@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Asynchronous child agents                                                                         │
+│00000000-0000-0000-0000-000000000101 [Running] task=Inspect session migrations output=reading     │
+│src/session.rs                                                                                    │
+│00000000-0000-0000-0000-000000000202 [WaitingApproval] task=Validate changes output=approval      │
+│required for run_command                                                                          │
+│00000000-0000-0000-0000-000000000303 [Completed] task=Review policy output=no findings            │
+│                                                                                                  │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close | 1/4                                       │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│Asynchronous child agents                                 │
+│00000000-0000-0000-0000-000000000101 [Running]            │
+│task=Inspect session migrations output=reading            │
+│src/session.rs                                            │
+│00000000-0000-0000-0000-000000000202 [WaitingApproval]    │
+│task=Validate changes output=approval required for        │
+│run_command                                               │
+│00000000-0000-0000-0000-000000000303 [Completed]          │
+│task=Review policy output=no findings                     │
+│                                                          │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close |   │
+│1/4                                                       │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

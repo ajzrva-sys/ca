@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&busy, 100, 30), render_to_text(&busy, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+
+
+
+
+
+                ┌ Session portability ─────────────────────────────────────────────┐
+                │Exporting session…                                                │
+                │                                                                  │
+                │/private/tmp/a very long works…exports/current conversation.md    │
+                │Bounded Markdown                                                  │
+                │                                                                  │
+                │Controls locked while the file is checked                         │
+                │                                                                  │
+                └──────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+
+
+
+
+
+  ┌ Session portability ─────────────────────────────────┐
+  │Exporting session…                                    │
+  │                                                      │
+  │/private/tmp/a very long…s/current conversation.md    │
+  │Bounded Markdown                                      │
+  │                                                      │
+  │Controls locked while the file is checked             │
+  │                                                      │
+  └──────────────────────────────────────────────────────┘
+
+
+
+
+
+ → ▌Ask anything…
+
+/ commands

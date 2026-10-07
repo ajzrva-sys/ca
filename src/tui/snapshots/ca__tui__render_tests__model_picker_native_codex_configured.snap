@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(wide, narrow)"
+---
+ ca · agent · gpt-5.6-sol
+
+
+
+
+               ┌────────────────────────────────────────────────────────────────────┐
+               │ Switch model                                                       │
+               │                                                                    │
+               │> type to filter…                                                   │
+               │  8 models · 1 provider live                                        │
+               │  8/8 · openai-codex · configured only · live · 7 models            │
+               │                                                                    │
+               │  openai-codex                                                      │
+               │    gpt-5.3-codex-spark           [openai-codex]                    │
+               │    gpt-5.4                       [openai-codex]                    │
+               │    gpt-5.4-mini                  [openai-codex]                    │
+               │    gpt-5.5                       [openai-codex]                    │
+               │    gpt-5.6-luna                  [openai-codex]                    │
+               │    gpt-5.6-terra                 [openai-codex]                    │
+               │▸   z-configured-only             [openai-codex]  configured only   │
+               │                                                                    │
+               │Enter select · Esc close · ↑↓ move · PgUp/PgDn page                 │
+               │Home/End jump · ⇧A model · ⇧P provider                              │
+               │⇧F favorite · ⇧E edit model/key · ⇧R refresh                        │
+               └────────────────────────────────────────────────────────────────────┘
+
+
+ → ▌Ask anything…
+
+8 models · 1 provider live
+-- narrow --
+ ca · agent · gpt-5.6-sol
+
+  ┌──────────────────────────────────────────────────────┐
+  │ Switch model                                         │
+  │                                                      │
+  │> type to filter…                                     │
+  │  8 models · 1 provider live                          │
+  │  8/8 · openai-codex · configured only · live · 7 mode│
+  │                                                      │
+  │  openai-codex                                        │
+  │    gpt-5.6-luna                                      │
+  │    [openai-codex]                                    │
+  │    gpt-5.6-terra                                     │
+  │    [openai-codex]                                    │
+  │▸   z-configured-only                                 │
+  │    [openai-codex]  configured only                   │
+  │                                                      │
+  │Enter select · Esc close · ↑↓ move · PgUp/PgDn page   │
+  │Home/End jump · ⇧A model · ⇧P provider                │
+  │⇧F favorite · ⇧E edit model/key · ⇧R refresh          │
+  │                                                      │
+ →└──────────────────────────────────────────────────────┘
+
+8 models · 1 provider live

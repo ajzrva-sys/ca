@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+
+
+       ┌ Support bundle preview ────────────────────────────────────────────────────────────┐
+       │Profile default · 1 entries · 3 bytes uncompressed                                  │
+       │Contains typed doctor/audit/health/provenance metadata and safe runtime logs.       │
+       │Excludes prompts, transcripts, tool content, provider payloads, raw paths, URLs,    │
+       │environment values, and credentials.                                                │
+       │                                                                                    │
+       │manifest.json · 3 bytes · ca3d163bab05                                              │
+       │                                                                                    │
+       │▶ Cancel       Create                                                               │
+       │Arrow/Tab choose · Enter confirm · Esc cancel                                       │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       └────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+
+
+ ┌ Support bundle preview ────────────────────────────────┐
+ │Profile default · 1 entries · 3 bytes uncompressed      │
+ │Contains typed doctor/audit/health/provenance metadata  │
+ │and safe runtime logs.                                  │
+ │Excludes prompts, transcripts, tool content, provider   │
+ │payloads, raw paths, URLs, environment values, and      │
+ │credentials.                                            │
+ │                                                        │
+ │manifest.json · 3 bytes · ca3d163bab05                  │
+ │                                                        │
+ │▶ Cancel       Create                                   │
+ │Arrow/Tab choose · Enter confirm · Esc cancel           │
+ │                                                        │
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+
+
+ → ▌Ask anything…
+
+/ commands

@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+  ┌ Tasks and agent graph ───────────────────────────────────────────────────────────────────────┐
+  │Persistent release plan · plan Approved · graph Idle · revision 4                             │
+  │>                                                                                             │
+  │                                                                                              │
+  │▶ Completed          Run repository validation                      attempt 0/0               │
+  │                                                                                              │
+  │Task ID: 00000000-0000-0000-0000-000000000456                                                 │
+  │Ordinary task · status Completed · owner main                                                 │
+  │Configure dependency and grant metadata in plan mode to run it as an agent graph.             │
+  │Recorded evidence: 1                                                                          │
+  │- 00000000-0000-0000-0000-000000000789: cargo test passed                                     │
+  │                                                                                              │
+  │Shift+S start/resume · Shift+P pause · Shift+R retry · Shift+C cancel · Esc close             │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+ →│                                                                                              │
+  └──────────────────────────────────────────────────────────────────────────────────────────────┘
+/ commands
+-- narrow --
+ ca · agent · auto
+ ┌ Tasks and agent graph ─────────────────────────────────┐
+ │Persistent release plan · plan Approved · graph Idle ·  │
+ │revision 4                                              │
+ │>                                                       │
+ │                                                        │
+ │▶ Completed          Run repository validation          │
+ │           attempt 0/0                                  │
+ │                                                        │
+ │Task ID: 00000000-0000-0000-0000-000000000456           │
+ │Ordinary task · status Completed · owner main           │
+ │Configure dependency and grant metadata in plan mode to │
+ │run it as an agent graph.                               │
+ │Recorded evidence: 1                                    │
+ │- 00000000-0000-0000-0000-000000000789: cargo test      │
+ │passed                                                  │
+ │                                                        │
+ │Shift+S start/resume · Shift+P pause · Shift+R retry ·  │
+ │Shift+C cancel · Esc close                              │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+/ commands

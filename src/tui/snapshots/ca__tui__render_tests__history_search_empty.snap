@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+        ┌ History ─────────────────────────────────────────────────────────────────────────┐
+        │ Input history · newest first                                                     │
+        │ > no-match                                                                       │
+        │  0 matching · process only                                                       │
+        │                                                                                  │
+        │  No matching input history                                                       │
+        │                                                                                  │
+        │Enter restore as draft · Esc close · ↑↓ navigate · PgUp/PgDn page                 │
+        │                                                                                  │
+        │                                                                                  │
+        │                                                                                  │
+        │                                                                                  │
+        │                                                                                  │
+        │                                                                                  │
+        │                                                                                  │
+        │                                                                                  │
+        │                                                                                  │
+        │                                                                                  │
+        │                                                                                  │
+        │                                                                                  │
+        └──────────────────────────────────────────────────────────────────────────────────┘
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+ ┌ History ───────────────────────────────────────────────┐
+ │ Input history · newest first                           │
+ │ > no-match                                             │
+ │  0 matching · process only                             │
+ │                                                        │
+ │  No matching input history                             │
+ │                                                        │
+ │Enter restore · Esc close · ↑↓ move · PgUp/PgDn         │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+
+/ commands

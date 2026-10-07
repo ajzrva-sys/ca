@@ -1,0 +1,5 @@
+# Slash command test — /help
+type:/help
+key:enter
+wait:2s
+assert:contains:model

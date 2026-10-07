@@ -1,0 +1,165 @@
+{
+  "type": "object",
+  "required": [
+    "protocol_version",
+    "repo",
+    "mission",
+    "project_complete",
+    "planner_due",
+    "master_due",
+    "queue",
+    "human_disposition_required",
+    "events_path",
+    "observe"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "protocol_version": {"type": "integer", "const": 1},
+    "repo": {"type": "string"},
+    "mission": {"type": "string"},
+    "project_complete": {"type": "boolean"},
+    "planner_due": {"type": "boolean"},
+    "master_due": {"type": "boolean"},
+    "queue": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["task_id", "kind", "title", "status"],
+        "additionalProperties": false,
+        "properties": {
+          "task_id": {"type": "string"},
+          "kind": {"type": "string"},
+          "title": {"type": "string"},
+          "status": {"type": "string"}
+        }
+      }
+    },
+    "human_disposition_required": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "required": ["reason", "options", "source"],
+          "additionalProperties": false,
+          "properties": {
+            "reason": {"type": "string"},
+            "options": {"type": "array", "items": {"type": "string"}},
+            "source": {"type": "string"}
+          }
+        }
+      ]
+    },
+    "events_path": {"type": "string"},
+    "observe": {"type": "boolean"},
+    "commit_mode": {"type": ["string", "null"], "enum": ["auto", "manual", null]},
+    "require_clean_start": {"type": ["boolean", "null"]},
+    "revision": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "pause_fingerprint": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "pending_commit": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "digest",
+            "source_lane",
+            "base_head",
+            "dirty_paths",
+            "commit_message",
+            "created_at"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "id": {"type": "string"},
+            "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "source_lane": {"type": "string"},
+            "task_id": {"type": ["string", "null"]},
+            "import_digest": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+            "base_head": {"type": "string"},
+            "dirty_paths": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+            "commit_message": {"type": "string"},
+            "guard_evidence_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+            "verification_evidence_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+            "created_at": {"type": "string"}
+          }
+        }
+      ]
+    },
+    "provider_hint": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "required": ["recommended_provider", "reason"],
+          "additionalProperties": false,
+          "properties": {
+            "recommended_provider": {"type": "string"},
+            "reason": {"type": "string"}
+          }
+        }
+      ]
+    },
+    "learning": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "task_id": {"type": ["string", "null"]},
+            "recommended_lane": {"type": ["string", "null"]},
+            "top_signals": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["lane", "weight", "reason"],
+                "additionalProperties": false,
+                "properties": {
+                  "lane": {"type": "string"},
+                  "weight": {"type": "integer"},
+                  "reason": {"type": "string"}
+                }
+              }
+            },
+            "cooldowns": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["role", "failure_kind", "recent_failures", "cooldown_advisory"],
+                "additionalProperties": false,
+                "properties": {
+                  "role": {"type": "string"},
+                  "failure_kind": {"type": "string"},
+                  "recent_failures": {"type": "integer", "minimum": 0},
+                  "cooldown_advisory": {"type": "boolean"}
+                }
+              }
+            },
+            "recent_episode_error_kinds": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["error_kind", "count"],
+                "additionalProperties": false,
+                "properties": {
+                  "error_kind": {"type": "string"},
+                  "count": {"type": "integer", "minimum": 0}
+                }
+              }
+            },
+            "catalog_healthy": {"type": "boolean"},
+            "proposal_count": {"type": "integer", "minimum": 0},
+            "approved_matching_count": {"type": "integer", "minimum": 0},
+            "quarantine_count": {"type": "integer", "minimum": 0},
+            "execution_count": {"type": "integer", "minimum": 0},
+            "ai_calls_avoided": {"type": "integer", "minimum": 0},
+            "estimated_tokens_avoided": {"type": "integer", "minimum": 0},
+            "applicable_recipe_id": {"type": ["string", "null"]},
+            "activation_state": {"type": ["string", "null"]}
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,15 @@
+
+{
+  "type": "object",
+  "required": ["task_id", "decision", "reason_code", "repair_brief", "needs_planner", "needs_master", "summary"],
+  "additionalProperties": false,
+  "properties": {
+    "task_id": {"type": "string"},
+    "decision": {"type": "string", "enum": ["retry_worker_same_task", "planner_due", "ceo_due", "abandon_task"]},
+    "reason_code": {"type": "string", "enum": ["bounded_repair", "retry_budget_exhausted", "ambiguous_failure", "planner_needed", "ceo_needed", "abandon_task"]},
+    "repair_brief": {"type": "string"},
+    "needs_planner": {"type": "boolean"},
+    "needs_master": {"type": "boolean"},
+    "summary": {"type": "string"}
+  }
+}

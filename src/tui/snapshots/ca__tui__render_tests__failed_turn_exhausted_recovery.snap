@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(wide, narrow)"
+---
+ ca · agent · auto
+> Inspect the provider stream
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+No reply (test · transport failed). /errors · /retry
+-- narrow --
+ ca · agent · auto
+> Inspect the provider stream
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+No reply (test · transport failed). /errors · /retry

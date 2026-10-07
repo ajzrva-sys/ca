@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+      ┌ BTW · ephemeral ─────────────────────────────────────────────────────────────────────┐
+      │                                                                                      │
+      │Model  mimo/mimo-v2.5-pro                                                             │
+      │                                                                                      │
+      │Question                                                                              │
+      │> Why is the c▏urrent request taking a while?                                         │
+      │                                                                                      │
+      │Ready                                                                                 │
+      │This answer stays out of the conversation and saved session.                          │
+      │                                                                                      │
+      │Enter ask · Esc close                                                                 │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      └──────────────────────────────────────────────────────────────────────────────────────┘
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+ ┌ BTW · ephemeral ───────────────────────────────────────┐
+ │                                                        │
+ │Model  mimo/mimo-v2.5-pro                               │
+ │                                                        │
+ │Question                                                │
+ │> Why is the c▏urrent request taking a while?           │
+ │                                                        │
+ │Ready                                                   │
+ │This answer stays out of the conversation and saved     │
+ │session.                                                │
+ │                                                        │
+ │Enter ask · Esc close                                   │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+/ commands

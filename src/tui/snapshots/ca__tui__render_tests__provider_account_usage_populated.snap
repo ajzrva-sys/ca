@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&populated, 100, 30),\nrender_to_text(&populated, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Usage                                                                                             │
+│                                                                                                  │
+│Provider account                                                                                  │
+│  Cached for up to 60 seconds                                                                     │
+│  openai · OpenAI month-to-date completions usage (2026-08)                                       │
+│    4 requests · 120 input · 30 output · 20 cached input                                          │
+│    Organization cost: USD 1.25                                                                   │
+│  deepseek · DeepSeek live balance · API available: yes                                           │
+│    USD 12.5 total · 2.5 granted · 10 topped up                                                   │
+│  mimo · MiMo                                                                                     │
+│    MiMo configured Token Plan: 8000000 credits · USD 50                                          │
+│    Locally observed consumption estimate: unavailable                                            │
+│    Live quota: unavailable (no documented public balance endpoint)                               │
+│                                                                                                  │
+│Local ca ledger · current process                                                                 │
+│Requests: 3                                                                                       │
+│Tokens: 1200 input · 300 output                                                                   │
+│Subsets: 400 cached input · 0 cache write · 120 reasoning output                                  │
+│Cost: unknown                                                                                     │
+│Input cache: 400 cached · 800 new input · 33.3% cache hit                                         │
+│Tool round trips: 0 tool round trips                                                              │
+│Latency: 764 ms average total · unavailable average to first output (0 of 3 request(s) measured)  │
+│Cost unknown for 1 request(s)                                                                     │
+│Token usage unavailable for 2 request(s)                                                          │
+│                                                                                                  │
+│Requests by kind                                                                                  │
+│  main turn: 1                                                                                    │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│Usage                                                     │
+│                                                          │
+│Provider account                                          │
+│  Cached for up to 60 seconds                             │
+│  openai · OpenAI month-to-date completions usage         │
+│(2026-08)                                                 │
+│    4 requests · 120 input · 30 output · 20 cached input  │
+│    Organization cost: USD 1.25                           │
+│  deepseek · DeepSeek live balance · API available: yes   │
+│    USD 12.5 total · 2.5 granted · 10 topped up           │
+│  mimo · MiMo                                             │
+│    MiMo configured Token Plan: 8000000 credits · USD 50  │
+│    Locally observed consumption estimate: unavailable    │
+│    Live quota: unavailable (no documented public balance │
+│endpoint)                                                 │
+│                                                          │
+│Local ca ledger · current process                         │
+│Requests: 3                                               │
+│Tokens: 1200 input · 300 output                           │
+│Subsets: 400 cached input · 0 cache write · 120 reasoning │
+│output                                                    │
+│Cost: unknown                                             │
+└──────────────────────────────────────────────────────────┘

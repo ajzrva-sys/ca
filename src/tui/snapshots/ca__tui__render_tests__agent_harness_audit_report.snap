@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&populated, 100, 30),\nrender_to_text(&populated, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Agent-harness audit                                                                               │
+│                                                                                                  │
+│Workspace: workspace                                                                              │
+│Profile: work                                                                                     │
+│Status: PARTIAL                                                                                   │
+│Scanned: 17 files · 4208 bytes                                                                    │
+│Findings: 1 critical · 0 high · 1 medium · 0 low · 0 info                                         │
+│                                                                                                  │
+│Findings                                                                                          │
+│                                                                                                  │
+│[CRITICAL] AUD-SYMLINK-001 · workspace/.agents/skills/escaped                                     │
+│Evidence: skill symlink escapes its declared authority; target withheld                           │
+│Remediation: Replace the symlink with an owned regular file or directory inside its authority.    │
+│                                                                                                  │
+│[MEDIUM] AUD-LIMIT-001 · workspace/.ca/rules                                                      │
+│Evidence: directory depth limit reached                                                           │
+│Remediation: Reduce the harness surface or repair read access, then rerun the audit.              │
+│                                                                                                  │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close | 1/17                                      │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│Agent-harness audit                                       │
+│                                                          │
+│Workspace: workspace                                      │
+│Profile: work                                             │
+│Status: PARTIAL                                           │
+│Scanned: 17 files · 4208 bytes                            │
+│Findings: 1 critical · 0 high · 1 medium · 0 low · 0 info │
+│                                                          │
+│Findings                                                  │
+│                                                          │
+│[CRITICAL] AUD-SYMLINK-001 ·                              │
+│workspace/.agents/skills/escaped                          │
+│Evidence: skill symlink escapes its declared authority;   │
+│target withheld                                           │
+│Remediation: Replace the symlink with an owned regular    │
+│file or directory inside its authority.                   │
+│                                                          │
+│[MEDIUM] AUD-LIMIT-001 · workspace/.ca/rules              │
+│Evidence: directory depth limit reached                   │
+│Remediation: Reduce the harness surface or repair read    │
+│access, then rerun the audit.                             │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

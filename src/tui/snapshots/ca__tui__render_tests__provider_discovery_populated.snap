@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&populated, 100, 30),\nrender_to_text(&populated, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+      ┌ Local provider discovery ────────────────────────────────────────────────────────────┐
+      │                                                                                      │
+      │2 compatible local providers                                                          │
+      │                                                                                      │
+      │  local-8000 · 1 model · tiny-coder                                                   │
+      │▶ local-11434 · 3 models · llama3.2, qwen-coder +1                                    │
+      │                                                                                      │
+      │Enter add · ⇧R rescan · Esc close · ↑↓ navigate                                       │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      └──────────────────────────────────────────────────────────────────────────────────────┘
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+  ┌ Local provider discovery ────────────────────────────┐
+  │                                                      │
+  │2 compatible local providers                          │
+  │                                                      │
+  │  local-8000 · 1 model · tiny-coder                   │
+  │▶ local-11434 · 3 models · llama3.2, qwen-coder +1    │
+  │                                                      │
+  │Enter add · ⇧R rescan · Esc close · ↑↓ navigate       │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+ →│                                                      │
+  └──────────────────────────────────────────────────────┘
+/ commands

@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&ranked, 100, 30), render_to_text(&ranked, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Skill suggestions for "ship-production rust correctness maintainability"                          │
+│Suggestions do not activate skills · activate an exact canonical ID with /skills activate <id>    │
+│                                                                                                  │
+│1. release-manager [active] (project) [aliases: ship-production] · exact alias: ship-production   │
+│   Coordinate a safe production deployment and rollback                                           │
+│2. rust-review (project) [aliases: audit-rust] · related                                          │
+│   Review Rust code for correctness and maintainability                                           │
+│                                                                                                  │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close | 1/7                                       │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│Skill suggestions for "ship-production rust correctness   │
+│maintainability"                                          │
+│Suggestions do not activate skills · activate an exact    │
+│canonical ID with /skills activate <id>                   │
+│                                                          │
+│1. release-manager [active] (project) [aliases:           │
+│ship-production] · exact alias: ship-production           │
+│   Coordinate a safe production deployment and rollback   │
+│2. rust-review (project) [aliases: audit-rust] · related  │
+│   Review Rust code for correctness and maintainability   │
+│                                                          │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close |   │
+│1/7                                                       │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

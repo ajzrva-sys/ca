@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · gpt-5.6-sol
+
+
+
+
+               ┌────────────────────────────────────────────────────────────────────┐
+               │ Switch model                                                       │
+               │                                                                    │
+               │> openai                                                            │
+               │  3 models · 0 live · 1 fallback                                    │
+               │  2/3 · openai-codex · fallback · models request failed             │
+               │                                                                    │
+               │  openai-codex                                                      │
+               │    gpt-5.6-luna                  [openai-codex]                    │
+               │▸   gpt-5.6-sol                   [openai-codex]  current           │
+               │    gpt-5.6-terra                 [openai-codex]                    │
+               │                                                                    │
+               │Enter select · Esc close · ↑↓ move · PgUp/PgDn page                 │
+               │Home/End jump · ⇧A model · ⇧P provider                              │
+               │⇧F favorite · ⇧E edit model/key · ⇧R refresh                        │
+               │                                                                    │
+               │                                                                    │
+               │                                                                    │
+               │                                                                    │
+               └────────────────────────────────────────────────────────────────────┘
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · gpt-5.6-sol
+
+  ┌──────────────────────────────────────────────────────┐
+  │ Switch model                                         │
+  │                                                      │
+  │> openai                                              │
+  │  3 models · 0 live · 1 fallback                      │
+  │  2/3 · openai-codex · fallback · models request faile│
+  │                                                      │
+  │  openai-codex                                        │
+  │    gpt-5.6-luna                                      │
+  │    [openai-codex]                                    │
+  │▸   gpt-5.6-sol                                       │
+  │    [openai-codex]  current                           │
+  │    gpt-5.6-terra                                     │
+  │    [openai-codex]                                    │
+  │                                                      │
+  │Enter select · Esc close · ↑↓ move · PgUp/PgDn page   │
+  │Home/End jump · ⇧A model · ⇧P provider                │
+  │⇧F favorite · ⇧E edit model/key · ⇧R refresh          │
+  │                                                      │
+ →└──────────────────────────────────────────────────────┘
+
+/ commands

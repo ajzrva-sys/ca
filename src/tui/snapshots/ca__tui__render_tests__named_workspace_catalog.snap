@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Named workspaces                                                                                  │
+│                                                                                                  │
+│client  2 root(s)                                                                                 │
+│  [primary] /catalog-fixture/first                                                                │
+│  [root] /catalog-fixture/second                                                                  │
+│                                                                                                  │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close | 1/5                                       │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│Named workspaces                                          │
+│                                                          │
+│client  2 root(s)                                         │
+│  [primary] /catalog-fixture/first                        │
+│  [root] /catalog-fixture/second                          │
+│                                                          │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close |   │
+│1/5                                                       │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

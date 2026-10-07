@@ -1,0 +1,10 @@
+{
+  "schema_version": "reasoning_pilot_fixture.v1",
+  "id": "process_timeout_cleanup",
+  "package": "reasoning-pilot-process-timeout-cleanup",
+  "task_file": "TASK.md",
+  "allowed_paths": ["src/lib.rs"],
+  "public_test_argv": ["cargo", "test", "--quiet"],
+  "stdlib_only": true,
+  "network_allowed": false
+}

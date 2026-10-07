@@ -1,0 +1,69 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&expanded, 100, 34),\nrender_to_text(&expanded, 60, 30))"
+---
+ ca · agent · auto
+  ✓ Explored
+  ✓ read_file {"path":"src/read-one.rs"}
+    ┌────────────────────────────────────────────────────────────────────────────────────────────┐
+    │ result for read-one                                                                        │
+    │ second line                                                                                │
+    └────────────────────────────────────────────────────────────────────────────────────────────┘
+  ✓ search_files {"path":"src/search-two.rs"}
+    ┌────────────────────────────────────────────────────────────────────────────────────────────┐
+    │ result for search-two                                                                      │
+    │ second line                                                                                │
+    └────────────────────────────────────────────────────────────────────────────────────────────┘
+  ✓ lsp_symbols {"path":"src/symbols-three.rs"}
+    ┌────────────────────────────────────────────────────────────────────────────────────────────┐
+    │ result for symbols-three                                                                   │
+    │ second line                                                                                │
+    └────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands
+-- narrow --
+ ca · agent · auto
+  ✓ Explored
+  ✓ read_file {"path":"src/read-one.rs"}
+    ┌────────────────────────────────────────────────────┐
+    │ result for read-one                                │
+    │ second line                                        │
+    └────────────────────────────────────────────────────┘
+  ✓ search_files {"path":"src/search-two.rs"}
+    ┌────────────────────────────────────────────────────┐
+    │ result for search-two                              │
+    │ second line                                        │
+    └────────────────────────────────────────────────────┘
+  ✓ lsp_symbols {"path":"src/symbols-three.rs"}
+    ┌────────────────────────────────────────────────────┐
+    │ result for symbols-three                           │
+    │ second line                                        │
+    └────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands

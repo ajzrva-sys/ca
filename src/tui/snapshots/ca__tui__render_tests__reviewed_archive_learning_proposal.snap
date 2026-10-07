@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&proposal, 100, 30),\nrender_to_text(&proposal, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Generated archive-learning proposal (inert)                                                       │
+│Evidence digest: 8c675308b4ab93d41d21c2762b02be7b7deca092bd8f46cb26d1f70a2caf8d26                 │
+│Route: openai/gpt-5.6-terra                                                                       │
+│Proposal runs: 2                                                                                  │
+│Exact proposal digest: 93114028fd7be3278956f3f7eb9ac6cfebd1e1b69a495209eef83413784c8b1c           │
+│                                                                                                  │
+│- 9f596ff0-d920-4dd1-a21e-91b60b33a4c0 · workspace 42f5d194034e · 1 memory operation(s) · 1 skill │
+│package(s)                                                                                        │
+│  memory item bbb3a430c14d1b2e793330543706592f30c78bfef16e39716669704ebcb9e0a8 · Workspace Add:   │
+│Keep diffs local.                                                                                 │
+│  skill item 0d722f881bcd53a69c05aab6c86f5095378672193540854350113949147eea29: Build focused      │
+│validation fixtures.                                                                              │
+│                                                                                                  │
+│Enter opens in-app actions.                                                                       │
+│Drag copies selected text; C copies the full page.                                                │
+│CLI fallback: ca learn proposal apply                                                             │
+│93114028fd7be3278956f3f7eb9ac6cfebd1e1b69a495209eef83413784c8b1c --item                           │
+│bbb3a430c14d1b2e793330543706592f30c78bfef16e39716669704ebcb9e0a8                                  │
+│                                                                                                  │
+│ Enter actions · R refresh · C copy all · j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close |  │
+│1/13                                                                                              │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│Generated archive-learning proposal (inert)               │
+│Evidence digest:                                          │
+│8c675308b4ab93d41d21c2762b02be7b7deca092bd8f46cb26d1f70a2c│
+│af8d26                                                    │
+│Route: openai/gpt-5.6-terra                               │
+│Proposal runs: 2                                          │
+│Exact proposal digest:                                    │
+│93114028fd7be3278956f3f7eb9ac6cfebd1e1b69a495209eef8341378│
+│4c8b1c                                                    │
+│                                                          │
+│- 9f596ff0-d920-4dd1-a21e-91b60b33a4c0 · workspace        │
+│42f5d194034e · 1 memory operation(s) · 1 skill package(s) │
+│  memory item                                             │
+│bbb3a430c14d1b2e793330543706592f30c78bfef16e39716669704ebc│
+│b9e0a8 · Workspace Add: Keep diffs local.                 │
+│  skill item                                              │
+│0d722f881bcd53a69c05aab6c86f509537867219354085435011394914│
+│7eea29: Build focused validation fixtures.                │
+│                                                          │
+│Enter opens in-app actions.                               │
+│Drag copies selected text; C copies the full page.        │
+│CLI fallback: ca learn proposal apply                     │
+└──────────────────────────────────────────────────────────┘

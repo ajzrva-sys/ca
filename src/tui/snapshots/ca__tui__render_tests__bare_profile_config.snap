@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&bare, 100, 30), render_to_text(&bare, 60, 24))"
+---
+ ca · agent · auto · profile bare
+
+
+
+
+            ┌──────────────────────────────────────────────────────────────────────────┐
+            │ Configuration                                                            │
+            │                                                                          │
+            │> type to filter…                                                         │
+            │                                                                          │
+            │▸ Active profile  bare · persistent writes, sessions, MCP, skills, and hoo│
+            │                                                                          │
+            │Enter open/edit · Esc close · ↑↓ navigate · type to filter                │
+            │                                                                          │
+            │                                                                          │
+            │                                                                          │
+            │                                                                          │
+            │                                                                          │
+            │                                                                          │
+            │                                                                          │
+            │                                                                          │
+            │                                                                          │
+            │                                                                          │
+            │                                                                          │
+            └──────────────────────────────────────────────────────────────────────────┘
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto · profile bare
+
+  ┌──────────────────────────────────────────────────────┐
+  │ Configuration                                        │
+  │                                                      │
+  │> type to filter…                                     │
+  │                                                      │
+  │▸ Active profile  bare · persistent writes, sessions, │
+  │                                                      │
+  │Enter open/edit · Esc close · ↑↓ navigate · type to fi│
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+ →└──────────────────────────────────────────────────────┘
+
+/ commands

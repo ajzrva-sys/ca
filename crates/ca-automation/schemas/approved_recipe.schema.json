@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "codex-team.approved_recipe.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "recipe_id", "revision_digest", "approved_at", "approval_receipt_id", "origin_repository_fingerprint", "validation_evidence_hashes", "definition"],
+  "properties": {
+    "schema": {"const": "codex-team.approved_recipe.v1"},
+    "recipe_id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9_.-]+$"},
+    "revision_digest": {"$ref": "#/$defs/sha256"},
+    "approved_at": {"type": "string", "format": "date-time"},
+    "approval_receipt_id": {"type": "string", "minLength": 1, "maxLength": 256},
+    "origin_repository_fingerprint": {"$ref": "#/$defs/sha256"},
+    "validation_evidence_hashes": {"type": "array", "minItems": 1, "maxItems": 8, "items": {"$ref": "#/$defs/sha256"}},
+    "definition": {"$ref": "recipe_proposal.schema.json#/$defs/definition"}
+  },
+  "$defs": {"sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
+}

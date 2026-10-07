@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&preview, 100, 30),\nrender_to_text(&preview, 60, 24))"
+---
+ ca · agent · auto · profile work
+
+
+
+
+
+
+
+                ┌ Session portability ─────────────────────────────────────────────┐
+                │Claude Code import preview                                        │
+                │                                                                  │
+                │Source: claude histories · 4 files · 12.1 KiB                     │
+                │Importable: 3 sessions · 42 visible messages                      │
+                │Skipped: 9 items · errors: 1                                      │
+                │Destination profile: work                                         │
+                │Automatic learning: off (default)                                 │
+                │old.jsonl: malformed JSONL record                                 │
+                │                                                                  │
+                │ Cancel     Import                                                │
+                │←→ choose · L learning · Enter confirm · Esc cancel               │
+                └──────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto · profile work
+
+
+
+
+  ┌ Session portability ─────────────────────────────────┐
+  │Claude Code import preview                            │
+  │                                                      │
+  │Source: claude histories · 4 files · 12.1 KiB         │
+  │Importable: 3 sessions · 42 visible messages          │
+  │Skipped: 9 items · errors: 1                          │
+  │Destination profile: work                             │
+  │Automatic learning: off (default)                     │
+  │old.jsonl: malformed JSONL record                     │
+  │                                                      │
+  │ Cancel     Import                                    │
+  │←→ choose · L learning · Enter confirm · Esc cancel   │
+  └──────────────────────────────────────────────────────┘
+
+
+
+ → ▌Ask anything…
+
+/ commands

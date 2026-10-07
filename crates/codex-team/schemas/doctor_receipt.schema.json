@@ -1,0 +1,34 @@
+{
+  "type": "object",
+  "required": [
+    "protocol_version",
+    "repo",
+    "healthy",
+    "initialized",
+    "checks"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "protocol_version": {"type": "integer", "const": 1},
+    "repo": {"type": "string"},
+    "healthy": {"type": "boolean"},
+    "initialized": {"type": "boolean"},
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "ok", "severity", "detail"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {"type": "string"},
+          "ok": {"type": "boolean"},
+          "severity": {
+            "type": "string",
+            "enum": ["ok", "error"]
+          },
+          "detail": {"type": "string"}
+        }
+      }
+    }
+  }
+}

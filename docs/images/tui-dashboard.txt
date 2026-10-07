@@ -1,0 +1,36 @@
+/p/t/ca-demo-csu9_l44/workspace  [Choose Ctrl+l]                                                                        
+ + New Agent                                                                                            Worktree Ctrl+w 
+ ▾ Idle 1 ─────────────────────────────────────────────────────── ┌Preview─────────────────────────────────────────────┐
+ ○ ca documentation demo · workspace                            2s│Select a session or agent to preview its latest     │
+   ## Working with your repository                                │activity                                            │
+                                                                  │                                                    │
+                                                                  │                                                    │
+                                                                  │                                                    │
+                                                                  │                                                    │
+                                                                  │                                                    │
+                                                                  │                                                    │
+                                                                  │                                                    │
+                                                                  │                                                    │
+                                                                  │                                                    │
+                                                                  │                                                    │
+                                                                  │                                                    │
+                                                                  │                                                    │
+                                                                  │                                                    │
+                                                                  │                                                    │
+                                                                  │                                                    │
+                                                                  │                                                    │
+                                                                  │                                                    │
+                                                                  │                                                    │
+                                                                  │                                                    │
+                                                                  │                                                    │
+                                                                  │                                                    │
+                                                                  │                                                    │
+                                                                  │                                                    │
+                                                                  │                                                    │
+                                                                  │                                                    │
+                                                                  │                                                    │
+                                                                  └────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│> Dispatch a new agent                                                                                                │
+└───────────────────────────────────────────────────────────────────────────────────────────fixture-model · auto-review┘
+Enter:toggle worktree  |  Esc:New Agent  |  Ctrl+.:shortcuts                                                            

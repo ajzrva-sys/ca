@@ -1,0 +1,69 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&approval, 100, 34),\nrender_to_text(&approval, 60, 30))"
+---
+ ca · agent · auto
+> Apply the approved system change
+
+
+  Approve tool [1/1] — run_privileged
+    Program: "/usr/bin/id"
+    argv[0]: "space value"
+    argv[1]: "$(literal);&|"
+    cwd: "/Users/example/project"
+    Filesystem authority: system-wide · Network: OS-denied
+    Invocation digest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  [y] authorize once  [n/Esc] deny
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands
+-- narrow --
+ ca · agent · auto
+> Apply the approved system change
+
+
+  Approve tool [1/1] — run_privileged
+    Program: "/usr/bin/id"
+    argv[0]: "space value"
+    argv[1]: "$(literal);&|"
+    cwd: "/Users/example/project"
+    Filesystem authority: system-wide · Network: OS-denied
+    Invocation digest:
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+aaaa
+  [y] authorize once  [n/Esc] deny
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands

@@ -1,0 +1,12 @@
+name: read_file
+description: >
+  Read a 1-based inclusive line range from a UTF-8 file (default 200 lines,
+  maximum 500); optionally prefix each returned line with an exact 8-hex
+  content anchor for hashline_edit
+guidance: >
+  Prefer this over shell commands such as cat or sed when inspecting a
+  known file. Use the offset parameter to skip to the area of interest
+  rather than reading from line 1.
+failure_guidance:
+  not_found: Verify the file exists and the path is relative to the workspace root.
+  permission_denied: Check if the file is outside the workspace sandbox.

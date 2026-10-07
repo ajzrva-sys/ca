@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Modified src/lib.rs                                                                               │
+│                                                                                                  │
+│LSP diagnostics [rust-analyzer] for document version 7: 2                                         │
+│- error [rustc/E0597] 12:9-12:14 — borrowed value does not live long enough                       │
+│- warning [clippy/needless_borrow] 18:5-18:17 — this expression creates a reference which is      │
+│immediately dereferenced                                                                          │
+│                                                                                                  │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close | 1/5                                       │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│Modified src/lib.rs                                       │
+│                                                          │
+│LSP diagnostics [rust-analyzer] for document version 7: 2 │
+│- error [rustc/E0597] 12:9-12:14 — borrowed value does not│
+│live long enough                                          │
+│- warning [clippy/needless_borrow] 18:5-18:17 — this      │
+│expression creates a reference which is immediately       │
+│dereferenced                                              │
+│                                                          │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close |   │
+│1/5                                                       │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

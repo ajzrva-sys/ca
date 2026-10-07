@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&confirmation, 100, 30),\nrender_to_text(&confirmation, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+
+
+
+            ┌ Full command output ─────────────────────────────────────────────────────┐
+            │Rerun this exact command in native scrollback?                            │
+            │                                                                          │
+            │Command: cargo test --all-targets                                         │
+            │Directory: /workspace/demo                                                │
+            │Network: disabled                                                         │
+            │                                                                          │
+            │[ Cancel ]     Run                                                        │
+            │                                                                          │
+            │                                                                          │
+            │                                                                          │
+            │                                                                          │
+            │                                                                          │
+            └──────────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+
+
+
+ ┌ Full command output ───────────────────────────────────┐
+ │Rerun this exact command in native scrollback?          │
+ │                                                        │
+ │Command: cargo test --all-targets                       │
+ │Directory: /workspace/demo                              │
+ │Network: disabled                                       │
+ │                                                        │
+ │[ Cancel ]     Run                                      │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+
+
+ → ▌Ask anything…
+
+/ commands

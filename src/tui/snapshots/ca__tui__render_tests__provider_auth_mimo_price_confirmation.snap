@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(wide, narrow)"
+---
+ ca · agent · auto
+
+
+
+       ┌ Provider authentication ───────────────────────────────────────────────────────────┐
+       │                                                                                    │
+       │Connect Xiaomi MiMo                                                                 │
+       │                                                                                    │
+       │Actual $5 differs from official list $6. Confirm this subscription allocation?      │
+       │Token Plan: 20% off during off-peak hours: 16:00–24:00 UTC (9:00 AM–5:00 PM PDT /   │
+       │8:00 AM–4:00 PM PST).                                                               │
+       │                                                                                    │
+       │▸ Cancel      Confirm actual USD                                                    │
+       │                                                                                    │
+       │←→ choose · Enter confirm · Esc cancel                                              │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       └────────────────────────────────────────────────────────────────────────────────────┘
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+ ┌ Provider authentication ───────────────────────┐
+ │                                                │
+ │Connect Xiaomi MiMo                             │
+ │                                                │
+ │Actual $5 differs from official list $6. Confirm│
+ │this subscription allocation?                   │
+ │Token Plan: 20% off during off-peak hours:      │
+ │16:00–24:00 UTC (9:00 AM–5:00 PM PDT / 8:00     │
+ │AM–4:00 PM PST).                                │
+ │                                                │
+ │▸ Cancel      Confirm actual USD                │
+ │                                                │
+ │←→ choose · Enter confirm · Esc cancel          │
+ │                                                │
+ │                                                │
+ │                                                │
+ │                                                │
+ │                                                │
+ │                                                │
+ │                                                │
+ │                                                │
+ └────────────────────────────────────────────────┘
+/ commands

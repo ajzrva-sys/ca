@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&picker, 100, 30), render_to_text(&picker, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+
+
+
+
+                     ┌ Command output ────────────────────────────────────────┐
+                     │Semantic summarizes supported Git/Cargo output for displ│
+                     │Ctrl+O always shows the process-local bounded raw output│
+                     │                                                        │
+                     │  Bounded     current                                   │
+                     │▸ Semantic                                              │
+                     │                                                        │
+                     │                                                        │
+                     │Enter save · Esc cancel · ↑↓ navigate                   │
+                     │                                                        │
+                     │                                                        │
+                     └────────────────────────────────────────────────────────┘
+
+
+
+
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+
+
+
+
+ ┌ Command output ────────────────────────────────────────┐
+ │Semantic summarizes supported Git/Cargo output for displ│
+ │Ctrl+O always shows the process-local bounded raw output│
+ │                                                        │
+ │  Bounded     current                                   │
+ │▸ Semantic                                              │
+ │                                                        │
+ │                                                        │
+ │Enter save · Esc cancel · ↑↓ navigate                   │
+ │                                                        │
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+
+
+
+ → ▌Ask anything…
+
+/ commands

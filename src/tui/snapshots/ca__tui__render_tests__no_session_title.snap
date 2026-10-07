@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&no_session, 100, 30),\nrender_to_text(&no_session, 60, 24))"
+---
+ ca · agent · auto · no session
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto · no session
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+/ commands

@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+┌ Managed shell job · 00000000-0000-4000-8000-000000000001 ────────────────────────────────────────┐
+│Command: cargo test --workspace                                                                   │
+│Directory: /tmp/project                                                                           │
+│Mode: background                                                                                  │
+│Status: running                                                                                   │
+│Elapsed: 1.2s                                                                                     │
+│                                                                                                  │
+│stdout:                                                                                           │
+│test output began                                                                                 │
+│[… stdout: 2048 bytes omitted …]                                                                  │
+│running 12 tests                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│stderr:                                                                                           │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│↑↓/PgUp/PgDn scroll · i write stdin · x cancel · Esc list                                         │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌ Managed shell job · 00000000-0000-4000-8000-000000000001 ┐
+│Command: cargo test --workspace                           │
+│Directory: /tmp/project                                   │
+│Mode: background                                          │
+│Status: running                                           │
+│Elapsed: 1.2s                                             │
+│                                                          │
+│stdout:                                                   │
+│test output began                                         │
+│[… stdout: 2048 bytes omitted …]                          │
+│running 12 tests                                          │
+│                                                          │
+│                                                          │
+│stderr:                                                   │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│↑↓ scroll · i stdin · x cancel · Esc list                 │
+└──────────────────────────────────────────────────────────┘

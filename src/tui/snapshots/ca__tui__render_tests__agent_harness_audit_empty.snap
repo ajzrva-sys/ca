@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&empty, 100, 30), render_to_text(&empty, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Agent-harness audit                                                                               │
+│                                                                                                  │
+│Workspace: workspace                                                                              │
+│Profile: default                                                                                  │
+│Status: COMPLETE                                                                                  │
+│Scanned: 0 files · 0 bytes                                                                        │
+│Findings: 0 critical · 0 high · 0 medium · 0 low · 0 info                                         │
+│                                                                                                  │
+│No findings.                                                                                      │
+│                                                                                                  │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close | 1/9                                       │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│Agent-harness audit                                       │
+│                                                          │
+│Workspace: workspace                                      │
+│Profile: default                                          │
+│Status: COMPLETE                                          │
+│Scanned: 0 files · 0 bytes                                │
+│Findings: 0 critical · 0 high · 0 medium · 0 low · 0 info │
+│                                                          │
+│No findings.                                              │
+│                                                          │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close |   │
+│1/9                                                       │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

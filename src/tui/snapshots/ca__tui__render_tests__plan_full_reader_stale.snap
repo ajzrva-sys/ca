@@ -1,0 +1,60 @@
+---
+source: src/tui/render_tests.rs
+assertion_line: 92
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24),)"
+---
+┌ Plan ────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                  │
+│This is a deliberately long readable paragraph that wraps across several terminal rows without    │
+│losing any of its text.                                                                           │
+│                                                                                                  │
+│This is a deliberately long readable paragraph that wraps across several terminal rows without    │
+│losing any of its text.                                                                           │
+│                                                                                                  │
+│This is a deliberately long readable paragraph that wraps across several terminal rows without    │
+│losing any of its text.                                                                           │
+│                                                                                                  │
+│This is a deliberately long readable paragraph that wraps across several terminal rows without    │
+│losing any of its text.                                                                           │
+│                                                                                                  │
+│This is a deliberately long readable paragraph that wraps across several terminal rows without    │
+│losing any of its text.                                                                           │
+│                                                                                                  │
+│## Tasks                                                                                          │
+│                                                                                                  │
+│  1. Finish the planning request before starting execution with the current agent and its normal  │
+│workspace tools [Pending]                                                                         │
+│  2. Render long tasks and Unicode cleanly: café, 界 面 , 👩🏽‍💻  [Pending]                              │
+│  3. Verify approval, revision, dismissal, saved-state recovery, and failure messages [Pending]   │
+│  4. Run completion checks [Pending]                                                              │
+│  5. Install the verified release [Pending]                                                       │
+│                                                                                                  │
+│Plan changed. Close and use /plan show to refresh.                                                │
+│↑/↓ scroll · PgUp/PgDn page · 29/29                                                               │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌ Plan ────────────────────────────────────────────────────┐
+│across several terminal rows without losing any of its    │
+│text.                                                     │
+│                                                          │
+│This is a deliberately long readable paragraph that wraps │
+│across several terminal rows without losing any of its    │
+│text.                                                     │
+│                                                          │
+│## Tasks                                                  │
+│                                                          │
+│  1. Finish the planning request before starting execution│
+│with the current agent and its normal workspace tools     │
+│[Pending]                                                 │
+│  2. Render long tasks and Unicode cleanly: café, 界 面 , 👩🏽‍💻 │
+│[Pending]                                                 │
+│  3. Verify approval, revision, dismissal, saved-state    │
+│recovery, and failure messages [Pending]                  │
+│  4. Run completion checks [Pending]                      │
+│  5. Install the verified release [Pending]               │
+│                                                          │
+│Plan changed. Close and use /plan show to refresh.        │
+│↑/↓ scroll · PgUp/PgDn page · 49/49                       │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

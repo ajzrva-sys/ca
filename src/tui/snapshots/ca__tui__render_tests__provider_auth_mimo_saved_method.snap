@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(saved_wide, render_to_text(&saved, 52, 24))"
+---
+ ca · agent · auto
+
+
+
+       ┌ Provider authentication ───────────────────────────────────────────────────────────┐
+       │                                                                                    │
+       │Connect Xiaomi MiMo                                                                 │
+       │                                                                                    │
+       │Reuse the saved Token Plan credential, authorize in a browser, or enter a key       │
+       │Token Plan: 20% off during off-peak hours: 16:00–24:00 UTC (9:00 AM–5:00 PM PDT /   │
+       │8:00 AM–4:00 PM PST).                                                               │
+       │                                                                                    │
+       │▸ Use saved Token Plan credential (Singapore; no sign-in)                           │
+       │  Browser authorization (API or Token Plan)                                         │
+       │  Manual Token Plan key (delegation eligible)                                       │
+       │                                                                                    │
+       │↑↓ choose · Enter continue · Esc cancel                                             │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       └────────────────────────────────────────────────────────────────────────────────────┘
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+ ┌ Provider authentication ───────────────────────┐
+ │                                                │
+ │Connect Xiaomi MiMo                             │
+ │                                                │
+ │Reuse the saved Token Plan credential, authorize│
+ │in a browser, or enter a key                    │
+ │Token Plan: 20% off during off-peak hours:      │
+ │16:00–24:00 UTC (9:00 AM–5:00 PM PDT / 8:00     │
+ │AM–4:00 PM PST).                                │
+ │                                                │
+ │▸ Use saved Token Plan credential (Singapore; no│
+ │sign-in)                                        │
+ │  Browser authorization (API or Token Plan)     │
+ │  Manual Token Plan key (delegation eligible)   │
+ │                                                │
+ │↑↓ choose · Enter continue · Esc cancel         │
+ │                                                │
+ │                                                │
+ │                                                │
+ │                                                │
+ │                                                │
+ └────────────────────────────────────────────────┘
+/ commands

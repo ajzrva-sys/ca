@@ -1,0 +1,10 @@
+name: write_file
+description: >
+  Create or overwrite a UTF-8 file with the supplied content. Parent
+  directories are created automatically.
+guidance: >
+  Use for new files or full replacements. For surgical edits to existing
+  files, prefer edit_file or apply_patch to avoid clobbering unrelated
+  changes.
+failure_guidance:
+  permission_denied: Check if the target path is outside the workspace sandbox.

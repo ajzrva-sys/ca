@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codex-team.local/schemas/self_improvement/source_transition.schema.json",
+  "title": "SourceTransitionReceiptV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "branch", "prior_head", "active_head", "candidate_inspection_digest", "clean_after"],
+  "properties": {
+    "schema": { "const": "codex-team.source_transition_receipt.v1" },
+    "branch": { "type": "string", "minLength": 1, "maxLength": 255 },
+    "prior_head": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "active_head": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "candidate_inspection_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "clean_after": { "const": true }
+  }
+}

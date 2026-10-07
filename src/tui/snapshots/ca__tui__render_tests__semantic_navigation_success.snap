@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&success, 100, 30),\nrender_to_text(&success, 60, 24))"
+---
+ ca · agent · auto
+The definition is in the current workspace.
+
+  ✓ Explored
+    lsp_definition src/main.rs · rust
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands
+-- narrow --
+ ca · agent · auto
+The definition is in the current workspace.
+
+  ✓ Explored
+    lsp_definition src/main.rs · rust
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands

@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+           ┌────────────────────────────────────────────────────────────────────────────┐
+           │ Prompt cache                                                               │
+           │                                                                            │
+           │  Model             custom/model-a                                          │
+           │  Protocol          openai_responses                                        │
+           │  Contract          custom_v1:openai_responses_explicit:auto (exact model)  │
+           │                                                                            │
+           │  Request format    Responses explicit                                      │
+           │▸ Usage format      Automatic detection                                     │
+           │  Policy            Stable prefix                                           │
+           │  Effective source  exact model                                             │
+           │                                                                            │
+           │  Select custom formats only when documented by the provider.               │
+           │                                                                            │
+           │Tab/↑↓ field · ←/→ choose · Backspace inherit · Enter save · Esc            │
+           │                                                                            │
+           │                                                                            │
+           │                                                                            │
+           │                                                                            │
+           │                                                                            │
+           │                                                                            │
+           └────────────────────────────────────────────────────────────────────────────┘
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+  ┌──────────────────────────────────────────────────────┐
+  │ Prompt cache                                         │
+  │                                                      │
+  │  Model     custom/model-a                            │
+  │  Protocol  openai_responses                          │
+  │  Contract  exact model                               │
+  │  ID        custom_v1:openai_responses_explicit:auto  │
+  │                                                      │
+  │  Request format    Responses explicit                │
+  │▸ Usage format      Automatic detection               │
+  │  Policy            Stable prefix                     │
+  │  Effective source  exact model                       │
+  │                                                      │
+  │  Use only documented provider formats.               │
+  │                                                      │
+  │Tab/↑↓ field · ←/→ choose                             │
+  │Backspace inherit · Enter save · Esc                  │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+ →│                                                      │
+  └──────────────────────────────────────────────────────┘
+/ commands

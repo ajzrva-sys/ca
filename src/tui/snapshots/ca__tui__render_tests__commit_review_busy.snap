@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&busy, 100, 30), render_to_text(&busy, 60, 24))"
+---
+┌ Confirm commit ──────────────────────────────────────────────────────────────────────────────────┐
+│Branch: codex/git-111 · HEAD: 0123456789ab                                                        │
+│Creating and verifying commit…                                                                    │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│Ctrl+C cancel operation · controls locked                                                         │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌ Confirm commit ──────────────────────────────────────────┐
+│Branch: codex/git-111 · HEAD: 0123456789ab                │
+│Creating and verifying commit…                            │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│Ctrl+C cancel operation · controls locked                 │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

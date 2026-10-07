@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Conversation: 0                                                                                   │
+│Attachments: 0                                                                                    │
+│                                                                                                  │
+│Automatic threshold: 80000                                                                        │
+│Checkpoint coverage: 2 of 2 messages (42 source tokens, 1970-01-01 00:00:00 UTC)                  │
+│Session usage total: 150 tokens                                                                   │
+│Canonical transcript: 2 messages (preserved)                                                      │
+│                                                                                                  │
+│This sitting                                                                                      │
+│Requests: 0                                                                                       │
+│Output speed: unknown                                                                             │
+│Cost: unknown                                                                                     │
+│Subscription allocation: none                                                                     │
+│Unknown cost: 0 request(s)                                                                        │
+│Unknown token usage: 0 request(s)                                                                 │
+│                                                                                                  │
+│Workspace                                                                                         │
+│Working directory: /workspace/ca                                                                  │
+│                                                                                                  │
+│LSP                                                                                               │
+│No enabled servers · 0 disabled                                                                   │
+│                                                                                                  │
+│Tasks                                                                                             │
+│No active plan · /tasks to inspect                                                                │
+│                                                                                                  │
+│Checkpoint summary                                                                                │
+│## Goal                                                                                           │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│Conversation: 0                                           │
+│Attachments: 0                                            │
+│                                                          │
+│Automatic threshold: 80000                                │
+│Checkpoint coverage: 2 of 2 messages (42 source tokens,   │
+│1970-01-01 00:00:00 UTC)                                  │
+│Session usage total: 150 tokens                           │
+│Canonical transcript: 2 messages (preserved)              │
+│                                                          │
+│This sitting                                              │
+│Requests: 0                                               │
+│Output speed: unknown                                     │
+│Cost: unknown                                             │
+│Subscription allocation: none                             │
+│Unknown cost: 0 request(s)                                │
+│Unknown token usage: 0 request(s)                         │
+│                                                          │
+│Workspace                                                 │
+│Working directory: /workspace/ca                          │
+│                                                          │
+│LSP                                                       │
+│No enabled servers · 0 disabled                           │
+└──────────────────────────────────────────────────────────┘

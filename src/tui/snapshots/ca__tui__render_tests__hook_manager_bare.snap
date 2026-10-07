@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&bare, 100, 30), render_to_text(&bare, 60, 24))"
+---
+ ca · agent · auto · profile bare
+
+
+      ┌ Hooks ───────────────────────────────────────────────────────────────────────────────┐
+      │> type to filter…                                                                     │
+      │3 hooks · network denied by OS sandbox                                                │
+      │Config: /tmp/ca-test/config.toml                                                      │
+      │                                                                                      │
+      │▶ session_start            enabled    5s  fail-closed working · 42 ms                 │
+      │  pre_tool_use             disabled  12s  fail-open   not tested                      │
+      │  after_agent_response     enabled    8s  fail-open   denied · 17 ms                  │
+      │                                                                                      │
+      │Space toggle · ⇧T test · ⇧R reload · Esc close                                        │
+      │Bare profile: view only; commands stay in config.toml                                 │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      └──────────────────────────────────────────────────────────────────────────────────────┘
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto · profile bare
+ ┌ Hooks ─────────────────────────────────────────────────┐
+ │> type to filter…                                       │
+ │3 hooks · network denied by OS sandbox                  │
+ │Config: /tmp/ca-test/config.toml                        │
+ │                                                        │
+ │▶ session_start            enabled    5s  fail-closed   │
+ │working · 42 ms                                         │
+ │  pre_tool_use             disabled  12s  fail-open     │
+ │not tested                                              │
+ │  after_agent_response     enabled    8s  fail-open     │
+ │denied · 17 ms                                          │
+ │                                                        │
+ │Space toggle · ⇧T test · ⇧R reload · Esc close          │
+ │Bare profile: view only; commands stay in config.toml   │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+/ commands

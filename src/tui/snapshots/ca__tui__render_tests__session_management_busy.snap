@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&busy, 100, 30), render_to_text(&busy, 60, 24))"
+---
+ ca · agent · auto
+
+
+    Sessions                                                                                 Esc
+
+     Recent 1    Archived 0   Tab changes list
+    Search  Type to search names, folders, or IDs
+
+    Thu Jan 1 1970
+    Repository review                                                                   12:00 AM
+
+    Working… · controls locked
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ →
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+
+    Sessions                                         Esc
+
+     Recent 1    Archived 0   Tab changes list
+    Search  Type to search names, folders, or IDs
+
+    Thu Jan 1 1970
+    Repository review                           12:00 AM
+
+    Working… · controls locked
+
+
+
+
+
+
+
+
+
+ →
+
+/ commands

@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&status, 100, 30), render_to_text(&status, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Provider exchange tracing                                                                         │
+│                                                                                                  │
+│Status: off                                                                                       │
+│Captured: 0 B                                                                                     │
+│Per-trace cap: 16.0 MiB                                                                           │
+│Retention: until explicit deletion                                                                │
+│Directory: /tmp/ca-profile/traces                                                                 │
+│                                                                                                  │
+│/trace on · /trace off · /trace list                                                              │
+│/trace open <id> · /trace delete <id>                                                             │
+│                                                                                                  │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close | 1/10                                      │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│Provider exchange tracing                                 │
+│                                                          │
+│Status: off                                               │
+│Captured: 0 B                                             │
+│Per-trace cap: 16.0 MiB                                   │
+│Retention: until explicit deletion                        │
+│Directory: /tmp/ca-profile/traces                         │
+│                                                          │
+│/trace on · /trace off · /trace list                      │
+│/trace open <id> · /trace delete <id>                     │
+│                                                          │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close |   │
+│1/10                                                      │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

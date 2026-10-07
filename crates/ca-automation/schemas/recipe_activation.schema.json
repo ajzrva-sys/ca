@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "codex-team.recipe_activation.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "recipe_id", "revision_digest", "repository_fingerprint", "compatibility_fingerprint", "status", "updated_at"],
+  "properties": {
+    "schema": {"const": "codex-team.recipe_activation.v1"},
+    "recipe_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "revision_digest": {"$ref": "#/$defs/sha256"},
+    "repository_fingerprint": {"$ref": "#/$defs/sha256"},
+    "compatibility_fingerprint": {"$ref": "#/$defs/sha256"},
+    "status": {"enum": ["active", "drifted", "quarantined", "unsupported"]},
+    "updated_at": {"type": "string", "format": "date-time"},
+    "reason": {"type": "string", "maxLength": 1024}
+  },
+  "$defs": {"sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
+}

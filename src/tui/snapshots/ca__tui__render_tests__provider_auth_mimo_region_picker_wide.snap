@@ -1,0 +1,34 @@
+---
+source: src/tui/render_tests.rs
+expression: "render_to_text(&state, 100, 30)"
+---
+ ca · agent · auto
+
+
+
+
+       ┌ Provider authentication ───────────────────────────────────────────────────────────┐
+       │                                                                                    │
+       │Connect Xiaomi MiMo                                                                 │
+       │                                                                                    │
+       │Select the region shown on your Xiaomi Token Plan page                              │
+       │                                                                                    │
+       │  CN · https://token-plan-cn.xiaomimimo.com/v1                                      │
+       │▸ Singapore · https://token-plan-sgp.xiaomimimo.com/v1                              │
+       │  Europe · https://token-plan-ams.xiaomimimo.com/v1                                 │
+       │                                                                                    │
+       │↑↓ choose · Enter continue · Esc cancel                                             │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       └────────────────────────────────────────────────────────────────────────────────────┘
+
+
+ → ▌Ask anything…
+
+/ commands

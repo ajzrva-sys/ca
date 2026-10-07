@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+  ✓ run_command {"command":"git status --short"}
+    ┌────────────────────────────────────────────────────────────────────────────────────────────┐
+    │ Git status · 2 paths · completed (0)                                                       │
+    │ modified 1 · untracked 1                                                                   │
+    │ modified:                                                                                  │
+    │   src/main.rs                                                                              │
+    │ untracked:                                                                                 │
+    │   notes.txt                                                                                │
+    │ [semantic presentation; transformed/omitted detail remains in the bounded raw Ctrl+O expa… │
+    └────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands
+-- narrow --
+ ca · agent · auto
+  ✓ run_command {"command":"git status --short"}
+    ┌────────────────────────────────────────────────────┐
+    │ Git status · 2 paths · completed (0)               │
+    │ modified 1 · untracked 1                           │
+    │ modified:                                          │
+    │   src/main.rs                                      │
+    │ untracked:                                         │
+    │   notes.txt                                        │
+    │ [semantic presentation; transformed/omitted detai… │
+    └────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands

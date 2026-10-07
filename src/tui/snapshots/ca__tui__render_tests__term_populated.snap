@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+
+      ┌ Durable terminals ───────────────────────────────────────────────────────────────────┐
+      │tmux 3.5a · 2 sessions                                                                │
+      │>                                                                                     │
+      │ dev-api                        3 windows · 1 attached                                │
+      │ local-repl                     1 window  · detached                                  │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │Enter attach · Shift+A create · Shift+D detach                                        │
+      │Shift+K kill · r refresh · Esc close                                                  │
+      │                                                                                      │
+ → ▌As└──────────────────────────────────────────────────────────────────────────────────────┘
+
+/ commands
+-- narrow --
+ ca · agent · auto
+ ┌ Durable terminals ─────────────────────────────────────┐
+ │tmux 3.5a · 2 sessions                                  │
+ │>                                                       │
+ │ dev-api                        3 windows · 1 attached  │
+ │ local-repl                     1 window  · detached    │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │Enter attach · ⇧A add · ⇧D detach                       │
+ │⇧K kill · Esc close                                     │
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+/ commands

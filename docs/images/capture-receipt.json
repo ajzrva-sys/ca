@@ -1,0 +1,29 @@
+{
+  "binary_sha256": "f20a97ab23bdec8e01c5f656bacd872cec5488181e73afc78c4d545831971fa0",
+  "terminal_columns": 120,
+  "terminal_rows": 36,
+  "source": "Actual signed release binary running in a PTY; PNG rendered from its VT output.",
+  "provider": "Disposable loopback fixture; sample reply, no live model.",
+  "captures": [
+    {
+      "path": "tui-welcome.png",
+      "sha256": "bf11cc45f9d8f584c2fbd8637b31876e080a8ef0d4bac744ac9c11fc026e7e4a"
+    },
+    {
+      "path": "tui-conversation.png",
+      "sha256": "62bc7ad0aa2d71b052643ff703cc70ca07d85bacfbc02b2b15ed0f0baa481115"
+    },
+    {
+      "path": "tui-usage.png",
+      "sha256": "9bc4d53a6d4e6138bc032f28b503b65ed9fe9864184adb2a93eeb00309581a78"
+    },
+    {
+      "path": "tui-help.png",
+      "sha256": "b156f8426f4b38bba1b71e7ba802b2e14c07e5bf42672a036019ae0e165a6ad7"
+    },
+    {
+      "path": "tui-dashboard.png",
+      "sha256": "06687fc81798c99b8aedb2787f088484b666e5dee7022bf10335713ea383146e"
+    }
+  ]
+}

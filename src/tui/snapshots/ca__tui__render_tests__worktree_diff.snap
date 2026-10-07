@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&diff, 100, 30), render_to_text(&diff, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Worktree diff · review · ca/review-11111111                                                       │
+│                                                                                                  │
+│Unstaged changes                                                                                  │
+│diff --git a/src/lib.rs b/src/lib.rs                                                              │
+│@@ -1 +1 @@                                                                                       │
+│-old                                                                                              │
+│+new                                                                                              │
+│                                                                                                  │
+│Untracked files (names only)                                                                      │
+│notes.txt                                                                                         │
+│                                                                                                  │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close | 1/10                                      │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│Worktree diff · review · ca/review-11111111               │
+│                                                          │
+│Unstaged changes                                          │
+│diff --git a/src/lib.rs b/src/lib.rs                      │
+│@@ -1 +1 @@                                               │
+│-old                                                      │
+│+new                                                      │
+│                                                          │
+│Untracked files (names only)                              │
+│notes.txt                                                 │
+│                                                          │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close |   │
+│1/10                                                      │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

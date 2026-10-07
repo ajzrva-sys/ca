@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&results, 100, 30),\nrender_to_text(&results, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┌ Paths 2/2 ───────────────────────────────────────────────────────────┐
+  │  src/                              folder                            │
+  │▸ specification-with-a-long-unicod… file                              │
+  └ ↑↓ select · Enter/Tab complete · Esc dismiss ────────────────────────┘
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ → Open ./s▌
+
+↑↓ select · Tab complete · Enter choose · Esc dismiss
+-- narrow --
+ ca · agent · auto
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┌ Paths 2/2 ───────────────────────────────────────────┐
+  │  src/                                                │
+  │    folder                                            │
+  │▸ specification-with-a-long-unicode-name-你 .md        │
+  │    file                                              │
+  └ ↑↓ select · Enter/Tab complete · Esc dismiss ────────┘
+────────────────────────────────────────────────────────────
+ → Open ./s▌
+
+↑↓ select · Tab complete · Enter choose · Esc dismiss

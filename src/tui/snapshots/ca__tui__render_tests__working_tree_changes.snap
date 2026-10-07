@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+┌ Working tree changes ────────────────────────────────────────────────────────────────────────────┐
+│ M  staged+unstaged   src/main.rs  +14 -3                                                         │
+│ R  staged            src/old_name.rs → src/new_name_with_a_long_descriptive_suffix.rs  +2 -1     │
+│ ?  unstaged          notes/新 規 -untracked.txt                                                    │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│↑↓ select · Enter open tracked diff · Esc close                                                   │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌ Working tree changes ────────────────────────────────────┐
+│ M  staged+unstaged   src/main.rs  +14 -3                 │
+│ R  staged            src/old_name.rs → src/new_name_with_│
+│ ?  unstaged          notes/新 規 -untracked.txt            │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│↑↓ select · Enter open tracked diff · Esc close           │
+└──────────────────────────────────────────────────────────┘

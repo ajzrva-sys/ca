@@ -1,0 +1,13 @@
+# Session save/resume test
+type:hello
+key:enter
+wait:8s
+type:/save
+key:enter
+type:/clear
+key:enter
+type:/resume
+key:enter
+sleep:500ms
+key:enter
+wait:3s

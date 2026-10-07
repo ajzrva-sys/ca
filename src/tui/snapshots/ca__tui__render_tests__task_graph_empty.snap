@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&empty, 100, 30), render_to_text(&empty, 60, 24))"
+---
+ ca · agent · auto
+  ┌ Tasks and agent graph ───────────────────────────────────────────────────────────────────────┐
+  │No plan tasks. Use /plan to propose one.                                                      │
+  │                                                                                              │
+  │Esc close                                                                                     │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+ →│                                                                                              │
+  └──────────────────────────────────────────────────────────────────────────────────────────────┘
+/ commands
+-- narrow --
+ ca · agent · auto
+ ┌ Tasks and agent graph ─────────────────────────────────┐
+ │No plan tasks. Use /plan to propose one.                │
+ │                                                        │
+ │Esc close                                               │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+/ commands

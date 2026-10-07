@@ -1,0 +1,60 @@
+---
+source: src/tui/render_tests.rs
+assertion_line: 66
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24),)"
+---
+┌ Plan ────────────────────────────────────────────────────────────────────────────────────────────┐
+│### Make plan review readable and execution reliable                                              │
+│                                                                                                  │
+│Ready for review                                                                                  │
+│                                                                                                  │
+│Make completed work visible and keep the next action clear.                                       │
+│                                                                                                  │
+│## Approach                                                                                       │
+│                                                                                                  │
+│  • Preserve Unicode: café, 界 面 , and 👩🏽‍💻 .                                                         │
+│  • Keep each list item separate.                                                                 │
+│                                                                                                  │
+│Approve the plan only after reviewing the full implementation and validation details.             │
+│                                                                                                  │
+│## Validation                                                                                     │
+│                                                                                                  │
+│Exercise narrow terminals, session restoration, interrupted execution, and a successful real file │
+│edit in a temporary workspace.                                                                    │
+│                                                                                                  │
+│## Additional details                                                                             │
+│                                                                                                  │
+│This is a deliberately long readable paragraph that wraps across several terminal rows without    │
+│losing any of its text.                                                                           │
+│                                                                                                  │
+│This is a deliberately long readable paragraph that wraps across several terminal rows without    │
+│losing any of its text.                                                                           │
+│Enter Execute · R Revise · N comment selection · Esc close · C copy all                           │
+│↑/↓ scroll · PgUp/PgDn page · 1/29                                                                │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌ Plan ────────────────────────────────────────────────────┐
+│### Make plan review readable and execution reliable      │
+│                                                          │
+│Ready for review                                          │
+│                                                          │
+│Make completed work visible and keep the next action      │
+│clear.                                                    │
+│                                                          │
+│## Approach                                               │
+│                                                          │
+│  • Preserve Unicode: café, 界 面 , and 👩🏽‍💻 .                 │
+│  • Keep each list item separate.                         │
+│                                                          │
+│Approve the plan only after reviewing the full            │
+│implementation and validation details.                    │
+│                                                          │
+│## Validation                                             │
+│                                                          │
+│Exercise narrow terminals, session restoration,           │
+│interrupted execution, and a successful real file edit in │
+│Enter Execute · R Revise · N comment selection · Esc close│
+│· C copy all                                              │
+│↑/↓ scroll · PgUp/PgDn page · 1/49                        │
+└──────────────────────────────────────────────────────────┘

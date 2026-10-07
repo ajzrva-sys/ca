@@ -1,0 +1,24 @@
+{
+  "name": "ca-memory-recall-lexical-v1",
+  "scope": "user",
+  "records": [
+    {"label":"preference", "scope":"user", "kind":"user_preference", "text":"Explain the outcome before the supporting details."},
+    {"label":"release", "scope":"user", "kind":"external_fact", "text":"Release automation starts from signed tags; the default branch push does not publish."},
+    {"label":"validation", "scope":"user", "kind":"external_fact", "text":"Compiler diagnostics identify type errors; run focused validation before broader checks."},
+    {"label":"spanish", "scope":"user", "kind":"external_fact", "text":"La validación usa pruebas aisladas para verificar errores del compilador."},
+    {"label":"russian", "scope":"user", "kind":"external_fact", "text":"Проверка компилятора использует отдельные тесты и диагностику ошибок."},
+    {"label":"chinese", "scope":"user", "kind":"external_fact", "text":"编译器诊断用于检查类型错误"},
+    {"label":"wrong-scope", "scope":"workspace", "kind":"external_fact", "text":"The amber comet is visible during fixture validation."}
+  ],
+  "cases": [
+    {"query":"signed tags release automation", "relevant":["release"], "identifier":true},
+    {"query":"compiler diagnostics type errors", "relevant":["validation"], "identifier":true},
+    {"query":"what makes publishing begin", "relevant":["release"]},
+    {"query":"validación compilador", "relevant":["spanish"]},
+    {"query":"Проверка компилятора", "relevant":["russian"]},
+    {"query":"检查类型错误", "relevant":["chinese"]},
+    {"query":"amber comet", "relevant":[]},
+    {"query":"hold please", "relevant":[]},
+    {"query":"banana waterfall", "relevant":[]}
+  ]
+}

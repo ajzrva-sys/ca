@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┌ Commands 1/3 ────────────────────────────────────────────────────────────────────────────────┐
+  │▸ /provider [templates|setup|discover|…] Manage provider templates, providers, and models     │
+  │  /errors [dismiss]              View recent safe provider failure categories                 │
+  │  /trace [on|off|list|open <id>|delete <id>]                                                  │
+  │    Inspect or control persistent provider exchange tracing                                   │
+  └ ↑↓ select · Tab complete · Enter choose · Esc dismiss ───────────────────────────────────────┘
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ → /provider▌
+
+↑↓ select · Tab complete · Enter choose · Esc dismiss
+-- narrow --
+ ca · agent · auto
+
+
+
+
+
+
+
+
+
+
+  ┌ Commands 1/3 ────────────────────────────────────────┐
+  │▸ /provider [templates|setup|discover|…]              │
+  │    Manage provider templates, providers, and models  │
+  │  /errors [dismiss]                                   │
+  │    View recent safe provider failure categories      │
+  │  /trace [on|off|list|open <id>|delete <id>]          │
+  │    Inspect or control persistent provider exchange   │
+  │tracing                                               │
+  └ ↑↓ select · Tab complete · Enter choose · Esc dismiss┘
+────────────────────────────────────────────────────────────
+ → /provider▌
+
+↑↓ select · Tab complete · Enter choose · Esc dismiss

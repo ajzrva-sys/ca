@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&busy, 100, 30), render_to_text(&busy, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+              ┌──────────────────────────────────────────────────────────────────────┐
+              │Saved session retention                                               │
+              │                                                                      │
+              │Exact preview · 3 permanent deletions                                 │
+              │Protected: current 1 · pinned 1 · archived 2                          │
+              │                                                                      │
+              │▸ Expired session 1 · 2026-05-12 · age+count                          │
+              │  A very long saved ses…hat is safely clipped · 2026-05-13 · age      │
+              │  Expired session 3 · 2026-05-14 · count                              │
+              │                                                                      │
+              │ Cancel     Delete permanently                                        │
+              │←→ choose · Enter confirm · Esc cancel · ↑↓ inspect                   │
+              │Deleting confirmed sessions… · controls locked                        │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              └──────────────────────────────────────────────────────────────────────┘
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+  ┌──────────────────────────────────────────────────────┐
+  │Saved session retention                               │
+  │                                                      │
+  │Exact preview · 3 permanent deletions                 │
+  │Protected: current 1 · pinned 1 · archived 2          │
+  │                                                      │
+  │▸ Expired session 1 · 2026-05-12 · age+count          │
+  │  A very long s…afely clipped · 2026-05-13 · age      │
+  │  Expired session 3 · 2026-05-14 · count              │
+  │                                                      │
+  │ Cancel     Delete permanently                        │
+  │←→ choose · Enter confirm · Esc cancel · ↑↓ inspect   │
+  │Deleting confirmed sessions… · controls locked        │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+ →└──────────────────────────────────────────────────────┘
+
+/ commands

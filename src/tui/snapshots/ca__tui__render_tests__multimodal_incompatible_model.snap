@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&failed, 100, 30), render_to_text(&failed, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+Selected model profile does not support images
+-- narrow --
+ ca · agent · auto
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+Selected model profile does not support images

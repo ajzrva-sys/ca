@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Context                                                                                           │
+│                                                                                                  │
+│Model: coder (local)                                                                              │
+│Estimate source: latest prepared tool set                                                         │
+│Estimator: generic conservative local estimate                                                    │
+│Request context: 448 / 100000 estimated tokens (0%)                                               │
+│                                                                                                  │
+│Context map (5×20 cells)                                                                          │
+││IIIIIIIIIIIIIIIIIIII│                                                                            │
+││IIIIIIISSSSSSSBBBBBB│                                                                            │
+││BBBBBBBBBBBBBBBBBBBB│                                                                            │
+││BBBBBBBBBBBBBBBBBBBB│                                                                            │
+││BMMMMMMMMMMKKKKKKKKK│                                                                            │
+│I Instructions · S Skills · B Built-in tools · M MCP tools                                        │
+│K Checkpoint · C Conversation · A Attachments · · Empty                                           │
+│                                                                                                  │
+│Categories (estimated tokens)                                                                     │
+│Instructions: 120                                                                                 │
+│Skills: 30                                                                                        │
+│Built-in tools: 210                                                                               │
+│MCP tools: 45                                                                                     │
+│Checkpoint: 43                                                                                    │
+│Conversation: 0                                                                                   │
+│Attachments: 0                                                                                    │
+│                                                                                                  │
+│Automatic threshold: 80000                                                                        │
+│Checkpoint coverage: 2 of 2 messages (42 source tokens, 1970-01-01 00:00:00 UTC)                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│Context                                                   │
+│                                                          │
+│Model: coder (local)                                      │
+│Estimate source: latest prepared tool set                 │
+│Estimator: generic conservative local estimate            │
+│Request context: 448 / 100000 estimated tokens (0%)       │
+│                                                          │
+│Context map (5×20 cells)                                  │
+││IIIIIIIIIIIIIIIIIIII│                                    │
+││IIIIIIISSSSSSSBBBBBB│                                    │
+││BBBBBBBBBBBBBBBBBBBB│                                    │
+││BBBBBBBBBBBBBBBBBBBB│                                    │
+││BMMMMMMMMMMKKKKKKKKK│                                    │
+│I Instructions · S Skills · B Built-in tools · M MCP tools│
+│K Checkpoint · C Conversation · A Attachments · · Empty   │
+│                                                          │
+│Categories (estimated tokens)                             │
+│Instructions: 120                                         │
+│Skills: 30                                                │
+│Built-in tools: 210                                       │
+│MCP tools: 45                                             │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

@@ -1,0 +1,43 @@
+{
+  "type": "object",
+  "required": [
+    "protocol_version",
+    "repo",
+    "outcome",
+    "decision",
+    "refresh_report",
+    "human_disposition_required",
+    "pause",
+    "events_path"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "protocol_version": {"type": "integer", "const": 1},
+    "repo": {"type": "string"},
+    "outcome": {
+      "type": "string",
+      "enum": ["kept_paused", "no_pause", "recorded"]
+    },
+    "decision": {"type": "string"},
+    "refresh_report": {"type": "boolean"},
+    "human_disposition_required": {"type": "boolean"},
+    "pause": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "required": ["reason", "options", "source"],
+          "additionalProperties": false,
+          "properties": {
+            "reason": {"type": "string"},
+            "options": {"type": "array", "items": {"type": "string"}},
+            "source": {"type": "string"}
+          }
+        }
+      ]
+    },
+    "events_path": {"type": "string"},
+    "revision": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "pause_fingerprint": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"}
+  }
+}

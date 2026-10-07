@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&success, 100, 30),\nrender_to_text(&success, 60, 24))"
+---
+ ca · agent · auto
+I extracted only the requested PDF pages within the configured bounds.
+
+  ✓ Explored
+    read_pdf docs/guide.pdf
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands
+-- narrow --
+ ca · agent · auto
+I extracted only the requested PDF pages within the
+configured bounds.
+
+  ✓ Explored
+    read_pdf docs/guide.pdf
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands

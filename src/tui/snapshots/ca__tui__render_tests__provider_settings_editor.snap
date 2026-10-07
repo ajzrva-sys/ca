@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+             ┌────────────────────────────────────────────────────────────────────────┐
+             │ Providers                                                              │
+             │┌ Edit provider: saved ────────────────────────────────────────────────┐│
+             ││                                                                      ││
+             ││  Provider       saved                                                ││
+             ││                  Existing provider                                   ││
+             ││  Base URL       https://saved.invalid/v1                             ││
+             ││                  Provider endpoint                                   ││
+             ││› API key        ▌                                                    ││
+             ││                  Saved securely; paste to replace                    ││
+             ││  API key env                                                         ││
+             ││                  Alternative: environment variable                   ││
+             ││Key stays masked; config stores only a reference.                     ││
+             ││                                                                      ││
+             ││Tab fields · ←→ cursor · Enter save · Esc back                        ││
+             ││Home/End jump · Backspace/Delete edit                                 ││
+             │└──────────────────────────────────────────────────────────────────────┘│
+             │                                                                        │
+             │                                                                        │
+             └────────────────────────────────────────────────────────────────────────┘
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+  ┌──────────────────────────────────────────────────────┐
+  │ Providers                                            │
+  ┌ Edit provider: saved ────────────────────────────────┐
+  │                                                      │
+  │  Provider       saved                                │
+  │                  Existing provider                   │
+  │  Base URL       https://saved.invalid/v1             │
+  │                  Provider endpoint                   │
+  │› API key        ▌                                    │
+  │                  Saved securely; paste to replace    │
+  │  API key env                                         │
+  │                  Alternative: environment variable   │
+  │Key stays masked; config stores only a reference.     │
+  │                                                      │
+  │Tab fields · ←→ cursor · Enter save · Esc back        │
+  │Home/End jump · Backspace/Delete edit                 │
+  └──────────────────────────────────────────────────────┘
+  │                                                      │
+  │                                                      │
+ →└──────────────────────────────────────────────────────┘
+
+/ commands

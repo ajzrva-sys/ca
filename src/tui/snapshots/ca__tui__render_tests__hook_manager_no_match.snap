@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&no_match, 100, 30),\nrender_to_text(&no_match, 60, 24))"
+---
+ ca · agent · auto
+
+
+      ┌ Hooks ───────────────────────────────────────────────────────────────────────────────┐
+      │> missing                                                                             │
+      │3 hooks · network denied by OS sandbox                                                │
+      │Config: /tmp/ca-test/config.toml                                                      │
+      │                                                                                      │
+      │No matching hooks                                                                     │
+      │                                                                                      │
+      │Space toggle · ⇧T test · ⇧R reload · Esc close                                        │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      └──────────────────────────────────────────────────────────────────────────────────────┘
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+ ┌ Hooks ─────────────────────────────────────────────────┐
+ │> missing                                               │
+ │3 hooks · network denied by OS sandbox                  │
+ │Config: /tmp/ca-test/config.toml                        │
+ │                                                        │
+ │No matching hooks                                       │
+ │                                                        │
+ │Space toggle · ⇧T test · ⇧R reload · Esc close          │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+/ commands

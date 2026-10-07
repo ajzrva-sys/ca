@@ -1,0 +1,56 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&busy, 100, 30), render_to_text(&busy, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+       ┌ Prompt Stash ──────────────────────────────────────────────────────────────────────┐
+       │ Saved composer drafts · newest first                                               │
+       │  2 of 50 entries · 64 KiB each · 1 MiB total                                       │
+       │                                                                                    │
+       │     2m ·   1 line  · Review @src/main.rs#12-40 before changing the parser.         │
+       │ ▸   2d ·   3 lines · First line Second line Third line with a longer explanatio…   │
+       │                                                                                    │
+       │  Preview                                                                           │
+       │  First line                                                                        │
+       │  Second line                                                                       │
+       │  Third line with a longer explanation                                              │
+       │                                                                                    │
+       │  Working…                                                                          │
+       │  Swapping composer and stashed draft…                                              │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       └────────────────────────────────────────────────────────────────────────────────────┘
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ → current composer stays visible behind the picker▌
+-- narrow --
+ ca · agent · auto
+ ┌ Prompt Stash ──────────────────────────────────────────┐
+ │ Saved composer drafts · newest first                   │
+ │  2 of 50 entries · 64 KiB each · 1 MiB total           │
+ │                                                        │
+ │     2m ·   1 line  · Review @src/main.rs#12-40 befo…   │
+ │ ▸   2d ·   3 lines · First line Second line Third l…   │
+ │                                                        │
+ │  Preview                                               │
+ │  First line                                            │
+ │  Second line                                           │
+ │  Third line with a longer explanation                  │
+ │                                                        │
+ │  Working…                                              │
+ │  Swapping composer and stashed draft…                  │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+─│                                                        │─
+ │                                                        │
+ └────────────────────────────────────────────────────────┘

@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&failed, 100, 30), render_to_text(&failed, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+      ┌ Permissions ─────────────────────────────────────────────────────────────────────────┐
+      │> type to filter…                                                                     │
+      │3 rules · persistent changes enabled                                                  │
+      │                                                                                      │
+      │  allow   legacy                            read_file                                 │
+      │▶ ask  ┌ Remove permission rule? ─────────────────────────────────────────────┐       │
+      │  allow│Ask · run_command · cargo test                                        │s      │
+      │       │Could not remove permission: simulated filesystem failure             │       │
+      │Could n│                                                                      │       │
+      │Shift+D│  Cancel     [ Remove ]                                               │       │
+      │       │Enter confirm · Esc cancel · ←→ choose                                │       │
+      │       │                                                                      │       │
+      │       │                                                                      │       │
+      │       │                                                                      │       │
+      │       │                                                                      │       │
+      │       └──────────────────────────────────────────────────────────────────────┘       │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      └──────────────────────────────────────────────────────────────────────────────────────┘
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+ ┌ Permissions ───────────────────────────────────────────┐
+ │> type to filter…                                       │
+ │3 rules · persistent changes enabled                    │
+ │                                                        │
+ │  allow   legacy                                        │
+ │┌ Remove permission rule? ─────────────────────────────┐│
+ ││Ask · run_command · cargo test                        ││
+ ││Could not remove permission: simulated filesystem     ││
+ ││failure                                               ││
+ ││                                                      ││
+ ││  Cancel     [ Remove ]                               ││
+ ││Enter confirm · Esc cancel · ←→ choose                ││
+ ││                                                      ││
+ ││                                                      ││
+ ││                                                      ││
+ │└──────────────────────────────────────────────────────┘│
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+/ commands

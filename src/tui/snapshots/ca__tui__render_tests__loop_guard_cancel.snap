@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&confirm, 100, 30),\nrender_to_text(&confirm, 60, 24))"
+---
+ ca · agent · auto
+I retained the completed boundary.
+
+
+
+
+
+
+              ┌ Low-yield loop paused ───────────────────────────────────────────────┐
+              │Failing command `cargo test --all-targets` returned unchanged output 3│
+              │times                                                                 │
+              │                                                                      │
+              │Cancel the current turn? Completed tool changes remain.               │
+              │                                                                      │
+              │ Keep paused    Cancel turn                                           │
+              │                                                                      │
+              │←/→ choose · Enter confirm · Esc back                                 │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              └──────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ → ▌Add a follow-up…
+ Esc stop · Enter interrupt · Alt+Enter queue
+Low-yield loop paused · choose Replan, Continue, or Cancel
+-- narrow --
+ ca · agent · auto
+I retained the completed boundary.
+
+
+
+ ┌ Low-yield loop paused ─────────────────────────────────┐
+ │Failing command `cargo test --all-targets` returned     │
+ │unchanged output 3 times                                │
+ │                                                        │
+ │Cancel the current turn? Completed tool changes remain. │
+ │                                                        │
+ │ Keep paused    Cancel turn                             │
+ │                                                        │
+ │←/→ choose · Enter confirm · Esc back                   │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+
+
+────────────────────────────────────────────────────────────
+ → ▌Add a follow-up…
+ Esc stop · Enter interrupt · Alt+Enter queue
+Low-yield loop paused · choose Replan, Continue, or Cancel

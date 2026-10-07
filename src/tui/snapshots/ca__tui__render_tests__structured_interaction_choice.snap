@@ -1,0 +1,55 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+
+
+
+              ┌ Input required ──────────────────────────────────────────────────────┐
+              │Which validation should run?                                          │
+              │Choose one option; the composer draft stays untouched.                │
+              │                                                                      │
+              │  (•) 1. Focused tests                                                │
+              │      Run only the affected module tests.                             │
+              │  ( ) 2. Full validation                                              │
+              │      Run tests, format, Clippy, and release build.                   │
+              │  ( ) 3. Other                                                        │
+              │                                                                      │
+              │↑/↓ or 1-9 choose · Enter submit · Esc cancel                         │
+              │                                                                      │
+              └──────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ → preserved composer draft▌
+-- narrow --
+ ca · agent · auto
+
+
+
+
+  ┌ Input required ──────────────────────────────────────┐
+  │Which validation should run?                          │
+  │Choose one option; the composer draft stays untouched.│
+  │                                                      │
+  │  (•) 1. Focused tests                                │
+  │      Run only the affected module tests.             │
+  │  ( ) 2. Full validation                              │
+  │      Run tests, format, Clippy, and release build.   │
+  │  ( ) 3. Other                                        │
+  │                                                      │
+  │↑/↓ or 1-9 choose · Enter submit · Esc cancel         │
+  │                                                      │
+  └──────────────────────────────────────────────────────┘
+
+
+────────────────────────────────────────────────────────────
+ → preserved composer draft▌

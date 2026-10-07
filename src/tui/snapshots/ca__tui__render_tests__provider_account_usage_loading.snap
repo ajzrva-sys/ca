@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&loading, 100, 30),\nrender_to_text(&loading, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Usage                                                                                             │
+│                                                                                                  │
+│Provider account                                                                                  │
+│  Loading configured provider accounts…                                                           │
+│                                                                                                  │
+│Local ca ledger · current process                                                                 │
+│Requests: 3                                                                                       │
+│Tokens: 1200 input · 300 output                                                                   │
+│Subsets: 400 cached input · 0 cache write · 120 reasoning output                                  │
+│Cost: unknown                                                                                     │
+│Input cache: 400 cached · 800 new input · 33.3% cache hit                                         │
+│Tool round trips: 0 tool round trips                                                              │
+│Latency: 764 ms average total · unavailable average to first output (0 of 3 request(s) measured)  │
+│Cost unknown for 1 request(s)                                                                     │
+│Token usage unavailable for 2 request(s)                                                          │
+│                                                                                                  │
+│Requests by kind                                                                                  │
+│  main turn: 1                                                                                    │
+│  tool continuation: 0                                                                            │
+│  check: 0                                                                                        │
+│  context checkpoint: 0 · branch handoff: 0                                                       │
+│  project initialization: 0                                                                       │
+│  review: 1                                                                                       │
+│  subagent: 0                                                                                     │
+│  provider probe: 1 · voice transcription: 0                                                      │
+│  btw: 0 · session title: 0                                                                       │
+│  goal evaluation: 0                                                                              │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│Usage                                                     │
+│                                                          │
+│Provider account                                          │
+│  Loading configured provider accounts…                   │
+│                                                          │
+│Local ca ledger · current process                         │
+│Requests: 3                                               │
+│Tokens: 1200 input · 300 output                           │
+│Subsets: 400 cached input · 0 cache write · 120 reasoning │
+│output                                                    │
+│Cost: unknown                                             │
+│Input cache: 400 cached · 800 new input · 33.3% cache hit │
+│Tool round trips: 0 tool round trips                      │
+│Latency: 764 ms average total · unavailable average to    │
+│first output (0 of 3 request(s) measured)                 │
+│Cost unknown for 1 request(s)                             │
+│Token usage unavailable for 2 request(s)                  │
+│                                                          │
+│Requests by kind                                          │
+│  main turn: 1                                            │
+│  tool continuation: 0                                    │
+│  check: 0                                                │
+└──────────────────────────────────────────────────────────┘

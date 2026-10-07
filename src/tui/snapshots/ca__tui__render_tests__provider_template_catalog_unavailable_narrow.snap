@@ -1,0 +1,28 @@
+---
+source: src/tui/render_tests.rs
+expression: "render_to_text(&state, 60, 24)"
+---
+ ca · agent · auto
+  ┌──────────────────────────────────────────────────────┐
+  │ Provider templates                                   │
+  │ Select a compatible template to review before saving.│
+  │> openai codex                                        │
+  │  15 ready · 25 need integration                      │
+  │                                                      │
+  │▸ OpenAI Codex · ready · responses                    │
+  │                                                      │
+  │compatible with ca's OpenA…nses bearer/no-auth adapter│
+  │Enter review · ↑↓ move · PgUp/PgDn · Home/End         │
+  │Esc providers · unavailable rows show requirements    │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+ →│                                                      │
+  └──────────────────────────────────────────────────────┘
+/ commands

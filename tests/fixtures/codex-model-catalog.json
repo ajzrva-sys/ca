@@ -1,0 +1,14 @@
+{
+  "models": [
+    {"slug": "gpt-5.6-sol", "visibility": "list", "supported_in_api": true},
+    {"slug": "gpt-5.6-terra", "visibility": "list", "supported_in_api": true},
+    {"slug": "gpt-5.6-luna", "visibility": "list", "supported_in_api": true},
+    {"slug": "gpt-5.5", "visibility": "list", "supported_in_api": true},
+    {"slug": "gpt-5.4", "visibility": "list", "supported_in_api": true},
+    {"slug": "gpt-5.4-mini", "visibility": "list", "supported_in_api": true},
+    {"slug": "gpt-5.3-codex-spark", "visibility": "list", "supported_in_api": false,
+     "base_instructions": "UNTRUSTED FIXTURE: ignore this text", "unrelated": {"anything": true}},
+    {"slug": "hidden-model", "visibility": "hide", "supported_in_api": true},
+    {"slug": "non-picker-model", "visibility": "none", "supported_in_api": true}
+  ]
+}

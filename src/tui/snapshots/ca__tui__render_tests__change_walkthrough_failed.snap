@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&failed, 100, 30), render_to_text(&failed, 60, 24))"
+---
+┌ Guided changes walkthrough ──────────────────────────────────────────────────────────────────────┐
+│Walkthrough failed                                                                                │
+│Target: working · Route: local/walkthrough-model                                                  │
+│Source: 0123456789ab · 2 tracked files                                                            │
+│                                                                                                  │
+│Walkthrough failed for local: provider timed out before usable output                             │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│↑↓/PgUp/PgDn scroll · Shift+R recapture · Esc close                                               │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌ Guided changes walkthrough ──────────────────────────────┐
+│Walkthrough failed                                        │
+│Target: working · Route: local/walkthrough-model          │
+│Source: 0123456789ab · 2 tracked files                    │
+│                                                          │
+│Walkthrough failed for local: provider timed out before   │
+│usable output                                             │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│↑↓/PgUp/PgDn scroll · Shift+R recapture · Esc close       │
+└──────────────────────────────────────────────────────────┘

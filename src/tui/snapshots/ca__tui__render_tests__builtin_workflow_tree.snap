@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&definition, 100, 30),\nrender_to_text(&definition, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Workflow tree · deep-research                                                                     │
+│Definition: builtin:deep-research · digest 2c3dba134f38b81b                                       │
+│Budgets: 64 steps · 256 provider attempts · 262144 bytes retained output                          │
+│Prompts and dependency output are intentionally hidden.                                           │
+│                                                                                                  │
+│└─ brief · root · route current route · attempt limit 1                                           │
+│   tools: no tools                                                                                │
+│   evidence: assistant output                                                                     │
+│   bounded output: brief                                                                          │
+│├─ plan · after brief · route current route · attempt limit 1                                     │
+│   tools: no tools                                                                                │
+│   evidence: assistant output                                                                     │
+│   bounded output: plan                                                                           │
+│├─ research · after plan · route current route · attempt limit 1                                  │
+│   tools: web_search, web_fetch                                                                   │
+│   evidence: successful web_search                                                                │
+│   bounded output: evidence                                                                       │
+│├─ reflect · after research · route current route · attempt limit 1                               │
+│   tools: no tools                                                                                │
+│   evidence: assistant output                                                                     │
+│   bounded output: reflection                                                                     │
+│├─ write · after reflect · route current route · attempt limit 1                                  │
+│   tools: no tools                                                                                │
+│   evidence: assistant output                                                                     │
+│   bounded output: report                                                                         │
+│├─ review · after write · route current route · attempt limit 1                                   │
+│   tools: no tools                                                                                │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│Workflow tree · deep-research                             │
+│Definition: builtin:deep-research · digest                │
+│2c3dba134f38b81b                                          │
+│Budgets: 64 steps · 256 provider attempts · 262144 bytes  │
+│retained output                                           │
+│Prompts and dependency output are intentionally hidden.   │
+│                                                          │
+│└─ brief · root · route current route · attempt limit 1   │
+│   tools: no tools                                        │
+│   evidence: assistant output                             │
+│   bounded output: brief                                  │
+│├─ plan · after brief · route current route · attempt     │
+│limit 1                                                   │
+│   tools: no tools                                        │
+│   evidence: assistant output                             │
+│   bounded output: plan                                   │
+│├─ research · after plan · route current route · attempt  │
+│limit 1                                                   │
+│   tools: web_search, web_fetch                           │
+│   evidence: successful web_search                        │
+│   bounded output: evidence                               │
+│├─ reflect · after research · route current route ·       │
+└──────────────────────────────────────────────────────────┘

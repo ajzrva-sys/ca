@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&open, 100, 30), render_to_text(&open, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Provider trace 00000000-0000-0000-0000-000000000117                                               │
+│                                                                                                  │
+│{"schema":"ca.provider-trace.v1","sequence":0,"event":"trace_started"}                            │
+│{"schema":"ca.provider-trace.v1","sequence":1,"request_kind":"main_turn","event":"request_started"│
+│}                                                                                                 │
+│                                                                                                  │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close | 1/4                                       │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│Provider trace 00000000-0000-0000-0000-000000000117       │
+│                                                          │
+│{"schema":"ca.provider-trace.v1","sequence":0,"event":"tra│
+│ce_started"}                                              │
+│{"schema":"ca.provider-trace.v1","sequence":1,"request_kin│
+│d":"main_turn","event":"request_started"}                 │
+│                                                          │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close |   │
+│1/4                                                       │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(wide, render_to_text(&state, 52, 24))"
+---
+ ca · agent · auto
+
+
+
+
+       ┌ Provider authentication ───────────────────────────────────────────────────────────┐
+       │                                                                                    │
+       │Connect DeepSeek                                                                    │
+       │                                                                                    │
+       │Paste your DeepSeek API key                                                         │
+       │Bare profile: this credential is memory-only and cannot become the saved default.   │
+       │                                                                                    │
+       │> ••••••••••••••••••••••••                                                          │
+       │                                                                                    │
+       │Enter continue · Esc cancel                                                         │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       └────────────────────────────────────────────────────────────────────────────────────┘
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+ ┌ Provider authentication ───────────────────────┐
+ │                                                │
+ │Connect DeepSeek                                │
+ │                                                │
+ │Paste your DeepSeek API key                     │
+ │Bare profile: this credential is memory-only and│
+ │cannot become the saved default.                │
+ │                                                │
+ │> ••••••••••••••••••••••••                      │
+ │                                                │
+ │Enter continue · Esc cancel                     │
+ │                                                │
+ │                                                │
+ │                                                │
+ │                                                │
+ │                                                │
+ │                                                │
+ │                                                │
+ │                                                │
+ └────────────────────────────────────────────────┘
+
+/ commands

@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Distill maintenance                                                                               │
+│                                                                                                  │
+│Schedule: off · every 30 days · not due                                                           │
+│Active auto-distilled generations: 2                                                              │
+│                                                                                                  │
+│Latest: 00000000-0000-0000-0000-000000000135 · completed                                          │
+│trigger: manual                                                                                   │
+│Route: openai/gpt-5.6-terra                                                                       │
+│Evidence sessions: 8                                                                              │
+│Changes: 2 · conflicts: 0                                                                         │
+│Result: published 2 auto-distilled skill generations                                              │
+│                                                                                                  │
+│Recent runs                                                                                       │
+│- 00000000-0000-0000-0000-000000000135 · completed · 2 changes                                    │
+│                                                                                                  │
+│/distill run · /distill on · /distill undo <run-id>                                               │
+│                                                                                                  │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close | 1/16                                      │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│Distill maintenance                                       │
+│                                                          │
+│Schedule: off · every 30 days · not due                   │
+│Active auto-distilled generations: 2                      │
+│                                                          │
+│Latest: 00000000-0000-0000-0000-000000000135 · completed  │
+│trigger: manual                                           │
+│Route: openai/gpt-5.6-terra                               │
+│Evidence sessions: 8                                      │
+│Changes: 2 · conflicts: 0                                 │
+│Result: published 2 auto-distilled skill generations      │
+│                                                          │
+│Recent runs                                               │
+│- 00000000-0000-0000-0000-000000000135 · completed · 2    │
+│changes                                                   │
+│                                                          │
+│/distill run · /distill on · /distill undo <run-id>       │
+│                                                          │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close |   │
+│1/16                                                      │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

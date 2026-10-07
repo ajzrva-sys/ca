@@ -1,0 +1,24 @@
+---
+source: src/tui/render_tests.rs
+expression: "render_to_text(&failed, 80, 20)"
+---
+ ca · agent · auto
+
+
+
+
+
+
+
+  │                                                                          │
+  │    Seedbox copy: Process exited before the completion marker appeared    │
+  │                                                                          │
+
+
+
+
+
+
+ → ▌Ask anything…
+
+/ commands

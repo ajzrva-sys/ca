@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&inherited, 100, 30),\nrender_to_text(&inherited, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+            ┌──────────────────────────────────────────────────────────────────────────┐
+            │ Context limits                                                           │
+            │                                                                          │
+            │  Model    mimo/mimo-v2.5-pro                                             │
+            │  Stored   exact model context                                            │
+            │                                                                          │
+            │▸ Context window        <inherit>       inherits 65536                    │
+            │  Checkpoint threshold  <inherit>       automatic 80%                     │
+            │                                                                          │
+            │  Effective window      65536                                             │
+            │  Effective checkpoint  52428 (automatic 80%)                             │
+            │  Empty values inherit independently.                                     │
+            │                                                                          │
+            │Enter save · Esc cancel · Tab/↑↓ field · empty inherits                   │
+            │                                                                          │
+            │                                                                          │
+            │                                                                          │
+            │                                                                          │
+            │                                                                          │
+            └──────────────────────────────────────────────────────────────────────────┘
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+  ┌──────────────────────────────────────────────────────┐
+  │ Context limits                                       │
+  │                                                      │
+  │  Model    mimo/mimo-v2.5-pro                         │
+  │  Stored   exact model context                        │
+  │                                                      │
+  │▸ Window      <inherit>  [inherits 65536]             │
+  │  Checkpoint  <inherit>  [80% default]                │
+  │                                                      │
+  │  Effective window      65536                         │
+  │  Effective checkpoint  52428 (automatic 80%)         │
+  │  Empty values inherit independently.                 │
+  │                                                      │
+  │Enter save · Esc cancel · Tab/↑↓ field                │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+ →└──────────────────────────────────────────────────────┘
+
+/ commands

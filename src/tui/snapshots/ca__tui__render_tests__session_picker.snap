@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+
+
+    Sessions                                                                                 Esc
+
+     Recent 2    Archived 1   Tab changes list
+    Search  workspace
+
+    Fri Jan 2 1970
+    Repository review                                                                   12:00 AM
+    Thu Jan 1 1970
+    Named session browser                                                               12:00 AM
+
+    Enter open  ·  Ctrl+R rename  ·  Ctrl+G generate name
+    Shift+P pin  ·  Shift+A archive  ·  Shift+D delete  ·  Tab archived
+
+
+
+
+
+
+
+
+
+
+
+
+ →
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+
+    Sessions                                         Esc
+
+     Recent 2    Archived 1   Tab changes list
+    Search  workspace
+
+    Fri Jan 2 1970
+    Repository review                           12:00 AM
+    Thu Jan 1 1970
+    Named session browser                       12:00 AM
+
+    Enter open · Ctrl+R rename
+    Ctrl+G generate name · Tab archived
+    Up/Down move · Esc close
+
+
+
+
+
+ →
+
+/ commands

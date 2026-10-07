@@ -1,0 +1,11 @@
+[
+  [["release",0.92],["validation",0.2]],
+  [["validation",0.94],["release",0.12]],
+  [["release",0.91],["validation",0.15]],
+  [["spanish",0.93],["validation",0.2]],
+  [["russian",0.91],["validation",0.2]],
+  [["chinese",0.92],["validation",0.18]],
+  [["wrong-scope",0.99],["release",0.25]],
+  [["release",0.22],["validation",0.15]],
+  [["chinese",0.23],["russian",0.17]]
+]

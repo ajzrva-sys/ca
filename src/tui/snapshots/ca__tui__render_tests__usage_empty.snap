@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&empty, 100, 30), render_to_text(&empty, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Usage · current ca process                                                                        │
+│                                                                                                  │
+│Requests: 0                                                                                       │
+│Tokens: 0 input · 0 output                                                                        │
+│Subsets: 0 cached input · 0 cache write · 0 reasoning output                                      │
+│Cost: unknown                                                                                     │
+│Input cache: 0 cached where reported · new input/cache hit unavailable (no provider token usage is│
+│available)                                                                                        │
+│Tool round trips: 0 tool round trips                                                              │
+│Latency: unavailable average total · unavailable average to first output (0 of 0 request(s)       │
+│measured)                                                                                         │
+│                                                                                                  │
+│Requests by kind                                                                                  │
+│  main turn: 0                                                                                    │
+│  tool continuation: 0                                                                            │
+│  check: 0                                                                                        │
+│  context checkpoint: 0 · branch handoff: 0                                                       │
+│  project initialization: 0                                                                       │
+│  review: 0                                                                                       │
+│  subagent: 0                                                                                     │
+│  provider probe: 0 · voice transcription: 0                                                      │
+│  btw: 0 · session title: 0                                                                       │
+│  goal evaluation: 0                                                                              │
+│  workflow step: 0                                                                                │
+│  multi-run candidate: 0                                                                          │
+│  multi-run judge: 0                                                                              │
+│  multi-run fusion: 0                                                                             │
+│  change walkthrough: 0                                                                           │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│Usage · current ca process                                │
+│                                                          │
+│Requests: 0                                               │
+│Tokens: 0 input · 0 output                                │
+│Subsets: 0 cached input · 0 cache write · 0 reasoning     │
+│output                                                    │
+│Cost: unknown                                             │
+│Input cache: 0 cached where reported · new input/cache hit│
+│unavailable (no provider token usage is available)        │
+│Tool round trips: 0 tool round trips                      │
+│Latency: unavailable average total · unavailable average  │
+│to first output (0 of 0 request(s) measured)              │
+│                                                          │
+│Requests by kind                                          │
+│  main turn: 0                                            │
+│  tool continuation: 0                                    │
+│  check: 0                                                │
+│  context checkpoint: 0 · branch handoff: 0               │
+│  project initialization: 0                               │
+│  review: 0                                               │
+│  subagent: 0                                             │
+│  provider probe: 0 · voice transcription: 0              │
+└──────────────────────────────────────────────────────────┘

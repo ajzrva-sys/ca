@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&empty, 100, 30), render_to_text(&empty, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+              ┌──────────────────────────────────────────────────────────────────────┐
+              │Saved session retention                                               │
+              │                                                                      │
+              │Exact preview · 0 permanent deletions                                 │
+              │Protected: current 1 · pinned 1 · archived 2                          │
+              │                                                                      │
+              │No active sessions match these rules.                                 │
+              │                                                                      │
+              │ Cancel     Delete permanently                                        │
+              │←→ choose · Enter confirm · Esc cancel · ↑↓ inspect                   │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              └──────────────────────────────────────────────────────────────────────┘
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+  ┌──────────────────────────────────────────────────────┐
+  │Saved session retention                               │
+  │                                                      │
+  │Exact preview · 0 permanent deletions                 │
+  │Protected: current 1 · pinned 1 · archived 2          │
+  │                                                      │
+  │No active sessions match these rules.                 │
+  │                                                      │
+  │ Cancel     Delete permanently                        │
+  │←→ choose · Enter confirm · Esc cancel · ↑↓ inspect   │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+ →└──────────────────────────────────────────────────────┘
+
+/ commands

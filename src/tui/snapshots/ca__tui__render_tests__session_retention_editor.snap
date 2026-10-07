@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&editor, 100, 30), render_to_text(&editor, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+              ┌──────────────────────────────────────────────────────────────────────┐
+              │Saved session retention                                               │
+              │                                                                      │
+              │Blank disables a rule. Saving never deletes sessions.                 │
+              │                                                                      │
+              │ Delete older than  30         days                                   │
+              │ Keep newest        100        eligible sessions                      │
+              │                                                                      │
+              │Tab/↑↓ field · Enter save · Esc cancel                                │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              └──────────────────────────────────────────────────────────────────────┘
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+  ┌──────────────────────────────────────────────────────┐
+  │Saved session retention                               │
+  │                                                      │
+  │Blank disables a rule. Saving never deletes sessions. │
+  │                                                      │
+  │ Delete older than  30         days                   │
+  │ Keep newest        100        eligible sessions      │
+  │                                                      │
+  │Tab/↑↓ field · Enter save · Esc cancel                │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+ →└──────────────────────────────────────────────────────┘
+
+/ commands

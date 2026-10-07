@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&generating, 100, 30),\nrender_to_text(&generating, 60, 24))"
+---
+┌ Guided changes walkthrough ──────────────────────────────────────────────────────────────────────┐
+│Generating ordered explanation…                                                                   │
+│Target: working · Route: local/walkthrough-model                                                  │
+│Source: 0123456789ab · 2 tracked files                                                            │
+│                                                                                                  │
+│The provider receives only this exact snapshot and the reporting schema.                          │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│Esc cancel                                                                                        │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌ Guided changes walkthrough ──────────────────────────────┐
+│Generating ordered explanation…                           │
+│Target: working · Route: local/walkthrough-model          │
+│Source: 0123456789ab · 2 tracked files                    │
+│                                                          │
+│The provider receives only this exact snapshot and the    │
+│reporting schema.                                         │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│Esc cancel                                                │
+└──────────────────────────────────────────────────────────┘

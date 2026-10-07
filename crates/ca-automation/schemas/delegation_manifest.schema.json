@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "codex-team.delegation_manifest.v1",
+  "title": "Inert learned read-observe-verify delegation proposal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "safety_class",
+    "actions",
+    "applicability",
+    "maximum_actions",
+    "maximum_output_bytes",
+    "digest"
+  ],
+  "properties": {
+    "schema": {"const": "codex-team.delegation_manifest.v1"},
+    "safety_class": {"const": "read_observe_verify_only"},
+    "actions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": {"$ref": "mechanistic_action.schema.json"}
+    },
+    "applicability": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {"type": "string", "minLength": 1, "maxLength": 512}
+    },
+    "maximum_actions": {"type": "integer", "minimum": 1, "maximum": 8},
+    "maximum_output_bytes": {"type": "integer", "minimum": 1, "maximum": 65536},
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

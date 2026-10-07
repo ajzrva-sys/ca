@@ -1,0 +1,69 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&expanded, 100, 34),\nrender_to_text(&expanded, 60, 30))"
+---
+ ca · agent · auto
+Splitting the review by feature domain.
+
+  ✗ spawn_agent ×4 identical failures
+    1. Compare core agent and TUI behavior
+    2. Compare multimodal and document support
+    3. Compare provider and authentication support
+    4. Compare memory and planning support
+    ┌────────────────────────────────────────────────────────────────────────────────────────────┐
+    │ no automatic delegation route qualifies for complex complexity; verify credentials, suppor │
+    │ ted billing metadata, capability, and pricing freshness                                    │
+    └────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands
+-- narrow --
+ ca · agent · auto
+Splitting the review by feature domain.
+
+  ✗ spawn_agent ×4 identical failures
+    1. Compare core agent and TUI behavior
+    2. Compare multimodal and document support
+    3. Compare provider and authentication support
+    4. Compare memory and planning support
+    ┌────────────────────────────────────────────────────┐
+    │ no automatic delegation route qualifies for comple │
+    │ x complexity; verify credentials, supported billin │
+    │ g metadata, capability, and pricing freshness      │
+    └────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands

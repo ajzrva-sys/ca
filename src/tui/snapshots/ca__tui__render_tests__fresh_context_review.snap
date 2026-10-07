@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Fresh-context review · working tree                                                               │
+│                                                                                                  │
+│Two correctness issues were found in the bounded working-tree diff.                               │
+│                                                                                                  │
+│[High] Failed stream is marked complete                                                           │
+│src/main.rs:1840-1848 · confidence 96%                                                            │
+│The failure path can drain queued input after an incomplete response.                             │
+│Validate: Add a fake-provider premature EOF test.                                                 │
+│                                                                                                  │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close | 1/8                                       │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│Fresh-context review · working tree                       │
+│                                                          │
+│Two correctness issues were found in the bounded          │
+│working-tree diff.                                        │
+│                                                          │
+│[High] Failed stream is marked complete                   │
+│src/main.rs:1840-1848 · confidence 96%                    │
+│The failure path can drain queued input after an          │
+│incomplete response.                                      │
+│Validate: Add a fake-provider premature EOF test.         │
+│                                                          │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close |   │
+│1/8                                                       │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

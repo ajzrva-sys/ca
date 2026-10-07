@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&subject, 100, 30),\nrender_to_text(&subject, 60, 24))"
+---
+┌ Commit subject ──────────────────────────────────────────────────────────────────────────────────┐
+│Branch: codex/git-111 · HEAD: 0123456789ab                                                        │
+│Enter one commit subject (maximum 256 characters):                                                │
+│                                                                                                  │
+│Stabilize Unicode café workflow                                                                   │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│Enter review commit · Esc return to file list                                                     │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌ Commit subject ──────────────────────────────────────────┐
+│Branch: codex/git-111 · HEAD: 0123456789ab                │
+│Enter one commit subject (maximum 256 characters):        │
+│                                                          │
+│Stabilize Unicode café workflow                           │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│Enter review commit · Esc return to file list             │
+└──────────────────────────────────────────────────────────┘

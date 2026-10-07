@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&complete, 100, 30),\nrender_to_text(&complete, 60, 24))"
+---
+┌ Guided changes walkthrough ──────────────────────────────────────────────────────────────────────┐
+│Fresh · source still matches the explanation                                                      │
+│Target: working · Route: local/walkthrough-model                                                  │
+│Source: 0123456789ab · 2 tracked files                                                            │
+│                                                                                                  │
+│Summary                                                                                           │
+│The change adds a complete, hash-bound explanation flow without altering the existing diff or     │
+│review commands.                                                                                  │
+│                                                                                                  │
+│1. Capture an exact snapshot                                                                      │
+│Files: src/changes.rs                                                                             │
+│Git changes are bounded and hashed before any provider request begins.                            │
+│                                                                                                  │
+│2. Render the ordered explanation                                                                 │
+│Files: src/tui/render.rs                                                                          │
+│The overlay keeps the source identity visible and labels stale output instead of silently         │
+│regenerating it.                                                                                  │
+│                                                                                                  │
+│Notes                                                                                             │
+│- Suggestions are explanatory only; no edits are applied.                                         │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│↑↓/PgUp/PgDn scroll · Shift+R recapture · Esc close                                               │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌ Guided changes walkthrough ──────────────────────────────┐
+│Fresh · source still matches the explanation              │
+│Target: working · Route: local/walkthrough-model          │
+│Source: 0123456789ab · 2 tracked files                    │
+│                                                          │
+│Summary                                                   │
+│The change adds a complete, hash-bound explanation flow   │
+│without altering the existing diff or review commands.    │
+│                                                          │
+│1. Capture an exact snapshot                              │
+│Files: src/changes.rs                                     │
+│Git changes are bounded and hashed before any provider    │
+│request begins.                                           │
+│                                                          │
+│2. Render the ordered explanation                         │
+│Files: src/tui/render.rs                                  │
+│The overlay keeps the source identity visible and labels  │
+│stale output instead of silently regenerating it.         │
+│                                                          │
+│Notes                                                     │
+│- Suggestions are explanatory only; no edits are applied. │
+│                                                          │
+│↑↓/PgUp/PgDn scroll · Shift+R recapture · Esc close       │
+└──────────────────────────────────────────────────────────┘

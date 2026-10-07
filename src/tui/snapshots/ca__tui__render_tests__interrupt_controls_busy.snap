@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ → ▌Add a follow-up…
+ Esc stop · Enter interrupt · Alt+Enter queue
+Working on your request…
+-- narrow --
+ ca · agent · auto
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────
+ → ▌Add a follow-up…
+ Esc stop · Enter interrupt · Alt+Enter queue
+Working on your request…

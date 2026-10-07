@@ -1,0 +1,28 @@
+---
+source: src/tui/render_tests.rs
+expression: "render_to_text(&empty, 80, 24)"
+---
+ ca · agent · auto
+
+
+
+
+
+  ┌ Route presets ───────────────────────────────────────────────────────────┐
+  │Apply provider, model, and reasoning for this process.                    │
+  │                                                                          │
+  │No route presets configured                                               │
+  │                                                                          │
+  │                                                                          │
+  │                                                                          │
+  │No route presets are configured; use /preset-save <name>                  │
+  │                                                                          │
+  │                                                                          │
+  └──────────────────────────────────────────────────────────────────────────┘
+
+
+
+
+ → ▌Ask anything…
+
+/ commands

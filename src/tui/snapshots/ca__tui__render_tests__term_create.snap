@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+
+      ┌ Durable terminals ───────────────────────────────────────────────────────────────────┐
+      │tmux 3.5a · 2 sessions                                                                │
+      │>                                                                                     │
+      │Create a detached tmux session                                                        │
+      │                                                                                      │
+      │Name: new-dev                                                                         │
+      │                                                                                      │
+      │The session is user-owned and survives ca shutdown.                                   │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │Enter create · Esc cancel                                                             │
+      │                                                                                      │
+      │                                                                                      │
+ → ▌As└──────────────────────────────────────────────────────────────────────────────────────┘
+
+/ commands
+-- narrow --
+ ca · agent · auto
+ ┌ Durable terminals ─────────────────────────────────────┐
+ │tmux 3.5a · 2 sessions                                  │
+ │>                                                       │
+ │Create a detached tmux session                          │
+ │                                                        │
+ │Name: new-dev                                           │
+ │                                                        │
+ │The session is user-owned and survives ca shutdown.     │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │Enter create · Esc cancel                               │
+ │                                                        │
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+/ commands

@@ -1,0 +1,78 @@
+---
+source: src/tui/render_tests.rs
+assertion_line: 9234
+expression: "wide_narrow(render_to_text(&state, 100, 38), render_to_text(&state, 60, 34))"
+---
+ ca · agent · auto
+The inline result is x₂ + α ≤ ∞, while $5.00$ remains currency.
+
+  ∑ᵢ₌₁ⁿ i = n⁄2
+
+  • Gradient: ∇ f
+  • Literal code: \(x_2\)
+
+  ┌────────┬─────────────┐
+  │ Symbol │ Meaning     │
+  ├────────┼─────────────┤
+  │ β      │ coefficient │
+  │ x²     │ square      │
+  └────────┴─────────────┘
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands
+-- narrow --
+ ca · agent · auto
+The inline result is x₂ + α ≤ ∞, while $5.00$ remains
+currency.
+
+  ∑ᵢ₌₁ⁿ i = n⁄2
+
+  • Gradient: ∇ f
+  • Literal code: \(x_2\)
+
+  ┌────────┬─────────────┐
+  │ Symbol │ Meaning     │
+  ├────────┼─────────────┤
+  │ β      │ coefficient │
+  │ x²     │ square      │
+  └────────┴─────────────┘
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands

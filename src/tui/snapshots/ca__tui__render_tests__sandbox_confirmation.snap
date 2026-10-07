@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+
+
+         ┌────────────────────────────────────────────────────────────────────────────────┐
+         │ Sandbox                                                                        │
+         │                                                                                │
+         │  Saved for next launch  required                                               │
+         │  Effective this run     required                                               │
+         │  macOS backend          ready                                                  │
+         │  Network enforcement    OS-enforced when granted                               │
+         │  Writable roots         4                                                      │
+         │    /tmp/project                                                                │
+         │    /tmp/shared source                                                          │
+         │    /tmp/generated                                                              │
+         │    … 1 more                                                                    │
+         │                                                                                │
+         │  Use off on the next launch?                                                   │
+         │  no process sandbox                                                            │
+         │  This run stays required until ca restarts.                                    │
+         │                                                                                │
+         │  Cancel       Save for next launch                                             │
+         │                                                                                │
+         │←→ choose · Enter confirm · Esc cancel                                          │
+         │                                                                                │
+         │                                                                                │
+         │                                                                                │
+         └────────────────────────────────────────────────────────────────────────────────┘
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+  ┌──────────────────────────────────────────────────────┐
+  │ Sandbox                                              │
+  │                                                      │
+  │  Saved for next launch  required                     │
+  │  Effective this run     required                     │
+  │  macOS backend          ready                        │
+  │  Network enforcement    OS-enforced when granted     │
+  │  Writable roots         4                            │
+  │    /tmp/project                                      │
+  │    /tmp/shared source                                │
+  │    /tmp/generated                                    │
+  │    … 1 more                                          │
+  │                                                      │
+  │  Use off on the next launch?                         │
+  │  no process sandbox                                  │
+  │  This run stays required until ca restarts.          │
+  │                                                      │
+  │  Cancel       Save for next launch                   │
+  │                                                      │
+  │←→ choose · Enter confirm · Esc cancel                │
+ →│                                                      │
+  └──────────────────────────────────────────────────────┘
+/ commands

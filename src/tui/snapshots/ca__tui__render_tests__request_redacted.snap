@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&redacted, 100, 30),\nrender_to_text(&redacted, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│  (none)                                                                                          │
+│                                                                                                  │
+│Messages (1)                                                                                      │
+│                                                                                                  │
+│[user 1]                                                                                          │
+│Authorization:[REDACTED]                                                                          │
+│                                                                                                  │
+│Tool schemas (0)                                                                                  │
+│  (none)                                                                                          │
+│                                                                                                  │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close | 25/33                                     │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│  (none)                                                  │
+│                                                          │
+│Messages (1)                                              │
+│                                                          │
+│[user 1]                                                  │
+│Authorization:[REDACTED]                                  │
+│                                                          │
+│Tool schemas (0)                                          │
+│  (none)                                                  │
+│                                                          │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close |   │
+│25/33                                                     │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

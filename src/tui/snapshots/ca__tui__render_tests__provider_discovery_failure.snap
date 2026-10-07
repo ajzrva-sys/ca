@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&empty, 100, 30), render_to_text(&empty, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+      ┌ Local provider discovery ────────────────────────────────────────────────────────────┐
+      │                                                                                      │
+      │Discovery failed: could not prepare local provider discovery                          │
+      │                                                                                      │
+      │Enter add · ⇧R rescan · Esc close · ↑↓ navigate                                       │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      └──────────────────────────────────────────────────────────────────────────────────────┘
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+  ┌ Local provider discovery ────────────────────────────┐
+  │                                                      │
+  │Discovery failed: could not prepare local provider    │
+  │discovery                                             │
+  │                                                      │
+  │Enter add · ⇧R rescan · Esc close · ↑↓ navigate       │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+ →│                                                      │
+  └──────────────────────────────────────────────────────┘
+/ commands

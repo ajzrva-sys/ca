@@ -1,0 +1,81 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 40), render_to_text(&state, 60, 36))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Session                                                                                           │
+│                                                                                                  │
+│Conversation history                                                                              │
+│Session: Focused stabilization                                                                    │
+│Continue: ca -s ses_7l2hTS89aiPdN3nrfX8Bgd                                                        │
+│Identifier: ses_7l2hTS89aiPdN3nrfX8Bgd                                                            │
+│Internal UUID: feedbeef-dead-cafe-0123-456789abcdef                                               │
+│Profile: default                                                                                  │
+│Provider/model: local/model                                                                       │
+│Branch: master                                                                                    │
+│Messages: 1                                                                                       │
+│User turns: 1                                                                                     │
+│Checkpoint coverage: none                                                                         │
+│                                                                                                  │
+│This sitting                                                                                      │
+│Worked time: 42s                                                                                  │
+│Model requests: 1 · tool round trips: 0                                                           │
+│Latency: 15 ms average total · unavailable average to first output (0 measured)                   │
+│Outcomes: completed 1                                                                             │
+│Requests by kind                                                                                  │
+│  main turn: 1                                                                                    │
+│Tools: 1                                                                                          │
+│  read_file: 1 (1 completed · 0 failed)                                                           │
+│Tokens                                                                                            │
+│  input: 20 total · 15 new · 5 cached · 25.0% hit                                                 │
+│  cache writes: 3                                                                                 │
+│  output: 6                                                                                       │
+│  reasoning output: 2                                                                             │
+│Cost: unknown                                                                                     │
+│Subscription allocation: none                                                                     │
+│Unknown cost: 1 request(s)                                                                        │
+│Unknown token usage: 0 request(s)                                                                 │
+│                                                                                                  │
+│Current context                                                                                   │
+│Occupancy: 3400 / unknown                                                                         │
+│Checkpoint coverage: none                                                                         │
+│                                                                                                  │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close | 1/36                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│Session                                                   │
+│                                                          │
+│Conversation history                                      │
+│Session: Focused stabilization                            │
+│Continue: ca -s ses_7l2hTS89aiPdN3nrfX8Bgd                │
+│Identifier: ses_7l2hTS89aiPdN3nrfX8Bgd                    │
+│Internal UUID: feedbeef-dead-cafe-0123-456789abcdef       │
+│Profile: default                                          │
+│Provider/model: local/model                               │
+│Branch: master                                            │
+│Messages: 1                                               │
+│User turns: 1                                             │
+│Checkpoint coverage: none                                 │
+│                                                          │
+│This sitting                                              │
+│Worked time: 42s                                          │
+│Model requests: 1 · tool round trips: 0                   │
+│Latency: 15 ms average total · unavailable average to     │
+│first output (0 measured)                                 │
+│Outcomes: completed 1                                     │
+│Requests by kind                                          │
+│  main turn: 1                                            │
+│Tools: 1                                                  │
+│  read_file: 1 (1 completed · 0 failed)                   │
+│Tokens                                                    │
+│  input: 20 total · 15 new · 5 cached · 25.0% hit         │
+│  cache writes: 3                                         │
+│  output: 6                                               │
+│  reasoning output: 2                                     │
+│Cost: unknown                                             │
+│Subscription allocation: none                             │
+│Unknown cost: 1 request(s)                                │
+│Unknown token usage: 0 request(s)                         │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

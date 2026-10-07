@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&cancelled, 100, 30),\nrender_to_text(&cancelled, 60, 24))"
+---
+ ca · agent · auto
+
+
+      ┌ Hooks ───────────────────────────────────────────────────────────────────────────────┐
+      │> type to filter…                                                                     │
+      │3 hooks · network denied by OS sandbox                                                │
+      │Config: /tmp/ca-test/config.toml                                                      │
+      │                                                                                      │
+      │▶ session_start            enabled    5s  fail-closed working · 42 ms                 │
+      │  pre_tool_use             disabled  12s  fail-open   not tested                      │
+      │  after_agent_response     enabled    8s  fail-open   denied · 17 ms                  │
+      │                                                                                      │
+      │Hook test cancelled                                                                   │
+      │                                                                                      │
+      │Space toggle · ⇧T test · ⇧R reload · Esc close                                        │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      └──────────────────────────────────────────────────────────────────────────────────────┘
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+ ┌ Hooks ─────────────────────────────────────────────────┐
+ │> type to filter…                                       │
+ │3 hooks · network denied by OS sandbox                  │
+ │Config: /tmp/ca-test/config.toml                        │
+ │                                                        │
+ │▶ session_start            enabled    5s  fail-closed   │
+ │working · 42 ms                                         │
+ │  pre_tool_use             disabled  12s  fail-open     │
+ │not tested                                              │
+ │  after_agent_response     enabled    8s  fail-open     │
+ │denied · 17 ms                                          │
+ │                                                        │
+ │Hook test cancelled                                     │
+ │                                                        │
+ │Space toggle · ⇧T test · ⇧R reload · Esc close          │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+/ commands

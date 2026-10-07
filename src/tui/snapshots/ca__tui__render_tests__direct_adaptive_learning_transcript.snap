@@ -1,0 +1,130 @@
+---
+source: src/tui/render_tests.rs
+assertion_line: 5476
+expression: "wide_narrow(render_to_text(&state, 120, 44), render_to_text(&state, 64, 80))"
+---
+ ca · agent · auto
+
+  ┌─────────────────────┬─────────────┬────────────┬─────────┬──────────────────────────────────┐
+  │ Workflow            │ Evidence    │ Confidence │ Outcome │ Reason / existing assets         │
+  ├─────────────────────┼─────────────┼────────────┼─────────┼──────────────────────────────────┤
+  │ BSD rsync check     │ 25 sessions │ high       │ skipped │ Existing: /check-rsync — /Users/ │
+  │                     │             │            │         │ aji/.mimocode/command/check-rsyn │
+  │                     │             │            │         │ c.md                             │
+  │ Transmission status │ 25 sessions │ high       │ skipped │ Existing: /check-transmission —  │
+  │                     │             │            │         │ /Users/aji/.mimocode/command/che │
+  │                     │             │            │         │ ck-transmission.md               │
+  │ Seedbox status      │ 24 sessions │ high       │ skipped │ Existing: /check-seedbox — /User │
+  │                     │             │            │         │ s/aji/.mimocode/command/check-se │
+  │                     │             │            │         │ edbox.md                         │
+  └─────────────────────┴─────────────┴────────────┴─────────┴──────────────────────────────────┘
+
+Collapsed low-signal singletons: 116 clusters / 116 sessions. Examples: FreeBSD QEMU check, one-off cleanup, isolated
+migration.
+
+## Created or extended
+
+  • Nothing new; existing knowledge already covers the validated evidence.
+
+## Skipped
+
+  • Existing BSD commands are shown above with exact paths.
+  • Collapsed 116 low-signal singleton clusters across 116 sessions.
+
+## Needs more evidence
+
+  • No unresolved recurring workflow.
+
+## Receipt
+
+Run: 11111111-1111-4111-8111-111111111111 · model mimo/mimo-v2.5-pro · 2 adaptive turns · 1 bounded retrieval step ·
+1842 input / 419 output tokens · undo /learn undo 11111111-1111-4111-8111-111111111111
+Structural validation: passed.
+Details: /learn status 11111111-1111-4111-8111-111111111111
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands
+-- narrow --
+ ca · agent · auto
+  • Sources: CA 18 · Codex 1000 · MiMo 578.
+  • Workflow clusters: 2/2 page(s) delivered · 119 searchable ·
+119 explicitly decided.
+  • Existing assets: 132 — 3 commands · 128 skills · 1 subagent.
+  • Proposed this run: 0 commands · 0 skills · 0 subagents.
+
+## Memory review
+
+  • Changed 0 cluster decision(s) · already covered 3 ·
+non-durable 116 · unresolved 0.
+
+## Shortlist
+
+  ┌────────────┬───────────┬───────────┬─────────┬───────────┐
+  │ Workflow   │ Evidence  │ Confidenc │ Outcome │ Reason /  │
+  │            │           │ e         │         │ existing  │
+  │            │           │           │         │ assets    │
+  ├────────────┼───────────┼───────────┼─────────┼───────────┤
+  │ BSD rsync  │ 25 sessio │ high      │ skipped │ Existing: │
+  │ check      │ ns        │           │         │  /check-r │
+  │            │           │           │         │ sync — /U │
+  │            │           │           │         │ sers/aji/ │
+  │            │           │           │         │ .mimocode │
+  │            │           │           │         │ /command/ │
+  │            │           │           │         │ check-rsy │
+  │            │           │           │         │ nc.md     │
+  │ Transmissi │ 25 sessio │ high      │ skipped │ Existing: │
+  │ on status  │ ns        │           │         │  /check-t │
+  │            │           │           │         │ ransmissi │
+  │            │           │           │         │ on — /Use │
+  │            │           │           │         │ rs/aji/.m │
+  │            │           │           │         │ imocode/c │
+  │            │           │           │         │ ommand/ch │
+  │            │           │           │         │ eck-trans │
+  │            │           │           │         │ mission.m │
+  │            │           │           │         │ d         │
+  │ Seedbox st │ 24 sessio │ high      │ skipped │ Existing: │
+  │ atus       │ ns        │           │         │  /check-s │
+  │            │           │           │         │ eedbox —  │
+  │            │           │           │         │ /Users/aj │
+  │            │           │           │         │ i/.mimoco │
+  │            │           │           │         │ de/comman │
+  │            │           │           │         │ d/check-s │
+  │            │           │           │         │ eedbox.md │
+  └────────────┴───────────┴───────────┴─────────┴───────────┘
+
+Collapsed low-signal singletons: 116 clusters / 116 sessions.
+Examples: FreeBSD QEMU check, one-off cleanup, isolated
+migration.
+
+## Created or extended
+
+  • Nothing new; existing knowledge already covers the validated
+evidence.
+
+## Skipped
+
+  • Existing BSD commands are shown above with exact paths.
+  • Collapsed 116 low-signal singleton clusters across 116
+sessions.
+
+## Needs more evidence
+
+  • No unresolved recurring workflow.
+
+## Receipt
+
+Run: 11111111-1111-4111-8111-111111111111 · model
+mimo/mimo-v2.5-pro · 2 adaptive turns · 1 bounded retrieval step
+· 1842 input / 419 output tokens · undo /learn undo
+11111111-1111-4111-8111-111111111111
+Structural validation: passed.
+Details: /learn status 11111111-1111-4111-8111-111111111111
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands

@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&clear, 100, 30), render_to_text(&clear, 60, 24))"
+---
+ ca · agent · auto · workflow running
+
+
+
+
+
+
+
+
+
+                   ┌ Clear workflow state? ─────────────────────────────────────┐
+                   │Clear release-check state? Definition and transcript remain │
+                   │unchanged.                                                  │
+                   │                                                            │
+                   │▶ Cancel       Clear                                        │
+                   │Arrow/Tab choose · Enter confirm · Esc close                │
+                   │                                                            │
+                   │                                                            │
+                   │                                                            │
+                   └────────────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto · workflow running
+
+
+
+
+
+
+ ┌ Clear workflow state? ─────────────────────────────────┐
+ │Clear release-check state? Definition and transcript    │
+ │remain unchanged.                                       │
+ │                                                        │
+ │▶ Cancel       Clear                                    │
+ │Arrow/Tab choose · Enter confirm · Esc close            │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+
+
+
+
+ → ▌Ask anything…
+
+/ commands

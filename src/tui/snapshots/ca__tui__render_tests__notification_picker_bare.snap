@@ -1,0 +1,28 @@
+---
+source: src/tui/render_tests.rs
+expression: "render_to_text(&bare, 80, 24)"
+---
+ ca · agent · auto · profile bare
+
+
+
+
+             ┌ Completion notification ───────────────────────────┐
+             │Notify when a top-level turn runs for 30 seconds.   │
+             │                                                    │
+             │  Off       current                                 │
+             │  BEL                                               │
+             │▸ OSC 9                                             │
+             │                                                    │
+             │                                                    │
+             │                                                    │
+             │Notification settings cannot be saved in bare mode; │
+             │rerun without --profile bare                        │
+             │                                                    │
+             └────────────────────────────────────────────────────┘
+
+
+
+ → ▌Ask anything…
+
+/ commands

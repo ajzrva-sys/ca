@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│MCP servers                                                                                       │
+│filesystem [stdio User/Running] oauth=none tools=4 active=2 resources=2                           │
+│project-db [stdio Project/Untrusted] oauth=none tools=0 active=0 resources=0                      │
+│network-api [streamable_http User/AuthorizationRequired] oauth=authorization_required tools=0     │
+│active=0 resources=0                                                                              │
+│  error: MCP server network-api requires authorization; run /mcp connect network-api              │
+│                                                                                                  │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close | 1/5                                       │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│MCP servers                                               │
+│filesystem [stdio User/Running] oauth=none tools=4        │
+│active=2 resources=2                                      │
+│project-db [stdio Project/Untrusted] oauth=none tools=0   │
+│active=0 resources=0                                      │
+│network-api [streamable_http User/AuthorizationRequired]  │
+│oauth=authorization_required tools=0 active=0 resources=0 │
+│  error: MCP server network-api requires authorization;   │
+│run /mcp connect network-api                              │
+│                                                          │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close |   │
+│1/5                                                       │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

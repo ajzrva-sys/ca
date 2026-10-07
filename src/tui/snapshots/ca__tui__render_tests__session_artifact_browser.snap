@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Session artifacts                                                                                 │
+│                                                                                                  │
+│1. src/session.rs · modified · tracked · 3 accesses                                               │
+│2. docs/report.md · created · tracked · 1 access                                                  │
+│3. tmp/removed.txt · deleted · deleted · 1 access                                                 │
+│                                                                                                  │
+│Use /artifacts inspect|view|copy|untrack <number-or-path>.                                        │
+│                                                                                                  │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close | 1/7                                       │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│Session artifacts                                         │
+│                                                          │
+│1. src/session.rs · modified · tracked · 3 accesses       │
+│2. docs/report.md · created · tracked · 1 access          │
+│3. tmp/removed.txt · deleted · deleted · 1 access         │
+│                                                          │
+│Use /artifacts inspect|view|copy|untrack <number-or-path>.│
+│                                                          │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close |   │
+│1/7                                                       │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

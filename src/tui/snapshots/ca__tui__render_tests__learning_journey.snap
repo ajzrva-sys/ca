@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Learning journey                                                                                  │
+│Metadata only · prompts, transcripts, tool data, and secrets are never recorded.                  │
+│                                                                                                  │
+│evt-0123456789abcdef0123 · 2026-08-25T10:00:00+00:00 · SkillCompletion · completed · check-rsync  │
+│evt-abcdef0123456789abcd · 2026-08-25T09:00:00+00:00 · LearningRun · completed                    │
+│                                                                                                  │
+│Legacy inventory (not fabricated history): 132 discovered skill(s) · 18 memory record(s) · 27     │
+│existing learning/mutation journal(s)                                                             │
+│Suggestions: /learning suggestions                                                                │
+│                                                                                                  │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close | 1/8                                       │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│Learning journey                                          │
+│Metadata only · prompts, transcripts, tool data, and      │
+│secrets are never recorded.                               │
+│                                                          │
+│evt-0123456789abcdef0123 · 2026-08-25T10:00:00+00:00 ·    │
+│SkillCompletion · completed · check-rsync                 │
+│evt-abcdef0123456789abcd · 2026-08-25T09:00:00+00:00 ·    │
+│LearningRun · completed                                   │
+│                                                          │
+│Legacy inventory (not fabricated history): 132 discovered │
+│skill(s) · 18 memory record(s) · 27 existing              │
+│learning/mutation journal(s)                              │
+│Suggestions: /learning suggestions                        │
+│                                                          │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close |   │
+│1/8                                                       │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

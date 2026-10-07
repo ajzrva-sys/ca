@@ -1,0 +1,6 @@
+# Tool call test
+type:read the file Cargo.toml and tell me the project name
+key:enter
+wait:15s
+assert:tool:read_file
+assert:contains:ca

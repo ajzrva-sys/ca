@@ -1,0 +1,34 @@
+---
+source: src/tui/render_tests.rs
+expression: "render_to_text(&activity_snapshot_state(ToolStatus::Done, false), 100, 30)"
+---
+ ca · agent · auto
+  [ ✎ Edited 4 files, ran a command ▸ ]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands

@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&preparing, 100, 30),\nrender_to_text(&preparing, 60, 24))"
+---
+┌ Initialize project instructions ─────────────────────────────────────────────────────────────────┐
+│Target: /workspace/demo/AGENTS.md                                                                 │
+│                                                                                                  │
+│Collecting bounded evidence and drafting with one tool-free request…                              │
+│Esc or Ctrl+C cancels without changing the workspace.                                             │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│Esc cancel                                                                                        │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌ Initialize project instructions ─────────────────────────┐
+│Target: /workspace/demo/AGENTS.md                         │
+│                                                          │
+│Collecting bounded evidence and drafting with one         │
+│tool-free request…                                        │
+│Esc or Ctrl+C cancels without changing the workspace.     │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│Esc cancel                                                │
+└──────────────────────────────────────────────────────────┘

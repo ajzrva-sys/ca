@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Dream maintenance                                                                                 │
+│                                                                                                  │
+│Schedule: on · every 7 days · not due                                                             │
+│                                                                                                  │
+│Latest: 00000000-0000-0000-0000-000000000134 · completed                                          │
+│trigger: automatic                                                                                │
+│Route: mimo/mimo-v2.5-pro                                                                         │
+│Evidence sessions: 12                                                                             │
+│Changes: 3 · conflicts: 1                                                                         │
+│Result: applied 3 Dream memory changes; 1 conflict                                                │
+│                                                                                                  │
+│Recent runs                                                                                       │
+│- 00000000-0000-0000-0000-000000000134 · completed · 3 changes                                    │
+│- 00000000-0000-0000-0000-000000000131 · skipped · 0 changes                                      │
+│- 00000000-0000-0000-0000-000000000132 · failed · 0 changes                                       │
+│- 00000000-0000-0000-0000-000000000133 · cancelled · 0 changes                                    │
+│- 00000000-0000-0000-0000-000000000134 · undone · 0 changes                                       │
+│                                                                                                  │
+│/dream run · /dream off · /dream undo <run-id>                                                    │
+│                                                                                                  │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close | 1/19                                      │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│Dream maintenance                                         │
+│                                                          │
+│Schedule: on · every 7 days · not due                     │
+│                                                          │
+│Latest: 00000000-0000-0000-0000-000000000134 · completed  │
+│trigger: automatic                                        │
+│Route: mimo/mimo-v2.5-pro                                 │
+│Evidence sessions: 12                                     │
+│Changes: 3 · conflicts: 1                                 │
+│Result: applied 3 Dream memory changes; 1 conflict        │
+│                                                          │
+│Recent runs                                               │
+│- 00000000-0000-0000-0000-000000000134 · completed · 3    │
+│changes                                                   │
+│- 00000000-0000-0000-0000-000000000131 · skipped · 0      │
+│changes                                                   │
+│- 00000000-0000-0000-0000-000000000132 · failed · 0       │
+│changes                                                   │
+│- 00000000-0000-0000-0000-000000000133 · cancelled · 0    │
+│changes                                                   │
+│- 00000000-0000-0000-0000-000000000134 · undone · 0       │
+│changes                                                   │
+└──────────────────────────────────────────────────────────┘

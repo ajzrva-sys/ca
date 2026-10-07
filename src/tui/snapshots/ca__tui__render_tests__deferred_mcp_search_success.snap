@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&success, 100, 30),\nrender_to_text(&success, 60, 24))"
+---
+ ca · agent · auto
+I found the relevant MCP tools. Their exact schemas will be available on the next turn.
+
+  ✓ search_mcp_tools {"query":"issues","server":"linear","limit":2}
+    ┌────────────────────────────────────────────────────────────────────────────────────────────┐
+    │ Activated 2 MCP tools for subsequent turns:                                                │
+    │ - mcp__linear__list_issues [linear]                                                        │
+    │ - mcp__linear__read_issue [linear]                                                         │
+    └────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands
+-- narrow --
+ ca · agent · auto
+I found the relevant MCP tools. Their exact schemas will be
+available on the next turn.
+
+  ✓ search_mcp_tools
+{"query":"issues","server":"linear","limit":2}
+    ┌────────────────────────────────────────────────────┐
+    │ Activated 2 MCP tools for subsequent turns:        │
+    │ - mcp__linear__list_issues [linear]                │
+    │ - mcp__linear__read_issue [linear]                 │
+    └────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands

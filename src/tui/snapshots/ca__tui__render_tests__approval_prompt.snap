@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+> Run the test suite
+
+
+  Approve command [1/1] — run_command
+    Reason: local process execution · [g] this exact command for this run
+    Command: cargo test
+  [y] run  [n] deny  [e] edit  [s] all uses of this tool  [g] allow exact for run  [p] always allow
+exact path  [x] always deny  [a] yolo
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands
+-- narrow --
+ ca · agent · auto
+> Run the test suite
+
+
+  Approve command [1/1] — run_command
+    Reason: local process execution · [g] this exact command
+for this run
+    Command: cargo test
+  [y] run  [n] deny  [e] edit  [s] all uses of this tool
+[g] allow exact for run  [p] always allow exact path  [x]
+always deny  [a] yolo
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands

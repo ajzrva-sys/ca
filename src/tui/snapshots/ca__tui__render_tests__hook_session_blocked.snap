@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+
+
+      ┌ Hooks ───────────────────────────────────────────────────────────────────────────────┐
+      │> type to filter…                                                                     │
+      │3 hooks · network denied by OS sandbox                                                │
+      │Config: /tmp/ca-test/config.toml                                                      │
+      │                                                                                      │
+      │▶ session_start            enabled    5s  fail-closed working · 42 ms                 │
+      │  pre_tool_use             disabled  12s  fail-open   not tested                      │
+      │  after_agent_response     enabled    8s  fail-open   denied · 17 ms                  │
+      │                                                                                      │
+      │Session-start hook blocked: Hook failed (fail-closed). Run /hooks to repair or disable│
+      │it                                                                                    │
+      │                                                                                      │
+      │Space toggle · ⇧T test · ⇧R reload · Esc close                                        │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      └──────────────────────────────────────────────────────────────────────────────────────┘
+ → ▌Ask anything…
+
+Session-start hook blocked: Hook failed (fail-closed). Run /hooks to repair or disable it
+-- narrow --
+ ca · agent · auto
+ ┌ Hooks ─────────────────────────────────────────────────┐
+ │> type to filter…                                       │
+ │3 hooks · network denied by OS sandbox                  │
+ │Config: /tmp/ca-test/config.toml                        │
+ │                                                        │
+ │▶ session_start            enabled    5s  fail-closed   │
+ │working · 42 ms                                         │
+ │  pre_tool_use             disabled  12s  fail-open     │
+ │not tested                                              │
+ │  after_agent_response     enabled    8s  fail-open     │
+ │denied · 17 ms                                          │
+ │                                                        │
+ │Session-start hook blocked: Hook failed (fail-closed).  │
+ │Run /hooks to repair or disable it                      │
+ │                                                        │
+ │Space toggle · ⇧T test · ⇧R reload · Esc close          │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+Session-start hook blocked: Hook failed (fail-closed). Run …

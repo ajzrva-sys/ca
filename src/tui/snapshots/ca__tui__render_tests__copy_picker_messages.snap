@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&messages, 100, 30),\nrender_to_text(&messages, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+      ┌ Copy message ────────────────────────────────────────────────────────────────────────┐
+      │Search:                                                                               │
+      │                                                                                      │
+      │  User · Review the provider contract before editing                                  │
+      │▸ Assistant · I found the failing cache-usage branch                                  │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │Enter inspect parts · Esc close · ↑↓ navigate · type to filter                        │
+      │                                                                                      │
+      └──────────────────────────────────────────────────────────────────────────────────────┘
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+ ┌ Copy message ──────────────────────────────────────────┐
+ │Search:                                                 │
+ │                                                        │
+ │  User · Review the provider contract before editing    │
+ │▸ Assistant · I found the failing cache-usage branch    │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │Enter inspect parts · Esc close · ↑↓ navigate · type to │
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+
+/ commands

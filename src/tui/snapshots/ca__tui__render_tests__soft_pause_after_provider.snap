@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+I retained the completed boundary.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ → ▌Add a follow-up…
+ Esc stop · Enter interrupt · Alt+Enter queue
+Paused after provider · /unpause · Ctrl+C cancel
+-- narrow --
+ ca · agent · auto
+I retained the completed boundary.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────
+ → ▌Add a follow-up…
+ Esc stop · Enter interrupt · Alt+Enter queue
+Paused after provider · /unpause · Ctrl+C cancel

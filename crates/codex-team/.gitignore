@@ -1,0 +1,22 @@
+# Rust build output
+/target/
+
+# Local orchestrator runtime state when this repo is used as a test target
+/.orchestrator/
+/session_export/
+/TASK.md
+/NEXT_STEPS.md
+/NEXT_STEPS_non-ai.md
+/CONTINUITY.md
+/ROADMAP.md
+
+# OS/editor noise
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Local environment overrides
+.env
+.env.*
+!.env.example

@@ -1,0 +1,93 @@
+{
+  "type": "object",
+  "required": [
+    "approved",
+    "batch_id",
+    "task_ids",
+    "reason_code",
+    "max_tasks",
+    "allowed_kinds",
+    "forbidden_scope",
+    "requires_stop_on",
+    "verification_required",
+    "auto_accept_policy",
+    "needs_planner",
+    "needs_master",
+    "summary",
+    "warnings",
+    "progress_actions"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "approved": {"type": "boolean"},
+    "batch_id": {"type": "string"},
+    "task_ids": {"type": "array", "items": {"type": "string"}},
+    "reason_code": {
+      "type": "string",
+      "enum": [
+        "approved_bounded_batch",
+        "needs_planner",
+        "needs_master",
+        "ambiguous_backlog",
+        "high_risk",
+        "incomplete_task_cards",
+        "no_safe_batch"
+      ]
+    },
+    "max_tasks": {"type": "integer", "minimum": 0},
+    "allowed_kinds": {"type": "array", "items": {"type": "string"}},
+    "forbidden_scope": {"type": "array", "items": {"type": "string"}},
+    "requires_stop_on": {"type": "array", "items": {"type": "string"}},
+    "verification_required": {"type": "array", "items": {"type": "string"}},
+    "auto_accept_policy": {
+      "type": "string",
+      "enum": ["low_risk_verified_only", "always_senior_review"]
+    },
+    "needs_planner": {"type": "boolean"},
+    "needs_master": {"type": "boolean"},
+    "summary": {"type": "string"},
+    "warnings": {"type": "array", "items": {"type": "string"}},
+    "progress_actions": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "required": [
+          "action_id",
+          "kind",
+          "title",
+          "summary",
+          "commit_message",
+          "allowed_files",
+          "read_only_files",
+          "commands",
+          "success_criteria",
+          "stop_conditions"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "action_id": {"type": "string"},
+          "kind": {
+            "type": "string",
+            "enum": [
+              "rust_evidence_job",
+              "rust_bookkeeping_job",
+              "rust_commit_job",
+              "worker_edit_task",
+              "senior_decision",
+              "pm_direction"
+            ]
+          },
+          "title": {"type": "string"},
+          "summary": {"type": "string"},
+          "commit_message": {"type": "string"},
+          "allowed_files": {"type": "array", "items": {"type": "string"}},
+          "read_only_files": {"type": "array", "items": {"type": "string"}},
+          "commands": {"type": "array", "items": {"type": "string"}},
+          "success_criteria": {"type": "array", "items": {"type": "string"}},
+          "stop_conditions": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    }
+  }
+}

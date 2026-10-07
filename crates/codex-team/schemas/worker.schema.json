@@ -1,0 +1,66 @@
+
+{
+  "type": "object",
+  "required": ["task_id", "status", "summary", "files_changed", "commands_run", "tests_run", "handoff_to_rust", "orchestration_request", "blocker", "confidence"],
+  "additionalProperties": false,
+  "properties": {
+    "task_id": {"type": "string"},
+    "status": {"type": "string", "enum": ["done", "blocked", "failed"]},
+    "summary": {"type": "string"},
+    "files_changed": {"type": "array", "items": {"type": "string"}},
+    "commands_run": {"type": "array", "items": {"type": "string"}},
+    "tests_run": {"type": "array", "items": {"type": "string"}},
+    "handoff_to_rust": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "program", "args", "cwd", "timeout_seconds", "kind", "failure_policy", "expected_exit", "tags", "source"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {"type": "string"},
+          "program": {"type": "string"},
+          "args": {"type": "array", "items": {"type": "string"}},
+          "cwd": {"type": ["string", "null"]},
+          "timeout_seconds": {"type": ["integer", "null"]},
+          "kind": {"type": "string", "enum": ["build", "test", "lint", "search", "git", "smoke", "unknown"]},
+          "failure_policy": {"type": "string", "enum": ["stop", "collect"]},
+          "expected_exit": {"type": ["integer", "null"]},
+          "tags": {"type": "array", "items": {"type": "string"}},
+          "source": {"type": "string"}
+        }
+      }
+    },
+    "orchestration_request": {
+      "type": ["object", "null"],
+      "required": ["kind", "reason", "lease_paths", "child_tasks"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"type": "string", "enum": ["split_task", "retry_same_task", "route_to_planner", "expand_lease"]},
+        "reason": {"type": "string"},
+        "lease_paths": {"type": "array", "items": {"type": "string"}},
+        "child_tasks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["title", "objective", "kind", "allowed_files", "read_only_files", "exact_steps", "success_criteria", "tests_to_run", "stop_conditions", "estimated_minutes"],
+            "additionalProperties": false,
+            "properties": {
+              "title": {"type": "string"},
+              "objective": {"type": "string"},
+              "kind": {"type": ["string", "null"]},
+              "allowed_files": {"type": "array", "items": {"type": "string"}},
+              "read_only_files": {"type": "array", "items": {"type": "string"}},
+              "exact_steps": {"type": "array", "items": {"type": "string"}},
+              "success_criteria": {"type": "array", "items": {"type": "string"}},
+              "tests_to_run": {"type": "array", "items": {"type": "string"}},
+              "stop_conditions": {"type": "array", "items": {"type": "string"}},
+              "estimated_minutes": {"type": ["integer", "null"]}
+            }
+          }
+        }
+      }
+    },
+    "blocker": {"type": "string"},
+    "confidence": {"type": "string", "enum": ["low", "medium", "high"]}
+  }
+}

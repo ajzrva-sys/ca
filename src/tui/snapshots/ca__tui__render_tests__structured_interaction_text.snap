@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+
+
+
+
+
+              ┌ Input required ──────────────────────────────────────────────────────┐
+              │What should the branch be called?                                     │
+              │                                                                      │
+              │  Answer:                                                             │
+              │  codex/interaction                                                   │
+              │                                                                      │
+              │Enter submit · Esc cancel                                             │
+              │                                                                      │
+              │                                                                      │
+              └──────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+
+
+
+
+
+  ┌ Input required ──────────────────────────────────────┐
+  │What should the branch be called?                     │
+  │                                                      │
+  │  Answer:                                             │
+  │  codex/interaction                                   │
+  │                                                      │
+  │Enter submit · Esc cancel                             │
+  │                                                      │
+  │                                                      │
+  └──────────────────────────────────────────────────────┘
+
+
+
+
+ → ▌Ask anything…
+
+/ commands

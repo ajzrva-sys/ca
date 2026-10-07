@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&evidence, 100, 30),\nrender_to_text(&evidence, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Pending evidence: 1129 messages · 842311 bytes · 6 workspaces · 27 root threads · 18 planned      │
+│bounded calls                                                                                     │
+│Route: openai/gpt-5.6-terra · estimated cost USD 1.42 maximum for 18 bounded calls                │
+│Sensitive messages skipped: 2                                                                     │
+│Exact digest: 8c675308b4ab93d41d21c2762b02be7b7deca092bd8f46cb26d1f70a2caf8d26                    │
+│                                                                                                  │
+│Source revisions                                                                                  │
+│- source 14b92072a0bd · revision 7818d12e274d                                                     │
+│                                                                                                  │
+│Sanitized excerpts                                                                                │
+│- workspace 42f5d194034e · thread bc8ba8ecac09 · user title/excerpt: Keep local changes narrowly  │
+│scoped.                                                                                           │
+│                                                                                                  │
+│Enter opens in-app actions.                                                                       │
+│Drag copies selected text; C copies the full page.                                                │
+│CLI fallback: ca learn review approve                                                             │
+│8c675308b4ab93d41d21c2762b02be7b7deca092bd8f46cb26d1f70a2caf8d26                                  │
+│                                                                                                  │
+│ Enter actions · R refresh · C copy all · j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close |  │
+│1/14                                                                                              │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│Pending evidence: 1129 messages · 842311 bytes · 6        │
+│workspaces · 27 root threads · 18 planned bounded calls   │
+│Route: openai/gpt-5.6-terra · estimated cost USD 1.42     │
+│maximum for 18 bounded calls                              │
+│Sensitive messages skipped: 2                             │
+│Exact digest:                                             │
+│8c675308b4ab93d41d21c2762b02be7b7deca092bd8f46cb26d1f70a2c│
+│af8d26                                                    │
+│                                                          │
+│Source revisions                                          │
+│- source 14b92072a0bd · revision 7818d12e274d             │
+│                                                          │
+│Sanitized excerpts                                        │
+│- workspace 42f5d194034e · thread bc8ba8ecac09 · user     │
+│title/excerpt: Keep local changes narrowly scoped.        │
+│                                                          │
+│Enter opens in-app actions.                               │
+│Drag copies selected text; C copies the full page.        │
+│CLI fallback: ca learn review approve                     │
+│8c675308b4ab93d41d21c2762b02be7b7deca092bd8f46cb26d1f70a2c│
+│af8d26                                                    │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

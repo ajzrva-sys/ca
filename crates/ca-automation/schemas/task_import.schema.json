@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "codex-team.task_import.v1",
+  "title": "codex-team single task import",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "source", "base_head", "task"],
+  "properties": {
+    "schema": {"const": "codex-team.task_import.v1"},
+    "source": {"const": "ca"},
+    "base_head": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "title",
+        "kind",
+        "objective",
+        "why_unblocks_progress",
+        "allowed_files",
+        "forbidden_actions",
+        "steps",
+        "acceptance_criteria",
+        "verification_commands",
+        "stop_conditions",
+        "discovery_budget",
+        "estimated_minutes"
+      ],
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "title": {"type": "string", "minLength": 1, "maxLength": 512},
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "objective": {"type": "string", "minLength": 1, "maxLength": 16384},
+        "why_unblocks_progress": {"type": "string", "minLength": 1, "maxLength": 16384},
+        "allowed_files": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 24,
+          "items": {"type": "string", "minLength": 1, "maxLength": 1024}
+        },
+        "read_only_files": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {"type": "string", "minLength": 1, "maxLength": 1024},
+          "default": []
+        },
+        "forbidden_actions": {"$ref": "#/$defs/nonemptyProseList"},
+        "steps": {"$ref": "#/$defs/nonemptyProseList"},
+        "acceptance_criteria": {"$ref": "#/$defs/nonemptyProseList"},
+        "verification_commands": {"$ref": "#/$defs/nonemptyProseList"},
+        "mechanistic_actions": {"type": "array", "maxItems": 8, "items": {"$ref": "mechanistic_action.schema.json"}, "default": []},
+        "delegation_policy": {"type": "string", "enum": ["legacy", "prefer", "require", "deny"], "default": "legacy"},
+        "stop_conditions": {"$ref": "#/$defs/nonemptyProseList"},
+        "discovery_budget": {"type": "string", "minLength": 1, "maxLength": 16384},
+        "estimated_minutes": {"type": "integer", "minimum": 1, "maximum": 10080}
+      }
+    }
+  },
+  "$defs": {
+    "nonemptyProseList": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {"type": "string", "minLength": 1, "maxLength": 4096}
+    }
+  }
+}

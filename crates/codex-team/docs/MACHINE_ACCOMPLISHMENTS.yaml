@@ -1,0 +1,439 @@
+# Machine-readable accomplishment catalog for codex-team (ORCH-HERMES-001/002,
+# ORCH-OLLAMA-001, ORCH-MLX-001 / mlx_lm linkage).
+#
+# Consumers: Hermes skills, supervisors, CI, agents.
+# Authority: this file describes shipped contracts; executable schemas live under
+# schemas/*.schema.json; Rust types live under src/app/receipts.rs and src/config.rs.
+#
+# protocol_version for CLI receipts remains 1 (additive fields only).
+
+catalog_version: 1
+generated_for_repo: codex-team
+protocol_version: 1
+
+authority:
+  rust_owns:
+    - admission
+    - repo_lock
+    - guards
+    - verification
+    - state_json
+    - queue_status_mutation
+    - git_commits
+    - local_model_invocation_when_provider_set
+  hermes_may:
+    - schedule_codex_team_cli
+    - parse_json_stdout_receipts
+    - notify_human_on_paused
+  hermes_must_not:
+    - write_dot_orchestrator_state
+    - mutate_control_plane_files
+    - git_add_or_commit
+    - nest_delegate_task_as_second_orchestrator
+    - call_ollama_or_mlx_directly_for_supervised_repo_work
+
+accomplishments:
+  - id: ORCH-HERMES-003
+    title: Failure receipts + MLX/Hermes roadmap pack
+    status: done
+    exec_plan: docs/exec-plans/completed/orch-hermes-003-roadmap-pack.md
+    summary: >
+      step --json outcome=error receipts; local JSON hydrate; empty-queue idle stop;
+      doctor MLX/Ollama model presence; providers --json; supervisor episodes;
+      routing failure budget + opt-in override; HERMES_MLX_DOGFOOD notes.
+    validation:
+      - cmd: cargo test hermes_
+        result: passed
+        count: 9
+      - cmd: cargo test
+        result: passed
+        count: 290
+    contracts:
+      cycle_outcome_error: true
+      supervisor_episodes_path: .orchestrator/observations/supervisor_episodes.jsonl
+      providers_cli: providers --json
+      routing_allow_provider_override_default: false
+
+  - id: ORCH-HERMES-002
+    title: Hermes supervisor ready pack
+    status: done
+    exec_plan: docs/exec-plans/completed/orch-hermes-002-supervisor-ready.md
+    summary: >
+      Installable skills/codex-team skill + install script; exit-code contract;
+      doctor --json severity + exit 1 when unhealthy; HERMES setup block;
+      Hermes asks→truth checklist; operator custom:ollama provider repair.
+    files_added:
+      - skills/codex-team/SKILL.md
+      - scripts/install_hermes_skill.sh
+      - docs/HERMES_INTEGRATION_CHECKLIST.md
+      - docs/exec-plans/completed/orch-hermes-002-supervisor-ready.md
+    files_touched:
+      - src/app.rs
+      - src/app/receipts.rs
+      - src/app_tests.rs
+      - schemas/doctor_receipt.schema.json
+      - docs/HERMES.md
+      - docs/hermes-skill-draft.md
+      - docs/.INDEX.md
+      - docs/AGENT_MAP.md
+      - docs/MACHINE_ACCOMPLISHMENTS.yaml
+      - docs/ACCOMPLISHMENTS.md
+      - NEXT_STEPS.md
+      - CONTINUITY.md
+      - TESTING.md
+    validation:
+      - cmd: cargo test hermes_
+        result: passed
+        count: 7
+      - cmd: cargo test
+        result: passed
+        count: 286
+      - cmd: cargo fmt -- --check
+        result: passed
+      - cmd: hermes chat -Q --max-turns 1 (default custom:ollama)
+        result: passed
+      - cmd: scripts/install_hermes_skill.sh
+        result: passed
+    contracts:
+      exit_codes:
+        "0": command_ok_parse_json_outcome
+        "1": operational_error_or_doctor_unhealthy_after_json
+        "2": clap_usage_or_supervisor_loop_paused
+      doctor_check_severity: [ok, error]
+      skill_name: codex-team
+      skill_install_path: ~/.hermes/skills/codex-team/
+
+  - id: ORCH-HERMES-001
+    title: Harden Hermes CLI bridge
+    status: done
+    exec_plan: docs/exec-plans/completed/orch-hermes-001-cli-bridge-harden.md
+    summary: >
+      Quiet --json stdout (progress on stderr), typed cycle/status/disposition/doctor
+      receipts, cycle_id correlation, status --observe, skill draft, supervisor loop script.
+    files_added:
+      - src/app/receipts.rs
+      - schemas/cycle_receipt.schema.json
+      - schemas/status_receipt.schema.json
+      - docs/hermes-skill-draft.md
+      - scripts/hermes_supervisor_loop.sh
+      - docs/exec-plans/completed/orch-hermes-001-cli-bridge-harden.md
+    files_touched:
+      - src/app.rs
+      - src/cli.rs
+      - src/app_tests.rs
+      - docs/HERMES.md
+      - docs/HERMES_IMPLEMENTATION_GUIDE.md
+      - docs/AGENT_MAP.md
+      - docs/OPERATIONS.md
+      - ROADMAP.md
+      - CONTINUITY.md
+      - TESTING.md
+      - ARCHITECTURE.md
+    validation:
+      - cmd: cargo test hermes_
+        result: passed
+        count: 7
+      - cmd: cargo test human_disposition
+        result: passed
+        count: 10
+      - cmd: cargo test
+        result: passed
+        count: 269
+      - cmd: cargo fmt -- --check
+        result: passed
+
+  - id: ORCH-OLLAMA-001
+    title: Rust-owned Ollama role runner
+    status: done
+    exec_plan: docs/exec-plans/completed/orch-ollama-001-rust-owned-ollama-runner.md
+    summary: >
+      Per-role provider=ollama with [ollama] enabled/base_url; ureq POST /v1/chat/completions;
+      fail closed when disabled; doctor health via /api/tags.
+    files_added:
+      - src/providers/mod.rs
+      - src/providers/ollama.rs
+      - docs/exec-plans/completed/orch-ollama-001-rust-owned-ollama-runner.md
+    files_touched:
+      - Cargo.toml
+      - src/lib.rs
+      - src/config.rs
+      - src/app.rs
+      - src/app_tests.rs
+      - src/codex/README.md
+      - docs/HERMES.md
+      - docs/hermes-skill-draft.md
+      - docs/AGENT_MAP.md
+      - README.md
+      - CONTINUITY.md
+      - TESTING.md
+    validation:
+      - cmd: cargo test ollama
+        result: passed
+        count: 9
+      - cmd: cargo test codex
+        result: passed
+        count: 12
+      - cmd: cargo test
+        result: passed
+        count: 278
+
+  - id: ORCH-MLX-001
+    title: Rust-owned Apple MLX LM role runner
+    status: done
+    exec_plan: null
+    next_steps_task: ORCH-MLX-001
+    summary: >
+      Per-role provider=mlx_lm (alias mlx-lm) with [mlx_lm] enabled/base_url defaulting to
+      http://127.0.0.1:8080; mlx_lm.server OpenAI-compat chat; health via /v1/models;
+      shared openai_compat helpers.
+    files_added:
+      - src/providers/mlx_lm.rs
+      - src/providers/openai_compat.rs
+    files_touched:
+      - src/providers/mod.rs
+      - src/config.rs
+      - src/app.rs
+      - src/app_tests.rs
+      - docs/HERMES.md
+      - docs/hermes-skill-draft.md
+      - docs/AGENT_MAP.md
+      - docs/OPERATIONS.md
+      - README.md
+      - ARCHITECTURE.md
+      - CONTINUITY.md
+      - TESTING.md
+      - NEXT_STEPS.md
+    validation:
+      - cmd: cargo test mlx_lm
+        result: passed
+        count: 6
+      - cmd: cargo test openai_compat
+        result: passed
+        count: 2
+      - cmd: cargo test
+        result: passed
+        count: 286
+
+deferred:
+  - id: hermes_mcp
+    reason: CLI POC checklist in docs/HERMES_IMPLEMENTATION_GUIDE.md not operator-checked-off
+  - id: hermes_worker_provider
+    reason: Phase 4 after Phase 2 contracts; nested orchestration anti-pattern
+  - id: auto_route_local_models
+    reason: Operator sets roles.*.provider; no scorecard auto-pick in v1
+  - id: provider_codex_fallback
+    reason: Explicit fail-closed; no silent fallback when Ollama/MLX disabled or down
+
+cli_surface:
+  stdout_rule: >
+    When --json is set on step|status|disposition|doctor, stdout is exactly one JSON
+    object. Human progress is redirected to stderr via MachineJsonModeGuard.
+  stdin_rule: >
+    Non-interactive step must close stdin (</dev/null). Non-TTY stops on human
+    disposition instead of blocking.
+  lock_rule: >
+    Mutating commands acquire .orchestrator/codex-team.lock. status --observe still
+    locks but skips queue recover/save.
+  commands:
+    - name: step
+      argv: ["codex-team", "step", "--repo", "$REPO", "--json"]
+      stdin: closed
+      stdout_schema: schemas/cycle_receipt.schema.json
+      outcomes: [continue, stopped, paused, no_work]
+      on_paused: notify_human_then_disposition
+    - name: status
+      argv: ["codex-team", "status", "--repo", "$REPO", "--json"]
+      stdout_schema: schemas/status_receipt.schema.json
+      notes: may mutate/save state under lock
+    - name: status_observe
+      argv: ["codex-team", "status", "--repo", "$REPO", "--json", "--observe"]
+      stdout_schema: schemas/status_receipt.schema.json
+      notes: observe=true; no queue recover/save
+    - name: disposition
+      argv:
+        - codex-team
+        - disposition
+        - --repo
+        - $REPO
+        - --decision
+        - "$DECISION"
+        - --json
+      decisions: [preserve, recheck, gate, keep-paused]
+      optional_flags: ["--refresh-report"]  # keep-paused only
+      stdout_schema: schemas/disposition_receipt.schema.json
+      outcomes: [kept_paused, no_pause, recorded]
+    - name: doctor
+      argv: ["codex-team", "doctor", "--repo", "$REPO", "--json"]
+      stdout_schema: schemas/doctor_receipt.schema.json
+    - name: supervisor_loop
+      path: scripts/hermes_supervisor_loop.sh
+      argv: ["scripts/hermes_supervisor_loop.sh", "$REPO", "5"]
+      env: [CODEX_TEAM]
+
+receipts:
+  protocol_version: 1
+  cycle:
+    schema: schemas/cycle_receipt.schema.json
+    rust: src/app/receipts.rs::CycleReceipt
+    fields:
+      protocol_version: { type: integer, const: 1 }
+      cycle_id:
+        type: string
+        notes: correlates with events.jsonl cycle_receipt transition
+      repo: { type: string }
+      outcome:
+        type: string
+        enum: [continue, stopped, paused, no_work]
+      mission: { type: string }
+      planner_due: { type: boolean }
+      master_due: { type: boolean }
+      queue_len: { type: integer }
+      human_disposition_required: { type: boolean }
+      pause:
+        type: object_or_null
+        shape:
+          reason: string
+          options: list_of_string
+          source: string
+      events_path: { type: string }
+  status:
+    schema: schemas/status_receipt.schema.json
+    rust: src/app/receipts.rs::StatusReceipt
+    fields:
+      protocol_version: { type: integer, const: 1 }
+      repo: { type: string }
+      mission: { type: string }
+      project_complete: { type: boolean }
+      planner_due: { type: boolean }
+      master_due: { type: boolean }
+      queue:
+        type: array
+        item:
+          task_id: string
+          kind: string
+          title: string
+          status: string
+      human_disposition_required:
+        type: object_or_null
+        shape:
+          reason: string
+          options: list_of_string
+          source: string
+      events_path: { type: string }
+      observe: { type: boolean }
+  disposition:
+    schema: schemas/disposition_receipt.schema.json
+    rust: src/app/receipts.rs::DispositionReceipt
+    fields:
+      protocol_version: { type: integer, const: 1 }
+      repo: { type: string }
+      outcome:
+        type: string
+        enum: [kept_paused, no_pause, recorded]
+      decision: { type: string }
+      refresh_report: { type: boolean }
+      human_disposition_required: { type: boolean }
+      pause: { type: object_or_null }
+      events_path: { type: string }
+  doctor:
+    schema: schemas/doctor_receipt.schema.json
+    rust: src/app/receipts.rs::DoctorReceipt
+    fields:
+      protocol_version: { type: integer, const: 1 }
+      repo: { type: string }
+      healthy:
+        type: boolean
+        notes: all checks.ok
+      initialized: { type: boolean }
+      checks:
+        type: array
+        item:
+          name: string
+          ok: boolean
+          detail: string
+    known_check_names:
+      - initialized
+      - config
+      - codex
+      - git
+      - "project_file:*"
+      - roles
+      - ollama
+      - mlx_lm
+      - "model:*"
+      - model_list
+
+providers:
+  schema: schemas/provider_config.schema.json
+  role_provider_enum: [codex, ollama, mlx_lm]
+  role_provider_aliases:
+    "mlx-lm": mlx_lm
+  default_provider: codex
+  fail_closed: true
+  no_silent_codex_fallback: true
+  config:
+    ollama:
+      toml_table: ollama
+      enabled_default: false
+      base_url_default: http://127.0.0.1:11434
+      chat_path: /v1/chat/completions
+      health_path: /api/tags
+      rust_module: src/providers/ollama.rs
+    mlx_lm:
+      toml_table: mlx_lm
+      enabled_default: false
+      base_url_default: http://127.0.0.1:8080
+      chat_path: /v1/chat/completions
+      health_path: /v1/models
+      rust_module: src/providers/mlx_lm.rs
+      server_hint: "mlx_lm.server --model <hf_or_path> [--port 8080]"
+  role_config_example: |
+    [ollama]
+    enabled = false
+    base_url = "http://127.0.0.1:11434"
+
+    [mlx_lm]
+    enabled = false
+    base_url = "http://127.0.0.1:8080"
+
+    [roles.worker]
+    provider = "codex"
+    model = "gpt-5.4-mini"
+    timeout_seconds = 900
+  ignored_codex_fields_when_local_http:
+    - sandbox
+    - approval_policy
+    - web_search
+    - effort
+  telemetry:
+    ai_escalation_payload_includes: [role, reason, model, provider, effort]
+    cost_jsonl_provider_field: optional string ollama or mlx_lm
+    run_artifacts:
+      ollama: ".orchestrator/runs/*-ollama.{prompt.md,ollama.json,stderr.log}"
+      mlx_lm: ".orchestrator/runs/*-mlx_lm.{prompt.md,mlx_lm.json,stderr.log}"
+
+events:
+  cycle_receipt_transition:
+    kind: StateTransitionApplied
+    payload_keys: [transition, cycle_id, outcome]
+    transition_value: cycle_receipt
+  path: .orchestrator/events.jsonl
+
+hermes_integration:
+  skill_draft: docs/hermes-skill-draft.md
+  short_contract: docs/HERMES.md
+  operator_guide: docs/HERMES_IMPLEMENTATION_GUIDE.md
+  loop_script: scripts/hermes_supervisor_loop.sh
+  outcome_actions:
+    continue: optionally_capped_another_step
+    no_work: stop_or_change_backlog_via_human
+    stopped: inspect_status_or_events_before_loop
+    paused: notify_human_run_disposition_after_choice
+
+pointers:
+  agent_map: docs/AGENT_MAP.md
+  continuity: CONTINUITY.md
+  testing: TESTING.md
+  architecture: ARCHITECTURE.md
+  this_catalog: docs/MACHINE_ACCOMPLISHMENTS.yaml
+  human_index: docs/ACCOMPLISHMENTS.md

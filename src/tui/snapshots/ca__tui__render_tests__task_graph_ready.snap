@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&ready, 100, 30), render_to_text(&ready, 60, 24))"
+---
+ ca · agent · auto
+  ┌ Tasks and agent graph ───────────────────────────────────────────────────────────────────────┐
+  │Release graph · plan Approved · graph Running · revision 3                                    │
+  │>                                                                                             │
+  │                                                                                              │
+  │▶ Ready              Inspect provider boundary                      attempt 0/2               │
+  │  Pending            Verify isolated changes                        attempt 0/2               │
+  │                                                                                              │
+  │Task ID: 00000000-0000-0000-0000-000000000001                                                 │
+  │Dependencies: none · Worktree: current workspace                                              │
+  │Grants: tools [read_file] · 1 path(s) · 0 command(s) · network denied                         │
+  │Evidence: assistant output                                                                    │
+  │                                                                                              │
+  │Shift+S start/resume · Shift+P pause · Shift+R retry · Shift+C cancel · Esc close             │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+  │                                                                                              │
+ →│                                                                                              │
+  └──────────────────────────────────────────────────────────────────────────────────────────────┘
+/ commands
+-- narrow --
+ ca · agent · auto
+ ┌ Tasks and agent graph ─────────────────────────────────┐
+ │Release graph · plan Approved · graph Running · revision│
+ │3                                                       │
+ │>                                                       │
+ │                                                        │
+ │▶ Ready              Inspect provider boundary          │
+ │           attempt 0/2                                  │
+ │  Pending            Verify isolated changes            │
+ │           attempt 0/2                                  │
+ │                                                        │
+ │Task ID: 00000000-0000-0000-0000-000000000001           │
+ │Dependencies: none · Worktree: current workspace        │
+ │Grants: tools [read_file] · 1 path(s) · 0 command(s) ·  │
+ │network denied                                          │
+ │Evidence: assistant output                              │
+ │                                                        │
+ │Shift+S start/resume · Shift+P pause · Shift+R retry ·  │
+ │Shift+C cancel · Esc close                              │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+/ commands

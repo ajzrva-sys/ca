@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+> Original request
+
+Original answer
+
+
+* Context checkpoint · 2 messages · /context to inspect
+
+> Continue after compaction
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+3 messages · / commands
+-- narrow --
+ ca · agent · auto
+> Original request
+
+Original answer
+
+
+* Context checkpoint · 2 messages · /context to inspect
+
+> Continue after compaction
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+3 messages · / commands

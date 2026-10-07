@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · model-000
+
+
+
+
+               ┌────────────────────────────────────────────────────────────────────┐
+               │ Switch model                                                       │
+               │                                                                    │
+               │> type to filter…                                                   │
+               │  100 models · 1 provider live                                      │
+               │  100/100 · ofox · live · 100 models                                │
+               │                                                                    │
+               │  ofox                                                              │
+               │    model-093                     [ofox]                            │
+               │    model-094                     [ofox]                            │
+               │    model-095                     [ofox]                            │
+               │    model-096                     [ofox]                            │
+               │    model-097                     [ofox]                            │
+               │    model-098                     [ofox]                            │
+               │▸   model-099                     [ofox]                            │
+               │                                                                    │
+               │Enter select · Esc close · ↑↓ move · PgUp/PgDn page                 │
+               │Home/End jump · ⇧A model · ⇧P provider                              │
+               │⇧F favorite · ⇧E edit model/key · ⇧R refresh                        │
+               └────────────────────────────────────────────────────────────────────┘
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · model-000
+
+  ┌──────────────────────────────────────────────────────┐
+  │ Switch model                                         │
+  │                                                      │
+  │> type to filter…                                     │
+  │  100 models · 1 provider live                        │
+  │  100/100 · ofox · live · 100 models                  │
+  │                                                      │
+  │  ofox                                                │
+  │    model-097                                         │
+  │    [ofox]                                            │
+  │    model-098                                         │
+  │    [ofox]                                            │
+  │▸   model-099                                         │
+  │    [ofox]                                            │
+  │                                                      │
+  │Enter select · Esc close · ↑↓ move · PgUp/PgDn page   │
+  │Home/End jump · ⇧A model · ⇧P provider                │
+  │⇧F favorite · ⇧E edit model/key · ⇧R refresh          │
+  │                                                      │
+ →└──────────────────────────────────────────────────────┘
+
+/ commands

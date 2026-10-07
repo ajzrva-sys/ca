@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&capturing, 100, 30),\nrender_to_text(&capturing, 60, 24))"
+---
+┌ Guided changes walkthrough ──────────────────────────────────────────────────────────────────────┐
+│Capturing complete bounded Git snapshot…                                                          │
+│Target: working · Route: local/walkthrough-model                                                  │
+│                                                                                                  │
+│Reading Git state without changing the repository.                                                │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│Esc cancel                                                                                        │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌ Guided changes walkthrough ──────────────────────────────┐
+│Capturing complete bounded Git snapshot…                  │
+│Target: working · Route: local/walkthrough-model          │
+│                                                          │
+│Reading Git state without changing the repository.        │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│Esc cancel                                                │
+└──────────────────────────────────────────────────────────┘

@@ -1,0 +1,6 @@
+# Basic chat test
+type:say hello in one word
+key:enter
+wait:10s
+assert:contains:hello
+assert:not_contains:error

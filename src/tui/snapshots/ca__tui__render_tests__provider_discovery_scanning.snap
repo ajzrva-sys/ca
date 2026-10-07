@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&scanning, 100, 30),\nrender_to_text(&scanning, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+      ┌ Local provider discovery ────────────────────────────────────────────────────────────┐
+      │                                                                                      │
+      │Scanning approved 127.0.0.1 ports…                                                    │
+      │                                                                                      │
+      │Esc cancel and close                                                                  │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      └──────────────────────────────────────────────────────────────────────────────────────┘
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+  ┌ Local provider discovery ────────────────────────────┐
+  │                                                      │
+  │Scanning approved 127.0.0.1 ports…                    │
+  │                                                      │
+  │Esc cancel and close                                  │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+ →│                                                      │
+  └──────────────────────────────────────────────────────┘
+/ commands

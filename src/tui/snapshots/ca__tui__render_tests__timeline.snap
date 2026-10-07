@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+              ┌──────────────────────────────────────────────────────────────────────┐
+              │ Rewind by creating a branch                                          │
+              │ Source history will not be changed                                   │
+              │                                                                      │
+              │   Turn 1 · 1970-01-01 00:00 · Inspect the project                    │
+              │ ▸ Turn 2 · 1970-01-01 00:01 · Implement stable sessions              │
+              │                                                                      │
+              │Enter branch here · Esc close · ↑↓ navigate                           │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              └──────────────────────────────────────────────────────────────────────┘
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+  ┌──────────────────────────────────────────────────────┐
+  │ Rewind by creating a branch                          │
+  │ Source history will not be changed                   │
+  │                                                      │
+  │   Turn 1 · 1970-01-01 00:00 · Inspect the project    │
+  │ ▸ Turn 2 · 1970-01-01 00:01 · Implement stable sessio│
+  │                                                      │
+  │Enter branch here · Esc close · ↑↓ navigate           │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+ →└──────────────────────────────────────────────────────┘
+
+/ commands

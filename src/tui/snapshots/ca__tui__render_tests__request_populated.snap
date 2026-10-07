@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&populated, 100, 30),\nrender_to_text(&populated, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│You are a coding agent. Keep changes focused.                                                     │
+│                                                                                                  │
+│Messages (1)                                                                                      │
+│                                                                                                  │
+│[user 1]                                                                                          │
+│Inspect src/request.rs                                                                            │
+│                                                                                                  │
+│Tool schemas (1)                                                                                  │
+│                                                                                                  │
+│[read_file]                                                                                       │
+│Read a bounded line range                                                                         │
+│parameters: {                                                                                     │
+│  "properties": {                                                                                 │
+│    "path": {                                                                                     │
+│      "type": "string"                                                                            │
+│    }                                                                                             │
+│  },                                                                                              │
+│  "type": "object"                                                                                │
+│}                                                                                                 │
+│                                                                                                  │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close | 27/45                                     │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│You are a coding agent. Keep changes focused.             │
+│                                                          │
+│Messages (1)                                              │
+│                                                          │
+│[user 1]                                                  │
+│Inspect src/request.rs                                    │
+│                                                          │
+│Tool schemas (1)                                          │
+│                                                          │
+│[read_file]                                               │
+│Read a bounded line range                                 │
+│parameters: {                                             │
+│  "properties": {                                         │
+│    "path": {                                             │
+│      "type": "string"                                    │
+│    }                                                     │
+│  },                                                      │
+│  "type": "object"                                        │
+│}                                                         │
+│                                                          │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close |   │
+│27/45                                                     │
+└──────────────────────────────────────────────────────────┘

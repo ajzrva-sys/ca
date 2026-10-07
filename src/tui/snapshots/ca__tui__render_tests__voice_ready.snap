@@ -1,0 +1,55 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+
+
+
+
+
+                ┌ Voice input ─────────────────────────────────────────────────────┐
+                │Ready                                                             │
+                │                                                                  │
+                │No microphone audio is captured until you press Space.            │
+                │                                                                  │
+                │Space start recording · Esc close                                 │
+                │                                                                  │
+                │                                                                  │
+                │                                                                  │
+                └──────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ → Existing editable draft▌
+-- narrow --
+ ca · agent · auto
+
+
+
+
+
+
+ ┌ Voice input ───────────────────────────────────────────┐
+ │Ready                                                   │
+ │                                                        │
+ │No microphone audio is captured until you press Space.  │
+ │                                                        │
+ │Space start recording · Esc close                       │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+
+
+
+────────────────────────────────────────────────────────────
+ → Existing editable draft▌

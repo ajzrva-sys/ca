@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&populated, 100, 30),\nrender_to_text(&populated, 60, 24))"
+---
+main /workspace/ca  [Choose Ctrl+l]                                                     :: 1 working
+ + New Agent   Open Previous /resume                                                Worktree Ctrl+w
+ ▾ Working 1 ───────────────────────────────────────── ┌Preview────────────────────────────────────┐
+ :: bsd2 MiMo Flash official Q2_K setup · ca         0s│Select a session or agent to preview its   │
+   Waiting for response…                               │latest activity                            │
+ ▾ Inactive 2 ──────────────────────────────────────── │                                           │
+ ◇ bsd2 local Qwen Coder 30B A3B · freebsd-localag…  3h│                                           │
+   /Volumes/projects/freebsd-localagent                │                                           │
+ ◇ Review FreeBSD fusion branch · freebsd-localage…  2d│                                           │
+   /Volumes/projects/freebsd-localagent                │                                           │
+                                                       │                                           │
+                                                       │                                           │
+                                                       │                                           │
+                                                       │                                           │
+                                                       │                                           │
+                                                       │                                           │
+                                                       │                                           │
+                                                       │                                           │
+                                                       │                                           │
+                                                       │                                           │
+                                                       │                                           │
+                                                       │                                           │
+                                                       │                                           │
+                                                       │                                           │
+                                                       │                                           │
+                                                       └───────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│> Dispatch a new agent                                                                            │
+└─────────────────────────────────────────────────────────────────────────────────Coder · allowlist┘
+Enter:collapse  |  Esc:New Agent  |  Ctrl+.:shortcuts
+-- narrow --
+main /workspace/ca  [Choose Ctrl+l]             :: 1 working
+ + New Agent   Open Previous /resume        Worktree Ctrl+w
+ ▾ Working 1 ──────────────────────────────────────────────
+ :: bsd2 MiMo Flash official Q2_K setup · ca              0s
+   Waiting for response…
+ ▾ Inactive 2 ─────────────────────────────────────────────
+ ◇ bsd2 local Qwen Coder 30B A3B · freebsd-localagent     3h
+   /Volumes/projects/freebsd-localagent
+ ◇ Review FreeBSD fusion branch · freebsd-localagent      2d
+   /Volumes/projects/freebsd-localagent
+
+
+
+
+
+
+
+
+
+
+┌──────────────────────────────────────────────────────────┐
+│> Dispatch a new agent                                    │
+└─────────────────────────────────────────Coder · allowlist┘
+Enter:collapse  |  Esc:New Agent  |  Ctrl+.:shortcuts

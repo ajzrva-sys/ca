@@ -1,0 +1,24 @@
+---
+source: src/tui/render_tests.rs
+expression: "render_to_text(&completed, 80, 20)"
+---
+ ca · agent · auto
+
+
+
+
+
+
+
+               │                                                │
+               │    Seedbox copy: Completion marker detected    │
+               │                                                │
+
+
+
+
+
+
+ → ▌Ask anything…
+
+/ commands

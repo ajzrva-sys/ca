@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+
+              ┌ Edit model ──────────────────────────────────────────────────────────┐
+              │                                                                      │
+              │  Provider       mimo                                                 │
+              │                  Existing provider                                   │
+              │› Base URL       https://token-plan-sgp.xiaomimimo.com/v1▌            │
+              │                  Provider endpoint                                   │
+              │  API key                                                             │
+              │                  Blank keeps the current credential                  │
+              │  API key env    MIMO_API_KEY                                         │
+              │                  Environment variable name                           │
+              │  Model ID       mimo-v2.5                                            │
+              │                  Exact ID from the provider                          │
+              │Key stays masked; config stores only a reference.                     │
+              │                                                                      │
+              │Tab fields · ←→ cursor · Enter save · Esc back                        │
+              │Home/End jump · Backspace/Delete edit                                 │
+              │                                                                      │
+              └──────────────────────────────────────────────────────────────────────┘
+
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+
+  ┌ Edit model ──────────────────────────────────────────┐
+  │                                                      │
+  │  Provider       mimo                                 │
+  │                  Existing provider                   │
+  │› Base URL       …://token-plan-sgp.xiaomimimo.com/v1▌│
+  │                  Provider endpoint                   │
+  │  API key                                             │
+  │                  Blank keeps the current credential  │
+  │  API key env    MIMO_API_KEY                         │
+  │                  Environment variable name           │
+  │  Model ID       mimo-v2.5                            │
+  │                  Exact ID from the provider          │
+  │Key stays masked; config stores only a reference.     │
+  │                                                      │
+  │Tab fields · ←→ cursor · Enter save · Esc back        │
+  │Home/End jump · Backspace/Delete edit                 │
+  │                                                      │
+  └──────────────────────────────────────────────────────┘
+ → ▌Ask anything…
+
+/ commands

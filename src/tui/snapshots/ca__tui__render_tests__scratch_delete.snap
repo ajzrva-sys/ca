@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&confirmation, 100, 30),\nrender_to_text(&confirmation, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+
+
+
+
+
+                   ┌ Delete scratch entry ──────────────────────────────────────┐
+                   │Delete scratch entry 00000000-0000-0000-0000-000000000000?  │
+                   │                                                            │
+                   │[ Cancel ]     Delete                                       │
+                   │                                                            │
+                   │                                                            │
+                   │                                                            │
+                   │                                                            │
+                   │                                                            │
+                   └────────────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+
+
+
+
+
+ ┌ Delete scratch entry ──────────────────────────────────┐
+ │Delete scratch entry                                    │
+ │00000000-0000-0000-0000-000000000000?                   │
+ │                                                        │
+ │[ Cancel ]     Delete                                   │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+
+
+
+
+ → ▌Ask anything…
+
+/ commands

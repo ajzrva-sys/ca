@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(wide, render_to_text(&state, 52, 24))"
+---
+ ca · agent · auto
+
+
+
+
+       ┌ Provider authentication ───────────────────────────────────────────────────────────┐
+       │                                                                                    │
+       │Connect Xiaomi MiMo                                                                 │
+       │                                                                                    │
+       │Open the URL on any device, sign in, then paste the encrypted one-time result       │
+       │                                                                                    │
+       │Authorization URL ready.                                                            │
+       │Ctrl+Y copies it and opens a borderless selectable handoff.                         │
+       │                                                                                    │
+       │>                                                                                   │
+       │                                                                                    │
+       │Ctrl+Y copy/show URL · Enter continue · Esc cancel                                  │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       └────────────────────────────────────────────────────────────────────────────────────┘
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+ ┌ Provider authentication ───────────────────────┐
+ │                                                │
+ │Connect Xiaomi MiMo                             │
+ │                                                │
+ │Open the URL on any device, sign in, then paste │
+ │the encrypted one-time result                   │
+ │                                                │
+ │Authorization URL ready.                        │
+ │Ctrl+Y copies it and opens a borderless         │
+ │selectable handoff.                             │
+ │                                                │
+ │>                                               │
+ │                                                │
+ │Ctrl+Y copy/show URL · Enter continue · Esc     │
+ │cancel                                          │
+ │                                                │
+ │                                                │
+ │                                                │
+ │                                                │
+ └────────────────────────────────────────────────┘
+
+/ commands

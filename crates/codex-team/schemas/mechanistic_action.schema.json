@@ -1,0 +1,923 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MechanisticActionV1",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "kind",
+        "path"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "read_tracked_file"
+          ]
+        },
+        "max_lines": {
+          "default": 200,
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "path": {
+          "description": "Repository-relative path under the repository pinned by codex-team.",
+          "type": "string"
+        },
+        "start_line": {
+          "default": 1,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "kind",
+        "pattern"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "search_text"
+          ]
+        },
+        "match_mode": {
+          "default": "literal",
+          "allOf": [
+            {
+              "$ref": "#/definitions/SearchMatchModeV1"
+            }
+          ]
+        },
+        "max_matches": {
+          "default": 200,
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "paths": {
+          "description": "Repository-relative tracked files or directory prefixes. Empty searches all tracked files.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "pattern": {
+          "description": "Literal text by default, or a Rust regex when match_mode is regex.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "list_tracked_files"
+          ]
+        },
+        "max_entries": {
+          "default": 200,
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "prefix": {
+          "description": "Optional repository-relative component prefix under the pinned repository.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "list_tracked_directory"
+          ]
+        },
+        "max_entries": {
+          "default": 200,
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "path": {
+          "description": "Optional repository-relative tracked directory prefix. None is the repository root.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "kind",
+        "pattern"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "glob_tracked_files"
+          ]
+        },
+        "max_entries": {
+          "default": 200,
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "pattern": {
+          "description": "A bounded glob pattern evaluated only against Git's tracked-file list.",
+          "type": "string"
+        },
+        "prefix": {
+          "description": "Optional repository-relative tracked directory prefix.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "git_status_summary"
+          ]
+        },
+        "max_entries": {
+          "default": 200,
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "git_diff_summary"
+          ]
+        },
+        "max_entries": {
+          "default": 200,
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "git_history"
+          ]
+        },
+        "max_entries": {
+          "default": 20,
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "kind",
+        "symbol"
+      ],
+      "properties": {
+        "context_lines": {
+          "default": 2,
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "inspect_symbol"
+          ]
+        },
+        "max_matches": {
+          "default": 200,
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "paths": {
+          "description": "Optional repository-relative tracked files or directory prefixes.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "symbol": {
+          "description": "Exact identifier to locate in tracked UTF-8 source files.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "kind",
+        "terms"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "inspect_feature"
+          ]
+        },
+        "max_files": {
+          "default": 12,
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "paths": {
+          "description": "Optional repository-relative tracked files or directory prefixes.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "terms": {
+          "description": "Bounded lexical terms used to rank tracked source and test files.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "summarize_changed_area"
+          ]
+        },
+        "max_entries": {
+          "default": 200,
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "kind",
+        "paths"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "find_relevant_tests"
+          ]
+        },
+        "max_entries": {
+          "default": 200,
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "paths": {
+          "description": "Repository-relative changed or seed paths under the pinned repository.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "job_id",
+        "kind"
+      ],
+      "properties": {
+        "job_id": {
+          "description": "Durable job identifier issued by this codex-team server.",
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "diagnose_failed_recipe"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "kind",
+        "paths"
+      ],
+      "properties": {
+        "allow_full_escalation": {
+          "description": "Whether policy permits dependency-graph failure or fan-out to escalate to a full suite.",
+          "default": false,
+          "type": "boolean"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "verify_changed_files"
+          ]
+        },
+        "paths": {
+          "description": "Exact repository-relative paths from host-owned mutation receipts.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "rust_api_baseline_ids": {
+          "description": "Opaque compiler-metadata baselines issued by the shared broker.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "scope": {
+          "default": "focused",
+          "allOf": [
+            {
+              "$ref": "#/definitions/VerificationScopeV1"
+            }
+          ]
+        },
+        "timeout_seconds": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "kind",
+        "recipe"
+      ],
+      "properties": {
+        "cwd": {
+          "description": "Optional repository-relative working directory under the pinned repository.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "evidence"
+          ]
+        },
+        "recipe": {
+          "$ref": "#/definitions/EvidenceRecipeV1"
+        },
+        "timeout_seconds": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "kind",
+        "label",
+        "pid"
+      ],
+      "properties": {
+        "interval_seconds": {
+          "default": 10,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "observe_process"
+          ]
+        },
+        "label": {
+          "type": "string"
+        },
+        "pid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "completion_marker",
+        "kind",
+        "label",
+        "pid"
+      ],
+      "properties": {
+        "completion_marker": {
+          "description": "Repository-relative marker path under the pinned repository.",
+          "type": "string"
+        },
+        "interval_seconds": {
+          "default": 10,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "observe_copy"
+          ]
+        },
+        "label": {
+          "type": "string"
+        },
+        "log_path": {
+          "description": "Optional repository-relative log path under the pinned repository.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    }
+  ],
+  "definitions": {
+    "BuiltinRepositoryCheckV1": {
+      "type": "string",
+      "enum": [
+        "snapshot_hygiene",
+        "protected_trees"
+      ]
+    },
+    "EvidenceRecipeV1": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "cargo_check"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "cargo_build"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "filter": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "cargo_test"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "cargo_clippy"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "cargo_fmt_check"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "npm_test"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "npm_run_test"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "npm_run_build"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "pnpm_test"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "pnpm_build"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "yarn_test"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "yarn_build"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "kind"
+          ],
+          "properties": {
+            "args": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "pytest"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "kind"
+          ],
+          "properties": {
+            "args": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "python_pytest"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "swift_build"
+              ]
+            },
+            "product": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "product"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "swift_release_build"
+              ]
+            },
+            "product": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "filter": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "swift_test"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "swift_version"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "binary",
+            "kind"
+          ],
+          "properties": {
+            "args": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "binary": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "local_smoke"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "check",
+            "kind"
+          ],
+          "properties": {
+            "check": {
+              "$ref": "#/definitions/BuiltinRepositoryCheckV1"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "builtin"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "SearchMatchModeV1": {
+      "type": "string",
+      "enum": [
+        "literal",
+        "regex"
+      ]
+    },
+    "VerificationScopeV1": {
+      "type": "string",
+      "enum": [
+        "focused",
+        "full"
+      ]
+    }
+  }
+}

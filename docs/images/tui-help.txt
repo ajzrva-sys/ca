@@ -1,0 +1,36 @@
+┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Commands                                                                                                              │
+│                                                                                                                      │
+│/model [model-id] [--once] (aliases: m) — Switch model                                                                │
+│/provider [templates|setup|discover|…] (aliases: providers) — Manage provider templates, providers, and models        │
+│/preset [name] — Apply a named route preset                                                                           │
+│/preset-save <name> — Save the current route as a named preset                                                        │
+│/add-dir <path> — Grant an additional session workspace root                                                          │
+│/workspace [list|save <name>|load <name>|delete <name>|cd <path>|remove <root-id>] (aliases: roots) — List or manage  │
+│named workspaces and session roots                                                                                    │
+│/save-workspace <name> — Save the current ordered workspace roots by name                                             │
+│/load-workspace <name> — Load a named workspace into the current session                                              │
+│/rule [filter|view <id>|activate <id>|deactivate <id>|create …|edit …|delete <id>|confirm <digest>|reload] (aliases:  │
+│rules) — Browse and manage conditional user or workspace rules                                                        │
+│/command [filter|view <name>|create …|edit …|delete <name>|confirm <digest>|reload] (aliases: commands) — Browse and  │
+│manage native custom prompt commands                                                                                  │
+│/plugin [list|search <query>|show <id>|add <manifest>|enable <id>|disable <id>|remove <id>|catalog <action>] (aliases:│
+│plugins) — Browse and manage verified local plugins and signed catalogs                                               │
+│/direnv [confirm <sha256>] — Preview and approve a process-only workspace environment overlay                         │
+│/skills [query|activate <id>|deactivate <id>|view <id>|unavailable|config <selector> [<key>=<value>]                  │
+│[--workspace]|reload] — Search and manage filesystem skills                                                           │
+│/bundles [show <name>|create <name> <skill1> <skill2> [...skill5] [--workspace]|delete <name>|reload] — List, inspect,│
+│create, delete, or reload task-local skill bundles                                                                    │
+│/recall [query|read <session-ref> [cursor]] — Search privacy-filtered completed CA, Codex, Hermes, and MiMo sessions  │
+│locally                                                                                                               │
+│/learning [skills|memory|runs|graph|suggestions|skill <selector>|<event-id>] (aliases: journey) — Inspect the         │
+│metadata-only learning and reusable-asset lifecycle                                                                   │
+│/mcp [verbose|connect <server>|refresh <server>|disconnect <server>|reconnect <server>|trust-project                  │
+│[--network]|allow-network <server>] — Inspect, authorize, or reconnect configured MCP servers                         │
+│/hooks [filter] — Inspect, test, and toggle lifecycle hooks                                                           │
+│/permissions [filter] (aliases: permission) — Inspect and remove permission rules                                     │
+│/memory [filter|export <path>] — Inspect and manage opt-in user or workspace memory                                   │
+│/learn [focus text|status [run-id]|sync|undo <run-id>] — Learn directly from recent work and publish validated        │
+│reusable assets                                                                                                       │
+│/dream [run|status|on|off|undo <run-id>] — Manage conservative memory maintenance                                     │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘

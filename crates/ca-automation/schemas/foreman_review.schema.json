@@ -1,0 +1,17 @@
+
+{
+  "type": "object",
+  "required": ["task_id", "accepted", "reason_code", "needs_master", "needs_planner", "project_complete", "summary", "problems", "warnings"],
+  "additionalProperties": false,
+  "properties": {
+    "task_id": {"type": "string"},
+    "accepted": {"type": "boolean"},
+    "reason_code": {"type": "string", "enum": ["accepted_clean", "verification_failed", "guard_violation", "incomplete", "ambiguous_task", "needs_planner", "needs_master", "out_of_scope"]},
+    "needs_master": {"type": "boolean"},
+    "needs_planner": {"type": "boolean"},
+    "project_complete": {"type": "boolean"},
+    "summary": {"type": "string"},
+    "problems": {"type": "array", "items": {"type": "string"}},
+    "warnings": {"type": "array", "items": {"type": "string"}}
+  }
+}

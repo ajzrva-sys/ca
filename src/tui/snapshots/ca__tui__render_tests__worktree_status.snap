@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&status, 100, 30), render_to_text(&status, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Worktree review                                                                                   │
+│                                                                                                  │
+│ID: 11111111-1111-4111-8111-111111111111                                                          │
+│State: ready                                                                                      │
+│Attached: yes                                                                                     │
+│Branch: ca/review-11111111                                                                        │
+│Path: /profile/worktrees/0123456789ab/11111111-1111-4111-8111-111111111111/review                 │
+│Base: 0123456789ab                                                                                │
+│HEAD: 89abcdef0123                                                                                │
+│Working tree: clean                                                                               │
+│From base: 1 ahead · 0 behind                                                                     │
+│                                                                                                  │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close | 1/11                                      │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│Worktree review                                           │
+│                                                          │
+│ID: 11111111-1111-4111-8111-111111111111                  │
+│State: ready                                              │
+│Attached: yes                                             │
+│Branch: ca/review-11111111                                │
+│Path:                                                     │
+│/profile/worktrees/0123456789ab/11111111-1111-4111-8111-11│
+│1111111111/review                                         │
+│Base: 0123456789ab                                        │
+│HEAD: 89abcdef0123                                        │
+│Working tree: clean                                       │
+│From base: 1 ahead · 0 behind                             │
+│                                                          │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close |   │
+│1/11                                                      │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&refused, 100, 30),\nrender_to_text(&refused, 60, 24))"
+---
+┌ Commit changes ──────────────────────────────────────────────────────────────────────────────────┐
+│Resolving repository state…                                                                       │
+│Error: Detached HEAD is not supported by /commit; check out a named branch first                  │
+│The commit workflow is unavailable until this Git state is resolved.                              │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│↑↓ select · Enter diff · s stage · u unstage · c commit · r refresh · Esc close                   │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌ Commit changes ──────────────────────────────────────────┐
+│Resolving repository state…                               │
+│Error: Detached HEAD is not supported by /commit; check   │
+│out a named branch first                                  │
+│The commit workflow is unavailable until this Git state is│
+│resolved.                                                 │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│↑↓ select · Enter diff · s stage · u unstage · c commit · │
+└──────────────────────────────────────────────────────────┘

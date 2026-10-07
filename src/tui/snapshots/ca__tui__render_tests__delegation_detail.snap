@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&detail, 100, 30), render_to_text(&detail, 60, 24))"
+---
+┌ Codex-team delegation · delegation-running-190 ──────────────────────────────────────────────────┐
+│Job: delegation-running-190                                                                       │
+│Server: codex_team_delegate                                                                       │
+│Actions: evidence                                                                                 │
+│Status: Running                                                                                   │
+│Revision: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa                        │
+│Started: 2026-08-26T18:00:00Z                                                                     │
+│Updated: 2026-08-26T18:00:20Z                                                                     │
+│Receipt digest: pending                                                                           │
+│Shared work: executed                                                                             │
+│Attached consumers: 2                                                                             │
+│Source receipt: pending                                                                           │
+│Avoided execution: 0 ms                                                                           │
+│                                                                                                  │
+│Cancellation detaches this consumer. Shared executor-owned work stops only when its final consumer│
+│leaves; codex-team never signals an observed PID.                                                 │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│↑↓/PgUp/PgDn scroll · x cancel · r refresh · a accept · 1-5 negative · C correction · Esc list    │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌ Codex-team delegation · delegation-running-190 ──────────┐
+│Job: delegation-running-190                               │
+│Server: codex_team_delegate                               │
+│Actions: evidence                                         │
+│Status: Running                                           │
+│Revision:                                                 │
+│aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa│
+│aaaaaa                                                    │
+│Started: 2026-08-26T18:00:00Z                             │
+│Updated: 2026-08-26T18:00:20Z                             │
+│Receipt digest: pending                                   │
+│Shared work: executed                                     │
+│Attached consumers: 2                                     │
+│Source receipt: pending                                   │
+│Avoided execution: 0 ms                                   │
+│                                                          │
+│Cancellation detaches this consumer. Shared executor-owned│
+│work stops only when its final consumer leaves; codex-team│
+│never signals an observed PID.                            │
+│                                                          │
+│                                                          │
+│                                                          │
+│↑↓ scroll · x cancel · r refresh · a/1-5 feedback · Esc li│
+└──────────────────────────────────────────────────────────┘

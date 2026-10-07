@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&failed, 100, 30), render_to_text(&failed, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┌ Attachments 0/0 · 0 indexed ─────────────────────────────────────────┐
+  │  Workspace paths could not be indexed                                │
+  └ ↑↓ select · Enter/Tab attach · Esc dismiss ──────────────────────────┘
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ → Summarize @▌
+
+↑↓ select · Tab complete · Enter choose · Esc dismiss
+-- narrow --
+ ca · agent · auto
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┌ Attachments 0/0 · 0 indexed ─────────────────────────┐
+  │  Workspace paths could not be indexed                │
+  └ ↑↓ select · Enter/Tab attach · Esc dismiss ──────────┘
+────────────────────────────────────────────────────────────
+ → Summarize @▌
+
+↑↓ select · Tab complete · Enter choose · Esc dismiss

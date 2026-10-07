@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+
+              ┌ Edit provider: openai ───────────────────────────────────────────────┐
+              │                                                                      │
+              │  Provider       openai                                               │
+              │                  Existing provider                                   │
+              │  Base URL       https://api.openai.com/v1                            │
+              │                  Provider endpoint                                   │
+              │  API key                                                             │
+              │                  Blank keeps the current credential                  │
+              │› API key env    OPENAI_API_KEY▌                                      │
+              │                  Environment variable name                           │
+              │  Legacy cache    Stable prefix  [read only]                          │
+              │                  Use /cache provider/model                           │
+              │Key stays masked; config stores only a reference.                     │
+              │                                                                      │
+              │Tab fields · ←→ cursor · Enter save · Esc back                        │
+              │Home/End jump · Backspace/Delete edit                                 │
+              └──────────────────────────────────────────────────────────────────────┘
+
+
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+
+  ┌ Edit provider: openai ───────────────────────────────┐
+  │                                                      │
+  │  Provider       openai                               │
+  │                  Existing provider                   │
+  │  Base URL       https://api.openai.com/v1            │
+  │                  Provider endpoint                   │
+  │  API key                                             │
+  │                  Blank keeps the current credential  │
+  │› API key env    OPENAI_API_KEY▌                      │
+  │                  Environment variable name           │
+  │  Legacy cache    Stable prefix  [read only]          │
+  │                  Use /cache provider/model           │
+  │Key stays masked; config stores only a reference.     │
+  │                                                      │
+  │Tab fields · ←→ cursor · Enter save · Esc back        │
+  │Home/End jump · Backspace/Delete edit                 │
+  └──────────────────────────────────────────────────────┘
+
+ → ▌Ask anything…
+
+/ commands

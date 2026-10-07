@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&bare, 100, 30), render_to_text(&bare, 60, 24))"
+---
+ ca · agent · auto
+
+   ┌ Memory ────────────────────────────────────────────────────────────────────────────────────┐
+   │[User]  Tab switch scope                                                                    │
+   │> type to filter…                                                                           │
+   │Recall off · proposals off · writes disabled                                                │
+   │                                                                                            │
+   │▶ preference             Prefer concise completion notes with the actual validation result. │
+   │  workflow               Run focused checks before repository-wide gates.                   │
+   │                                                                                            │
+   │Memory changes are disabled in bare mode; rerun without --profile bare                      │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   └────────────────────────────────────────────────────────────────────────────────────────────┘
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+ ┌ Memory ────────────────────────────────────────────────┐
+ │[User]  Tab switch scope                                │
+ │> type to filter…                                       │
+ │Recall off · proposals off · writes disabled            │
+ │                                                        │
+ │▶ preference             Prefer concise completion notes│
+ │with the actual validation result.                      │
+ │  workflow               Run focused checks before      │
+ │repository-wide gates.                                  │
+ │                                                        │
+ │Memory changes are disabled in bare mode; rerun without │
+ │--profile bare                                          │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+/ commands

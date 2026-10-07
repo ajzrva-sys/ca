@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&preview, 100, 30),\nrender_to_text(&preview, 60, 24))"
+---
+┌ Initialize project instructions ─────────────────────────────────────────────────────────────────┐
+│Target: /workspace/demo/AGENTS.md                                                                 │
+│                                                                                                  │
+│Preview — no file has been written                                                                │
+│                                                                                                  │
+│# Repository instructions                                                                         │
+│                                                                                                  │
+│- Run `cargo test`.                                                                               │
+│- Keep credentials external.                                                                      │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│ Cancel    Create AGENTS.md                                                                       │
+│←/→ choose · ↑↓/Pg scroll · Enter select · Esc cancel                                             │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌ Initialize project instructions ─────────────────────────┐
+│Target: /workspace/demo/AGENTS.md                         │
+│                                                          │
+│Preview — no file has been written                        │
+│                                                          │
+│# Repository instructions                                 │
+│                                                          │
+│- Run `cargo test`.                                       │
+│- Keep credentials external.                              │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│ Cancel    Create AGENTS.md                               │
+│←/→ choose · ↑↓/Pg scroll · Enter select · Esc cancel     │
+└──────────────────────────────────────────────────────────┘

@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ca doctor                                                                                         │
+│                                                                                                  │
+│[PASS] Config — config.toml parsed successfully                                                   │
+│[PASS] Default model — mimo / mimo-v2.5-pro                                                       │
+│[FAIL] Provider connections — 1 provider(s) did not pass                                          │
+│                                                                                                  │
+│Providers                                                                                         │
+│- mimo: 2 configured · 2 available · credential environment MIMO_API_KEY · credential rejected    │
+│(HTTP 401) · model mimo-v2.5-pro                                                                  │
+│  pricing 2/2 fresh · billing USD Token Plan ready · capability standard · routing eligible       │
+│- local: 1 configured · 1 available · credential none · working · model local-model               │
+│  pricing unknown · billing unsupported billing mode · capability unknown · routing ineligible    │
+│                                                                                                  │
+│Not ready — fix the failed checks above                                                           │
+│                                                                                                  │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close | 1/13                                      │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│ca doctor                                                 │
+│                                                          │
+│[PASS] Config — config.toml parsed successfully           │
+│[PASS] Default model — mimo / mimo-v2.5-pro               │
+│[FAIL] Provider connections — 1 provider(s) did not pass  │
+│                                                          │
+│Providers                                                 │
+│- mimo: 2 configured · 2 available · credential           │
+│environment MIMO_API_KEY · credential rejected (HTTP 401) │
+│· model mimo-v2.5-pro                                     │
+│  pricing 2/2 fresh · billing USD Token Plan ready ·      │
+│capability standard · routing eligible                    │
+│- local: 1 configured · 1 available · credential none ·   │
+│working · model local-model                               │
+│  pricing unknown · billing unsupported billing mode ·    │
+│capability unknown · routing ineligible                   │
+│                                                          │
+│Not ready — fix the failed checks above                   │
+│                                                          │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close |   │
+│1/13                                                      │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

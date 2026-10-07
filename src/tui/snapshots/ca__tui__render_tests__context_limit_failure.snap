@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&failed, 100, 30), render_to_text(&failed, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+            ┌──────────────────────────────────────────────────────────────────────────┐
+            │ Context limits                                                           │
+            │                                                                          │
+            │  Model    mimo/mimo-v2.5-pro                                             │
+            │  Stored   model profile                                                  │
+            │                                                                          │
+            │  Context window        131072          configured here                   │
+            │▸ Checkpoint threshold  98304           configured here                   │
+            │                                                                          │
+            │  Effective window      131072                                            │
+            │  Effective checkpoint  98304                                             │
+            │  Empty values inherit independently.                                     │
+            │Error: Could not save context limits: permission denied                   │
+            │                                                                          │
+            │Enter save · Esc cancel · Tab/↑↓ field · empty inherits                   │
+            │                                                                          │
+            │                                                                          │
+            │                                                                          │
+            │                                                                          │
+            └──────────────────────────────────────────────────────────────────────────┘
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+  ┌──────────────────────────────────────────────────────┐
+  │ Context limits                                       │
+  │                                                      │
+  │  Model    mimo/mimo-v2.5-pro                         │
+  │  Stored   model profile                              │
+  │                                                      │
+  │  Window      131072  [set]                           │
+  │▸ Checkpoint  98304  [set]                            │
+  │                                                      │
+  │  Effective window      131072                        │
+  │  Effective checkpoint  98304                         │
+  │  Empty values inherit independently.                 │
+  │Error:                                                │
+  │  Could not save context limits: permission denied    │
+  │                                                      │
+  │Enter save · Esc cancel · Tab/↑↓ field                │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+ →└──────────────────────────────────────────────────────┘
+
+/ commands

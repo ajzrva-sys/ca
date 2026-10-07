@@ -1,0 +1,21 @@
+# Auto-review policy — tools and commands safe for unattended execution
+#
+# This file is the evolvable surface for AHE-style mutation.
+# The Rust evaluation algorithm in permission.rs remains the source of truth;
+# this file documents the policy intent and can be used by evolution agents
+# to propose safe-list changes.
+
+# Commands that can run without approval (read-only pipeline)
+safe_commands = [
+    "basename", "cat", "cmp", "comm", "cut", "df", "dirname", "du",
+    "echo", "false", "grep", "head", "id", "jq", "lsof", "ls", "md5",
+    "od", "pgrep", "printf", "ps", "pwd", "readlink", "realpath",
+    "rg", "shasum", "strings", "sw_vers", "tail", "tr", "true", "uname",
+    "wc", "whoami",
+]
+
+# Commands with conditional safety (argument-dependent)
+[command_conditions]
+"find" = { safe_when_args_not = ["-delete", "-exec", "-execdir", "-fls", "-fprint", "-fprint0", "-fprintf", "-ok", "-okdir"] }
+"diff" = { safe_when_args_not = ["-o", "--output"] }
+"sort" = { safe_when_stdout_only = true }

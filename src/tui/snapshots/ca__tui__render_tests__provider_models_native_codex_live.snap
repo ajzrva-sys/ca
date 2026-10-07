@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · gpt-5.6-sol
+
+
+
+            ┌──────────────────────────────────────────────────────────────────────────┐
+            │ Provider: openai-codex                                                   │
+            │ Endpoint: https://chatgpt.com/backend-api/codex                          │
+            │ Credential: no credential · live · 7 models                              │
+            │                                                                          │
+            │> type to filter models…                                                  │
+            │                                                                          │
+            │  gpt-5.3-codex-spark · available                                         │
+            │  gpt-5.4 · available                                                     │
+            │  gpt-5.4-mini · available                                                │
+            │  gpt-5.5 · available                                                     │
+            │  gpt-5.6-luna · available                                                │
+            │  gpt-5.6-sol · configured · current                                      │
+            │  gpt-5.6-terra · available                                               │
+            │▸ z-configured-only · configured only                                     │
+            │                                                                          │
+            │Enter select · ⇧A add model · ⇧E edit/add · ⇧C cache                      │
+            │⇧S settings · ⇧R refresh · ⇧D delete provider · Esc providers             │
+            │                                                                          │
+            │                                                                          │
+            │                                                                          │
+            └──────────────────────────────────────────────────────────────────────────┘
+
+ → ▌Ask anything…
+
+openai-codex: live · 7 models
+-- narrow --
+ ca · agent · gpt-5.6-sol
+  ┌──────────────────────────────────────────────────────┐
+  │ Provider: openai-codex                               │
+  │ Endpoint: https://chatgpt.com/backend-api/codex      │
+  │ Credential: no credential · live · 7 models          │
+  │                                                      │
+  │> type to filter models…                              │
+  │                                                      │
+  │  gpt-5.3-codex-spark · available                     │
+  │  gpt-5.4 · available                                 │
+  │  gpt-5.4-mini · available                            │
+  │  gpt-5.5 · available                                 │
+  │  gpt-5.6-luna · available                            │
+  │  gpt-5.6-sol · configured · current                  │
+  │  gpt-5.6-terra · available                           │
+  │▸ z-configured-only · configured only                 │
+  │                                                      │
+  │Enter select · ⇧A add model · ⇧E edit/add · ⇧C cache  │
+  │⇧S settings · ⇧R refresh · ⇧D delete provider · Esc pr│
+  │                                                      │
+  │                                                      │
+ →│                                                      │
+  └──────────────────────────────────────────────────────┘
+openai-codex: live · 7 models

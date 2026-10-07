@@ -1,0 +1,55 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&chips, 100, 30), render_to_text(&chips, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ [1 image attachment]
+ → Review @src/main.rs and [Pasted Content 12438 chars]▌
+-- narrow --
+ ca · agent · auto
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────
+ [1 image attachment]
+ → Review @src/main.rs and [Pasted Content 12438 chars]▌

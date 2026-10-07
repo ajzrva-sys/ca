@@ -1,0 +1,59 @@
+{
+  "$comment": "Documentational JSON Schema for .orchestrator/config.toml provider/role fields related to local HTTP runners. Not loaded by Rust at runtime.",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "ollama": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean", "default": false},
+        "base_url": {
+          "type": "string",
+          "default": "http://127.0.0.1:11434"
+        }
+      }
+    },
+    "mlx_lm": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean", "default": false},
+        "base_url": {
+          "type": "string",
+          "default": "http://127.0.0.1:8080"
+        }
+      }
+    },
+    "roles": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "master": {"$ref": "#/$defs/role"},
+        "planner": {"$ref": "#/$defs/role"},
+        "foreman": {"$ref": "#/$defs/role"},
+        "worker": {"$ref": "#/$defs/role"}
+      }
+    }
+  },
+  "$defs": {
+    "role": {
+      "type": "object",
+      "required": ["model"],
+      "additionalProperties": true,
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": ["codex", "ollama", "mlx_lm"],
+          "default": "codex"
+        },
+        "model": {"type": "string"},
+        "effort": {"type": "string"},
+        "sandbox": {"type": "string"},
+        "approval_policy": {"type": "string"},
+        "web_search": {"type": "string"},
+        "timeout_seconds": {"type": "integer", "minimum": 1}
+      }
+    }
+  }
+}

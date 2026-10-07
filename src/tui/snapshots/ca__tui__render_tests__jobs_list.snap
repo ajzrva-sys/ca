@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+┌ Background activity ─────────────────────────────────────────────────────────────────────────────┐
+│ [job] 00000000  bg  running             1.2s  cargo test --workspace · running 12 tests          │
+│ [job] 00000000  fg  completed (0)       0.2s  printf complete · complete                         │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│↑↓ select · Enter open · i stdin (jobs) · x cancel/stop watching · r refresh · Esc close          │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌ Background activity ─────────────────────────────────────┐
+│ [job] 00000000  bg  running             1.2s  cargo test │
+│ [job] 00000000  fg  completed (0)       0.2s  printf comp│
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│Enter open · x cancel/stop · r refresh · Esc close        │
+└──────────────────────────────────────────────────────────┘

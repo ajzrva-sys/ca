@@ -1,0 +1,11 @@
+name: run_command
+description: >
+  Execute a shell command in the workspace with a timeout. Returns stdout,
+  stderr, and exit code.
+guidance: >
+  Prefer dedicated tools (read_file, search_files, glob) for inspection.
+  Use run_command for build, test, and pipeline operations. Always quote
+  paths containing spaces.
+failure_guidance:
+  timeout: The command exceeded its time limit. Consider running a more targeted command.
+  permission_denied: The command was blocked by the approval policy.

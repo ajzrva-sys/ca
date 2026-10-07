@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+
+     ┌ Claude setup import preview ───────────────────────────────────────────────────────────┐
+     │project scope · 2 files · 777 input bytes                                               │
+     │Source: /workspace/claude-setup                                                         │
+     │Target: /workspace/.ca                                                                  │
+     │Digest: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef                │
+     │Imports inert instructions, conditional rules, prompt commands, and valid skills only.  │
+     │Settings, credentials, hooks, MCP, permissions, shell, and account data remain excluded.│
+     │                                                                                        │
+     │▶ Cancel      Apply exact preview                                                       │
+     │Left/Right/Tab choose · Up/Down details · Enter confirm · Esc cancel                    │
+     │                                                                                        │
+     │rule · /workspace/.ca/rules/claude/CLAUDE.md · 222222222222                             │
+     │skill · /workspace/.ca/skills/review/SKILL.md · 333333333333                            │
+     │1 excluded file(s) listed in the preview                                                │
+     │                                                                                        │
+     │                                                                                        │
+     │                                                                                        │
+     └────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+
+ ┌ Claude setup import preview ───────────────────────────┐
+ │project scope · 2 files · 777 input bytes               │
+ │Source: /workspace/claude-setup                         │
+ │Target: /workspace/.ca                                  │
+ │Digest:                                                 │
+ │0123456789abcdef0123456789abcdef0123456789abcdef01234567│
+ │89abcdef                                                │
+ │Imports inert instructions, conditional rules, prompt   │
+ │commands, and valid skills only.                        │
+ │Settings, credentials, hooks, MCP, permissions, shell,  │
+ │and account data remain excluded.                       │
+ │                                                        │
+ │▶ Cancel      Apply exact preview                       │
+ │Left/Right/Tab choose · Up/Down details · Enter confirm │
+ │· Esc cancel                                            │
+ │                                                        │
+ │rule · /workspace/.ca/rules/claude/CLAUDE.md ·          │
+ └────────────────────────────────────────────────────────┘
+ → ▌Ask anything…
+
+/ commands

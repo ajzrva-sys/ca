@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+  ✓ run_command {"command":"git status --short"}
+    ┌────────────────────────────────────────────────────────────────────────────────────────────┐
+    │ exit code: 0                                                                               │
+    │ stdout:                                                                                    │
+    │  M src/main.rs                                                                             │
+    │ ?? notes.txt                                                                               │
+    └────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands
+-- narrow --
+ ca · agent · auto
+  ✓ run_command {"command":"git status --short"}
+    ┌────────────────────────────────────────────────────┐
+    │ exit code: 0                                       │
+    │ stdout:                                            │
+    │  M src/main.rs                                     │
+    │ ?? notes.txt                                       │
+    └────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands

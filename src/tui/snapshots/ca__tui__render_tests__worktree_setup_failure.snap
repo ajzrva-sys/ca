@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+       ┌ Worktree setup preview ────────────────────────────────────────────────────────────┐
+       │Worktree: feature-review · base main                                                │
+       │Source: native · SHA-256 0123456789ab                                               │
+       │Approval digest: fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210   │
+       │Setup is local, bounded, and is not run until you choose Run.                       │
+       │                                                                                    │
+       │1. fetch dependencies · cwd=. · sandbox=required · network=denied                   │
+       │   cargo fetch --locked                                                             │
+       │2. prepare fixtures · cwd=tests · sandbox=policy-only · network=allowed             │
+       │   just fixtures                                                                    │
+       │Setup failed; worktree retained: configuration changed after preview                │
+       │                                                                                    │
+       │  Skip     ▶ Run                                                                    │
+       │Arrow/Tab choose · Enter confirm · Esc skip                                         │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       └────────────────────────────────────────────────────────────────────────────────────┘
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+ ┌ Worktree setup preview ────────────────────────────────┐
+ │Worktree: feature-review · base main                    │
+ │Source: native · SHA-256 0123456789ab                   │
+ │Approval digest:                                        │
+ │fedcba9876543210fedcba9876543210fedcba9876543210fedcba98│
+ │76543210                                                │
+ │Setup is local, bounded, and is not run until you choose│
+ │Run.                                                    │
+ │                                                        │
+ │1. fetch dependencies · cwd=. · sandbox=required ·      │
+ │network=denied                                          │
+ │   cargo fetch --locked                                 │
+ │2. prepare fixtures · cwd=tests · sandbox=policy-only · │
+ │network=allowed                                         │
+ │   just fixtures                                        │
+ │Setup failed; worktree retained: configuration changed  │
+ │after preview                                           │
+ │                                                        │
+ │  Skip     ▶ Run                                        │
+ │Arrow/Tab choose · Enter confirm · Esc skip             │
+ └────────────────────────────────────────────────────────┘
+
+/ commands

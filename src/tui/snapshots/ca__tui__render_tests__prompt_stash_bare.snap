@@ -1,0 +1,56 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&bare, 100, 30), render_to_text(&bare, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+       ┌ Prompt Stash ──────────────────────────────────────────────────────────────────────┐
+       │ Saved composer drafts · newest first                                               │
+       │  0 of 50 entries · 64 KiB each · 1 MiB total                                       │
+       │                                                                                    │
+       │  Persistent drafts are unavailable in bare mode                                    │
+       │                                                                                    │
+       │  View only in bare mode · Esc close                                                │
+       │  Bare mode can inspect no persistent drafts and cannot save or restore them        │
+       │  Error: Prompt stash persistence is unavailable in bare mode                       │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       └────────────────────────────────────────────────────────────────────────────────────┘
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ → current composer stays visible behind the picker▌
+-- narrow --
+ ca · agent · auto
+ ┌ Prompt Stash ──────────────────────────────────────────┐
+ │ Saved composer drafts · newest first                   │
+ │  0 of 50 entries · 64 KiB each · 1 MiB total           │
+ │                                                        │
+ │  Persistent drafts are unavailable in bare mode        │
+ │                                                        │
+ │  View only in bare mode · Esc close                    │
+ │  Bare mode can inspect no persistent drafts and cannot │
+ │  Error: Prompt stash persistence is unavailable in bare│
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+─│                                                        │─
+ │                                                        │
+ └────────────────────────────────────────────────────────┘

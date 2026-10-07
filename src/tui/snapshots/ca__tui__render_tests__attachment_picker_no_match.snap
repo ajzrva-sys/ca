@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&no_match, 100, 30),\nrender_to_text(&no_match, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┌ Attachments 0/0 · 82 indexed ────────────────────────────────────────┐
+  │  No attachment matches                                               │
+  └ ↑↓ select · Enter/Tab attach · Esc dismiss ──────────────────────────┘
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ → Summarize @▌
+
+↑↓ select · Tab complete · Enter choose · Esc dismiss
+-- narrow --
+ ca · agent · auto
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┌ Attachments 0/0 · 82 indexed ────────────────────────┐
+  │  No attachment matches                               │
+  └ ↑↓ select · Enter/Tab attach · Esc dismiss ──────────┘
+────────────────────────────────────────────────────────────
+ → Summarize @▌
+
+↑↓ select · Tab complete · Enter choose · Esc dismiss

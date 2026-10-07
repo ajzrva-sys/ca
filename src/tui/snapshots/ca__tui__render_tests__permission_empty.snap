@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&empty, 100, 30), render_to_text(&empty, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+      ┌ Permissions ─────────────────────────────────────────────────────────────────────────┐
+      │> type to filter…                                                                     │
+      │0 rules · persistent changes enabled                                                  │
+      │                                                                                      │
+      │No matching permission rules                                                          │
+      │                                                                                      │
+      │Shift+D remove · Esc close · ↑↓ navigate                                              │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      └──────────────────────────────────────────────────────────────────────────────────────┘
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+ ┌ Permissions ───────────────────────────────────────────┐
+ │> type to filter…                                       │
+ │0 rules · persistent changes enabled                    │
+ │                                                        │
+ │No matching permission rules                            │
+ │                                                        │
+ │Shift+D remove · Esc close · ↑↓ navigate                │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+/ commands

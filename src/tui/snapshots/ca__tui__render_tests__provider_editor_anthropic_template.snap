@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+
+              ┌ Add provider: anthropic ─────────────────────────────────────────────┐
+              │                                                                      │
+              │  Provider       anthropic                                            │
+              │                  Use letters, numbers, . _ or -                      │
+              │  Base URL       https://api.anthropic.com/v1                         │
+              │                  Required; use http:// or https://                   │
+              │› API key        ▌                                                    │
+              │                  Paste to save in the secure credential store        │
+              │  API key env    ANTHROPIC_API_KEY                                    │
+              │                  Environment variable name                           │
+              │  Model ID       claude-sonnet-4-6                                    │
+              │                  Exact ID from the provider                          │
+              │  Protocol       Anthropic Messages                                   │
+              │Key stays masked; config stores only a reference.                     │
+              │                                                                      │
+              │Tab fields · ←→ cursor · Enter save · Esc back                        │
+              │Home/End jump · Backspace/Delete edit                                 │
+              └──────────────────────────────────────────────────────────────────────┘
+
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+
+  ┌ Add provider: anthropic ─────────────────────────────┐
+  │                                                      │
+  │  Provider       anthropic                            │
+  │                  Use letters, numbers, . _ or -      │
+  │  Base URL       https://api.anthropic.com/v1         │
+  │                  Required; use http:// or https://   │
+  │› API key        ▌                                    │
+  │                  Paste to save in the secure credenti│
+  │  API key env    ANTHROPIC_API_KEY                    │
+  │                  Environment variable name           │
+  │  Model ID       claude-sonnet-4-6                    │
+  │                  Exact ID from the provider          │
+  │  Protocol       Anthropic Messages                   │
+  │Key stays masked; config stores only a reference.     │
+  │                                                      │
+  │Tab fields · ←→ cursor · Enter save · Esc back        │
+  │Home/End jump · Backspace/Delete edit                 │
+  └──────────────────────────────────────────────────────┘
+ → ▌Ask anything…
+
+/ commands

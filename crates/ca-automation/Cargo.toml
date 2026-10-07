@@ -1,0 +1,36 @@
+[package]
+name = "ca-automation"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "ca-owned typed automation execution, verification and compatibility services"
+
+[dependencies]
+anyhow = "1.0"
+base64 = "0.22"
+clap = { version = "4.5", features = ["derive"] }
+chrono = { version = "0.4", features = ["serde"] }
+ca-watch = { path = "../ca-watch" }
+ca-automation-protocol = { path = "../ca-automation-protocol" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+signal-hook = "0.3"
+toml = "0.8"
+toml_edit = "0.22"
+ureq = { version = "2.12", default-features = true, features = ["json"] }
+xmlrpc = { version = "0.15.1", default-features = false }
+globset = "0.4"
+futures = "0.3"
+regex = "1"
+walkdir = "2.5"
+os_pipe = "1"
+libc = "0.2"
+rmcp = { version = "=3.1.2", features = ["client", "transport-child-process", "transport-io"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+
+[dev-dependencies]
+serde_json = { version = "1.0", features = ["preserve_order"] }
+tempfile = "3"
+transmission-rpc = "=0.5.0"
+rtorrent-xmlrpc-bindings = "=1.0.4"

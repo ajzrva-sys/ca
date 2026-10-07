@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&usage, 100, 30), render_to_text(&usage, 60, 24))"
+---
+main /workspace/ca  [Choose Ctrl+l]                                                     :: 1 working
+ + New Agent   Open Previous /resume                                                Worktree Ctrl+w
+ ▾ Working 1 ───────────────────────────────────────── ┌Preview────────────────────────────────────┐
+ :: bsd2 MiMo Flash official Q2_K setup · ca         0s│Select a session or agent to preview its   │
+   Wai┌──────────────────────────────────────────────────────────────────────────────────────┐     │
+ ▾ Ina│Context usage  Usage limit  Session info                                           [x]│     │
+ ◇ bsd│──────────────────────────────────────────────────────────────────────────────────────│     │
+   /Vo│Token plan (MiMo)                                                                     │     │
+ ◇ Rev│███████████░░░░░░░░░░░░░  47%                                                         │     │
+   /Vo│3760000 of 8000000 credits used                                                       │     │
+      │                                                                                      │     │
+      │MiMo  8000000 credits · USD 50                                                        │     │
+      │DeepSeek  CNY 110 remaining                                                           │     │
+      │This process  0 requests · 0 in · 0 out                                               │     │
+      │                                                                                      │     │
+      │                                                                                      │     │
+      │                                                                                      │     │
+      │                                                                                      │     │
+      │                                                                                      │     │
+      │                                                                                      │     │
+      │                                                                                      │     │
+      │                                                                                      │     │
+      │                                                                                      │     │
+      │                                                                                      │     │
+      │                        Tab switch  |  ↑/↓ scroll  |  Esc close                       │     │
+      └──────────────────────────────────────────────────────────────────────────────────────┘─────┘
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│> Dispatch a new agent                                                                            │
+└─────────────────────────────────────────────────────────────────────────────────Coder · allowlist┘
+Enter:collapse  |  Esc:New Agent  |  Ctrl+.:shortcuts
+-- narrow --
+main /workspace/ca  [Choose Ctrl+l]             :: 1 working
+ + New Agent   Open Previous /resume        Worktree Ctrl+w
+ ▾ ┌────────────────────────────────────────────────────┐──
+ ::│Context usage  Usage limit  Session info         [x]│ 0s
+   │────────────────────────────────────────────────────│
+ ▾ │Token plan (MiMo)                                   │──
+ ◇ │███████████░░░░░░░░░░░░░  47%                       │ 3h
+   │3760000 of 8000000 credits used                     │
+ ◇ │                                                    │ 2d
+   │MiMo  8000000 credits · USD 50                      │
+   │DeepSeek  CNY 110 remaining                         │
+   │This process  0 requests · 0 in · 0 out             │
+   │                                                    │
+   │                                                    │
+   │                                                    │
+   │                                                    │
+   │                                                    │
+   │                                                    │
+   │                                                    │
+   │                                                    │
+┌──│       Tab switch  |  ↑/↓ scroll  |  Esc close      │──┐
+│> └────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────Coder · allowlist┘
+Enter:collapse  |  Esc:New Agent  |  Ctrl+.:shortcuts

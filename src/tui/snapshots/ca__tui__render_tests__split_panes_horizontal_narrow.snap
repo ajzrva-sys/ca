@@ -1,0 +1,36 @@
+---
+source: src/tui/render_tests.rs
+expression: "render_to_text(&horizontal, 60, 32)"
+---
+┌ ○ pane 1 · idle ─────────────────────────────────────────┐
+│ ca · agent · auto                                        │
+│Transcript owned by top.                                  │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│ → Ask anything…                                          │
+│                                                          │
+│1 messages · / commands                                   │
+└──────────────────────────────────────────────────────────┘
+┌ ● pane 2 · idle ─────────────────────────────────────────┐
+│ ca · agent · auto                                        │
+│Transcript owned by bottom.                               │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│ → Ask anything…                                          │
+│                                                          │
+│1 messages · / commands                                   │
+└──────────────────────────────────────────────────────────┘

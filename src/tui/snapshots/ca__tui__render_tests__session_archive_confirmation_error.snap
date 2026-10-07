@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+
+
+    Sessions                                                                                 Esc
+
+     Recent 0    Archived 0   Tab changes list
+    Search  Type to search names, folders, or IDs
+
+      No recent sessions
+                     ┌────────────────────────────────────────────────────────┐
+    Enter open  ·  Ct│Archive saved session?                                  │
+    Shift+P pin  ·  S│                                                        │
+                     │Repository review · 11111111                            │
+                     │This moves exactly this session into the archive.       │
+                     │Branches stay active; you can restore this session      │
+                     │later.                                                  │
+                     │                                                        │
+                     │Session archive failed: permission denied               │
+                     │                                                        │
+                     │ Cancel     Archive                                     │
+                     └────────────────────────────────────────────────────────┘
+
+
+
+
+
+
+ →
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+
+    Sessions                                         Esc
+
+     Recent 0    Archived 0   Tab changes list
+  ┌──────────────────────────────────────────────────────┐
+  │Archive saved session?                                │
+  │                                                      │
+  │Repository review · 11111111                          │
+  │This moves exactly this session into the archive.     │
+  │Branches stay active; you can restore this session    │
+  │later.                                                │
+  │                                                      │
+  │Session archive failed: permission denied             │
+  │                                                      │
+  │ Cancel     Archive                                   │
+  └──────────────────────────────────────────────────────┘
+
+
+
+ →
+
+/ commands

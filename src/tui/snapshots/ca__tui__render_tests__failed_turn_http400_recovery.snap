@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(wide, narrow)"
+---
+ ca · agent · auto
+> Inspect the provider stream
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+Request rejected (400) by test. Resend for a clean branch.
+-- narrow --
+ ca · agent · auto
+> Inspect the provider stream
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+Request rejected (400) by test. Resend for a clean branch.

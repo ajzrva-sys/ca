@@ -1,0 +1,6 @@
+# Test new tools
+type:create a directory called /tmp/ca-test-tdir and then tell me if it exists
+key:enter
+wait:20s
+assert:tool:create_directory
+assert:contains:tmp

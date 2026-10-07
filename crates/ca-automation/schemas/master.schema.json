@@ -1,0 +1,13 @@
+
+{
+  "type": "object",
+  "required": ["project_complete", "needs_planner", "roadmap_status", "summary", "warnings"],
+  "additionalProperties": false,
+  "properties": {
+    "project_complete": {"type": "boolean"},
+    "needs_planner": {"type": "boolean"},
+    "roadmap_status": {"type": "string", "enum": ["created", "updated", "unchanged", "blocked", "complete"]},
+    "summary": {"type": "string"},
+    "warnings": {"type": "array", "items": {"type": "string"}}
+  }
+}

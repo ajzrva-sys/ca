@@ -1,0 +1,60 @@
+---
+source: src/tui/render_tests.rs
+assertion_line: 135
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24),)"
+---
+ ca · plan · auto
+
+  ╭────────────────────────────────────────────────────────────────────────────────────────────────╮
+  │ Plan · Blocked                                                                                 │
+  │ Make plan review readable and execution reliable                                               │
+  │ Make completed work visible and keep the next action clear.                                    │
+  │                                                                                                │
+  │ 1. Inspect repository history, processing symbols, datasets, and buildability; reproduce the   │
+  │ current application baseline, compare reproducible reference outputs, and preserve the         │
+  │ complete validation evidence through the final marker [in progress]                            │
+  │ 2. Render long tasks and Unicode cleanly: café, 界 面 , 👩🏽‍💻                                        │
+  │ 3. Verify approval, revision, dismissal, saved-state recovery, and failure messages            │
+  │ 4. Run completion checks [done]                                                                │
+  │ 5. Install the verified release [blocked]                                                      │
+  │ 6. Report the final result                                                                     │
+  │                                                                                                │
+  │ Enter Execute · Ctrl+O View plan                                                               │
+  │ Type to Revise · Esc Dismiss                                                                   │
+  ╰────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · plan · auto
+  │ clear.                                                 │
+  │                                                        │
+  │ 1. Inspect repository history, processing symbols,     │
+  │ datasets, and buildability; reproduce the current      │
+  │ application baseline, compare reproducible reference   │
+  │ outputs, and preserve the complete validation evidence │
+  │ through the final marker [in progress]                 │
+  │ 2. Render long tasks and Unicode cleanly: café, 界 面 ,  │
+  │ 👩🏽‍💻                                                      │
+  │ 3. Verify approval, revision, dismissal, saved-state   │
+  │ recovery, and failure messages                         │
+  │ 4. Run completion checks [done]                        │
+  │ 5. Install the verified release [blocked]              │
+  │ 6. Report the final result                             │
+  │                                                        │
+  │ Enter Execute · Ctrl+O View plan                       │
+  │ Type to Revise · Esc Dismiss                           │
+  ╰────────────────────────────────────────────────────────╯
+
+
+ → ▌Ask anything…
+
+/ commands

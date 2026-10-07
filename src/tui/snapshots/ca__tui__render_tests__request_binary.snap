@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&binary, 100, 30), render_to_text(&binary, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│  (none)                                                                                          │
+│                                                                                                  │
+│Messages (1)                                                                                      │
+│                                                                                                  │
+│[user 1]                                                                                          │
+│[                                                                                                 │
+│  {                                                                                               │
+│    "text": "Inspect this image",                                                                 │
+│    "type": "text"                                                                                │
+│  },                                                                                              │
+│  {                                                                                               │
+│    "height": 1,                                                                                  │
+│    "media_type": "image/png",                                                                    │
+│    "payload": "[binary content omitted]",                                                        │
+│    "type": "image",                                                                              │
+│    "width": 1                                                                                    │
+│  }                                                                                               │
+│]                                                                                                 │
+│                                                                                                  │
+│Tool schemas (0)                                                                                  │
+│  (none)                                                                                          │
+│                                                                                                  │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close | 25/45                                     │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│  (none)                                                  │
+│                                                          │
+│Messages (1)                                              │
+│                                                          │
+│[user 1]                                                  │
+│[                                                         │
+│  {                                                       │
+│    "text": "Inspect this image",                         │
+│    "type": "text"                                        │
+│  },                                                      │
+│  {                                                       │
+│    "height": 1,                                          │
+│    "media_type": "image/png",                            │
+│    "payload": "[binary content omitted]",                │
+│    "type": "image",                                      │
+│    "width": 1                                            │
+│  }                                                       │
+│]                                                         │
+│                                                          │
+│Tool schemas (0)                                          │
+│  (none)                                                  │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

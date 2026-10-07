@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codex-team.local/schemas/self_improvement/replay_receipt.schema.json",
+  "title": "ReplayReceiptV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "replay_id", "plan_id", "candidate_id", "case_id", "lane", "route", "result", "bounded_output", "evidence_hashes", "created_at", "digest"],
+  "properties": {
+    "schema": {"const": "codex-team.replay_receipt.v1"},
+    "replay_id": {"type": "string", "maxLength": 160},
+    "plan_id": {"type": "string", "maxLength": 160},
+    "candidate_id": {"type": "string", "maxLength": 160},
+    "case_id": {"type": "string", "maxLength": 160},
+    "lane": {"enum": ["baseline", "candidate"]},
+    "route": {"type": "string", "maxLength": 241},
+    "result": {"type": "object"},
+    "bounded_output": {"type": "string", "maxLength": 16385},
+    "evidence_hashes": {"type": "array", "items": {"type": "string"}},
+    "created_at": {"type": "string"},
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

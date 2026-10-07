@@ -1,0 +1,62 @@
+
+{
+  "type": "object",
+  "description": "Project Manager output. PM must return direction, disposition, approved task cards, or typed Rust commit requests only; Rust/Worker perform file edits and Rust performs commits.",
+  "required": ["project_complete", "needs_master", "summary", "work_plan", "tasks", "warnings", "commit_requests"],
+  "additionalProperties": false,
+  "properties": {
+    "project_complete": {"type": "boolean", "description": "True only when the top-level mission is complete, not when the queue is merely empty."},
+    "needs_master": {"type": "boolean", "description": "True only when strategic CEO/Master direction is needed."},
+    "summary": {"type": "string", "description": "Read-only assessment and next routing decision. Do not claim files were edited by PM."},
+    "work_plan": {
+      "type": "object",
+      "description": "Compact multi-step execution map so Rust/Senior/Worker can continue without returning to PM every cycle. Use empty arrays when no map is safe.",
+      "required": ["summary", "goals", "task_sequence", "test_strategy", "pm_return_triggers"],
+      "additionalProperties": false,
+      "properties": {
+        "summary": {"type": "string"},
+        "goals": {"type": "array", "items": {"type": "string"}},
+        "task_sequence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "title", "kind", "status", "depends_on", "tests", "notes", "estimated_minutes"],
+            "additionalProperties": false,
+            "properties": {
+              "id": {"type": "string"},
+              "title": {"type": "string"},
+              "kind": {"type": "string"},
+              "status": {"type": "string"},
+              "depends_on": {"type": "array", "items": {"type": "string"}},
+              "tests": {"type": "array", "items": {"type": "string"}},
+              "notes": {"type": "string"},
+              "estimated_minutes": {"type": "integer", "minimum": 0}
+            }
+          }
+        },
+        "test_strategy": {"type": "array", "items": {"type": "string"}},
+        "pm_return_triggers": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "tasks": {"type": "array", "items": TASK_SCHEMA_PLACEHOLDER},
+    "warnings": {"type": "array", "items": {"type": "string"}, "description": "Read-only warnings, blockers, or dispositions. No file mutation instructions outside returned tasks."},
+    "commit_requests": {
+      "type": "array",
+      "description": "Typed requests for Rust to commit an already-dirty bounded slice. Use [] unless a selected dirty slice is ready for Rust-owned commit.",
+      "items": {
+        "type": "object",
+        "required": ["request_id", "title", "summary", "allowed_files", "verification_commands", "commit_message", "stop_conditions"],
+        "additionalProperties": false,
+        "properties": {
+          "request_id": {"type": "string"},
+          "title": {"type": "string"},
+          "summary": {"type": "string"},
+          "allowed_files": {"type": "array", "items": {"type": "string"}},
+          "verification_commands": {"type": "array", "items": {"type": "string"}},
+          "commit_message": {"type": "string"},
+          "stop_conditions": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    }
+  }
+}

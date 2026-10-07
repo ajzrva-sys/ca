@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&collapsed, 100, 30),\nrender_to_text(&collapsed, 60, 24))"
+---
+ ca · agent · auto
+Splitting the review by feature domain.
+
+  ✗ spawn_agent ×4 identical failures · ctrl+o details
+    ┌────────────────────────────────────────────────────────────────────────────────────────────┐
+    │ no automatic delegation route qualifies for complex complexity; verify credentials, suppo… │
+    └────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands
+-- narrow --
+ ca · agent · auto
+Splitting the review by feature domain.
+
+  ✗ spawn_agent ×4 identical failures · ctrl+o details
+    ┌────────────────────────────────────────────────────┐
+    │ no automatic delegation route qualifies for compl… │
+    └────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands

@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+      ┌ Permissions ─────────────────────────────────────────────────────────────────────────┐
+      │> type to filter…                                                                     │
+      │3 rules · persistent changes enabled                                                  │
+      │                                                                                      │
+      │  allow   legacy                            read_file                                 │
+      │▶ ask     config                            run_command · cargo test                  │
+      │  allow   session                           write_file · /tmp/project/src/lib.rs      │
+      │                                                                                      │
+      │Permission removed                                                                    │
+      │Shift+D remove · Esc close · ↑↓ navigate                                              │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      └──────────────────────────────────────────────────────────────────────────────────────┘
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+ ┌ Permissions ───────────────────────────────────────────┐
+ │> type to filter…                                       │
+ │3 rules · persistent changes enabled                    │
+ │                                                        │
+ │  allow   legacy                                        │
+ │    read_file                                           │
+ │▶ ask     config                                        │
+ │    run_command · cargo test                            │
+ │  allow   session                                       │
+ │    write_file · /tmp/project/src/lib.rs                │
+ │                                                        │
+ │Permission removed                                      │
+ │Shift+D remove · Esc close · ↑↓ navigate                │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+/ commands

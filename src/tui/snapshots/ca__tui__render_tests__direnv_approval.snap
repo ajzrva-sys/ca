@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Direnv approval                                                                                   │
+│                                                                                                  │
+│Command: direnv export json                                                                       │
+│Workspace: /workspace/direnv-fixture                                                              │
+│.envrc SHA-256: 1ee464bf762351a65a16bdad94cce1bcb559eaf66cffb5cbeaacd080180aa4dc                  │
+│Sandbox: required                                                                                 │
+│Network: denied                                                                                   │
+│Persistence: process only                                                                         │
+│                                                                                                  │
+│Confirm exactly:                                                                                  │
+│/direnv confirm 1ee464bf762351a65a16bdad94cce1bcb559eaf66cffb5cbeaacd080180aa4dc                  │
+│                                                                                                  │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close | 1/11                                      │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│Direnv approval                                           │
+│                                                          │
+│Command: direnv export json                               │
+│Workspace: /workspace/direnv-fixture                      │
+│.envrc SHA-256:                                           │
+│1ee464bf762351a65a16bdad94cce1bcb559eaf66cffb5cbeaacd08018│
+│0aa4dc                                                    │
+│Sandbox: required                                         │
+│Network: denied                                           │
+│Persistence: process only                                 │
+│                                                          │
+│Confirm exactly:                                          │
+│/direnv confirm                                           │
+│1ee464bf762351a65a16bdad94cce1bcb559eaf66cffb5cbeaacd08018│
+│0aa4dc                                                    │
+│                                                          │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close |   │
+│1/11                                                      │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&confirmation, 100, 30),\nrender_to_text(&confirmation, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+
+
+
+
+                  ┌──────────────────────────────────────────────────────────────┐
+                  │Delete provider trace?                                        │
+                  │                                                              │
+                  │00000000-0000-0000-0000-000000000117 · 12.1 KiB               │
+                  │This permanently removes exactly this trace file.             │
+                  │Provider requests, sessions, and other traces are unchanged.  │
+                  │                                                              │
+                  │trace changed before deletion                                 │
+                  │                                                              │
+                  │ Cancel     Delete                                            │
+                  │←/→ choose · Enter confirm · Esc cancel                       │
+                  └──────────────────────────────────────────────────────────────┘
+
+
+
+
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+
+
+
+
+  ┌──────────────────────────────────────────────────────┐
+  │Delete provider trace?                                │
+  │                                                      │
+  │00000000-0000-0000-0000-000000000117 · 12.1 KiB       │
+  │This permanently removes exactly this trace file.     │
+  │Provider requests, sessions, and other traces are     │
+  │unchanged.                                            │
+  │                                                      │
+  │trace changed before deletion                         │
+  │                                                      │
+  │ Cancel     Delete                                    │
+  └──────────────────────────────────────────────────────┘
+
+
+
+ → ▌Ask anything…
+
+/ commands

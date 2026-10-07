@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · mimo-v2.5-pro · multi-run judged
+ ┌ Multi-run · isolated candidates ───────────────────────────────────────────────────────────────┐
+ │judged · 2 candidates · cost estimate shown per route when configured                           │
+ │Candidate worktrees and branches remain user-owned; nothing is merged or attached.              │
+ │                                                                                                │
+ │▶ candidate-1 · mimo/mimo-v2.5-pro · completed · unknown                                        │
+ │  worktree 11111111 · 1 changes · 0 omitted                                                     │
+ │  candidate-2 · deepseek/deepseek-chat · completed · unknown                                    │
+ │  worktree 22222222 · 2 changes · 0 omitted                                                     │
+ │                                                                                                │
+ │Judge selected candidate-2 · Candidate 2 has the stronger focused diff and test evidence        │
+ │                                                                                                │
+ │Shift+R refresh · Shift+F fusion proposal · Esc close                                           │
+ │Multi-run judgment ready                                                                        │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ └────────────────────────────────────────────────────────────────────────────────────────────────┘
+/ commands
+-- narrow --
+ ca · agent · mimo-v2.5-pro · multi-run judged
+ ┌ Multi-run · isolated candidates ───────────────────────┐
+ │judged · 2 candidates · cost estimate shown per route   │
+ │when configured                                         │
+ │Candidate worktrees and branches remain user-owned;     │
+ │nothing is merged or attached.                          │
+ │                                                        │
+ │▶ candidate-1 · mimo/mimo-v2.5-pro · completed · unknown│
+ │  worktree 11111111 · 1 changes · 0 omitted             │
+ │  candidate-2 · deepseek/deepseek-chat · completed ·    │
+ │unknown                                                 │
+ │  worktree 22222222 · 2 changes · 0 omitted             │
+ │                                                        │
+ │Judge selected candidate-2 · Candidate 2 has the        │
+ │stronger focused diff and test evidence                 │
+ │                                                        │
+ │Shift+R refresh · Shift+F fusion proposal · Esc close   │
+ │Multi-run judgment ready                                │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+/ commands

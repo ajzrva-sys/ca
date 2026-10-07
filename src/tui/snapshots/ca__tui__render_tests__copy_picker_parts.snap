@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&parts, 100, 30), render_to_text(&parts, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+      ┌ Copy message part ───────────────────────────────────────────────────────────────────┐
+      │Search:                                                                               │
+      │                                                                                      │
+      │  Content · I found the failing cache-usage branch.                                   │
+      │▸ Visible reasoning · The hit/miss pair is authoritative.                             │
+      │  Tool result · run_command · focused tests passed                                    │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │Enter copy exact stored bytes · Esc back · ↑↓ navigate · type to filter               │
+      │                                                                                      │
+      └──────────────────────────────────────────────────────────────────────────────────────┘
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+ ┌ Copy message part ─────────────────────────────────────┐
+ │Search:                                                 │
+ │                                                        │
+ │  Content · I found the failing cache-usage branch.     │
+ │▸ Visible reasoning · The hit/miss pair is authoritative│
+ │  Tool result · run_command · focused tests passed      │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │Enter copy exact stored bytes · Esc back · ↑↓ navigate ·│
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+
+/ commands

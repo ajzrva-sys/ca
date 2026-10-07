@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · mimo-v2.5-pro
+
+
+
+            ┌──────────────────────────────────────────────────────────────────────────┐
+            │ Provider: mimo                                                           │
+            │ Endpoint: https://token-plan-sgp.xiaomimimo.com/v1                       │
+            │ Credential: env MIMO_API_KEY · live · 3 models                           │
+            │                                                                          │
+            │> type to filter models…                                                  │
+            │                                                                          │
+            │  mimo-v2.5 · configured                                                  │
+            │▸ mimo-v2.5-pro · configured · current                                    │
+            │  mimo-v2.5-omni · available                                              │
+            │                                                                          │
+            │Enter select · ⇧A add model · ⇧E edit/add · ⇧C cache                      │
+            │⇧S settings · ⇧R refresh · ⇧D delete provider · Esc providers             │
+            │                                                                          │
+            │                                                                          │
+            │                                                                          │
+            │                                                                          │
+            │                                                                          │
+            │                                                                          │
+            │                                                                          │
+            │                                                                          │
+            └──────────────────────────────────────────────────────────────────────────┘
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · mimo-v2.5-pro
+  ┌──────────────────────────────────────────────────────┐
+  │ Provider: mimo                                       │
+  │ Endpoint: https://token-plan-sgp.xiaomimimo.com/v1   │
+  │ Credential: env MIMO_API_KEY · live · 3 models       │
+  │                                                      │
+  │> type to filter models…                              │
+  │                                                      │
+  │  mimo-v2.5 · configured                              │
+  │▸ mimo-v2.5-pro · configured · current                │
+  │  mimo-v2.5-omni · available                          │
+  │                                                      │
+  │Enter select · ⇧A add model · ⇧E edit/add · ⇧C cache  │
+  │⇧S settings · ⇧R refresh · ⇧D delete provider · Esc pr│
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+ →│                                                      │
+  └──────────────────────────────────────────────────────┘
+/ commands

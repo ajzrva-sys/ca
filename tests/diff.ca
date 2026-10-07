@@ -1,0 +1,10 @@
+# Diff display test — write then edit
+type:write a file called /tmp/ca-tdiff.txt with content "line1\nline2\nline3"
+key:enter
+wait:12s
+type:edit /tmp/ca-tdiff.txt — change line2 to line2_MODIFIED
+key:enter
+wait:12s
+assert:tool:edit_file
+assert:contains:-line2
+assert:contains:+line2_MODIFIED

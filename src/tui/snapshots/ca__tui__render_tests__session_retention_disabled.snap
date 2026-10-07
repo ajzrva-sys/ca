@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&disabled, 100, 30),\nrender_to_text(&disabled, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+              ┌──────────────────────────────────────────────────────────────────────┐
+              │Saved session retention                                               │
+              │                                                                      │
+              │Age rule       disabled                                               │
+              │Count rule     disabled                                               │
+              │                                                                      │
+              │Active 7 · Archived 2 (always excluded)                               │
+              │Current and pinned sessions are always protected.                     │
+              │Retention is disabled. Nothing runs automatically.                    │
+              │                                                                      │
+              │Enter preview · Shift+E edit · Esc close                              │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              └──────────────────────────────────────────────────────────────────────┘
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+  ┌──────────────────────────────────────────────────────┐
+  │Saved session retention                               │
+  │                                                      │
+  │Age rule       disabled                               │
+  │Count rule     disabled                               │
+  │                                                      │
+  │Active 7 · Archived 2 (always excluded)               │
+  │Current and pinned sessions are always protected.     │
+  │Retention is disabled. Nothing runs automatically.    │
+  │                                                      │
+  │Enter preview · Shift+E edit · Esc close              │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+ →└──────────────────────────────────────────────────────┘
+
+/ commands

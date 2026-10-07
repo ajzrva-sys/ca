@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · mimo-v2.5-pro
+
+
+
+
+
+
+            ┌──────────────────────────────────────────────────────────────────────────┐
+            │                                                                          │
+            │Provider setup: empty-local                                               │
+            │Endpoint: http://127.0.0.1:4000/v1                                        │
+            │Credential: no credential                                                 │
+            │Test model: none configured                                               │
+            │                                                                          │
+            │Status: needs a model                                                     │
+            │                                                                          │
+            │⇧T test provider · ⇧E edit settings/key · ⇧A add model                    │
+            │⇧R refresh models · Esc checklist                                         │
+            │                                                                          │
+            │                                                                          │
+            │                                                                          │
+            │                                                                          │
+            └──────────────────────────────────────────────────────────────────────────┘
+
+
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · mimo-v2.5-pro
+
+
+
+  ┌──────────────────────────────────────────────────────┐
+  │                                                      │
+  │Provider setup: empty-local                           │
+  │Endpoint: http://127.0.0.1:4000/v1                    │
+  │Credential: no credential                             │
+  │Test model: none configured                           │
+  │                                                      │
+  │Status: needs a model                                 │
+  │                                                      │
+  │⇧T test provider · ⇧E edit settings/key · ⇧A add model│
+  │⇧R refresh models · Esc checklist                     │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  └──────────────────────────────────────────────────────┘
+
+ → ▌Ask anything…
+
+/ commands

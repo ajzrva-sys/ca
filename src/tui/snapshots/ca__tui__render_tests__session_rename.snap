@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+
+
+    Sessions                                                                                 Esc
+
+     Recent 1    Archived 0   Tab changes list
+    Search  Type to search names, folders, or IDs
+
+    Thu Jan 1 1970
+    Repository review                                                                   12:00 AM
+              ┌──────────────────────────────────────────────────────────────────────┐
+    Enter open│Rename Session                                                        │
+    Shift+P pi│                                                                      │
+              │> Repository▌ review                                                  │
+              │                                                                      │
+              │Enter save · Esc cancel · ←→ move · Home/End                          │
+              │                                                                      │
+              │                                                                      │
+              └──────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+
+ →
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+
+    Sessions                                         Esc
+
+     Recent 1    Archived 0   Tab changes list
+    Search  Type to search names, folders, or IDs
+  ┌──────────────────────────────────────────────────────┐
+  │Rename Session                                        │
+  │                                                      │
+  │> Repository▌ review                                  │
+  │                                                      │
+  │Enter save · Esc cancel · ←→ move · Home/End          │
+  │                                                      │
+  │                                                      │
+  └──────────────────────────────────────────────────────┘
+
+
+
+
+
+ →
+
+/ commands

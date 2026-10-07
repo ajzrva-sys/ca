@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codex-team.local/schemas/self_improvement/artifact_content.schema.json",
+  "title": "ArtifactContentV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "content_id", "files", "digest"],
+  "properties": {
+    "schema": { "const": "codex-team.artifact_content.v1" },
+    "content_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "files": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "encoding", "content", "inject_into_prompt", "executable"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "encoding": { "enum": ["utf8", "hex"] },
+          "content": { "type": "string" },
+          "inject_into_prompt": { "type": "boolean" },
+          "executable": { "type": "boolean" }
+        }
+      }
+    },
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}

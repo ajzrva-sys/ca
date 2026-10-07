@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+┌ Background activity ─────────────────────────────────────────────────────────────────────────────┐
+│ [delegate] delegati  Running  evidence · 2026-08-26T18:00:20Z                                    │
+│ [delegate] delegati  Completed  observation · 2026-08-26T17:59:00Z                               │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│↑↓ select · Enter open · x cancel · r refresh · a accept · 1-5 negative · C correction · Esc close│
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌ Background activity ─────────────────────────────────────┐
+│ [delegate] delegati  Running  evidence · 2026-08-26T18:00│
+│ [delegate] delegati  Completed  observation · 2026-08-26T│
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│Enter open · x cancel · r refresh · a/1-5 feedback · Esc c│
+└──────────────────────────────────────────────────────────┘

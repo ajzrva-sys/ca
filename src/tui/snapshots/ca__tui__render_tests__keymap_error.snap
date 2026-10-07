@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&failed, 100, 30), render_to_text(&failed, 60, 24))"
+---
+ ca · agent · auto
+
+
+        ┌ Keymap ──────────────────────────────────────────────────────────────────────────┐
+        │ Keyboard shortcuts                                                               │
+        │ > type to filter…                                                                │
+        │                                                                                  │
+        │ ▸ Switch model              Ctrl+K / Ctrl+L           custom                     │
+        │   Open external editor      Ctrl+G                                               │
+        │   Cycle model               Ctrl+P                                               │
+        │   Cycle recent model        Ctrl+X R                                             │
+        │   Cycle favorite model      Ctrl+X F                                             │
+        │   Cycle reasoning           Ctrl+T                                               │
+        │   Queue message / save queued edit Alt+Enter                                     │
+        │   Interrupt and send / save session when idle Ctrl+S                             │
+        │   Expand latest response    Ctrl+O                                               │
+        │   Search input history      Ctrl+X Ctrl+R                                        │
+        │   Stash composer draft      Ctrl+X S                                             │
+        │   Focus agent activity      Ctrl+X Down                                          │
+        │                                                                                  │
+        │  Fixed: Ctrl+R Diff · Ctrl+C cancel/quit · Enter/Esc and modal decisions         │
+        │Enter capture · ⇧R reset selected · Esc close · ↑↓ navigate                       │
+        │Error: Could not save keymap: simulated filesystem failure                        │
+        │                                                                                  │
+        │                                                                                  │
+        └──────────────────────────────────────────────────────────────────────────────────┘
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+ ┌ Keymap ────────────────────────────────────────────────┐
+ │ Keyboard shortcuts                                     │
+ │ > type to filter…                                      │
+ │                                                        │
+ │ ▸ Switch model · Ctrl+K / Ctrl+L  custom               │
+ │   Open external editor · Ctrl+G                        │
+ │   Cycle model · Ctrl+P                                 │
+ │   Cycle recent model · Ctrl+X R                        │
+ │   Cycle favorite model · Ctrl+X F                      │
+ │   Cycle reasoning · Ctrl+T                             │
+ │   Queue message / save queued edit · Alt+Enter         │
+ │   Interrupt and send / save session when idle · Ctrl+S │
+ │   Expand latest response · Ctrl+O                      │
+ │   Search input history · Ctrl+X Ctrl+R                 │
+ │   Stash composer draft · Ctrl+X S                      │
+ │                                                        │
+ │  Fixed: Ctrl+R Diff · Ctrl+C cancel/quit               │
+ │  Enter/Esc and modal decisions are fixed               │
+ │Enter capture · ⇧R reset · Esc close · ↑↓ move          │
+ │Error: Could not save keymap: simulated filesystem failu│
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+/ commands

@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&populated, 100, 30),\nrender_to_text(&populated, 60, 24))"
+---
+ ca · agent · auto
+
+   ┌ Memory ────────────────────────────────────────────────────────────────────────────────────┐
+   │[User]  Tab switch scope                                                                    │
+   │> type to filter…                                                                           │
+   │Recall on · proposals off · writes enabled                                                  │
+   │                                                                                            │
+   │▶ preference             Prefer concise completion notes with the actual validation result. │
+   │  workflow               Run focused checks before repository-wide gates.                   │
+   │                                                                                            │
+   │Shift+A add · Shift+E edit · Shift+D delete/reject · Shift+R recall · Shift+G proposals ·   │
+   │Shift+X export · Esc close                                                                  │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   └────────────────────────────────────────────────────────────────────────────────────────────┘
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+ ┌ Memory ────────────────────────────────────────────────┐
+ │[User]  Tab switch scope                                │
+ │> type to filter…                                       │
+ │Recall on · proposals off · writes enabled              │
+ │                                                        │
+ │▶ preference             Prefer concise completion notes│
+ │with the actual validation result.                      │
+ │  workflow               Run focused checks before      │
+ │repository-wide gates.                                  │
+ │                                                        │
+ │Shift+A add · Shift+E edit · Shift+D delete/reject ·    │
+ │Shift+R recall · Shift+G proposals · Shift+X export ·   │
+ │Esc close                                               │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+/ commands

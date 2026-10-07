@@ -1,0 +1,60 @@
+---
+source: src/tui/render_tests.rs
+assertion_line: 110
+expression: "wide_narrow(wide, narrow)"
+---
+ ca · plan · auto
+
+  ╭────────────────────────────────────────────────────────────────────────────────────────────────╮
+  │ Plan · Ready for review                                                                        │
+  │ Make plan review readable and execution reliable                                               │
+  │ Make completed work visible and keep the next action clear.                                    │
+  │                                                                                                │
+  │ 1. Finish the planning request before starting execution with the current agent and its normal │
+  │ workspace tools                                                                                │
+  │ 2. Render long tasks and Unicode cleanly: café, 界 面 , 👩🏽‍💻                                        │
+  │ 3. Verify approval, revision, dismissal, saved-state recovery, and failure messages            │
+  │ 4. Run completion checks                                                                       │
+  │ 5. Install the verified release                                                                │
+  │                                                                                                │
+  │ Enter Execute · Ctrl+O View plan                                                               │
+  │ Type to Revise · Esc Dismiss                                                                   │
+  ╰────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · plan · auto
+  │ Plan · Ready for review                                │
+  │ Make plan review readable and execution reliable       │
+  │ Make completed work visible and keep the next action   │
+  │ clear.                                                 │
+  │                                                        │
+  │ 1. Finish the planning request before starting         │
+  │ execution with the current agent and its normal        │
+  │ workspace tools                                        │
+  │ 2. Render long tasks and Unicode cleanly: café, 界 面 ,  │
+  │ 👩🏽‍💻                                                      │
+  │ 3. Verify approval, revision, dismissal, saved-state   │
+  │ recovery, and failure messages                         │
+  │ 4. Run completion checks                               │
+  │ 5. Install the verified release                        │
+  │                                                        │
+  │ Enter Execute · Ctrl+O View plan                       │
+  │ Type to Revise · Esc Dismiss                           │
+  ╰────────────────────────────────────────────────────────╯
+
+
+ → ▌Ask anything…
+
+/ commands

@@ -1,0 +1,23 @@
+# Generated artifacts and local validation
+/target/
+**/target/
+/scratch/
+/testai/
+/oracles/
+/reference/
+.DS_Store
+._*
+*.log
+*.profraw
+# Runtime state and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+**/.hermes/
+**/.ca/
+**/.codex/
+# Local planning artifacts
+/dontdo.txt
+/fx.plan

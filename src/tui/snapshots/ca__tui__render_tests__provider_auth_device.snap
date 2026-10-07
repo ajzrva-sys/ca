@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 52, 24))"
+---
+ ca · agent · auto
+
+
+
+
+       ┌ Provider authentication ───────────────────────────────────────────────────────────┐
+       │                                                                                    │
+       │Connect OpenAI Codex (ChatGPT)                                                      │
+       │                                                                                    │
+       │Open the URL on any browser, enter the one-time code, and leave ca running.         │
+       │                                                                                    │
+       │Authorization URL ready.                                                            │
+       │Ctrl+Y copies it and opens a borderless selectable handoff.                         │
+       │                                                                                    │
+       │One-time code: ABCD-EFGH                                                            │
+       │                                                                                    │
+       │Ctrl+Y copy/show URL · Waiting for authorization… · Esc cancel                      │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       └────────────────────────────────────────────────────────────────────────────────────┘
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+ ┌ Provider authentication ───────────────────────┐
+ │                                                │
+ │Connect OpenAI Codex (ChatGPT)                  │
+ │                                                │
+ │Open the URL on any browser, enter the one-time │
+ │code, and leave ca running.                     │
+ │                                                │
+ │Authorization URL ready.                        │
+ │Ctrl+Y copies it and opens a borderless         │
+ │selectable handoff.                             │
+ │                                                │
+ │One-time code: ABCD-EFGH                        │
+ │                                                │
+ │Ctrl+Y copy/show URL · Waiting for              │
+ │authorization… · Esc cancel                     │
+ │                                                │
+ │                                                │
+ │                                                │
+ │                                                │
+ └────────────────────────────────────────────────┘
+
+/ commands

@@ -1,0 +1,34 @@
+---
+source: src/tui/render_tests.rs
+expression: masked
+---
+ ca · agent · auto
+
+
+
+
+       ┌ Provider authentication ───────────────────────────────────────────────────────────┐
+       │                                                                                    │
+       │Connect Xiaomi MiMo                                                                 │
+       │                                                                                    │
+       │Paste the Token Plan API key (tp-…)                                                 │
+       │                                                                                    │
+       │> ••••••••••••••••••••••••                                                          │
+       │                                                                                    │
+       │Enter continue · Esc cancel                                                         │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       │                                                                                    │
+       └────────────────────────────────────────────────────────────────────────────────────┘
+
+
+ → ▌Ask anything…
+
+/ commands

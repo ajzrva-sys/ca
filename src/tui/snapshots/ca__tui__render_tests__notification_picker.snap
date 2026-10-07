@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+
+
+
+                       ┌ Completion notification ───────────────────────────┐
+                       │Notify when a top-level turn runs for 30 seconds.   │
+                       │                                                    │
+                       │  Off       current                                 │
+                       │  BEL                                               │
+                       │▸ OSC 9                                             │
+                       │                                                    │
+                       │                                                    │
+                       │                                                    │
+                       │Enter save · Esc cancel · ↑↓ navigate               │
+                       │                                                    │
+                       │                                                    │
+                       └────────────────────────────────────────────────────┘
+
+
+
+
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+
+
+
+   ┌ Completion notification ───────────────────────────┐
+   │Notify when a top-level turn runs for 30 seconds.   │
+   │                                                    │
+   │  Off       current                                 │
+   │  BEL                                               │
+   │▸ OSC 9                                             │
+   │                                                    │
+   │                                                    │
+   │                                                    │
+   │Enter save · Esc cancel · ↑↓ navigate               │
+   │                                                    │
+   │                                                    │
+   └────────────────────────────────────────────────────┘
+
+
+
+ → ▌Ask anything…
+
+/ commands

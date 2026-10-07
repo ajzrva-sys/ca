@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&failed, 100, 30), render_to_text(&failed, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┌ Paths 0/0 ───────────────────────────────────────────────────────────┐
+  │Path completion failed: permission denied                             │
+  │                                                                      │
+  └ ↑↓ select · Enter/Tab complete · Esc dismiss ────────────────────────┘
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ → Open ./s▌
+
+↑↓ select · Tab complete · Enter choose · Esc dismiss
+-- narrow --
+ ca · agent · auto
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┌ Paths 0/0 ───────────────────────────────────────────┐
+  │Path completion failed: permission denied             │
+  │                                                      │
+  └ ↑↓ select · Enter/Tab complete · Esc dismiss ────────┘
+────────────────────────────────────────────────────────────
+ → Open ./s▌
+
+↑↓ select · Tab complete · Enter choose · Esc dismiss

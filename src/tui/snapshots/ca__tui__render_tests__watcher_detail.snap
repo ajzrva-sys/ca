@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&detail, 100, 30), render_to_text(&detail, 60, 24))"
+---
+┌ PID watcher · 00000000-0000-4000-8000-000000000011 ──────────────────────────────────────────────┐
+│Label: Seedbox copy                                                                               │
+│Host: ssh root@bsd                                                                                │
+│PID: 55347                                                                                        │
+│Process: copy                                                                                     │
+│Cadence: 10s                                                                                      │
+│Health: running                                                                                   │
+│Elapsed: 15s                                                                                      │
+│Progress: item 53 of 993, approximately 15 GB copied                                              │
+│Log: /home/aji/copy-seedbox1-ratio.log                                                            │
+│Completion marker: /bigmac/seed-ro/seedbox1/.copy-complete                                        │
+│                                                                                                  │
+│Stopping this watcher stops observation only. The target process is unaffected.                   │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│↑↓/PgUp/PgDn scroll · x stop watching (target unaffected) · Esc list                              │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌ PID watcher · 00000000-0000-4000-8000-000000000011 ──────┐
+│Label: Seedbox copy                                       │
+│Host: ssh root@bsd                                        │
+│PID: 55347                                                │
+│Process: copy                                             │
+│Cadence: 10s                                              │
+│Health: running                                           │
+│Elapsed: 15s                                              │
+│Progress: item 53 of 993, approximately 15 GB copied      │
+│Log: /home/aji/copy-seedbox1-ratio.log                    │
+│Completion marker: /bigmac/seed-ro/seedbox1/.copy-complete│
+│                                                          │
+│Stopping this watcher stops observation only. The target  │
+│process is unaffected.                                    │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│↑↓ scroll · x stop watching · Esc list                    │
+└──────────────────────────────────────────────────────────┘

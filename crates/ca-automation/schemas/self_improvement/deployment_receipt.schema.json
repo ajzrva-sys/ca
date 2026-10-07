@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codex-team.local/schemas/self_improvement/deployment_receipt.schema.json",
+  "title": "DeploymentReceiptV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "deployment_id", "candidate_id", "component", "previous_slot",
+    "active_slot", "binary_sha256", "source_commit", "health_evidence_ids",
+    "known_good_pair_digest", "disposition", "created_at", "digest"
+  ],
+  "properties": {
+    "schema": {"const": "codex-team.deployment_receipt.v1"},
+    "deployment_id": {"type": "string"},
+    "candidate_id": {"type": "string"},
+    "component": {"enum": ["ca", "codex_team"]},
+    "previous_slot": {"enum": ["a", "b"]},
+    "active_slot": {"enum": ["a", "b"]},
+    "binary_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "source_commit": {"type": "string"},
+    "health_evidence_ids": {"type": "array", "items": {"type": "string"}},
+    "known_good_pair_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "disposition": {"type": "string"},
+    "created_at": {"type": "string"},
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+
+      ┌ Durable terminals ───────────────────────────────────────────────────────────────────┐
+      │tmux unavailable · install tmux and reopen /term                                      │
+      │>                                                                                     │
+      │ca did not start or install anything. Install tmux with your package manager, then    │
+      │press r to refresh.                                                                   │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │Enter attach · Shift+A create · Shift+D detach                                        │
+      │Shift+K kill · r refresh · Esc close                                                  │
+      │tmux is not installed or is not available on PATH                                     │
+ → ▌As└──────────────────────────────────────────────────────────────────────────────────────┘
+
+/ commands
+-- narrow --
+ ca · agent · auto
+ ┌ Durable terminals ─────────────────────────────────────┐
+ │tmux unavailable · install tmux and reopen /term        │
+ │>                                                       │
+ │ca did not start or install anything. Install tmux with │
+ │your package manager, then press r to refresh.          │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │Enter attach · ⇧A add · ⇧D detach                       │
+ │⇧K kill · Esc close                                     │
+ │tmux is not installed or is not available on PATH       │
+ └────────────────────────────────────────────────────────┘
+/ commands

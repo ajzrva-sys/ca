@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&list, 100, 30), render_to_text(&list, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Worktrees                                                                                         │
+│                                                                                                  │
+│11111111  review  ready · attached                                                                │
+│    branch: ca/review-11111111                                                                    │
+│22222222  verify  ready · dirty                                                                   │
+│    branch: ca/verify-22222222                                                                    │
+│                                                                                                  │
+│/worktree status <id> · diff <id> · attach <id> · cleanup <id>                                    │
+│                                                                                                  │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close | 1/8                                       │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│Worktrees                                                 │
+│                                                          │
+│11111111  review  ready · attached                        │
+│    branch: ca/review-11111111                            │
+│22222222  verify  ready · dirty                           │
+│    branch: ca/verify-22222222                            │
+│                                                          │
+│/worktree status <id> · diff <id> · attach <id> · cleanup │
+│<id>                                                      │
+│                                                          │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close |   │
+│1/8                                                       │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

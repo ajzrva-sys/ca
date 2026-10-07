@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto · workflow running · inspect
+The verification needs a command.
+
+  ⟳ run_command {"command":"cargo test workflow"}
+
+
+  Approve command [1/1] — run_command
+    Reason: local process execution · [g] this exact command for this run
+    Command: cargo test workflow
+  [y] run  [n] deny  [e] edit  [s] all uses of this tool  [g] allow exact for run  [p] always allow
+exact path  [x] always deny  [a] yolo
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+Tool needs approval [1/1] (y/n/a/g/s/x/p)
+-- narrow --
+ ca · agent · auto · workflow running · inspect
+The verification needs a command.
+
+  ⟳ run_command {"command":"cargo test workflow"}
+
+
+  Approve command [1/1] — run_command
+    Reason: local process execution · [g] this exact command
+for this run
+    Command: cargo test workflow
+  [y] run  [n] deny  [e] edit  [s] all uses of this tool
+[g] allow exact for run  [p] always allow exact path  [x]
+always deny  [a] yolo
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+Tool needs approval [1/1] (y/n/a/g/s/x/p)

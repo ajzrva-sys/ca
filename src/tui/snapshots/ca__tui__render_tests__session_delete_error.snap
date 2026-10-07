@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+
+
+    Sessions                                                                                 Esc
+
+     Recent 0    Archived 0   Tab changes list
+    Search  Type to search names, folders, or IDs
+
+      No recent sessions
+                     ┌────────────────────────────────────────────────────────┐
+    Enter open  ·  Ct│Delete saved session?                                   │
+    Shift+P pin  ·  S│                                                        │
+                     │Repository review · 11111111                            │
+                     │This permanently removes exactly this saved session.    │
+                     │Branches and their history are not deleted.             │
+                     │                                                        │
+                     │Session deletion failed: permission denied              │
+                     │                                                        │
+                     │ Cancel     Delete                                      │
+                     │←/→ choose · Enter confirm · Esc cancel                 │
+                     └────────────────────────────────────────────────────────┘
+
+
+
+
+
+
+ →
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+
+    Sessions                                         Esc
+
+     Recent 0    Archived 0   Tab changes list
+  ┌──────────────────────────────────────────────────────┐
+  │Delete saved session?                                 │
+  │                                                      │
+  │Repository review · 11111111                          │
+  │This permanently removes exactly this saved session.  │
+  │Branches and their history are not deleted.           │
+  │                                                      │
+  │Session deletion failed: permission denied            │
+  │                                                      │
+  │ Cancel     Delete                                    │
+  │←/→ choose · Enter confirm · Esc cancel               │
+  └──────────────────────────────────────────────────────┘
+
+
+
+ →
+
+/ commands

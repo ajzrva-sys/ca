@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&interrupted, 100, 30),\nrender_to_text(&interrupted, 60, 24))"
+---
+ ca · agent · auto
+[1970-01-01 00:00:00 UTC]
+> Check the release path.
+
+[1970-01-01 00:00:01 UTC]
+I checked the first boundary.
+
+
+[1970-01-01 00:00:02 UTC]
+The release path is ready.
+
+mimo/mimo-v2.5-pro · 1.4s · interrupted
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+3 messages · / commands
+-- narrow --
+ ca · agent · auto
+[1970-01-01 00:00:00 UTC]
+> Check the release path.
+
+[1970-01-01 00:00:01 UTC]
+I checked the first boundary.
+
+
+[1970-01-01 00:00:02 UTC]
+The release path is ready.
+
+mimo/mimo-v2.5-pro · 1.4s · interrupted
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+3 messages · / commands

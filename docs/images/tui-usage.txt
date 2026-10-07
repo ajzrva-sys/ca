@@ -1,0 +1,36 @@
+ ca · agent · fixture-model · auto-review                                                                               
+> Explain how you can help with this repository.                                                                        
+                                                                                                                        
+## Working with your repository                                                                                         
+                                                                                                                        
+I can inspect the source, explain the architecture, propose a plan, make approved edits, and run validation.            
+                                                                                                                        
+  • Start with a┌──────────────────────────────────────────────────────────────────────────────────────┐                
+  • Review the s│Context usage  Usage limit  Session info                                           [x]│                
+  • Check the re│──────────────────────────────────────────────────────────────────────────────────────│                
+                │Usage limit                                                                           │                
+This documentati│░░░░░░░░░░░░░░░░░░░░░░░░  0%                                                          │                
+                │No provider quota available                                                           │                
+                │                                                                                      │                
+                │This process  1 requests · 100 in · 20 out                                            │                
+                │                                                                                      │                
+                │                                                                                      │                
+                │                                                                                      │                
+                │                                                                                      │                
+                │                                                                                      │                
+                │                                                                                      │                
+                │                                                                                      │                
+                │                                                                                      │                
+                │                                                                                      │                
+                │                                                                                      │                
+                │                                                                                      │                
+                │                                                                                      │                
+                │                        Tab switch  |  ↑/↓ scroll  |  Esc close                       │                
+                └──────────────────────────────────────────────────────────────────────────────────────┘                
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+ → Ask anything…                                                                                                        
+                                                                                                                        
+Provider account usage refreshed                                                                                        

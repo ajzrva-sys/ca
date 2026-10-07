@@ -1,0 +1,55 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&composer, 100, 30),\nrender_to_text(&composer, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ → ship-production and review Rust correctness▌
+-- narrow --
+ ca · agent · auto
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────
+ → ship-production and review Rust correctness▌

@@ -1,0 +1,13 @@
+[package]
+name = "codex-team-protocol"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Compatibility contract facade for ca automation"
+
+[dependencies]
+ca-automation-protocol = { path = "../ca-automation-protocol" }
+
+[dev-dependencies]
+schemars = { version = "0.8", features = ["derive"] }
+serde_json = "1.0"

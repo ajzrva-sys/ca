@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+I launched two focused explorations.
+
+
+  ✿ Background Agent — Audit learning hooks and tools
+      ↳ read_file
+  ◆ Waiting for approval — Audit session structure
+      ↳ run_command
+  Ctrl+X Down view agents
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands
+-- narrow --
+ ca · agent · auto
+I launched two focused explorations.
+
+
+  ✿ Background Agent — Audit learning hooks and tools
+      ↳ read_file
+  ◆ Waiting for approval — Audit session structure
+      ↳ run_command
+  Ctrl+X Down view agents
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands

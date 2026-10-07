@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Workflow release-check · running                                                                  │
+│Definition: .ca/workflows/release.toml · attempts 1/256                                           │
+│Default route: mimo/mimo-v2.5                                                                     │
+│Current: inspect                                                                                  │
+│                                                                                                  │
+│- running    inspect      attempt 1 · mimo/mimo-v2.5                                              │
+│- pending    verify       attempts 0                                                              │
+│                                                                                                  │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close | 1/7                                       │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│Workflow release-check · running                          │
+│Definition: .ca/workflows/release.toml · attempts 1/256   │
+│Default route: mimo/mimo-v2.5                             │
+│Current: inspect                                          │
+│                                                          │
+│- running    inspect      attempt 1 · mimo/mimo-v2.5      │
+│- pending    verify       attempts 0                      │
+│                                                          │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close |   │
+│1/7                                                       │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

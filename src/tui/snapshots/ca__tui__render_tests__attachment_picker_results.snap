@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&populated, 100, 30),\nrender_to_text(&populated, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┌ Attachments 2/3 · 50000 indexed · index capped ──────────────────────┐
+  │  workspace  src/main.rs                                              │
+  │▸ [read-only] docs  guide/main.md                                     │
+  │  reference  Main guide                                               │
+  └ ↑↓ select · Enter/Tab attach · Esc dismiss ──────────────────────────┘
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ → Summarize @▌
+
+↑↓ select · Tab complete · Enter choose · Esc dismiss
+-- narrow --
+ ca · agent · auto
+
+
+
+
+
+
+
+
+
+
+
+  ┌ Attachments 2/3 · 50000 indexed · index capped ──────┐
+  │  workspace  src/main.rs                              │
+  │    workspace file                                    │
+  │▸ [read-only] docs  guide/main.md                     │
+  │    workspace file · read-only root                   │
+  │  reference  Main guide                               │
+  │    MCP resource                                      │
+  └ ↑↓ select · Enter/Tab attach · Esc dismiss ──────────┘
+────────────────────────────────────────────────────────────
+ → Summarize @▌
+
+↑↓ select · Tab complete · Enter choose · Esc dismiss

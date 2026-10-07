@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&bare, 100, 30), render_to_text(&bare, 60, 24))"
+---
+ ca · agent · auto · profile bare
+
+
+
+
+
+                  ┌ Theme ───────────────────────────────────────────────────────┐
+                  │>                                                             │
+                  │Highlight previews immediately; Enter persists.               │
+                  │ Default       current                                        │
+                  │ Ocean                                                        │
+                  │ Amber         preview                                        │
+                  │ Mimocode                                                     │
+                  │ Mono                                                         │
+                  │ Rose Pine                                                    │
+                  │                                                              │
+                  │                                                              │
+                  │                                                              │
+                  │                                                              │
+                  │                                                              │
+                  │Bare profile · preview only · Esc restore                     │
+                  │Theme preview is available in bare mode, but persistent change│
+                  │                                                              │
+                  └──────────────────────────────────────────────────────────────┘
+
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto · profile bare
+
+
+ ┌ Theme ─────────────────────────────────────────────────┐
+ │>                                                       │
+ │Highlight previews immediately; Enter persists.         │
+ │ Default       current                                  │
+ │ Ocean                                                  │
+ │ Amber         preview                                  │
+ │ Mimocode                                               │
+ │ Mono                                                   │
+ │ Rose Pine                                              │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │Bare profile · preview only · Esc restore               │
+ │Theme preview is available in bare mode, but persistent │
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+ → ▌Ask anything…
+
+/ commands

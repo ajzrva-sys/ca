@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&loading, 100, 30),\nrender_to_text(&loading, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┌ Paths 0/0 ───────────────────────────────────────────────────────────┐
+  │  Listing parent directory…                                           │
+  │                                                                      │
+  └ ↑↓ select · Enter/Tab complete · Esc dismiss ────────────────────────┘
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ → Open ./s▌
+
+↑↓ select · Tab complete · Enter choose · Esc dismiss
+-- narrow --
+ ca · agent · auto
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┌ Paths 0/0 ───────────────────────────────────────────┐
+  │  Listing parent directory…                           │
+  │                                                      │
+  └ ↑↓ select · Enter/Tab complete · Esc dismiss ────────┘
+────────────────────────────────────────────────────────────
+ → Open ./s▌
+
+↑↓ select · Tab complete · Enter choose · Esc dismiss

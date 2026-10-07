@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&bare, 100, 30), render_to_text(&bare, 60, 24))"
+---
+ ca · agent · auto · profile bare
+
+
+
+              ┌──────────────────────────────────────────────────────────────────────┐
+              │Saved session retention                                               │
+              │                                                                      │
+              │Age rule       disabled                                               │
+              │Count rule     disabled                                               │
+              │                                                                      │
+              │Active 0 · Archived 0 (always excluded)                               │
+              │Current and pinned sessions are always protected.                     │
+              │Retention is disabled. Nothing runs automatically.                    │
+              │                                                                      │
+              │View only in bare mode · Esc close                                    │
+              │This run has no persistent sessio…ngs may be edited for a future run  │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              └──────────────────────────────────────────────────────────────────────┘
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto · profile bare
+
+  ┌──────────────────────────────────────────────────────┐
+  │Saved session retention                               │
+  │                                                      │
+  │Age rule       disabled                               │
+  │Count rule     disabled                               │
+  │                                                      │
+  │Active 0 · Archived 0 (always excluded)               │
+  │Current and pinned sessions are always protected.     │
+  │Retention is disabled. Nothing runs automatically.    │
+  │                                                      │
+  │View only in bare mode · Esc close                    │
+  │This run has no persisten…be edited for a future run  │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+ →└──────────────────────────────────────────────────────┘
+
+/ commands

@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&refused, 100, 30),\nrender_to_text(&refused, 60, 24))"
+---
+┌ Guided changes walkthrough ──────────────────────────────────────────────────────────────────────┐
+│Not generated · incomplete input                                                                  │
+│Target: working · Route: local/walkthrough-model                                                  │
+│                                                                                                  │
+│Untracked file contents are not captured; stage them or remove them before generating a complete  │
+│walkthrough                                                                                       │
+│                                                                                                  │
+│Omitted tracked files                                                                             │
+│- src/oversized.rs                                                                                │
+│                                                                                                  │
+│Untracked names only; contents were not sent                                                      │
+│- notes/private-draft.txt                                                                         │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│↑↓/PgUp/PgDn scroll · Shift+R recapture · Esc close                                               │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌ Guided changes walkthrough ──────────────────────────────┐
+│Not generated · incomplete input                          │
+│Target: working · Route: local/walkthrough-model          │
+│                                                          │
+│Untracked file contents are not captured; stage them or   │
+│remove them before generating a complete walkthrough      │
+│                                                          │
+│Omitted tracked files                                     │
+│- src/oversized.rs                                        │
+│                                                          │
+│Untracked names only; contents were not sent              │
+│- notes/private-draft.txt                                 │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│↑↓/PgUp/PgDn scroll · Shift+R recapture · Esc close       │
+└──────────────────────────────────────────────────────────┘

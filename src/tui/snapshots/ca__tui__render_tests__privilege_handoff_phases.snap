@@ -1,0 +1,401 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(wide, narrow)"
+---
+=== CACHE CHECKING ===
+ ca · agent · auto
+> Apply the approved system change
+
+
+  Approve tool [1/1] — run_privileged
+    Program: "/usr/bin/id"
+    argv[0]: "space value"
+    argv[1]: "$(literal);&|"
+    cwd: "/Users/example/project"
+    Filesystem authority: system-wide · Network: OS-denied
+    Invocation digest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  [y] authorize once  [n/Esc] deny
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+Checking administrator authorization…
+=== MASKED INPUT ===
+ ca · agent · auto
+> Apply the approved system change
+
+
+  Approve tool [1/1] — run_privileged
+    Program: "/usr/bin/id"
+    argv[0]: "space value"
+    argv[1]: "$(literal);&|"
+    cwd: "/Users/example/project"
+    Filesystem authority: system-wide · Network: OS-denied
+    Invocation digest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  [y] authorize once  [n/Esc] deny
+              ┌ Input required ──────────────────────────────────────────────────────┐
+              │Administrator password                                                │
+              │One keyboard-only attempt for invocation                              │
+              │aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa      │
+              │                                                                      │
+              │  Secret:                                                             │
+              │  ••••••••••••••••••••••••••                                          │
+              │                                                                      │
+              │Enter submit · Esc cancel                                             │
+              └──────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+Administrator authentication required (Esc cancels)
+=== CANCELLATION ===
+ ca · agent · auto
+> Apply the approved system change
+
+
+  Approve tool [1/1] — run_privileged
+    Program: "/usr/bin/id"
+    argv[0]: "space value"
+    argv[1]: "$(literal);&|"
+    cwd: "/Users/example/project"
+    Filesystem authority: system-wide · Network: OS-denied
+    Invocation digest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  [y] authorize once  [n/Esc] deny
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+Cancelling administrator authentication…
+=== AUTH FAILURE ===
+ ca · agent · auto
+> Apply the approved system change
+
+
+  Approve tool [1/1] — run_privileged
+    Program: "/usr/bin/id"
+    argv[0]: "space value"
+    argv[1]: "$(literal);&|"
+    cwd: "/Users/example/project"
+    Filesystem authority: system-wide · Network: OS-denied
+    Invocation digest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  [y] authorize once  [n/Esc] deny
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+Administrator authentication failed
+=== EXECUTION ===
+ ca · agent · auto
+> Apply the approved system change
+
+
+  Approve tool [1/1] — run_privileged
+    Program: "/usr/bin/id"
+    argv[0]: "space value"
+    argv[1]: "$(literal);&|"
+    cwd: "/Users/example/project"
+    Filesystem authority: system-wide · Network: OS-denied
+    Invocation digest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  [y] authorize once  [n/Esc] deny
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+Executing approved administrator command…
+=== COMPLETION ===
+ ca · agent · auto
+> Apply the approved system change
+
+
+  Approve tool [1/1] — run_privileged
+    Program: "/usr/bin/id"
+    argv[0]: "space value"
+    argv[1]: "$(literal);&|"
+    cwd: "/Users/example/project"
+    Filesystem authority: system-wide · Network: OS-denied
+    Invocation digest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  [y] authorize once  [n/Esc] deny
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+Administrator command completed
+-- narrow --
+=== CACHE CHECKING ===
+ ca · agent · auto
+> Apply the approved system change
+
+
+  Approve tool [1/1] — run_privileged
+    Program: "/usr/bin/id"
+    argv[0]: "space value"
+    argv[1]: "$(literal);&|"
+    cwd: "/Users/example/project"
+    Filesystem authority: system-wide · Network: OS-denied
+    Invocation digest:
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+aaaa
+  [y] authorize once  [n/Esc] deny
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+Checking administrator authorization…
+=== MASKED INPUT ===
+ ca · agent · auto
+> Apply the approved system change
+
+
+  Approve tool [1/1] — run_privileged
+    Program: "/usr/bin/id"
+    argv[0]: "space value"
+    argv[1]: "$(literal);&|"
+    cwd: "/Users/example/project"
+    Filesystem authority: system-wide · Network: OS-denied
+  ┌ Input required ──────────────────────────────────────┐
+aa│Administrator password                                │aa
+aa│One keyboard-only attempt for invocation              │
+  │aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa│
+  │aaaaaaaaaa                                            │
+  │                                                      │
+  │  Secret:                                             │
+  │  ••••••••••••••••••••••••••                          │
+  │                                                      │
+  └──────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+Administrator authentication required (Esc cancels)
+=== CANCELLATION ===
+ ca · agent · auto
+> Apply the approved system change
+
+
+  Approve tool [1/1] — run_privileged
+    Program: "/usr/bin/id"
+    argv[0]: "space value"
+    argv[1]: "$(literal);&|"
+    cwd: "/Users/example/project"
+    Filesystem authority: system-wide · Network: OS-denied
+    Invocation digest:
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+aaaa
+  [y] authorize once  [n/Esc] deny
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+Cancelling administrator authentication…
+=== AUTH FAILURE ===
+ ca · agent · auto
+> Apply the approved system change
+
+
+  Approve tool [1/1] — run_privileged
+    Program: "/usr/bin/id"
+    argv[0]: "space value"
+    argv[1]: "$(literal);&|"
+    cwd: "/Users/example/project"
+    Filesystem authority: system-wide · Network: OS-denied
+    Invocation digest:
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+aaaa
+  [y] authorize once  [n/Esc] deny
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+Administrator authentication failed
+=== EXECUTION ===
+ ca · agent · auto
+> Apply the approved system change
+
+
+  Approve tool [1/1] — run_privileged
+    Program: "/usr/bin/id"
+    argv[0]: "space value"
+    argv[1]: "$(literal);&|"
+    cwd: "/Users/example/project"
+    Filesystem authority: system-wide · Network: OS-denied
+    Invocation digest:
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+aaaa
+  [y] authorize once  [n/Esc] deny
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+Executing approved administrator command…
+=== COMPLETION ===
+ ca · agent · auto
+> Apply the approved system change
+
+
+  Approve tool [1/1] — run_privileged
+    Program: "/usr/bin/id"
+    argv[0]: "space value"
+    argv[1]: "$(literal);&|"
+    cwd: "/Users/example/project"
+    Filesystem authority: system-wide · Network: OS-denied
+    Invocation digest:
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+aaaa
+  [y] authorize once  [n/Esc] deny
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+Administrator command completed

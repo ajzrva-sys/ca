@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+         ┌────────────────────────────────────────────────────────────────────────────────┐
+         │ Provider templates                                                             │
+         │ Select a compatible template to review before saving.                          │
+         │> type to filter names, aliases, or key env…                                    │
+         │  15 ready · 25 need integration                                                │
+         │                                                                                │
+         │▸ Nous Portal · needs OAuth                                                     │
+         │  OpenAI Codex · ready · responses                                              │
+         │  GitHub Copilot · needs adapter                                                │
+         │  GitHub Copilot ACP · needs subprocess                                         │
+         │  Anthropic · ready · messages                                                  │
+         │  OpenRouter · ready · chat                                                     │
+         │  Fireworks AI · needs adapter                                                  │
+         │  NovitaAI · needs adapter                                                      │
+         │  AI Gateway (Vercel) · needs adapter                                           │
+         │  z.ai / GLM · needs adapter                                                    │
+         │  Kimi / Moonshot · needs adapter                                               │
+         │                                                                                │
+         │Enter review · ↑↓ move · PgUp/PgDn · Home/End                                   │
+         │Esc providers · unavailable rows show requirements                              │
+         │                                                                                │
+         └────────────────────────────────────────────────────────────────────────────────┘
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+  ┌──────────────────────────────────────────────────────┐
+  │ Provider templates                                   │
+  │ Select a compatible template to review before saving.│
+  │> type to filter names, aliases, or key env…          │
+  │  15 ready · 25 need integration                      │
+  │                                                      │
+  │▸ Nous Portal · needs OAuth                           │
+  │  OpenAI Codex · ready · responses                    │
+  │  GitHub Copilot · needs adapter                      │
+  │  GitHub Copilot ACP · needs subprocess               │
+  │  Anthropic · ready · messages                        │
+  │  OpenRouter · ready · chat                           │
+  │  Fireworks AI · needs adapter                        │
+  │  NovitaAI · needs adapter                            │
+  │  AI Gateway (Vercel) · needs adapter                 │
+  │  z.ai / GLM · needs adapter                          │
+  │  Kimi / Moonshot · needs adapter                     │
+  │                                                      │
+  │Enter review · ↑↓ move · PgUp/PgDn · Home/End         │
+  │Esc providers · unavailable rows show requirements    │
+ →│                                                      │
+  └──────────────────────────────────────────────────────┘
+/ commands

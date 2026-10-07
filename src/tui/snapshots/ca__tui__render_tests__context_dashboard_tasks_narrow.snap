@@ -1,0 +1,28 @@
+---
+source: src/tui/render_tests.rs
+expression: "render_to_text(&state, 60, 24)"
+---
+┌──────────────────────────────────────────────────────────┐
+│Canonical transcript: 2 messages (preserved)              │
+│                                                          │
+│This sitting                                              │
+│Requests: 0                                               │
+│Output speed: unknown                                     │
+│Cost: unknown                                             │
+│Subscription allocation: none                             │
+│Unknown cost: 0 request(s)                                │
+│Unknown token usage: 0 request(s)                         │
+│                                                          │
+│Workspace                                                 │
+│Working directory: /workspace/ca                          │
+│                                                          │
+│LSP                                                       │
+│No enabled servers · 0 disabled                           │
+│                                                          │
+│Tasks                                                     │
+│No active plan · /tasks to inspect                        │
+│                                                          │
+│Checkpoint summary                                        │
+│## Goal                                                   │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                                              ┌ Render diagnostics ──────────────┐│
+│                                                              │Redraws          2                ││
+│                                                              │Dirty regions    5                ││
+│                                                              │Last / max frame 140 / 140 ms     ││
+│                                                              │Render failures  1                ││
+│                                                              │Repaint rate     2/s              ││
+│                                                              │Highlight        on               ││
+│                                                              │Cache layouts    1 · 0 blocks     ││
+│                                                              │Cached payload   0 KiB · ready    ││
+│                                                              │                                  ││
+│                                                              └──────────────────────────────────┘│
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│→ ▌Ask anything…                                                                                   │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│                      ┌ Render diagnostics ──────────────┐│
+│                      │Redraws          2                ││
+│                      │Dirty regions    5                ││
+│                      │Last / max frame 140 / 140 ms     ││
+│                      │Render failures  1                ││
+│                      │Repaint rate     2/s              ││
+│                      │Highlight        on               ││
+│                      │Cache layouts    2 · 0 blocks     ││
+│                      │Cached payload   0 KiB · ready    ││
+│                      │                                  ││
+│                      └──────────────────────────────────┘│
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│→ ▌Ask anything…                                           │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

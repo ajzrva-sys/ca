@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · plan · auto
+
+
+
+
+
+
+
+              ┌ Learned Rust Recipe ─────────────────────────────────────────────────┐
+              │Review learned Rust recipe cargo-check                                │
+              │Global approval automatically activates exact local matches.          │
+              │                                                                      │
+              │  (•) 1. Approve globally                                             │
+              │      Publish this exact digest after isolated validation.            │
+              │  ( ) 2. Reject                                                       │
+              │  ( ) 3. Later                                                        │
+              │                                                                      │
+              │↑/↓ or 1-9 choose · Enter submit · Esc cancel                         │
+              │                                                                      │
+              │                                                                      │
+              └──────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · plan · auto
+
+
+
+
+  ┌ Learned Rust Recipe ─────────────────────────────────┐
+  │Review learned Rust recipe cargo-check                │
+  │Global approval automatically activates exact local   │
+  │matches.                                              │
+  │                                                      │
+  │  (•) 1. Approve globally                             │
+  │      Publish this exact digest after isolated        │
+  │validation.                                           │
+  │  ( ) 2. Reject                                       │
+  │  ( ) 3. Later                                        │
+  │                                                      │
+  │↑/↓ or 1-9 choose · Enter submit · Esc cancel         │
+  └──────────────────────────────────────────────────────┘
+
+
+
+ → ▌Ask anything…
+
+/ commands

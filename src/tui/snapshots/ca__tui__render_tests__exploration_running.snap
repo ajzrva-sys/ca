@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&running, 100, 30),\nrender_to_text(&running, 60, 24))"
+---
+ ca · agent · auto
+  ⟳ Exploring…
+    read_file src/read-one.rs
+    search_files src/search-two.rs
+    lsp_symbols src/symbols-three.rs
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands
+-- narrow --
+ ca · agent · auto
+  ⟳ Exploring…
+    read_file src/read-one.rs
+    search_files src/search-two.rs
+    lsp_symbols src/symbols-three.rs
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands

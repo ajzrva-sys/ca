@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+
+
+
+
+               ┌ Clean up worktree? ────────────────────────────────────────────────┐
+               │Remove the clean worktree directory for review?                     │
+               │Branch ca/review-11111111 will be preserved.                        │
+               │No merge, commit, stash, or branch deletion will run.               │
+               │                                                                    │
+               │▶ Cancel       Remove                                               │
+               │Arrow/Tab choose · Enter confirm · Esc close                        │
+               │                                                                    │
+               │                                                                    │
+               │                                                                    │
+               │                                                                    │
+               └────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+
+
+
+
+ ┌ Clean up worktree? ────────────────────────────────────┐
+ │Remove the clean worktree directory for review?         │
+ │Branch ca/review-11111111 will be preserved.            │
+ │No merge, commit, stash, or branch deletion will run.   │
+ │                                                        │
+ │▶ Cancel       Remove                                   │
+ │Arrow/Tab choose · Enter confirm · Esc close            │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+
+
+
+ → ▌Ask anything…
+
+/ commands

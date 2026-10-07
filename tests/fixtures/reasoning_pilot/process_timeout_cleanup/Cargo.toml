@@ -1,0 +1,12 @@
+[package]
+name = "reasoning-pilot-process-timeout-cleanup"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+
+[[bin]]
+name = "process-fixture-helper"
+path = "src/bin/process_fixture_helper.rs"
+

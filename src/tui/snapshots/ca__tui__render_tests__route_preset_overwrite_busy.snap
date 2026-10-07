@@ -1,0 +1,28 @@
+---
+source: src/tui/render_tests.rs
+expression: "render_to_text(&overwrite, 80, 24)"
+---
+ ca · agent · auto
+
+
+
+
+     ┌ Overwrite route preset? ───────────────────────────────────────────┐
+     │Replace the existing named route preset?                            │
+     │                                                                    │
+     │Name: daily                                                         │
+     │Route: local/coder                                                  │
+     │Reasoning: high                                                     │
+     │                                                                    │
+     │ Cancel     Save                                                    │
+     │                                                                    │
+     │Saving… controls locked                                             │
+     │                                                                    │
+     │                                                                    │
+     │                                                                    │
+     └────────────────────────────────────────────────────────────────────┘
+
+
+ → ▌Ask anything…
+
+/ commands

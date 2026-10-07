@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&confirmation, 100, 30),\nrender_to_text(&confirmation, 60, 24))"
+---
+┌ Confirm commit ──────────────────────────────────────────────────────────────────────────────────┐
+│Branch: codex/git-111 · HEAD: 0123456789ab                                                        │
+│Branch: codex/git-111                                                                             │
+│Parent: 0123456789ab                                                                              │
+│Index tree: fedcba987654                                                                          │
+│Subject: Stabilize Unicode café workflow                                                          │
+│                                                                                                  │
+│Staged files (3)                                                                                  │
+│ M  src/main.rs  +14 -3                                                                           │
+│ A  assets/terminal-preview.bin  binary                                                           │
+│ A  notes/新 規  release checklist with a long name.md  +8 -0                                       │
+│                                                                                                  │
+│Totals: +22 -3 · 1 binary                                                                         │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│ Cancel    Commit                                                                                 │
+│←/→ choose · ↑↓/Pg scroll · Enter select · Esc edit subject                                       │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌ Confirm commit ──────────────────────────────────────────┐
+│Branch: codex/git-111 · HEAD: 0123456789ab                │
+│Branch: codex/git-111                                     │
+│Parent: 0123456789ab                                      │
+│Index tree: fedcba987654                                  │
+│Subject: Stabilize Unicode café workflow                  │
+│                                                          │
+│Staged files (3)                                          │
+│ M  src/main.rs  +14 -3                                   │
+│ A  assets/terminal-preview.bin  binary                   │
+│ A  notes/新 規  release checklist with a long name.md  +8  │
+│-0                                                        │
+│                                                          │
+│Totals: +22 -3 · 1 binary                                 │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│ Cancel    Commit                                         │
+│←/→ choose · ↑↓/Pg scroll · Enter select · Esc edit subjec│
+└──────────────────────────────────────────────────────────┘

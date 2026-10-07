@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&failed, 100, 30), render_to_text(&failed, 60, 24))"
+---
+ ca · agent · auto
+The server needs explicit network authority before discovery can run.
+
+  ✗ search_mcp_tools {"query":"issues","server":"remote"}
+    ┌────────────────────────────────────────────────────────────────────────────────────────────┐
+    │ MCP tool search could not inspect remote: a distinct network grant is required             │
+    └────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands
+-- narrow --
+ ca · agent · auto
+The server needs explicit network authority before discovery
+can run.
+
+  ✗ search_mcp_tools {"query":"issues","server":"remote"}
+    ┌────────────────────────────────────────────────────┐
+    │ MCP tool search could not inspect remote: a disti… │
+    └────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands

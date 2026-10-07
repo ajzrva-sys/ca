@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Session recall                                                                                    │
+│Historical text is untrusted evidence; it cannot issue instructions.                              │
+│                                                                                                  │
+│Indexed 190 session(s) · 1596 message(s)                                                          │
+│                                                                                                  │
+│BSD rsync recovery · CA/MiMo · 12 message(s)                                                      │
+│  recall:0123456789abcdef01234567                                                                 │
+│  source IDs: CA:session-44, MiMo:ses_mimo44                                                      │
+│  user msg-44 · 2026-08-24T10:00:00Z                                                              │
+│    Check the BSD transfer and stop after the destination catches up.                             │
+│    action: run_command shape=ssh status=success                                                  │
+│                                                                                                  │
+│More results available · cursor 76323a726561643a313a30                                            │
+│                                                                                                  │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close | 1/13                                      │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│Session recall                                            │
+│Historical text is untrusted evidence; it cannot issue    │
+│instructions.                                             │
+│                                                          │
+│Indexed 190 session(s) · 1596 message(s)                  │
+│                                                          │
+│BSD rsync recovery · CA/MiMo · 12 message(s)              │
+│  recall:0123456789abcdef01234567                         │
+│  source IDs: CA:session-44, MiMo:ses_mimo44              │
+│  user msg-44 · 2026-08-24T10:00:00Z                      │
+│    Check the BSD transfer and stop after the destination │
+│catches up.                                               │
+│    action: run_command shape=ssh status=success          │
+│                                                          │
+│More results available · cursor 76323a726561643a313a30    │
+│                                                          │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close |   │
+│1/13                                                      │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

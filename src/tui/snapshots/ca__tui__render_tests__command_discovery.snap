@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&discovery, 100, 30),\nrender_to_text(&discovery, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┌ Commands 1/114 ──────────────────────────────────────────────────────────────────────────────┐
+  │▸ /model [model-id] [--once]     Switch model                                                 │
+  │  /sessions [session-id]         Browse and continue previous sessions                        │
+  │  /dashboard                     Open the agent dashboard                                     │
+  │  /permissions [filter]          Inspect and remove permission rules                          │
+  │  /diff                          Review working-tree changes                                  │
+  │  /review [working|base <branch>|commit <sha>|custom <instructions>|converge [--ack-unpriced] │
+  │[SCOPE]]                                                                                      │
+  │    Run a fresh-context model review or explicit dual-route convergence                       │
+  │  /context                       Show context usage and checkpoint coverage                   │
+  │  /usage                        Show context, account, and session usage in a tabbed dashboard│
+  └ ↑↓ select · Tab complete · Enter choose · Esc dismiss ───────────────────────────────────────┘
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ → /▌
+
+↑↓ select · Tab complete · Enter choose · Esc dismiss
+-- narrow --
+ ca · agent · auto
+
+
+
+
+
+
+
+  ┌ Commands 1/114 ──────────────────────────────────────┐
+  │▸ /model [model-id] [--once]                          │
+  │    Switch model                                      │
+  │  /sessions [session-id]                              │
+  │    Browse and continue previous sessions             │
+  │  /dashboard                                          │
+  │    Open the agent dashboard                          │
+  │  /permissions [filter]                               │
+  │    Inspect and remove permission rules               │
+  │  /diff                                               │
+  │    Review working-tree changes                       │
+  └ ↑↓ select · Tab complete · Enter choose · Esc dismiss┘
+────────────────────────────────────────────────────────────
+ → /▌
+
+↑↓ select · Tab complete · Enter choose · Esc dismiss

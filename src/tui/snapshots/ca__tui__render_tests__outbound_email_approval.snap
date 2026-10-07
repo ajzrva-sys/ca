@@ -1,0 +1,67 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 34), render_to_text(&state, 60, 28))"
+---
+ ca · agent · auto
+> Send the frozen draft
+
+
+  Approve tool [1/1] — email_send
+    Account: work
+    To: alice@example.com, bob@example.com
+    Cc: copy@example.com
+    Bcc: audit@example.com
+    Subject: Quarterly follow-up
+    Body: 248 bytes · sha256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    Draft sha256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb · 1 attachment(s)
+  [y] send exactly once  [n/Esc] deny
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands
+-- narrow --
+ ca · agent · auto
+> Send the frozen draft
+
+
+  Approve tool [1/1] — email_send
+    Account: work
+    To: alice@example.com, bob@example.com
+    Cc: copy@example.com
+    Bcc: audit@example.com
+    Subject: Quarterly follow-up
+    Body: 248 bytes · sha256
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+aaaa
+    Draft sha256:
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+bbbb · 1 attachment(s)
+  [y] send exactly once  [n/Esc] deny
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands

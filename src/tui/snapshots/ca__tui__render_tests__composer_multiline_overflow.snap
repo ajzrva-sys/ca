@@ -1,0 +1,55 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&overflow, 100, 30),\nrender_to_text(&overflow, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ ↑2 visual row 2 你 é
+   visual row 3 你 é
+   visual row 4 你 é
+   visual row 5 你 é
+   visual row 6 你 é
+   visual row 7 你 é
+   visual row 8 你 é ↓1
+-- narrow --
+ ca · agent · auto
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────
+ ↑2 visual row 2 你 é
+   visual row 3 你 é
+   visual row 4 你 é
+   visual row 5 你 é
+   visual row 6 你 é
+   visual row 7 你 é
+   visual row 8 你 é ↓1

@@ -1,0 +1,36 @@
+ ca · agent · fixture-model · auto-review                                                                               
+> Explain how you can help with this repository.                                                                        
+                                                                                                                        
+## Working with your repository                                                                                         
+                                                                                                                        
+I can inspect the source, explain the architecture, propose a plan, make approved edits, and run validation.            
+                                                                                                                        
+  • Start with a focused question or task.                                                                              
+  • Review the selected mode and tool permissions.                                                                      
+  • Check the results and validation evidence before publishing.                                                        
+                                                                                                                        
+This documentation session uses a local fixture provider.                                                               
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+ → Ask anything…                                                                                                        
+                                                                                                                        
+Done                                                                                                                    

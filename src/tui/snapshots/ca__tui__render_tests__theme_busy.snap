@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&busy, 100, 30), render_to_text(&busy, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+
+                  ┌ Theme ───────────────────────────────────────────────────────┐
+                  │>                                                             │
+                  │Highlight previews immediately; Enter persists.               │
+                  │ Default       current                                        │
+                  │ Ocean                                                        │
+                  │ Amber         preview                                        │
+                  │ Mimocode                                                     │
+                  │ Mono                                                         │
+                  │ Rose Pine                                                    │
+                  │                                                              │
+                  │                                                              │
+                  │                                                              │
+                  │                                                              │
+                  │                                                              │
+                  │Saving… controls locked                                       │
+                  │                                                              │
+                  │                                                              │
+                  └──────────────────────────────────────────────────────────────┘
+
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+
+ ┌ Theme ─────────────────────────────────────────────────┐
+ │>                                                       │
+ │Highlight previews immediately; Enter persists.         │
+ │ Default       current                                  │
+ │ Ocean                                                  │
+ │ Amber         preview                                  │
+ │ Mimocode                                               │
+ │ Mono                                                   │
+ │ Rose Pine                                              │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │Saving… controls locked                                 │
+ │                                                        │
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+ → ▌Ask anything…
+
+/ commands

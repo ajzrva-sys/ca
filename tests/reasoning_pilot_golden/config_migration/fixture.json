@@ -1,0 +1,10 @@
+{
+  "schema_version": "reasoning_pilot_fixture.v1",
+  "id": "config_migration",
+  "package": "reasoning-pilot-config-migration",
+  "task_file": "TASK.md",
+  "allowed_paths": ["src/lib.rs"],
+  "public_test_argv": ["cargo", "test", "--quiet"],
+  "stdlib_only": true,
+  "network_allowed": false
+}

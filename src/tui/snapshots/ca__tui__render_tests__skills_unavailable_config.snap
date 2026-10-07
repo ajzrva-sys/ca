@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Unavailable skills                                                                                │
+│                                                                                                  │
+│workspace::release::ship                                                                          │
+│  unavailable: platform macos is not in [linux, freebsd]                                          │
+│workspace::incident::triage                                                                       │
+│  setup required: log_root, report_format · /skills config workspace::incident::triage            │
+│                                                                                                  │
+│Set: /skills config workspace::incident::triage log_root=/var/log --workspace                     │
+│                                                                                                  │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close | 1/8                                       │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│Unavailable skills                                        │
+│                                                          │
+│workspace::release::ship                                  │
+│  unavailable: platform macos is not in [linux, freebsd]  │
+│workspace::incident::triage                               │
+│  setup required: log_root, report_format · /skills config│
+│workspace::incident::triage                               │
+│                                                          │
+│Set: /skills config workspace::incident::triage           │
+│log_root=/var/log --workspace                             │
+│                                                          │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close |   │
+│1/8                                                       │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

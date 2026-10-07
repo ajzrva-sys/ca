@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+
+
+              ┌──────────────────────────────────────────────────────────────────────┐
+              │ Choose a working default                                             │
+              │                                                                      │
+              │▸ mimo / mimo-v2.5-pro                                                │
+              │  saved / saved-model                                                 │
+              │                                                                      │
+              │Enter select and finish · Esc checklist · ↑↓ move                     │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              └──────────────────────────────────────────────────────────────────────┘
+
+
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+
+
+  ┌──────────────────────────────────────────────────────┐
+  │ Choose a working default                             │
+  │                                                      │
+  │▸ mimo / mimo-v2.5-pro                                │
+  │  saved / saved-model                                 │
+  │                                                      │
+  │Enter select and finish · Esc checklist · ↑↓ move     │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  └──────────────────────────────────────────────────────┘
+
+ → ▌Ask anything…
+
+/ commands

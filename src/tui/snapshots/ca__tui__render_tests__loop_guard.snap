@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+I retained the completed boundary.
+
+
+
+
+
+              ┌ Low-yield loop paused ───────────────────────────────────────────────┐
+              │Failing command `cargo test --all-targets` returned unchanged output 3│
+              │times                                                                 │
+              │                                                                      │
+              │Choose how to continue:                                               │
+              │                                                                      │
+              │ Replan   require a materially different next approach                │
+              │ Continue   suppress this guard for the rest of the turn              │
+              │ Cancel   open a safe confirmation                                    │
+              │                                                                      │
+              │←/→ choose · Enter select · r replan · o continue · c cancel          │
+              │                                                                      │
+              │                                                                      │
+              │                                                                      │
+              └──────────────────────────────────────────────────────────────────────┘
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ → ▌Add a follow-up…
+ Esc stop · Enter interrupt · Alt+Enter queue
+Low-yield loop paused · choose Replan, Continue, or Cancel
+-- narrow --
+ ca · agent · auto
+I retained the completed boundary.
+
+
+ ┌ Low-yield loop paused ─────────────────────────────────┐
+ │Failing command `cargo test --all-targets` returned     │
+ │unchanged output 3 times                                │
+ │                                                        │
+ │Choose how to continue:                                 │
+ │                                                        │
+ │ Replan   require a materially different next approach  │
+ │ Continue   suppress this guard for the rest of the turn│
+ │ Cancel   open a safe confirmation                      │
+ │                                                        │
+ │←/→ choose · Enter select · r replan · o continue · c   │
+ │cancel                                                  │
+ │                                                        │
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+
+────────────────────────────────────────────────────────────
+ → ▌Add a follow-up…
+ Esc stop · Enter interrupt · Alt+Enter queue
+Low-yield loop paused · choose Replan, Continue, or Cancel

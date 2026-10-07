@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&failed, 100, 30), render_to_text(&failed, 60, 24))"
+---
+ ca · agent · auto
+
+
+         ┌────────────────────────────────────────────────────────────────────────────────┐
+         │ Sandbox                                                                        │
+         │                                                                                │
+         │  Saved for next launch  required                                               │
+         │  Effective this run     required                                               │
+         │  macOS backend          ready                                                  │
+         │  Network enforcement    OS-enforced when granted                               │
+         │  Writable roots         4                                                      │
+         │    /tmp/project                                                                │
+         │    /tmp/shared source                                                          │
+         │    /tmp/generated                                                              │
+         │    … 1 more                                                                    │
+         │                                                                                │
+         │  required [saved, active] — OS process isolation                               │
+         │▸ policy-only — approval policy; no OS sandbox                                  │
+         │  off — no process sandbox                                                      │
+         │                                                                                │
+         │Error: Could not save sandbox mode: permission denied                           │
+         │Enter choose · Esc close · ↑↓ navigate                                          │
+         │                                                                                │
+         │                                                                                │
+         │                                                                                │
+         │                                                                                │
+         └────────────────────────────────────────────────────────────────────────────────┘
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+  ┌──────────────────────────────────────────────────────┐
+  │ Sandbox                                              │
+  │                                                      │
+  │  Saved for next launch  required                     │
+  │  Effective this run     required                     │
+  │  macOS backend          ready                        │
+  │  Network enforcement    OS-enforced when granted     │
+  │  Writable roots         4                            │
+  │    /tmp/project                                      │
+  │    /tmp/shared source                                │
+  │    /tmp/generated                                    │
+  │    … 1 more                                          │
+  │                                                      │
+  │  required [saved, active] — OS process isolation     │
+  │▸ policy-only — approval policy; no OS sandbox        │
+  │  off — no process sandbox                            │
+  │                                                      │
+  │Error: Could not save sandbox mode: permission denied │
+  │Enter choose · Esc close · ↑↓ navigate                │
+  │                                                      │
+ →│                                                      │
+  └──────────────────────────────────────────────────────┘
+/ commands

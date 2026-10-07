@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&status, 100, 30), render_to_text(&status, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Session evidence learning                                                                         │
+│                                                                                                  │
+│Sources: 2                                                                                        │
+│Indexed files: 89                                                                                 │
+│Indexed: 1515 messages                                                                            │
+│Searchable: 1515 · Retrieved: 96 · Inspected: 24 · Used as support: 48 · Retired: 1515            │
+│Indexed sources: CA 12 · Codex 1003 · MiMo 500                                                    │
+│Searchable sources: CA 12 · Codex 1003 · MiMo 500                                                 │
+│Workflow clusters: 18 · catalog pages 1/1 · complete                                              │
+│Pending evidence: none                                                                            │
+│Last scanner failure: 2026-08-22T12:00:00Z · archive source changed during revision check         │
+│Skipped records: 3 malformed · 7 unknown · 1 oversized · 2 sensitive messages · 4 incomplete      │
+│messages                                                                                          │
+│                                                                                                  │
+│ Enter actions · R refresh · C copy all · j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close |  │
+│1/12                                                                                              │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│Session evidence learning                                 │
+│                                                          │
+│Sources: 2                                                │
+│Indexed files: 89                                         │
+│Indexed: 1515 messages                                    │
+│Searchable: 1515 · Retrieved: 96 · Inspected: 24 · Used as│
+│support: 48 · Retired: 1515                               │
+│Indexed sources: CA 12 · Codex 1003 · MiMo 500            │
+│Searchable sources: CA 12 · Codex 1003 · MiMo 500         │
+│Workflow clusters: 18 · catalog pages 1/1 · complete      │
+│Pending evidence: none                                    │
+│Last scanner failure: 2026-08-22T12:00:00Z · archive      │
+│source changed during revision check                      │
+│Skipped records: 3 malformed · 7 unknown · 1 oversized · 2│
+│sensitive messages · 4 incomplete messages                │
+│                                                          │
+│ Enter actions · R refresh · C copy all · j/k ↓↑ · g/G    │
+│top/bottom · space/f page · q/Esc close | 1/12            │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

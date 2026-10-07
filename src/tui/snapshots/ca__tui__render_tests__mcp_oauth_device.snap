@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│MCP authorization                                                                                 │
+│                                                                                                  │
+│Open login.example.test and enter code ABCD-EFGH                                                  │
+│                                                                                                  │
+│Waiting for MCP authorization…                                                                    │
+│                                                                                                  │
+│ j/k ↓↑ · g/G top/bottom · space/f page · Esc cancel | 1/5                                        │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│MCP authorization                                         │
+│                                                          │
+│Open login.example.test and enter code ABCD-EFGH          │
+│                                                          │
+│Waiting for MCP authorization…                            │
+│                                                          │
+│ j/k ↓↑ · g/G top/bottom · space/f page · Esc cancel | 1/5│
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

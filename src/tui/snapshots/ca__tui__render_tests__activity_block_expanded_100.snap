@@ -1,0 +1,56 @@
+---
+source: src/tui/render_tests.rs
+expression: "render_to_text(&activity_snapshot_state(ToolStatus::Done, true), 100, 52)"
+---
+ ca · agent · auto
+  [ ✎ Edited 4 files, ran a command ▾ ]
+    ✎ Created src/new.rs
+@@ /workspace/ca/src/new.rs (Created, 3 bytes) @@
++new
+
+    ✎ Edited src/長 い 名 前 .rs
+@@ /workspace/ca/src/長 い 名 前 .rs @@
+-old
++new
+
+    ✎ Deleted src/obsolete.rs
+@@ /workspace/ca/src/obsolete.rs (deleted) @@
+-src/obsolete.rs
+
+    ✎ Created directory src/generated
+    ┌────────────────────────────────────────────────────────────────────────────────────────────┐
+    │ Created directory /workspace/ca/src/generated                                              │
+    └────────────────────────────────────────────────────────────────────────────────────────────┘
+    ▣ Ran command
+      cargo test --workspace --all-features -- --test-threads=1
+    ┌────────────────────────────────────────────────────────────────────────────────────────────┐
+    │ exit code: 0                                                                               │
+    │ stdout:                                                                                    │
+    │ activity verification passed                                                               │
+    └────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands

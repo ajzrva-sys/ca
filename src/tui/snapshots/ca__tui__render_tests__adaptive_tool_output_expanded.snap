@@ -1,0 +1,95 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&adaptive_tool_output_state(true), 184, 38),\nrender_to_text(&adaptive_tool_output_state(true), 60, 52))"
+---
+ ca · agent · auto
+I calculated the ratio-sorted selection.
+
+  ✓ run_command {"command":"python3 ratio_report.py"}
+    ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+    │ exit code: 0                                                                                                                                                                   │
+    │ stdout:                                                                                                                                                                        │
+    │ Highest upload ratios                                                                                                                                                          │
+    │ rank │ site │    id │ name                             │       ratio │ uploaded_bytes │ data_size_bytes │ cumulative_size_bytes │ current_upload_Bps                           │
+    │ ─────┼──────┼───────┼──────────────────────────────────┼─────────────┼────────────────┼─────────────────┼───────────────────────┼───────────────────                           │
+    │    1 │ OPS  │ 11952 │ Astral Projection – Power Gen EP │ 2.001586952 │      737125708 │       368270640 │            1004897068 │                  0                           │
+    │      │      │       │  [FLAC]                          │             │                │                 │                       │                                              │
+    │    2 │ RED  │ 31873 │ 佐 井 好 子  – 1976.6.29 ラ イ ブ       │ 1.520707435 │      395325056 │       259961283 │            3779522457 │                                              │
+    └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+## Results
+
+The saved TSV remains unchanged.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+2 messages · / commands
+-- narrow --
+ ca · agent · auto
+I calculated the ratio-sorted selection.
+
+  ✓ run_command {"command":"python3 ratio_report.py"}
+    ┌────────────────────────────────────────────────────┐
+    │ exit code: 0                                       │
+    │ stdout:                                            │
+    │ Highest upload ratios                              │
+    │ ran │ sit │  id │ name │ rat │ upl │ dat │ cu │ cu │
+    │   k │ e   │     │      │  io │ oad │ a_s │ mu │ rr │
+    │     │     │     │      │     │ ed_ │ ize │ la │ en │
+    │     │     │     │      │     │ byt │ _by │ ti │ t_ │
+    │     │     │     │      │     │  es │ tes │ ve │ up │
+    │     │     │     │      │     │     │     │ _s │ lo │
+    │     │     │     │      │     │     │     │ iz │ ad │
+    │     │     │     │      │     │     │     │ e_ │ _B │
+    │     │     │     │      │     │     │     │ by │ ps │
+    │     │     │     │      │     │     │     │ te │    │
+    │     │     │     │      │     │     │     │  s │    │
+    │ ────┼─────┼─────┼──────┼─────┼─────┼─────┼────┼─── │
+    │   1 │ OPS │ 119 │ Astr │ 2.0 │ 737 │ 368 │ 10 │  0 │
+    │     │     │  52 │ al P │ 015 │ 125 │ 270 │ 04 │    │
+    │     │     │     │ roje │ 869 │ 708 │ 640 │ 89 │    │
+    │     │     │     │ ctio │  52 │     │     │ 70 │    │
+    │     │     │     │ n –  │     │     │     │ 68 │    │
+    │     │     │     │ Powe │     │     │     │    │    │
+    │     │     │     │ r Ge │     │     │     │    │    │
+    │     │     │     │ n EP │     │     │     │    │    │
+    │     │     │     │  [FL │     │     │     │    │    │
+    │     │     │     │ AC]  │     │     │     │    │    │
+    │   2 │ RED │ 318 │ 佐 井  │ 1.5 │ 395 │ 259 │ 37 │    │
+    │     │     │  73 │ 好 子  │ 207 │ 325 │ 961 │ 79 │    │
+    │     │     │     │  – 1 │ 074 │ 056 │ 283 │ 52 │    │
+    │     │     │     │ 976. │  35 │     │     │ 24 │    │
+    │     │     │     │ 6.29 │     │     │     │ 57 │    │
+    │     │     │     │  ラ   │     │     │     │    │    │
+    │     │     │     │ イ ブ  │     │     │     │    │    │
+    └────────────────────────────────────────────────────┘
+
+## Results
+
+The saved TSV remains unchanged.
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+2 messages · / commands

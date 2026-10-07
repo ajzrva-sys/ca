@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+             ┌────────────────────────────────────────────────────────────────────────┐
+             │ Providers                                                              │
+             │                                                                        │
+             │> type to filter…                                                       │
+             │  1/4 matches · 4 quick-connect routes · 0 configured providers         │
+             │                                                                        │
+             │▸ Xiaomi MiMo                       disconnected · not configured       │
+             │  OpenAI Codex (ChatGPT)            disconnected · not configured       │
+             │  DeepSeek                          disconnected · not configured       │
+             │  OpenAI API                        disconnected · not configured       │
+             │                                                                        │
+             │Enter connect/models · ⇧L reconnect · ⇧P templates                      │
+             │⇧A custom · ⇧E edit · ⇧D delete                                         │
+             │Esc close · ↑↓ wrap · PgUp/PgDn · Home/End                              │
+             │                                                                        │
+             │                                                                        │
+             │                                                                        │
+             │                                                                        │
+             │                                                                        │
+             └────────────────────────────────────────────────────────────────────────┘
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+  ┌──────────────────────────────────────────────────────┐
+  │ Providers                                            │
+  │                                                      │
+  │> type to filter…                                     │
+  │  1/4 matches · 4 quick-connect routes · 0 configured │
+  │                                                      │
+  │▸ Xiaomi MiMo                                         │
+  │    disconnected · not configured                     │
+  │  OpenAI Codex (ChatGPT)                              │
+  │    disconnected · not configured                     │
+  │  DeepSeek                                            │
+  │    disconnected · not configured                     │
+  │  OpenAI API                                          │
+  │    disconnected · not configured                     │
+  │                                                      │
+  │Enter connect/models · ⇧L reconnect · ⇧P templates    │
+  │⇧A custom · ⇧E edit · ⇧D delete                       │
+  │Esc close · ↑↓ wrap · PgUp/PgDn · Home/End            │
+  │                                                      │
+ →└──────────────────────────────────────────────────────┘
+
+/ commands

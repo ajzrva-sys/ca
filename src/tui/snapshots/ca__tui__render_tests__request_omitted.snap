@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&omitted, 100, 30),\nrender_to_text(&omitted, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                  │
+│[user 61]                                                                                         │
+│                                                                                                  │
+│                                                                                                  │
+│[user 62]                                                                                         │
+│                                                                                                  │
+│                                                                                                  │
+│[user 63]                                                                                         │
+│                                                                                                  │
+│                                                                                                  │
+│[user 64]                                                                                         │
+│                                                                                                  │
+│  [… 6 message item(s) omitted]                                                                   │
+│                                                                                                  │
+│Tool schemas (0)                                                                                  │
+│  (none)                                                                                          │
+│                                                                                                  │
+│[… 668541 semantic byte(s) omitted by the snapshot bound]                                         │
+│                                                                                                  │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close | 213/230                                   │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│                                                          │
+│[user 61]                                                 │
+│                                                          │
+│                                                          │
+│[user 62]                                                 │
+│                                                          │
+│                                                          │
+│[user 63]                                                 │
+│                                                          │
+│                                                          │
+│[user 64]                                                 │
+│                                                          │
+│  [… 6 message item(s) omitted]                           │
+│                                                          │
+│Tool schemas (0)                                          │
+│  (none)                                                  │
+│                                                          │
+│[… 668541 semantic byte(s) omitted by the snapshot bound] │
+│                                                          │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close |   │
+│213/230                                                   │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

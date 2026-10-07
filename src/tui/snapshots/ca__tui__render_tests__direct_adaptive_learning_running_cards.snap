@@ -1,0 +1,62 @@
+---
+source: src/tui/render_tests.rs
+assertion_line: 5496
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 26))"
+---
+ ca · agent · auto
+### Learning
+
+Model: mimo/mimo-v2.5-pro · up to 8 turns
+
+## Investigation
+
+  • ▸ Inspect · 3 signal clusters · 6 representative sessions (collapsed)
+  • ▸ Inventory · 132 reusable asset entries (collapsed)
+
+## Current stage
+
+⏳  Continuing from bounded evidence · adaptive turn 2/8
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands
+-- narrow --
+ ca · agent · auto
+### Learning
+
+Model: mimo/mimo-v2.5-pro · up to 8 turns
+
+## Investigation
+
+  • ▸ Inspect · 3 signal clusters · 6 representative
+sessions (collapsed)
+  • ▸ Inventory · 132 reusable asset entries (collapsed)
+
+## Current stage
+
+⏳  Continuing from bounded evidence · adaptive turn 2/8
+
+
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+1 messages · / commands

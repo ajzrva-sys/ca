@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Plugin enable preview                                                                             │
+│                                                                                                  │
+│Review Helper (review-helper)                                                                     │
+│State: disabled                                                                                   │
+│Capabilities: metadata-only                                                                       │
+│Skills: 0                                                                                         │
+│MCP:                                                                                              │
+│Hooks: 0                                                                                          │
+│Workflows:                                                                                        │
+│Themes:                                                                                           │
+│Description: Local review workflow                                                                │
+│Collisions: none                                                                                  │
+│Integrity: unchanged                                                                              │
+│Digest: 25061c7a9bce373b                                                                          │
+│Source: local manifest                                                                            │
+│                                                                                                  │
+│Confirm with: /plugin enable review-helper confirm review-helper                                  │
+│                                                                                                  │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close | 1/17                                      │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│Plugin enable preview                                     │
+│                                                          │
+│Review Helper (review-helper)                             │
+│State: disabled                                           │
+│Capabilities: metadata-only                               │
+│Skills: 0                                                 │
+│MCP:                                                      │
+│Hooks: 0                                                  │
+│Workflows:                                                │
+│Themes:                                                   │
+│Description: Local review workflow                        │
+│Collisions: none                                          │
+│Integrity: unchanged                                      │
+│Digest: 25061c7a9bce373b                                  │
+│Source: local manifest                                    │
+│                                                          │
+│Confirm with: /plugin enable review-helper confirm        │
+│review-helper                                             │
+│                                                          │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close |   │
+│1/17                                                      │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

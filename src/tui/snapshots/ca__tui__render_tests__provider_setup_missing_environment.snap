@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · mimo-v2.5-pro
+
+
+
+
+
+
+            ┌──────────────────────────────────────────────────────────────────────────┐
+            │                                                                          │
+            │Provider setup: mimo                                                      │
+            │Endpoint: https://token-plan-sgp.xiaomimimo.com/v1                        │
+            │Credential: env MIMO_API_KEY                                              │
+            │Test model: mimo-v2.5-pro                                                 │
+            │                                                                          │
+            │Status: env MIMO_API_KEY missing                                          │
+            │                                                                          │
+            │⇧T test provider · ⇧E edit settings/key · ⇧A add model                    │
+            │⇧R refresh models · Esc checklist                                         │
+            │                                                                          │
+            │                                                                          │
+            │                                                                          │
+            │                                                                          │
+            └──────────────────────────────────────────────────────────────────────────┘
+
+
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · mimo-v2.5-pro
+
+
+
+  ┌──────────────────────────────────────────────────────┐
+  │                                                      │
+  │Provider setup: mimo                                  │
+  │Endpoint: https://token-plan-sgp.xiaomimimo.com/v1    │
+  │Credential: env MIMO_API_KEY                          │
+  │Test model: mimo-v2.5-pro                             │
+  │                                                      │
+  │Status: env MIMO_API_KEY missing                      │
+  │                                                      │
+  │⇧T test provider · ⇧E edit settings/key · ⇧A add model│
+  │⇧R refresh models · Esc checklist                     │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  └──────────────────────────────────────────────────────┘
+
+ → ▌Ask anything…
+
+/ commands

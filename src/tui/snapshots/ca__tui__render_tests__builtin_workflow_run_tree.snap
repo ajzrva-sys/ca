@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&live, 100, 30), render_to_text(&live, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Workflow tree · deep-research · running                                                           │
+│Run 11111111-2222-4333-8444-555555555555 · provider attempts 1/256 · retained output 0/262144     │
+│bytes                                                                                             │
+│Current: brief                                                                                    │
+│Prompts and output content are intentionally hidden.                                              │
+│                                                                                                  │
+│▶ brief · root · running · attempts 1 · route provider/model                                      │
+│· plan · after brief · pending · attempts 0 · route not started                                   │
+│· research · after plan · pending · attempts 0 · route not started                                │
+│· reflect · after research · pending · attempts 0 · route not started                             │
+│· write · after reflect · pending · attempts 0 · route not started                                │
+│· review · after write · pending · attempts 0 · route not started                                 │
+│                                                                                                  │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close | 1/11                                      │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│Workflow tree · deep-research · running                   │
+│Run 11111111-2222-4333-8444-555555555555 · provider       │
+│attempts 1/256 · retained output 0/262144 bytes           │
+│Current: brief                                            │
+│Prompts and output content are intentionally hidden.      │
+│                                                          │
+│▶ brief · root · running · attempts 1 · route             │
+│provider/model                                            │
+│· plan · after brief · pending · attempts 0 · route not   │
+│started                                                   │
+│· research · after plan · pending · attempts 0 · route not│
+│started                                                   │
+│· reflect · after research · pending · attempts 0 · route │
+│not started                                               │
+│· write · after reflect · pending · attempts 0 · route not│
+│started                                                   │
+│· review · after write · pending · attempts 0 · route not │
+│started                                                   │
+│                                                          │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close |   │
+│1/11                                                      │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

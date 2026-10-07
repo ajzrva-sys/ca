@@ -1,0 +1,28 @@
+---
+source: src/tui/render_tests.rs
+expression: "render_to_text(&busy, 80, 24)"
+---
+ ca · agent · auto
+
+
+
+
+             ┌ Completion notification ───────────────────────────┐
+             │Notify when a top-level turn runs for 30 seconds.   │
+             │                                                    │
+             │  Off       current                                 │
+             │  BEL                                               │
+             │▸ OSC 9                                             │
+             │                                                    │
+             │                                                    │
+             │                                                    │
+             │Saving… controls locked                             │
+             │                                                    │
+             │                                                    │
+             └────────────────────────────────────────────────────┘
+
+
+
+ → ▌Ask anything…
+
+/ commands

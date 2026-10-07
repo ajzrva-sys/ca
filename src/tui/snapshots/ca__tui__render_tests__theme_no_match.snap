@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&no_match, 100, 30),\nrender_to_text(&no_match, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+
+                  ┌ Theme ───────────────────────────────────────────────────────┐
+                  │> violet                                                      │
+                  │Highlight previews immediately; Enter persists.               │
+                  │No themes match this filter.                                  │
+                  │                                                              │
+                  │                                                              │
+                  │                                                              │
+                  │                                                              │
+                  │                                                              │
+                  │                                                              │
+                  │                                                              │
+                  │                                                              │
+                  │                                                              │
+                  │                                                              │
+                  │Enter save · Esc restore · ↑↓ navigate · type to filter       │
+                  │                                                              │
+                  │                                                              │
+                  └──────────────────────────────────────────────────────────────┘
+
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+
+ ┌ Theme ─────────────────────────────────────────────────┐
+ │> violet                                                │
+ │Highlight previews immediately; Enter persists.         │
+ │No themes match this filter.                            │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │Enter save · Esc restore · ↑↓ navigate · type to filter │
+ │                                                        │
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+ → ▌Ask anything…
+
+/ commands

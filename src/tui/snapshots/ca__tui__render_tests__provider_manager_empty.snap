@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · mimo-v2.5-pro
+
+
+
+
+             ┌────────────────────────────────────────────────────────────────────────┐
+             │ Providers                                                              │
+             │                                                                        │
+             │> type to filter…                                                       │
+             │  0/0 matches · 4 quick-connect routes · 0 configured providers         │
+             │                                                                        │
+             │  No providers configured. ⇧P templates · ⇧A custom                     │
+             │                                                                        │
+             │Enter connect/models · ⇧L reconnect · ⇧P templates                      │
+             │⇧A custom · ⇧E edit · ⇧D delete                                         │
+             │Esc close · ↑↓ wrap · PgUp/PgDn · Home/End                              │
+             │                                                                        │
+             │                                                                        │
+             │                                                                        │
+             │                                                                        │
+             │                                                                        │
+             │                                                                        │
+             │                                                                        │
+             │                                                                        │
+             └────────────────────────────────────────────────────────────────────────┘
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · mimo-v2.5-pro
+
+  ┌──────────────────────────────────────────────────────┐
+  │ Providers                                            │
+  │                                                      │
+  │> type to filter…                                     │
+  │  0/0 matches · 4 quick-connect routes · 0 configured │
+  │                                                      │
+  │  No providers configured. ⇧P templates · ⇧A custom   │
+  │                                                      │
+  │Enter connect/models · ⇧L reconnect · ⇧P templates    │
+  │⇧A custom · ⇧E edit · ⇧D delete                       │
+  │Esc close · ↑↓ wrap · PgUp/PgDn · Home/End            │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+ →└──────────────────────────────────────────────────────┘
+
+/ commands

@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "codex-team.recipe_execution.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "receipt_id", "recipe_id", "revision_digest", "task_id", "repository_fingerprint", "compatibility_fingerprint", "started_at", "finished_at", "disposition", "commands", "ai_calls_avoided", "estimated_tokens_avoided"],
+  "properties": {
+    "schema": {"const": "codex-team.recipe_execution.v1"},
+    "receipt_id": {"type": "string", "minLength": 1, "maxLength": 256},
+    "recipe_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "revision_digest": {"$ref": "#/$defs/sha256"},
+    "task_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "repository_fingerprint": {"$ref": "#/$defs/sha256"},
+    "compatibility_fingerprint": {"$ref": "#/$defs/sha256"},
+    "started_at": {"type": "string", "format": "date-time"},
+    "finished_at": {"type": "string", "format": "date-time"},
+    "disposition": {"enum": ["passed", "quarantined", "stopped"]},
+    "commands": {"type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/command"}},
+    "ai_calls_avoided": {"type": "integer", "minimum": 0},
+    "estimated_tokens_avoided": {"type": "integer", "minimum": 0}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command_fingerprint", "category", "exit_code", "duration_ms", "evidence_hash"],
+      "properties": {
+        "command_fingerprint": {"$ref": "#/$defs/sha256"},
+        "category": {"type": "string", "maxLength": 64},
+        "exit_code": {"type": "integer"},
+        "duration_ms": {"type": "integer", "minimum": 0},
+        "evidence_hash": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

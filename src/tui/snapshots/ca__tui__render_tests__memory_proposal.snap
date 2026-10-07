@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&proposal, 100, 30),\nrender_to_text(&proposal, 60, 24))"
+---
+ ca · agent · auto
+
+   ┌ Memory ────────────────────────────────────────────────────────────────────────────────────┐
+   │[Proposals]  Tab switch scope                                                               │
+   │> type to filter…                                                                           │
+   │1 pending · never persisted before acceptance                                               │
+   │                                                                                            │
+   │▶ workspace decision     Provider checks use a fixed deterministic message.                 │
+   │                                                                                            │
+   │Accept proposal and persist it?                                                             │
+   │ [Cancel]     Confirm                                                                       │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   │                                                                                            │
+   └────────────────────────────────────────────────────────────────────────────────────────────┘
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+ ┌ Memory ────────────────────────────────────────────────┐
+ │[Proposals]  Tab switch scope                           │
+ │> type to filter…                                       │
+ │1 pending · never persisted before acceptance           │
+ │                                                        │
+ │▶ workspace decision     Provider checks use a fixed    │
+ │deterministic message.                                  │
+ │                                                        │
+ │Accept proposal and persist it?                         │
+ │ [Cancel]     Confirm                                   │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+/ commands

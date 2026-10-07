@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&failed, 100, 30), render_to_text(&failed, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+
+
+
+
+                ┌ Session portability ─────────────────────────────────────────────┐
+                │Session import failed                                             │
+                │                                                                  │
+                │/private/tmp/imports/portable history.json                        │
+                │                                                                  │
+                │Session import failed: unresolved tool call call-1 cannot be …    │
+                │                                                                  │
+                │Enter or Esc close                                                │
+                │                                                                  │
+                │                                                                  │
+                └──────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · auto
+
+
+
+
+
+  ┌ Session portability ─────────────────────────────────┐
+  │Session import failed                                 │
+  │                                                      │
+  │/private/tmp/imports/portable history.json            │
+  │                                                      │
+  │Session import failed: unresolved tool call call-…    │
+  │                                                      │
+  │Enter or Esc close                                    │
+  │                                                      │
+  │                                                      │
+  └──────────────────────────────────────────────────────┘
+
+
+
+
+ → ▌Ask anything…
+
+/ commands

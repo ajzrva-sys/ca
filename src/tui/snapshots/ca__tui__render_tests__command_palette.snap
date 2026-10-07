@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · auto
+
+
+
+
+
+
+
+
+
+
+
+
+  ┌ Commands 2/18 ───────────────────────────────────────────────────────────────────────────────┐
+  │  /session                       Show conversation history and current-sitting metrics        │
+  │▸ /sessions [session-id]         Browse and continue previous sessions                        │
+  │  /add-dir <path>                Grant an additional session workspace root                   │
+  │  /workspace [list|save <name>|load <name>|delete <name>|cd <path>|remove <root-id>]          │
+  │    List or manage named workspaces and session roots                                         │
+  │  /load-workspace <name>         Load a named workspace into the current session              │
+  │  /recall [query|read <session-ref> [cursor]]                                                 │
+  │    Search privacy-filtered completed CA, Codex, Hermes, and MiMo sessions locally            │
+  │  /goal [status|pause|resume|clear|<condition> [--iterations N] [--tokens N] [--minutes N]]   │
+  │    Set or manage a finite evidence-evaluated goal session                                    │
+  │  /new                           Start a new session; keep the previous one                   │
+  └ ↑↓ select · Tab complete · Enter choose · Esc dismiss ───────────────────────────────────────┘
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ → /session▌
+
+↑↓ select · Tab complete · Enter choose · Esc dismiss
+-- narrow --
+ ca · agent · auto
+
+
+
+
+
+  ┌ Commands 2/18 ───────────────────────────────────────┐
+  │  /session                                            │
+  │    Show conversation history and current-sitting     │
+  │metrics                                               │
+  │▸ /sessions [session-id]                              │
+  │    Browse and continue previous sessions             │
+  │  /add-dir <path>                                     │
+  │    Grant an additional session workspace root        │
+  │  /workspace [list|save <name>|load <name>|delete     │
+  │<name>|cd <path>|remove <root-id>]                    │
+  │    List or manage named workspaces and session roots │
+  │  /load-workspace <name>                              │
+  │    Load a named workspace into the current session   │
+  └ ↑↓ select · Tab complete · Enter choose · Esc dismiss┘
+────────────────────────────────────────────────────────────
+ → /session▌
+
+↑↓ select · Tab complete · Enter choose · Esc dismiss

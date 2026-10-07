@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · Alpha Two
+
+
+
+
+               ┌────────────────────────────────────────────────────────────────────┐
+               │ Switch model                                                       │
+               │                                                                    │
+               │> type to filter…                                                   │
+               │  4 models · 2 provider(s) configured                               │
+               │  1/4 · beta · configured only                                      │
+               │                                                                    │
+               │  Favorites                                                         │
+               │▸ ★ Beta Three                    [beta]                            │
+               │  Recent                                                            │
+               │    Alpha Two                     [alpha]  current                  │
+               │    Alpha One                     [alpha]                           │
+               │  alpha                                                             │
+               │    Alpha Spare                   [alpha]                           │
+               │                                                                    │
+               │Enter select · Esc close · ↑↓ move · PgUp/PgDn page                 │
+               │Home/End jump · ⇧A model · ⇧P provider                              │
+               │⇧F favorite · ⇧E edit model/key · ⇧R refresh                        │
+               │                                                                    │
+               └────────────────────────────────────────────────────────────────────┘
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · Alpha Two
+
+  ┌──────────────────────────────────────────────────────┐
+  │ Switch model                                         │
+  │                                                      │
+  │> type to filter…                                     │
+  │  4 models · 2 provider(s) configured                 │
+  │  1/4 · beta · configured only                        │
+  │                                                      │
+  │  Favorites                                           │
+  │▸ ★ Beta Three                                        │
+  │    [beta]                                            │
+  │  Recent                                              │
+  │    Alpha Two                                         │
+  │    [alpha]  current                                  │
+  │    Alpha One                                         │
+  │    [alpha]                                           │
+  │                                                      │
+  │Enter select · Esc close · ↑↓ move · PgUp/PgDn page   │
+  │Home/End jump · ⇧A model · ⇧P provider                │
+  │⇧F favorite · ⇧E edit model/key · ⇧R refresh          │
+ →└──────────────────────────────────────────────────────┘
+
+/ commands

@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "codex-team.task_import_apply.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "outcome",
+    "task_id",
+    "import_digest",
+    "expected_revision",
+    "revision_before",
+    "revision_after",
+    "base_head",
+    "task",
+    "receipt_path",
+    "applied_at"
+  ],
+  "properties": {
+    "schema": {"const": "codex-team.task_import_apply.v1"},
+    "outcome": {"enum": ["applied", "already_applied"]},
+    "task_id": {"type": "string"},
+    "import_digest": {"$ref": "#/$defs/sha256"},
+    "expected_revision": {"$ref": "#/$defs/sha256"},
+    "revision_before": {"$ref": "#/$defs/sha256"},
+    "revision_after": {"$ref": "#/$defs/sha256"},
+    "base_head": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
+    "task": {"$ref": "#/$defs/taskSummary"},
+    "receipt_path": {"type": "string", "pattern": "^\\.orchestrator/imports/[A-Za-z0-9_.:-]+-[0-9a-f]{16}\\.json$"},
+    "applied_at": {"type": "string"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "taskSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "base_head",
+        "task_id",
+        "title",
+        "kind",
+        "objective",
+        "why_unblocks_progress",
+        "allowed_files",
+        "read_only_files",
+        "forbidden_actions",
+        "steps",
+        "acceptance_criteria",
+        "verification_commands",
+        "stop_conditions",
+        "discovery_budget",
+        "estimated_minutes"
+      ],
+      "properties": {
+        "source": {"type": "string"},
+        "base_head": {"type": "string"},
+        "task_id": {"type": "string"},
+        "title": {"type": "string"},
+        "kind": {"type": "string"},
+        "objective": {"type": "string"},
+        "why_unblocks_progress": {"type": "string"},
+        "allowed_files": {"type": "array", "items": {"type": "string"}},
+        "read_only_files": {"type": "array", "items": {"type": "string"}},
+        "forbidden_actions": {"type": "array", "items": {"type": "string"}},
+        "steps": {"type": "array", "items": {"type": "string"}},
+        "acceptance_criteria": {"type": "array", "items": {"type": "string"}},
+        "verification_commands": {"type": "array", "items": {"type": "string"}},
+        "stop_conditions": {"type": "array", "items": {"type": "string"}},
+        "discovery_budget": {"type": "string"},
+        "estimated_minutes": {"type": "integer"}
+      }
+    }
+  }
+}

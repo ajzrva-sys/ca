@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&preview, 100, 30),\nrender_to_text(&preview, 60, 24))"
+---
+ ca · agent · auto
+
+    ┌ Run workflow ────────────────────────────────────────────────────────────────────────────┐
+    │Release readiness (release-check)                                                         │
+    │2 steps · .ca/workflows/release.toml · digest 0123456789ab                                │
+    │                                                                                          │
+    │- inspect · ready · mimo/mimo-v2.5 · tools: read_file · retries: 1                        │
+    │    evidence: assistant output                                                            │
+    │    output: inspection                                                                    │
+    │- verify · after inspect · current model · tools: no tools · retries: 0                   │
+    │    evidence: assistant output                                                            │
+    │                                                                                          │
+    │▶ Cancel       Run                                                                        │
+    │Arrow/Tab choose · Enter confirm · Esc close                                              │
+    │                                                                                          │
+    │                                                                                          │
+    │                                                                                          │
+    │                                                                                          │
+    │                                                                                          │
+    │                                                                                          │
+    │                                                                                          │
+    │                                                                                          │
+    │                                                                                          │
+    │                                                                                          │
+    │                                                                                          │
+    │                                                                                          │
+    │                                                                                          │
+ → ▌└──────────────────────────────────────────────────────────────────────────────────────────┘
+
+/ commands
+-- narrow --
+ ca · agent · auto
+ ┌ Run workflow ──────────────────────────────────────────┐
+ │Release readiness (release-check)                       │
+ │2 steps · .ca/workflows/release.toml · digest           │
+ │0123456789ab                                            │
+ │                                                        │
+ │- inspect · ready · mimo/mimo-v2.5 · tools: read_file · │
+ │retries: 1                                              │
+ │    evidence: assistant output                          │
+ │    output: inspection                                  │
+ │- verify · after inspect · current model · tools: no    │
+ │tools · retries: 0                                      │
+ │    evidence: assistant output                          │
+ │                                                        │
+ │▶ Cancel       Run                                      │
+ │Arrow/Tab choose · Enter confirm · Esc close            │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+/ commands

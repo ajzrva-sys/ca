@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · mimo-v2.5-pro
+
+
+
+         ┌────────────────────────────────────────────────────────────────────────────────┐
+         │ Provider setup                                                                 │
+         │ Tests send one tiny isolated request; provider usage may apply.                │
+         │> type to filter providers…                                                     │
+         │  1 of 3 working                                                                │
+         │                                                                                │
+         │▸ mimo · env MIMO_API_KEY · working                                             │
+         │  empty-local · no credential · cannot connect                                  │
+         │  saved · saved credential · credential rejected (401)                          │
+         │                                                                                │
+         │Enter details · ⇧T test · ⇧E edit · ⇧F finish                                   │
+         │⇧P templates · ⇧O OpenAI · ⇧A custom                                            │
+         │Esc close · ↑↓ move · PgUp/PgDn · Home/End                                      │
+         │                                                                                │
+         │                                                                                │
+         │                                                                                │
+         │                                                                                │
+         │                                                                                │
+         │                                                                                │
+         │                                                                                │
+         │                                                                                │
+         └────────────────────────────────────────────────────────────────────────────────┘
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · mimo-v2.5-pro
+  ┌──────────────────────────────────────────────────────┐
+  │ Provider setup                                       │
+  │ Tests send one tiny isolated request; provider usage │
+  │> type to filter providers…                           │
+  │  1 of 3 working                                      │
+  │                                                      │
+  │▸ mimo · env MIMO_API_KEY · working                   │
+  │  empty-local · no credential · cannot connect        │
+  │  saved · saved credential · credential rejected (401)│
+  │                                                      │
+  │Enter details · ⇧T test · ⇧E edit · ⇧F finish         │
+  │⇧P templates · ⇧O OpenAI · ⇧A custom                  │
+  │Esc close · ↑↓ move · PgUp/PgDn · Home/End            │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+ →│                                                      │
+  └──────────────────────────────────────────────────────┘
+/ commands

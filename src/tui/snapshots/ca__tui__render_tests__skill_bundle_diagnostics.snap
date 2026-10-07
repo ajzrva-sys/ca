@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Skill bundles                                                                                     │
+│Each bundle pins two to five compatible skills for one prompt only.                               │
+│                                                                                                  │
+│/release · Prepare and verify a release · 3 member(s) · Profile                                   │
+│/incident · Investigate a bounded incident · 2 member(s) · Workspace                              │
+│                                                                                                  │
+│1 diagnostic(s); use /bundles reload after fixing bundle files.                                   │
+│                                                                                                  │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close | 1/7                                       │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌──────────────────────────────────────────────────────────┐
+│Skill bundles                                             │
+│Each bundle pins two to five compatible skills for one    │
+│prompt only.                                              │
+│                                                          │
+│/release · Prepare and verify a release · 3 member(s) ·   │
+│Profile                                                   │
+│/incident · Investigate a bounded incident · 2 member(s) ·│
+│Workspace                                                 │
+│                                                          │
+│1 diagnostic(s); use /bundles reload after fixing bundle  │
+│files.                                                    │
+│                                                          │
+│ j/k ↓↑ · g/G top/bottom · space/f page · q/Esc close |   │
+│1/7                                                       │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘

@@ -1,0 +1,6 @@
+# The official ACP 2.0 SDK enables serde_json's `preserve_order` feature for
+# the workspace dependency graph. That makes rmcp::model::CallToolResult 200
+# bytes in the combined all-feature build, although the protected codex-team
+# source and its API are unchanged. Keep result_large_err active with a narrow
+# ceiling above that externally determined representation size.
+large-error-threshold = 256

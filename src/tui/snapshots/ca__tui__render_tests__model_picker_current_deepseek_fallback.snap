@@ -1,0 +1,59 @@
+---
+source: src/tui/render_tests.rs
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+ ca · agent · deepseek-v4-flash
+
+
+
+
+               ┌────────────────────────────────────────────────────────────────────┐
+               │ Switch model                                                       │
+               │                                                                    │
+               │> deepseek                                                          │
+               │  6 models · 0 live · 2 fallback · 4 unavailable                    │
+               │  1/2 · deepseek · fallback · API key env is not set                │
+               │                                                                    │
+               │  deepseek                                                          │
+               │▸   deepseek-v4-flash             [deepseek]  current               │
+               │    deepseek-v4-pro               [deepseek]                        │
+               │                                                                    │
+               │Enter select · Esc close · ↑↓ move · PgUp/PgDn page                 │
+               │Home/End jump · ⇧A model · ⇧P provider                              │
+               │⇧F favorite · ⇧E edit model/key · ⇧R refresh                        │
+               │                                                                    │
+               │                                                                    │
+               │                                                                    │
+               │                                                                    │
+               │                                                                    │
+               └────────────────────────────────────────────────────────────────────┘
+
+
+ → ▌Ask anything…
+
+/ commands
+-- narrow --
+ ca · agent · deepseek-v4-flash
+
+  ┌──────────────────────────────────────────────────────┐
+  │ Switch model                                         │
+  │                                                      │
+  │> deepseek                                            │
+  │  6 models · 0 live · 2 fallback · 4 unavailable      │
+  │  1/2 · deepseek · fallback · API key env is not set  │
+  │                                                      │
+  │  deepseek                                            │
+  │▸   deepseek-v4-flash                                 │
+  │    [deepseek]  current                               │
+  │    deepseek-v4-pro                                   │
+  │    [deepseek]                                        │
+  │                                                      │
+  │Enter select · Esc close · ↑↓ move · PgUp/PgDn page   │
+  │Home/End jump · ⇧A model · ⇧P provider                │
+  │⇧F favorite · ⇧E edit model/key · ⇧R refresh          │
+  │                                                      │
+  │                                                      │
+  │                                                      │
+ →└──────────────────────────────────────────────────────┘
+
+/ commands
