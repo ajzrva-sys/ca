@@ -1,0 +1,25 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== README.md =====
+## License
+
+Licensed under either of
+
+* Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or <https://www.apache.org/licenses/LICENSE-2.0>)
+* MIT license ([LICENSE-MIT](LICENSE-MIT) or <https://opensource.org/license/mit>)
+
+at your option.
+
+===== src/lib.rs =====
+// Copyright ⓒ 2015-2016 Kevin B. Knapp and [`clap-rs` contributors](https://github.com/clap-rs/clap/graphs/contributors).
+// Licensed under the MIT license
+// (see LICENSE or <http://opensource.org/licenses/MIT>) All files in the project carrying such
+// notice may not be copied, modified, or distributed except according to those terms.
+
+#![doc = include_str!("../README.md")]
+#![doc(html_logo_url = "https://raw.githubusercontent.com/clap-rs/clap/master/assets/clap.png")]
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
+#![warn(clippy::print_stderr)]
+#![warn(clippy::print_stdout)]

@@ -1,0 +1,137 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== src/ast.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+//! Types for the pest's abstract syntax tree.
+
+/// A grammar rule
+
+===== src/lib.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+//! # pest meta
+//!
+//! This crate parses, validates, optimizes, and converts pest's own grammars to ASTs.
+
+#![doc(
+
+===== src/optimizer/concatenator.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+===== src/optimizer/factorizer.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+===== src/optimizer/lister.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+===== src/optimizer/mod.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+//! Different optimizations for pest's ASTs.
+
+===== src/optimizer/restorer.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+===== src/optimizer/rotator.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+===== src/optimizer/skipper.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+===== src/optimizer/unroller.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+===== src/parser.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+//! Types and helpers for the pest's own grammar parser.
+
+===== src/validator.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+//! Helpers for validating pest grammars that could help with debugging
+//! and provide a more user-friendly error message.

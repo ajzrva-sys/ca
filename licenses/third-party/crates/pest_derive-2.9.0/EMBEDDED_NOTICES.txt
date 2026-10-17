@@ -1,0 +1,85 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== src/lib.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+#![doc(
+
+===== tests/grammar.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+#![cfg_attr(not(feature = "std"), no_std)]
+
+===== tests/grammar_inline.rs =====
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+#![cfg_attr(not(feature = "std"), no_std)]
+
+===== tests/implicit.rs =====
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+#![cfg_attr(not(feature = "std"), no_std)]
+
+===== tests/lists.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+#![cfg_attr(not(feature = "std"), no_std)]
+
+===== tests/opt.rs =====
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+#![cfg_attr(not(feature = "std"), no_std)]
+
+===== tests/reporting.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+#![cfg_attr(not(feature = "std"), no_std)]
+
+===== tests/surround.rs =====
+// pest. The Elegant Parser
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+#![cfg_attr(not(feature = "std"), no_std)]

@@ -1,0 +1,231 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== README.md =====
+## License
+
+Licensed under either of
+
+* Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+* MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+
+at your option.
+
+===== benches/length.rs =====
+/* Copyright 2018-2022 Torbjørn Birch Moltu
+ *
+ * Licensed under the Apache License, Version 2.0, <LICENSE-APACHE or
+ * http://apache.org/licenses/LICENSE-2.0> or the MIT license <LICENSE-MIT or
+ * http://opensource.org/licenses/MIT>, at your option. This file may not be
+ * copied, modified, or distributed except according to those terms.
+ */
+
+// Run with -- --nocapture to show error messages if setup fails.
+// (or use ./do.sh)
+
+#![cfg(feature="std")]
+#![feature(test)]
+
+===== benches/multiiterators.rs =====
+/* Copyright 2018 Torbjørn Birch Moltu
+ *
+ * Licensed under the Apache License, Version 2.0, <LICENSE-APACHE or
+ * http://apache.org/licenses/LICENSE-2.0> or the MIT license <LICENSE-MIT or
+ * http://opensource.org/licenses/MIT>, at your option. This file may not be
+ * copied, modified, or distributed except according to those terms.
+ */
+
+// Run with -- --nocapture to show error messages if setup fails.
+// (or use ./do.sh)
+
+// uses /usr/share/dict/ for text to convert to Vec<Utf*Char> and iterate over
+#![cfg(all(unix, feature="std"))]
+#![feature(test)]
+
+===== examples/length_distribution.rs =====
+/* Copyright 2018 Torbjørn Birch Moltu
+ *
+ * Licensed under the Apache License, Version 2.0, <LICENSE-APACHE or
+ * http://apache.org/licenses/LICENSE-2.0> or the MIT license <LICENSE-MIT or
+ * http://opensource.org/licenses/MIT>, at your option. This file may not be
+ * copied, modified, or distributed except according to those terms.
+ */
+
+//! Counts the number of codepoints of each UTF-8 length in files
+
+===== src/decoding_iterators.rs =====
+/* Copyright 2018-2020 Torbjørn Birch Moltu
+ *
+ * Licensed under the Apache License, Version 2.0, <LICENSE-APACHE or
+ * http://apache.org/licenses/LICENSE-2.0> or the MIT license <LICENSE-MIT or
+ * http://opensource.org/licenses/MIT>, at your option. This file may not be
+ * copied, modified, or distributed except according to those terms.
+ */
+
+//! Iterators that turn multiple `u8`s or `u16`s into `Utf*Char`s, but can fail.
+//!
+//! To be predictable, all errors consume one element each.
+//!
+//! The iterator adaptors produce neither offset nor element length to work
+//! well with other adaptors,
+//! while the slice iterators yield both to make more advanced use cases easy.
+
+===== src/errors.rs =====
+/* Copyright 2016-2022 Torbjørn Birch Moltu
+ *
+ * Licensed under the Apache License, Version 2.0, <LICENSE-APACHE or
+ * http://apache.org/licenses/LICENSE-2.0> or the MIT license <LICENSE-MIT or
+ * http://opensource.org/licenses/MIT>, at your option. This file may not be
+ * copied, modified, or distributed except according to those terms.
+ */
+
+
+//! Boilerplate-y error types.
+//!
+//! The discriminant values of the enums might change in minor releases.
+//! (to reduce the size of the `Result<>` types they are returned in)
+
+===== src/lib.rs =====
+/* Copyright 2016-2022 Torbjørn Birch Moltu
+ * Copyright 2018 Aljoscha Meyer
+ *
+ * Licensed under the Apache License, Version 2.0, <LICENSE-APACHE or
+ * http://apache.org/licenses/LICENSE-2.0> or the MIT license <LICENSE-MIT or
+ * http://opensource.org/licenses/MIT>, at your option. This file may not be
+ * copied, modified, or distributed except according to those terms.
+ */
+
+
+/*!
+Miscellaneous UTF-8 and UTF-16 types and methods.
+
+# Optional features:
+* `#![no_std]`-mode: There are a few differences:
+  * `Error` doesn't exist, but `description()` is made available as an inherent impl.
+  * `Extend`/`FromIterator`-implementations for `String`/`Vec<u8>`/`Vec<u16>` are missing.
+  * There is no `io`, so `Utf8Iterator` and `Utf8CharSplitter` doesn't implement `Read`.
+
+  This feature is enabled by setting `default-features=false` in `Cargo.toml`:
+  `encode_unicode = {version="0.3.4", default-features=false}`
+* Integration with the [ascii](https://tomprogrammer.github.io/rust-ascii/ascii/index.html) crate:  
+  Convert `Utf8Char` and `Utf16Char` to and from
+  [`ascii::AsciiChar`](https://tomprogrammer.github.io/rust-ascii/ascii/enum.AsciiChar.html).
+
+# Minimum supported Rust version
+
+The minimum supported Rust version for 1.0.\* releases is 1.56.  
+Later 1.y.0 releases might require newer Rust versions, but the three most
+recent stable releases at the time of publishing will always be supported.
+For example this means that if the current stable Rust version is 1.66 when
+`encode_unicode` 1.1.0 is released, then `encode_unicode` 1.1.\* will
+not require a newer Rust version than 1.63.
+
+[crates.io page](https://crates.io/crates/encode_unicode)  
+[github repository](https://github.com/tormol/encode_unicode)
+
+*/
+
+#![cfg_attr(not(feature="std"), no_std)]
+
+#![warn(missing_docs, unsafe_op_in_unsafe_fn)]
+#![allow(
+
+===== src/traits.rs =====
+/* Copyright 2016-2022 Torbjørn Birch Moltu
+ * Copyright 2018 Aljoscha Meyer
+ *
+ * Licensed under the Apache License, Version 2.0, <LICENSE-APACHE or
+ * http://apache.org/licenses/LICENSE-2.0> or the MIT license <LICENSE-MIT or
+ * http://opensource.org/licenses/MIT>, at your option. This file may not be
+ * copied, modified, or distributed except according to those terms.
+ */
+
+===== src/utf16_char.rs =====
+/* Copyright 2016-2022 Torbjørn Birch Moltu
+ *
+ * Licensed under the Apache License, Version 2.0, <LICENSE-APACHE or
+ * http://apache.org/licenses/LICENSE-2.0> or the MIT license <LICENSE-MIT or
+ * http://opensource.org/licenses/MIT>, at your option. This file may not be
+ * copied, modified, or distributed except according to those terms.
+ */
+
+===== src/utf16_iterators.rs =====
+/* Copyright 2018-2019 Torbjørn Birch Moltu
+ *
+ * Licensed under the Apache License, Version 2.0, <LICENSE-APACHE or
+ * http://apache.org/licenses/LICENSE-2.0> or the MIT license <LICENSE-MIT or
+ * http://opensource.org/licenses/MIT>, at your option. This file may not be
+ * copied, modified, or distributed except according to those terms.
+ */
+
+===== src/utf8_char.rs =====
+/* Copyright 2016-2022 Torbjørn Birch Moltu
+ *
+ * Licensed under the Apache License, Version 2.0, <LICENSE-APACHE or
+ * http://apache.org/licenses/LICENSE-2.0> or the MIT license <LICENSE-MIT or
+ * http://opensource.org/licenses/MIT>, at your option. This file may not be
+ * copied, modified, or distributed except according to those terms.
+ */
+
+===== src/utf8_iterators.rs =====
+/* Copyright 2018-2020 Torbjørn Birch Moltu
+ *
+ * Licensed under the Apache License, Version 2.0, <LICENSE-APACHE or
+ * http://apache.org/licenses/LICENSE-2.0> or the MIT license <LICENSE-MIT or
+ * http://opensource.org/licenses/MIT>, at your option. This file may not be
+ * copied, modified, or distributed except according to those terms.
+ */
+
+===== tests/errs.rs =====
+/* Copyright 2016-2022 Torbjørn Birch Moltu
+ * Copyright 2018 Aljoscha Meyer
+ *
+ * Licensed under the Apache License, Version 2.0, <LICENSE-APACHE or
+ * http://apache.org/licenses/LICENSE-2.0> or the MIT license <LICENSE-MIT or
+ * http://opensource.org/licenses/MIT>, at your option. This file may not be
+ * copied, modified, or distributed except according to those terms.
+ */
+
+//! Test that methods gives the correct error.
+//! Some also test a bit more because it's easy.
+
+===== tests/exhaustive.rs =====
+/* Copyright 2018-2022 Torbjørn Birch Moltu
+ *
+ * Licensed under the Apache License, Version 2.0, <LICENSE-APACHE or
+ * http://apache.org/licenses/LICENSE-2.0> or the MIT license <LICENSE-MIT or
+ * http://opensource.org/licenses/MIT>, at your option. This file may not be
+ * copied, modified, or distributed except according to those terms.
+ */
+
+//! Tests that try all possible values for at least one parameter / byte / unit
+//! of the tested function.
+
+===== tests/iterators.rs =====
+/* Copyright 2018-2022 Torbjørn Birch Moltu
+ *
+ * Licensed under the Apache License, Version 2.0, <LICENSE-APACHE or
+ * http://apache.org/licenses/LICENSE-2.0> or the MIT license <LICENSE-MIT or
+ * http://opensource.org/licenses/MIT>, at your option. This file may not be
+ * copied, modified, or distributed except according to those terms.
+ */
+
+//! Iterator tests
+
+#![cfg(feature="std")]
+
+#![allow(
+
+===== tests/oks.rs =====
+/* Copyright 2016-2022 Torbjørn Birch Moltu
+ *
+ * Licensed under the Apache License, Version 2.0, <LICENSE-APACHE or
+ * http://apache.org/licenses/LICENSE-2.0> or the MIT license <LICENSE-MIT or
+ * http://opensource.org/licenses/MIT>, at your option. This file may not be
+ * copied, modified, or distributed except according to those terms.
+ */
+
+//! Test that every method gives the correct result for valid values.
+//! Except iterators, which are stateful.
+
+#![cfg(feature="std")]
+#![allow(

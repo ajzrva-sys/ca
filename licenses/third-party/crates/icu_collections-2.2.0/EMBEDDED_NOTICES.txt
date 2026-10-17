@@ -1,0 +1,193 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== tests/data/char16trie/empty.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/char16trie/months.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/char16trie/test_a.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/char16trie/test_a_ab.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/char16trie/test_branches.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/char16trie/test_compact.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/char16trie/test_long_branch.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/char16trie/test_long_sequence.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/char16trie/test_shortest_branch.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/cpt/free-blocks.16.toml =====
+# This file is part of ICU4X. For terms of use, please see the file
+# called LICENSE at the top level of the ICU4X source tree
+# (online at: https://github.com/unicode-org/icu4x/blob/main/LICENSE ).
+
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/cpt/free-blocks.32.toml =====
+# This file is part of ICU4X. For terms of use, please see the file
+# called LICENSE at the top level of the ICU4X source tree
+# (online at: https://github.com/unicode-org/icu4x/blob/main/LICENSE ).
+
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/cpt/free-blocks.8.toml =====
+# This file is part of ICU4X. For terms of use, please see the file
+# called LICENSE at the top level of the ICU4X source tree
+# (online at: https://github.com/unicode-org/icu4x/blob/main/LICENSE ).
+
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/cpt/free-blocks.small16.toml =====
+# This file is part of ICU4X. For terms of use, please see the file
+# called LICENSE at the top level of the ICU4X source tree
+# (online at: https://github.com/unicode-org/icu4x/blob/main/LICENSE ).
+
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/cpt/grow-data.16.toml =====
+# This file is part of ICU4X. For terms of use, please see the file
+# called LICENSE at the top level of the ICU4X source tree
+# (online at: https://github.com/unicode-org/icu4x/blob/main/LICENSE ).
+
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/cpt/grow-data.32.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/cpt/grow-data.8.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/cpt/grow-data.small16.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/cpt/set-empty.16.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/cpt/set-empty.32.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/cpt/set-empty.8.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/cpt/set-empty.small16.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/cpt/set-single-value.16.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/cpt/set-single-value.32.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/cpt/set-single-value.8.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/cpt/set-single-value.small16.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/cpt/set1.16.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/cpt/set1.32.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/cpt/set1.8.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/cpt/set1.small16.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/cpt/set2-overlap.16.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/cpt/set2-overlap.32.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/cpt/set2-overlap.small16.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/cpt/set3-initial-9.16.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/cpt/set3-initial-9.32.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/cpt/set3-initial-9.8.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/cpt/set3-initial-9.small16.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/cpt/short-all-same.16.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/cpt/short-all-same.8.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/cpt/short-all-same.small16.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/cpt/small0-in-fast.16.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/cpt/small0-in-fast.32.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/cpt/small0-in-fast.8.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+
+===== tests/data/cpt/small0-in-fast.small16.toml =====
+# Copyright (C) 2021 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html

@@ -101,6 +101,13 @@ the checks actually run. Historical validation is recorded in [TESTING.md](TESTI
 Long-duration soak tests and selected real-model retrieval checks are separate
 from compiling and running the offline test suite.
 
-No project-wide license has been selected in this source snapshot. Dependency
-and compatibility-package notices retain their original scope. Published source
-visibility alone does not grant a project-wide redistribution license.
+## License
+
+CA-owned code, documentation, prompts, schemas, tests, tools, and screenshots
+are available under either the [MIT License](LICENSE-MIT) or the
+[Apache License, Version 2.0](LICENSE-APACHE), at your option.
+
+Third-party components retain their own licenses and notices; this choice does
+not relicense them. See [third-party notices](THIRD_PARTY_NOTICES.md),
+[licensing scope and unresolved provenance](docs/LICENSING.md), and
+[contribution terms](CONTRIBUTING.md). Existing MIT grants remain available.

@@ -1,0 +1,228 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== src/huffman.rs =====
+// Copyright 2017 Brian Langenberger
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+//! Traits and implementations for reading or writing Huffman codes
+//! from or to a stream.
+
+#![warn(missing_docs)]
+
+/// A trait for building a final value from individual bits
+///
+/// Though similar to the [`crate::read::FromBitStream`] trait,
+/// this is intended to parse short symbols from a stream of bits
+/// while `FromBitStream` is meant for parsing larger structs from
+/// a whole reader.
+/// For example, one might have several [`FromBits`] implementations
+/// in a single program that all generate `i32` symbols from bits,
+/// but implementing `FromBitStream` multiple times for `i32`
+/// isn't possible (or practical).
+
+===== src/lib.rs =====
+// Copyright 2017 Brian Langenberger
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+//! Traits and helpers for bitstream handling functionality
+//!
+//! Bitstream readers are for reading signed and unsigned integer
+//! values from a stream whose sizes may not be whole bytes.
+//! Bitstream writers are for writing signed and unsigned integer
+//! values to a stream, also potentially un-aligned at a whole byte.
+//!
+//! Both big-endian and little-endian streams are supported.
+//!
+//! The only requirement for wrapped reader streams is that they must
+//! implement the [`io::Read`] trait, and the only requirement
+//! for writer streams is that they must implement the [`io::Write`] trait.
+//!
+//! In addition, reader streams do not consume any more bytes
+//! from the underlying reader than necessary, buffering only a
+//! single partial byte as needed.
+//! Writer streams also write out all whole bytes as they are accumulated.
+//!
+//! Readers and writers are also designed to work with integer
+//! types of any possible size.
+//! Many of Rust's built-in integer types are supported by default.
+
+//! # Minimum Compiler Version
+//!
+//! Beginning with version 2.4, the minimum compiler version has been
+//! updated to Rust 1.79.
+//!
+//! The issue is that reading an excessive number of
+//! bits to a type which is too small to hold them,
+//! or writing an excessive number of bits from too small of a type,
+//! are always errors:
+//! ```
+//! use std::io::{Read, Cursor};
+//! use bitstream_io::{BigEndian, BitReader, BitRead};
+//! let data = [0; 10];
+//! let mut r = BitReader::endian(Cursor::new(&data), BigEndian);
+//! let x: Result<u32, _> = r.read_var(64);  // reading 64 bits to u32 always fails at runtime
+//! assert!(x.is_err());
+//! ```
+//! but those errors will not be caught until the program runs,
+//! which is less than ideal for the common case in which
+//! the number of bits is already known at compile-time.
+//!
+//! But starting with Rust 1.79, we can now have read and write methods
+//! which take a constant number of bits and can validate the number of bits
+//! are small enough for the type being read/written at compile-time:
+//! ```rust,compile_fail
+//! use std::io::{Read, Cursor};
+//! use bitstream_io::{BigEndian, BitReader, BitRead};
+//! let data = [0; 10];
+//! let mut r = BitReader::endian(Cursor::new(&data), BigEndian);
+//! let x: Result<u32, _> = r.read::<64, _>();  // doesn't compile at all
+//! ```
+//! Since catching potential bugs at compile-time is preferable
+//! to encountering errors at runtime, this will hopefully be
+//! an improvement in the long run.
+
+//! # Changes From 3.X.X
+//!
+//! Version 4.0.0 features significant optimizations to the [`BitRecorder`]
+//! and deprecates the [`BitCounter`] in favor of [`BitsWritten`],
+//! which no longer requires specifying an endianness.
+//!
+//! In addition, the [`BitRead::read_bytes`] and [`BitWrite::write_bytes`]
+//! methods are significantly optimized in the case of non-aligned
+//! reads and writes.
+//!
+//! Finally, the [`Endianness`] traits have been sealed so as not
+//! to be implemented by other packages.  Given that other endianness
+//! types are extremely rare in file formats and end users should not
+//! have to implement this trait themselves, this should not be a
+//! concern.
+//!
+//! # Changes From 2.X.X
+//!
+//! Version 3.0.0 has made many breaking changes to the [`BitRead`] and
+//! [`BitWrite`] traits.
+//!
+//! The [`BitRead::read`] method takes a constant number of bits,
+//! and the [`BitRead::read_var`] method takes a variable number of bits
+//! (reversing the older [`BitRead2::read_in`] and [`BitRead2::read`]
+//! calling methods to emphasize using the constant-based one,
+//! which can do more validation at compile-time).
+//! A new [`BitRead2`] trait uses the older calling convention
+//! for compatibility with existing code and is available
+//! for anything implementing [`BitRead`].
+//!
+//! In addition, the main reading methods return primitive types which
+//! implement a new [`Integer`] trait,
+//! which delegates to [`BitRead::read_unsigned`]
+//! or [`BitRead::read_signed`] depending on whether the output
+//! is an unsigned or signed type.
+//!
+//! [`BitWrite::write`] and [`BitWrite::write_var`] work
+//! similarly to the reader's `read` methods, taking anything
+//! that implements [`Integer`] and writing an unsigned or
+//! signed value to [`BitWrite::write_unsigned`] or
+//! [`BitWrite::write_signed`] as appropriate.
+//!
+//! And as with reading, a [`BitWrite2`] trait is offered
+//! for compatibility.
+//!
+//! In addition, the Huffman code handling has been rewritten
+//! to use a small amount of macro magic to write
+//! code to read and write symbols at compile-time.
+//! This is significantly faster than the older version
+//! and can no longer fail to compile at runtime.
+//!
+//! Lastly, there's a new [`BitCount`] struct which wraps a humble
+//! `u32` but encodes the maximum possible number of bits
+//! at the type level.
+//! This is intended for file formats which encode the number
+//! of bits to be read in the format itself.
+//! For example, FLAC's predictor coefficient precision
+//! is a 4 bit value which indicates how large each predictor
+//! coefficient is in bits
+//! (each coefficient might be an `i32` type).
+//! By keeping track of the maximum value at compile time
+//! (4 bits' worth, in this case), we can eliminate
+//! any need to check that coefficients aren't too large
+//! for an `i32` at runtime.
+//! This is accomplished by using [`BitRead::read_count`] to
+//! read a [`BitCount`] and then reading final values with
+//! that number of bits using [`BitRead::read_counted`].
+
+//! # Migrating From Pre 1.0.0
+//!
+//! There are now [`BitRead`] and [`BitWrite`] traits for bitstream
+//! reading and writing (analogous to the standard library's
+//! `Read` and `Write` traits) which you will also need to import.
+//! The upside to this approach is that library consumers
+//! can now make functions and methods generic over any sort
+//! of bit reader or bit writer, regardless of the underlying
+//! stream byte source or endianness.
+
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![warn(missing_docs)]
+#![forbid(unsafe_code)]
+#![no_std]
+
+===== src/read.rs =====
+// Copyright 2017 Brian Langenberger
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+//! Traits and implementations for reading bits from a stream.
+
+#![warn(missing_docs)]
+
+===== src/write.rs =====
+// Copyright 2017 Brian Langenberger
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+//! Traits and implementations for writing bits to a stream.
+
+#![warn(missing_docs)]
+
+===== tests/read.rs =====
+// Copyright 2017 Brian Langenberger
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+===== tests/roundtrip.rs =====
+// Copyright 2017 Brian Langenberger
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+===== tests/write.rs =====
+// Copyright 2017 Brian Langenberger
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.

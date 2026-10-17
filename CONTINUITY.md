@@ -1,5 +1,27 @@
 # Continuity
 
+## 2026-10-17 dual MIT/Apache-2.0 licensing
+
+The owner selected MIT OR Apache-2.0 for CA-owned material. The six workspace
+packages and thirteen fixture/verifier packages declare those terms; both
+canonical license texts are included in every workspace package. Existing MIT
+permissions and separate third-party terms are preserved. The October 6
+publication evidence remains a historical record.
+
+The dependency notice inventory covers 650 checksum-verified locked registry
+archives, with original legal texts, upstream supplements, explicit MPL source
+locations, and reproducible offline checking. The notice drift check rejects an
+intentional altered text in a disposable source copy. Package and document-link
+checks pass. Rust source, Cargo.lock, version and installed executable are
+unchanged; no new Rust runtime or binary-linkage result is claimed.
+
+Unresolved: pre-import ownership, upstream Apple SDK binding concerns, syntect
+serialized-asset provenance, and 25 packages without verified complete original
+primary license texts. Canonical terms supplement declared licenses without
+inventing copyright holders. See [licensing scope](docs/LICENSING.md),
+[third-party notices](THIRD_PARTY_NOTICES.md), and the
+[change record](docs/exec-plans/completed/LIC-2026-10-17-dual-licensing.md).
+
 ## 2026-10-06 initial public source publication
 
 Built the complete all-feature release and prepared the public `ajzrva-sys/ca`

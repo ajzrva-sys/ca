@@ -1,0 +1,20 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== src/lib.rs =====
+// Copyright 2013-2016 The rust-url developers.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+//! Parser and serializer for the [`application/x-www-form-urlencoded` syntax](
+//! http://url.spec.whatwg.org/#application/x-www-form-urlencoded),
+//! as used by HTML forms.
+//!
+//! Converts between a string (such as an URL’s query string)
+//! and a sequence of (name, value) pairs.
+#![no_std]
+
+// For forwards compatibility

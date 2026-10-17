@@ -1,0 +1,187 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== src/bit_depth.rs =====
+/*
+ * Copyright (c) 2023.
+ *
+ * This software is free software;
+ *
+ * You can redistribute it or modify it under terms of the MIT, Apache License or Zlib license
+ */
+
+//! Image bit depth, information and manipulations
+
+/// The image bit depth.
+///
+/// The library successfully supports depths up to
+/// 16 bits, as the underlying storage is usually a `u16`.
+///
+/// This allows us to comfortably support a wide variety of images
+/// e.g 10 bit av1, 16 bit png and ppm.
+
+===== src/bytestream/traits.rs =====
+/*
+ * Copyright (c) 2023.
+ *
+ * This software is free software;
+ *
+ * You can redistribute it or modify it under terms of the MIT, Apache License or Zlib license
+ */
+//! Traits for reading and writing images in zune
+//!
+//!
+//! This exposes the traits and implementations for readers
+//! and writers in the zune family of decoders and encoders.
+
+===== src/bytestream/writer.rs =====
+/*
+ * Copyright (c) 2023.
+ *
+ * This software is free software;
+ *
+ * You can redistribute it or modify it under terms of the MIT, Apache License or Zlib license
+ */
+
+===== src/bytestream.rs =====
+/*
+ * Copyright (c) 2023.
+ *
+ * This software is free software;
+ *
+ * You can redistribute it or modify it under terms of the MIT, Apache License or Zlib license
+ */
+
+//! A simple implementation of a bytestream reader
+//! and writer.
+//!
+//! This module contains two main structs that help in
+//! byte reading and byte writing
+//!
+//! Useful for a lot of image readers and writers, it's put
+//! here to minimize code reuse
+
+===== src/colorspace.rs =====
+/*
+ * Copyright (c) 2023.
+ *
+ * This software is free software;
+ *
+ * You can redistribute it or modify it under terms of the MIT, Apache License or Zlib license
+ */
+
+//! Image Colorspace information and manipulation utilities.
+
+/// All possible image colorspaces
+/// Some of them aren't yet supported exist here.
+
+===== src/lib.rs =====
+/*
+ * Copyright (c) 2023.
+ *
+ * This software is free software; You can redistribute it or modify it under terms of the MIT, Apache License or Zlib license
+ */
+
+//! Core routines shared by all libraries
+//!
+//! This crate provides a set of core routines shared
+//! by the decoders and encoders under `zune` umbrella
+//!
+//! It currently contains
+//!
+//! - A bytestream reader and writer with endian aware reads and writes
+//! - Colorspace and bit depth information shared by images
+//! - Image decoder and encoder options
+//! - A simple enum type to hold image decoding results.
+//!
+//! This library is `#[no_std]` with `alloc` feature needed for defining `Vec`
+//! which we need for storing decoded  bytes.
+//!
+//!
+//! # Features
+//!  - `no_std`: Enables `#[no_std]` compilation support.
+//!
+//!  - `serde`: Enables serializing of some of the data structures
+//!     present in the crate
+//!
+//!
+//! # Input/Output
+//!
+//! zune-image supports many different input and output devices. For input readers
+//! we can read anything that implements `BufRead` + `Seek` and provide an optimized routine for
+//! handling in memory buffers by using [`ZCursor`](crate::bytestream::ZCursor).
+//!
+//! For output, we support anything that implements `Write` trait, this includes files, standard io streams
+//! network sockets, etc
+//!
+//! In a `no_std` environment. We can write to in memory buffers `&mut [u8]` and `&mut Vec<u8>`
+//!
+//! If you have an in memory buffer, use [`ZCursor`](crate::bytestream::ZCursor),
+//! it's optimized for in memory buffers.
+//!
+//!  
+//!
+#![cfg_attr(not(feature = "std"), no_std)]
+#![macro_use]
+
+===== src/log.rs =====
+/*
+ * Copyright (c) 2023.
+ *
+ * This software is free software;
+ *
+ * You can redistribute it or modify it under terms of the MIT, Apache License or Zlib license
+ */
+
+// #[macro_export] is required to make macros works across crates
+// but it always put the macro in the crate root.
+// #[doc(hidden)] + "pub use" is a workaround to namespace a macro.
+
+===== src/options/decoder.rs =====
+/*
+ * Copyright (c) 2023.
+ *
+ * This software is free software;
+ *
+ * You can redistribute it or modify it under terms of the MIT, Apache License or Zlib license
+ */
+
+//! Global Decoder options
+#![allow(clippy::zero_prefixed_literal)]
+
+===== src/options/encoder.rs =====
+/*
+ * Copyright (c) 2023.
+ *
+ * This software is free software;
+ *
+ * You can redistribute it or modify it under terms of the MIT, Apache License or Zlib license
+ */
+
+===== src/result.rs =====
+/*
+ * Copyright (c) 2023.
+ *
+ * This software is free software;
+ *
+ * You can redistribute it or modify it under terms of the MIT, Apache License or Zlib license
+ */
+
+//! Decoding results for images
+
+===== src/serde.rs =====
+/*
+ * Copyright (c) 2023.
+ *
+ * This software is free software;
+ *
+ * You can redistribute it or modify it under terms of the MIT, Apache License or Zlib license
+ */
+
+#![cfg(feature = "serde")]
+//! Serde support for serializing
+//! crate datastructures
+//!
+//! Implements serialize for
+//!  - ColorSpace
+//!  - BitDepth
+//!  - ColorCharacteristics

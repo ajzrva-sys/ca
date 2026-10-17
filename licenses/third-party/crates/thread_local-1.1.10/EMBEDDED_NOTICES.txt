@@ -1,0 +1,89 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== README.md =====
+## License
+
+Licensed under either of
+
+ * Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+ * MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+
+at your option.
+
+===== src/lib.rs =====
+// Copyright 2017 Amanieu d'Antras
+//
+// Licensed under the Apache License, Version 2.0, <LICENSE-APACHE or
+// http://apache.org/licenses/LICENSE-2.0> or the MIT license <LICENSE-MIT or
+// http://opensource.org/licenses/MIT>, at your option. This file may not be
+// copied, modified, or distributed except according to those terms.
+
+//! Per-object thread-local storage
+//!
+//! This library provides the `ThreadLocal` type which allows a separate copy of
+//! an object to be used for each thread. This allows for per-object
+//! thread-local storage, unlike the standard library's `thread_local!` macro
+//! which only allows static thread-local storage.
+//!
+//! Per-thread objects are not destroyed when a thread exits. Instead, objects
+//! are only destroyed when the `ThreadLocal` containing them is destroyed.
+//!
+//! You can also iterate over the thread-local values of all thread in a
+//! `ThreadLocal` object using the `iter_mut` and `into_iter` methods. This can
+//! only be done if you have mutable access to the `ThreadLocal` object, which
+//! guarantees that you are the only thread currently accessing it.
+//!
+//! Note that since thread IDs are recycled when a thread exits, it is possible
+//! for one thread to retrieve the object of another thread. Since this can only
+//! occur after a thread has exited this does not lead to any race conditions.
+//!
+//! # Examples
+//!
+//! Basic usage of `ThreadLocal`:
+//!
+//! ```rust
+//! use thread_local::ThreadLocal;
+//! let tls: ThreadLocal<u32> = ThreadLocal::new();
+//! assert_eq!(tls.get(), None);
+//! assert_eq!(tls.get_or(|| 5), &5);
+//! assert_eq!(tls.get(), Some(&5));
+//! ```
+//!
+//! Combining thread-local values into a single result:
+//!
+//! ```rust
+//! use thread_local::ThreadLocal;
+//! use std::cell::Cell;
+//! use std::thread;
+//!
+//! let tls = ThreadLocal::new();
+//!
+//! // Create a bunch of threads to do stuff
+//! thread::scope(|scope| {
+//!     for _ in 0..5 {
+//!         scope.spawn(|| {
+//!             // Increment a counter to count some event...
+//!             let cell = tls.get_or(|| Cell::new(0));
+//!             cell.set(cell.get() + 1);
+//!         });
+//!     }
+//! });
+//!
+//! // Once all threads are done, collect the counter values and return the
+//! // sum of all thread-local counter values.
+//! let total = tls.into_iter().fold(0, |x, y| x + y.get());
+//! assert_eq!(total, 5);
+//! ```
+
+#![warn(missing_docs)]
+#![warn(clippy::undocumented_unsafe_blocks)]
+#![warn(unsafe_op_in_unsafe_fn)]
+#![cfg_attr(feature = "nightly", feature(thread_local))]
+
+===== src/thread_id.rs =====
+// Copyright 2017 Amanieu d'Antras
+//
+// Licensed under the Apache License, Version 2.0, <LICENSE-APACHE or
+// http://apache.org/licenses/LICENSE-2.0> or the MIT license <LICENSE-MIT or
+// http://opensource.org/licenses/MIT>, at your option. This file may not be
+// copied, modified, or distributed except according to those terms.

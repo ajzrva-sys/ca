@@ -1,0 +1,77 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== README.md =====
+#### License
+
+<sup>
+Licensed under either of <a href="LICENSE-APACHE.txt">Apache License, Version
+2.0</a> or <a href="LICENSE-MIT.txt">MIT license</a> at your option.
+</sup>
+
+<br>
+
+<sub>
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in this crate by you, as defined in the Apache-2.0 license, shall
+be dual licensed as above, without any additional terms or conditions.
+</sub>
+
+===== src/common.rs =====
+/*
+SPDX-License-Identifier: Apache-2.0 OR MIT
+
+Copyright 2022 The Arboard contributors
+
+The project to which this file belongs is licensed under either of
+the Apache 2.0 or the MIT license at the licensee's choice. The terms
+and conditions of the chosen license apply to this file.
+*/
+
+===== src/lib.rs =====
+/*
+SPDX-License-Identifier: Apache-2.0 OR MIT
+
+Copyright 2022 The Arboard contributors
+
+The project to which this file belongs is licensed under either of
+the Apache 2.0 or the MIT license at the licensee's choice. The terms
+and conditions of the chosen license apply to this file.
+*/
+#![warn(unreachable_pub)]
+
+===== src/platform/linux/x11.rs =====
+/*
+SPDX-License-Identifier: Apache-2.0 OR MIT
+
+Copyright 2022 The Arboard contributors
+
+The project to which this file belongs is licensed under either of
+the Apache 2.0 or the MIT license at the licensee's choice. The terms
+and conditions of the chosen license apply to this file.
+*/
+
+// More info about using the clipboard on X11:
+// https://tronche.com/gui/x/icccm/sec-2.html#s-2.6
+// https://freedesktop.org/wiki/ClipboardManager/
+
+===== src/platform/osx.rs =====
+/*
+SPDX-License-Identifier: Apache-2.0 OR MIT
+
+Copyright 2022 The Arboard contributors
+
+The project to which this file belongs is licensed under either of
+the Apache 2.0 or the MIT license at the licensee's choice. The terms
+and conditions of the chosen license apply to this file.
+*/
+
+===== src/platform/windows.rs =====
+/*
+SPDX-License-Identifier: Apache-2.0 OR MIT
+
+Copyright 2022 The Arboard contributors
+
+The project to which this file belongs is licensed under either of
+the Apache 2.0 or the MIT license at the licensee's choice. The terms
+and conditions of the chosen license apply to this file.
+*/

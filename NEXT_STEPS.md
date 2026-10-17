@@ -1,5 +1,14 @@
 # Next Steps
 
+## LIC-2026-10-17 dual licensing — implementation complete
+
+Owner-selected MIT OR Apache-2.0 terms, workspace/fixture metadata, contribution
+policy and dependency notices are implemented and package/notice checks pass.
+See [the change record](docs/exec-plans/completed/LIC-2026-10-17-dual-licensing.md).
+Before distributing a binary, review the recorded original-notice/provenance
+gaps and verify that target's native linkage and bundled assets. This source
+change does not certify release-specific third-party rights or binary contents.
+
 ## PUB-2026-10-06 public GitHub publication — COMPLETE
 
 User-requested build, portable documentation, public source import and five TUI

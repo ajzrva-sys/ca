@@ -1,0 +1,63 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== src/lib.rs =====
+// MIT License
+
+// Copyright (c) 2016 Jerome Froelich
+
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+//! An implementation of a LRU cache. The cache supports `get`, `get_mut`, `put`,
+//! and `pop` operations, all of which are O(1). This crate was heavily influenced
+//! by the [LRU Cache implementation in an earlier version of Rust's std::collections crate](https://doc.rust-lang.org/0.12.0/std/collections/lru_cache/struct.LruCache.html).
+//!
+//! ## Example
+//!
+//! ```rust
+//! extern crate lru;
+//!
+//! use lru::LruCache;
+//! use std::num::NonZeroUsize;
+//!
+//! fn main() {
+//!         let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
+//!         cache.put("apple", 3);
+//!         cache.put("banana", 2);
+//!
+//!         assert_eq!(*cache.get(&"apple").unwrap(), 3);
+//!         assert_eq!(*cache.get(&"banana").unwrap(), 2);
+//!         assert!(cache.get(&"pear").is_none());
+//!
+//!         assert_eq!(cache.put("banana", 4), Some(2));
+//!         assert_eq!(cache.put("pear", 5), None);
+//!
+//!         assert_eq!(*cache.get(&"pear").unwrap(), 5);
+//!         assert_eq!(*cache.get(&"banana").unwrap(), 4);
+//!         assert!(cache.get(&"apple").is_none());
+//!
+//!         {
+//!             let v = cache.get_mut(&"banana").unwrap();
+//!             *v = 6;
+//!         }
+//!
+//!         assert_eq!(*cache.get(&"banana").unwrap(), 6);
+//! }
+//! ```
+
+#![no_std]

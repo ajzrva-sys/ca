@@ -1,0 +1,26 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== src/lib.rs =====
+//! Crate for changing case of Rust identifiers.
+//!
+//! # Features
+//! * Supports `snake_case`, `lowercase`, `camelCase`, 
+//!   `PascalCase`, `SCREAMING_SNAKE_CASE`, and `kebab-case`
+//! * Rename variants, and fields
+//! 
+//! # Examples
+//! ```rust
+//! use ident_case::RenameRule;
+//!
+//! assert_eq!("helloWorld", RenameRule::CamelCase.apply_to_field("hello_world"));
+//!
+//! assert_eq!("i_love_serde", RenameRule::SnakeCase.apply_to_variant("ILoveSerde"));
+//! ```
+
+// Copyright 2017 Serde Developers
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.

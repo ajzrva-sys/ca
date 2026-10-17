@@ -61,6 +61,15 @@ do not claim a fresh oracle comparison from their historical notes.
 
 ## Publication boundary
 
+CA-owned material is licensed under MIT OR Apache-2.0. See
+[licensing scope and unresolved provenance](LICENSING.md),
+[contribution terms](../CONTRIBUTING.md), and the
+[dependency notices](../THIRD_PARTY_NOTICES.md). Before distributing a binary,
+include the applicable license texts and notices and the source-availability
+information for MPL-covered dependencies. Verify each independently packaged
+crate contains both project license texts; dependency metadata alone is not a
+record of the native libraries and assets in a particular binary.
+
 `.gitignore` excludes build output, scratch work, local state, oracle archives,
 Finder files, and credential files. The initial import deliberately retains
 historical engineering docs, including dated paths and references to omitted

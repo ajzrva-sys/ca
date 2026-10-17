@@ -1,0 +1,14 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== README.md =====
+## License
+
+This project is licensed under the terms specified in the repository's [LICENSE](../../LICENSE) file.
+
+===== src/model/extension.rs =====
+//! A container for those extra data could be carried on request or notification.
+//!
+//! This file is copied and modified from crate [http](https://github.com/hyperium/http).
+//!
+//! - Original code license: <https://github.com/hyperium/http/blob/master/LICENSE-MIT>
+//! - Original code: <https://github.com/hyperium/http/blob/master/src/extensions.rs>

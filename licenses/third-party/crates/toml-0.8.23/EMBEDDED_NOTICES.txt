@@ -1,0 +1,28 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== README.md =====
+## License
+
+Licensed under either of
+
+* Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or <http://www.apache.org/licenses/LICENSE-2.0>)
+* MIT license ([LICENSE-MIT](LICENSE-MIT) or <http://opensource.org/licenses/MIT>)
+
+at your option.
+
+===== src/map.rs =====
+// Copyright 2017 Serde Developers
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+//! A map of `String` to [Value].
+//!
+//! By default the map is backed by a [`BTreeMap`]. Enable the `preserve_order`
+//! feature of toml-rs to use [`IndexMap`] instead.
+//!
+//! [`BTreeMap`]: https://doc.rust-lang.org/std/collections/struct.BTreeMap.html
+//! [`IndexMap`]: https://docs.rs/indexmap

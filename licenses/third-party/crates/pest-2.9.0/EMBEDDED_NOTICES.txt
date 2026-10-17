@@ -1,0 +1,232 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== benches/pratt.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+===== benches/stack.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+===== src/error.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+//! Types for different kinds of parsing failures.
+
+===== src/iterators/flat_pairs.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+===== src/iterators/mod.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+//! Types and iterators for parser output.
+
+===== src/iterators/pair.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+===== src/iterators/pairs.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+===== src/iterators/queueable_token.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+// This structure serves to improve performance over Token objects in two ways:
+//
+//   * it is smaller than a Token, leading to both less memory use when stored in the queue but also
+//     increased speed when pushing to the queue
+//   * it finds its pair in O(1) time instead of O(N), since pair positions are known at parse time
+//     and can easily be stored instead of recomputed
+
+===== src/iterators/tokens.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+===== src/lib.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+#![no_std]
+#![doc(
+
+===== src/macros.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+===== src/parser.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+===== src/parser_state.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+//! The core functionality of parsing grammar.
+//! State of parser during the process of rules handling.
+
+===== src/position.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+===== src/pratt_parser.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+//! Constructs useful in prefix, postfix, and infix operator parsing with the
+//! Pratt parsing method.
+
+===== src/prec_climber.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+//! Constructs useful in infix operator parsing with the precedence climbing method.
+
+===== src/span.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+===== src/stack.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+===== src/token.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+===== tests/calculator.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.
+
+===== tests/json.rs =====
+// pest. The Elegant Parser
+// Copyright (c) 2018 Dragoș Tiselice
+//
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. All files in the project carrying such notice may not be copied,
+// modified, or distributed except according to those terms.

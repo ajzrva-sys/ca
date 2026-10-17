@@ -2,7 +2,7 @@
 name = "ca-automation-protocol"
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license.workspace = true
 description = "Runner-free automation contracts with preserved legacy V1 wire identities"
 
 [dependencies]

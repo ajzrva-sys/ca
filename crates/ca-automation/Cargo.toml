@@ -2,7 +2,7 @@
 name = "ca-automation"
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license.workspace = true
 description = "ca-owned typed automation execution, verification and compatibility services"
 
 [dependencies]

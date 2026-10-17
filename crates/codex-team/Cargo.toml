@@ -3,7 +3,7 @@ name = "codex-team"
 version = "0.1.0"
 edition = "2021"
 default-run = "codex-team"
-license = "MIT"
+license.workspace = true
 description = "Legacy CLI and library compatibility adapters for ca automation"
 
 [dependencies]

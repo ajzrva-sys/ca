@@ -1,0 +1,312 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== README.md =====
+## License
+
+Licensed under either of
+
+ * Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+ * MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+
+at your option.
+
+
+## Copyright
+
+Copyright (C) 2020, Stalwart Labs LLC
+
+===== examples/custom_parser.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== examples/mailbox_iterate_maildir.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== examples/mailbox_parse_mbox.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== examples/message_parse.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== examples/message_write_attachments.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/core/address.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/core/body.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/core/builder.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/core/header.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/core/message.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/core/mod.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/core/rkyv.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/decoders/base64.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/decoders/charsets/map.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/decoders/charsets/mod.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/decoders/charsets/multi_byte.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/decoders/charsets/single_byte.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/decoders/charsets/utf.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/decoders/encoded_word.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/decoders/hex.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/decoders/html.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/decoders/mod.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/decoders/quoted_printable.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/lib.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+#![doc = include_str!("../README.md")]
+#![deny(rust_2018_idioms)]
+
+===== src/mailbox/maildir.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/mailbox/mbox.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/parsers/fields/address.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/parsers/fields/content_type.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/parsers/fields/date.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/parsers/fields/id.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/parsers/fields/list.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/parsers/fields/mod.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/parsers/fields/raw.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/parsers/fields/received.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/parsers/fields/thread.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/parsers/fields/unstructured.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/parsers/header.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/parsers/message.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/parsers/mime.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/parsers/mod.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/parsers/preview.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== tests/integration_test.rs =====
+/*
+ * SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */

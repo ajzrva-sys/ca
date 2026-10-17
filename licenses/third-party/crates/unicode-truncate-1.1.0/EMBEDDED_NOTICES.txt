@@ -1,0 +1,28 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== src/lib.rs =====
+// Copyright 2019 Aetf <aetf at unlimitedcodeworks dot xyz>.
+// See the COPYRIGHT file at the top-level directory of this distribution.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+#![forbid(missing_docs, unsafe_code)]
+#![warn(clippy::arithmetic_side_effects)]
+#![cfg_attr(not(feature = "std"), no_std)]
+
+//! Unicode-aware algorithm to pad or truncate `str` in terms of displayed width.
+//!
+//! See the [`UnicodeTruncateStr`](crate::UnicodeTruncateStr) trait for new methods available on
+//! `str`.
+//!
+//! # Examples
+//! Safely truncate string to display width even not at character boundaries.
+//! ```rust
+//! use unicode_truncate::UnicodeTruncateStr;
+//! assert_eq!("你好吗".unicode_truncate(5), ("你好", 4));
+//! ```
+#![cfg_attr(

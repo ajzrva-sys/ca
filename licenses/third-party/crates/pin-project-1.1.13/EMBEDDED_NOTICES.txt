@@ -1,0 +1,677 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== README.md =====
+## License
+
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
+[MIT license](LICENSE-MIT) at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in the work by you, as defined in the Apache-2.0 license, shall
+be dual licensed as above, without any additional terms or conditions.
+
+===== examples/enum-default-expanded.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+// Original code (./enum-default.rs):
+//
+// ```
+// #![allow(dead_code)]
+//
+// use pin_project::pin_project;
+//
+// #[pin_project(project = EnumProj)]
+// enum Enum<T, U> {
+//     Pinned(#[pin] T),
+//     Unpinned(U),
+// }
+//
+// fn main() {}
+// ```
+
+#![allow(
+
+===== examples/enum-default.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+// See ./enum-default-expanded.rs for generated code.
+
+#![allow(dead_code)]
+
+===== examples/not_unpin-expanded.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+// Original code (./not_unpin.rs):
+//
+// ```
+// #![allow(dead_code)]
+//
+// use pin_project::pin_project;
+//
+// #[pin_project(!Unpin)]
+// struct Struct<T, U> {
+//     #[pin]
+//     pinned: T,
+//     unpinned: U,
+// }
+//
+// fn main() {
+//     fn _is_unpin<T: Unpin>() {}
+//     // _is_unpin::<Struct<(), ()>>(); //~ ERROR `std::marker::PhantomPinned` cannot be unpinned
+// }
+// ```
+
+#![allow(
+
+===== examples/not_unpin.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+// See ./not_unpin-expanded.rs for generated code.
+
+#![allow(dead_code)]
+
+===== examples/pinned_drop-expanded.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+// Original code (./pinned_drop.rs):
+//
+// ```
+// #![allow(dead_code)]
+//
+// use std::pin::Pin;
+//
+// use pin_project::{pin_project, pinned_drop};
+//
+// #[pin_project(PinnedDrop)]
+// pub struct Struct<'a, T> {
+//     was_dropped: &'a mut bool,
+//     #[pin]
+//     field: T,
+// }
+//
+// #[pinned_drop]
+// fn drop_Struct<T>(mut this: Pin<&mut Struct<'_, T>>) {
+//     **this.project().was_dropped = true;
+// }
+//
+// fn main() {}
+// ```
+
+#![allow(
+
+===== examples/pinned_drop.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+// See ./pinned_drop-expanded.rs for generated code.
+
+#![allow(dead_code)]
+
+===== examples/project_replace-expanded.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+// Original code (./struct-default.rs):
+//
+// ```
+// #![allow(dead_code)]
+//
+// use pin_project::pin_project;
+//
+// #[pin_project(project_replace)]
+// struct Struct<T, U> {
+//     #[pin]
+//     pinned: T,
+//     unpinned: U,
+// }
+//
+// fn main() {}
+// ```
+
+#![allow(
+
+===== examples/project_replace.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+// See ./struct-default-expanded.rs for generated code.
+
+#![allow(dead_code)]
+
+===== examples/struct-default-expanded.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+// Original code (./struct-default.rs):
+//
+// ```
+// #![allow(dead_code)]
+//
+// use pin_project::pin_project;
+//
+// #[pin_project]
+// struct Struct<T, U> {
+//     #[pin]
+//     pinned: T,
+//     unpinned: U,
+// }
+//
+// fn main() {}
+// ```
+
+#![allow(
+
+===== examples/struct-default.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+// See ./struct-default-expanded.rs for generated code.
+
+#![allow(dead_code)]
+
+===== examples/unsafe_unpin-expanded.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+// Original code (./unsafe_unpin.rs):
+//
+// ```
+// #![allow(dead_code)]
+//
+// use pin_project::{pin_project, UnsafeUnpin};
+//
+// #[pin_project(UnsafeUnpin)]
+// struct Struct<T, U> {
+//     #[pin]
+//     pinned: T,
+//     unpinned: U,
+// }
+//
+// unsafe impl<T: Unpin, U> UnsafeUnpin for Struct<T, U> {}
+//
+// fn main() {}
+// ```
+
+#![allow(
+
+===== examples/unsafe_unpin.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+// See ./unsafe_unpin-expanded.rs for generated code.
+
+#![allow(dead_code, clippy::undocumented_unsafe_blocks)]
+
+===== src/lib.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+/*!
+<!-- Note: Document from sync-markdown-to-rustdoc:start through sync-markdown-to-rustdoc:end
+     is synchronized from README.md. Any changes to that range are not preserved. -->
+<!-- tidy:sync-markdown-to-rustdoc:start -->
+
+A crate for safe and ergonomic [pin-projection].
+
+## Usage
+
+Add this to your `Cargo.toml`:
+
+```toml
+[dependencies]
+pin-project = "1"
+```
+
+## Examples
+
+[`#[pin_project]`][`pin_project`] attribute creates projection types
+covering all the fields of struct or enum.
+
+```
+use std::pin::Pin;
+
+use pin_project::pin_project;
+
+#[pin_project]
+struct Struct<T, U> {
+    #[pin]
+    pinned: T,
+    unpinned: U,
+}
+
+impl<T, U> Struct<T, U> {
+    fn method(self: Pin<&mut Self>) {
+        let this = self.project();
+        let _: Pin<&mut T> = this.pinned; // Pinned reference to the field
+        let _: &mut U = this.unpinned; // Normal reference to the field
+    }
+}
+```
+
+[*code like this will be generated*][struct-default-expanded]
+
+To use `#[pin_project]` on enums, you need to name the projection type
+returned from the method.
+
+```
+use std::pin::Pin;
+
+use pin_project::pin_project;
+
+#[pin_project(project = EnumProj)]
+enum Enum<T, U> {
+    Pinned(#[pin] T),
+    Unpinned(U),
+}
+
+impl<T, U> Enum<T, U> {
+    fn method(self: Pin<&mut Self>) {
+        match self.project() {
+            EnumProj::Pinned(x) => {
+                let _: Pin<&mut T> = x;
+            }
+            EnumProj::Unpinned(y) => {
+                let _: &mut U = y;
+            }
+        }
+    }
+}
+```
+
+[*code like this will be generated*][enum-default-expanded]
+
+See [`#[pin_project]`][`pin_project`] attribute for more details, and
+see [examples] directory for more examples and generated code.
+
+## Related Projects
+
+- [pin-project-lite]: A lightweight version of pin-project written with declarative macros.
+
+[enum-default-expanded]: https://github.com/taiki-e/pin-project/blob/HEAD/examples/enum-default-expanded.rs
+[examples]: https://github.com/taiki-e/pin-project/blob/HEAD/examples/README.md
+[pin-project-lite]: https://github.com/taiki-e/pin-project-lite
+[pin-projection]: https://doc.rust-lang.org/std/pin/index.html#projections-and-structural-pinning
+[struct-default-expanded]: https://github.com/taiki-e/pin-project/blob/HEAD/examples/struct-default-expanded.rs
+
+<!-- tidy:sync-markdown-to-rustdoc:end -->
+*/
+
+#![no_std]
+#![doc(test(
+
+===== tests/auxiliary/mod.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+#![allow(dead_code, unused_macros)]
+
+===== tests/cfg.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+#![allow(dead_code, clippy::items_after_statements)]
+
+// Refs: https://doc.rust-lang.org/reference/attributes.html
+
+===== tests/compiletest.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+#![cfg(not(miri))]
+
+===== tests/drop_order.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+// Refs: https://doc.rust-lang.org/reference/destructors.html
+
+===== tests/expand/default/enum.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/default/struct.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/default/tuple_struct.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/multifields/enum.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/multifields/struct.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/multifields/tuple_struct.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/naming/enum-all.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/naming/enum-mut.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/naming/enum-none.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/naming/enum-own.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/naming/enum-ref.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/naming/struct-all.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/naming/struct-mut.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/naming/struct-none.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/naming/struct-own.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/naming/struct-ref.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/naming/tuple_struct-all.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/naming/tuple_struct-mut.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/naming/tuple_struct-none.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/naming/tuple_struct-own.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/naming/tuple_struct-ref.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/not_unpin/enum.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/not_unpin/struct.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/not_unpin/tuple_struct.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/pinned_drop/enum.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/pinned_drop/struct.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/pinned_drop/tuple_struct.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/project_replace/enum.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/project_replace/struct.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/project_replace/tuple_struct.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/pub/enum.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/pub/struct.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/pub/tuple_struct.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/unsafe_unpin/enum.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/unsafe_unpin/struct.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expand/unsafe_unpin/tuple_struct.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/expandtest.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+#![cfg(not(miri))]
+
+===== tests/include/basic-safe-part.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+// default #[pin_project], PinnedDrop, project_replace, !Unpin, and UnsafeUnpin without UnsafeUnpin impl are completely safe.
+
+/// Testing default struct.
+
+===== tests/include/basic.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/pin_project.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+#![allow(
+
+===== tests/pinned_drop.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/proper_unpin.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+#![allow(dead_code)]
+
+===== tests/repr_packed.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+// unaligned_references did not exist in older compilers and safe_packed_borrows was removed in the latest compilers.
+// https://github.com/rust-lang/rust/pull/82525
+#![allow(unknown_lints, renamed_and_removed_lints)]
+#![forbid(unaligned_references, safe_packed_borrows)]
+
+===== tests/run-pass/private_in_public-enum.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+// Even if allows private_in_public, these are errors.
+
+#![allow(private_interfaces, dead_code)]
+
+===== tests/ui/cfg/cfg_attr-resolve.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/ui/cfg/cfg_attr-type-mismatch.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/ui/cfg/packed_sneaky-span-issue-1.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/ui/cfg/packed_sneaky-span-issue-2.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/ui/cfg/packed_sneaky.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/ui/cfg/unsupported.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/ui/not_unpin/conflict-unpin.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/ui/not_unpin/impl-unsafe-unpin.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/ui/not_unpin/negative_impls_stable.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+// https://github.com/taiki-e/pin-project/issues/340#issuecomment-2428002670
+
+===== tests/ui/pin_project/add-attr-to-struct.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/ui/pin_project/add-pinned-field.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/ui/pin_project/conflict-drop.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/ui/pin_project/conflict-unpin.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/ui/pin_project/impl-unsafe-unpin.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/ui/pin_project/import_unnamed.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+// Only named projected types can be imported.
+// See visibility.rs for named projected types.
+
+===== tests/ui/pin_project/invalid.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/ui/pin_project/negative_impls_stable.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+// https://github.com/taiki-e/pin-project/issues/340#issuecomment-2428002670
+
+===== tests/ui/pin_project/overlapping_unpin_struct.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/ui/pin_project/override-priv-mod.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+// https://discord.com/channels/273534239310479360/512792629516173323/870075511009857617
+
+#![allow(hidden_glob_reexports)]
+
+===== tests/ui/pin_project/packed-enum.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/ui/pin_project/packed-name-value.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/ui/pin_project/packed.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/ui/pin_project/packed_sneaky-1.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/ui/pin_project/packed_sneaky-2.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/ui/pin_project/packed_sneaky-3.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/ui/pin_project/packed_sneaky-4.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+// https://github.com/taiki-e/pin-project/issues/342
+
+===== tests/ui/pin_project/project_replace_unsized.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/ui/pin_project/project_replace_unsized_fn_params.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+#![allow(internal_features)]
+#![feature(unsized_fn_params)]
+
+===== tests/ui/pin_project/remove-attr-from-field.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/ui/pin_project/remove-attr-from-struct.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/ui/pin_project/safe_packed_borrows.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+#![deny(renamed_and_removed_lints)]
+#![deny(safe_packed_borrows)] //~ ERROR has been renamed to `unaligned_references`
+
+// This lint was removed in https://github.com/rust-lang/rust/pull/82525 (nightly-2021-03-28).
+// Refs:
+// - https://github.com/rust-lang/rust/pull/82525
+// - https://github.com/rust-lang/rust/issues/46043
+
+===== tests/ui/pin_project/unaligned_references.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+// Refs: https://github.com/rust-lang/rust/issues/82523
+
+===== tests/ui/pin_project/unpin_sneaky.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/ui/pin_project/visibility.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+// Only named projected types can be imported.
+// See import_unnamed.rs for unnamed projected types.
+
+#![allow(unused_imports)]
+
+===== tests/ui/pinned_drop/call-drop-inner.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/ui/pinned_drop/conditional-drop-impl.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/ui/pinned_drop/forget-pinned-drop-impl.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/ui/pinned_drop/invalid-self.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+// by-ref binding `ref (mut) self` and sub-patterns `@` are not allowed in receivers (rejected by rustc).
+
+===== tests/ui/pinned_drop/invalid.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/ui/pinned_drop/pinned-drop-no-attr-arg.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/ui/pinned_drop/self.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/ui/pinned_drop/unsafe-call.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/ui/unsafe_unpin/conflict-unpin.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== tests/ui/unsafe_unpin/negative_impls_stable.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+// https://github.com/taiki-e/pin-project/issues/340#issuecomment-2428002670
+
+===== tests/ui/unstable-features/marker_trait_attr-feature-gate.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+// Note: If you change this test, change 'marker_trait_attr.rs' at the same time.
+
+===== tests/ui/unstable-features/marker_trait_attr.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+// Note: If you change this test, change 'marker_trait_attr-feature-gate.rs' at the same time.
+
+// marker_trait_attr
+// Tracking issue: https://github.com/rust-lang/rust/issues/29864
+#![feature(marker_trait_attr)]
+
+// See https://github.com/taiki-e/pin-project/issues/105#issuecomment-535355974
+
+===== tests/ui/unstable-features/negative_impls.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+#![feature(negative_impls)]
+
+// https://rust-lang.zulipchat.com/#narrow/stream/213817-t-lang/topic/design.20meeting.3A.20backlog.20bonanza/near/269471299
+// https://github.com/taiki-e/pin-project/issues/340
+
+===== tests/ui/unstable-features/trivial_bounds-feature-gate.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+// Note: If you change this test, change 'trivial_bounds.rs' at the same time.
+
+===== tests/ui/unstable-features/trivial_bounds.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+// Note: If you change this test, change 'trivial_bounds-feature-gate.rs' at the same time.
+
+// trivial_bounds
+// Tracking issue: https://github.com/rust-lang/rust/issues/48214
+#![feature(trivial_bounds)]
+#![deny(trivial_bounds)]
+#![allow(dead_code)]
+
+===== tests/unsafe_unpin.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+#![allow(dead_code, clippy::undocumented_unsafe_blocks)]
