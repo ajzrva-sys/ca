@@ -1,0 +1,26 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== src/lib.rs =====
+// Copyright The rust-url developers.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+//! This crate abstracts over a Unicode back end for the [`idna`][1]
+//! crate.
+//!
+//! To work around the lack of [`global-features`][2] in Cargo, this
+//! crate allows the top level `Cargo.lock` to choose an alternative
+//! Unicode back end for the `idna` crate by pinning a version of this
+//! crate.
+//!
+//! See the [README of the latest version][3] for more details.
+//!
+//! [1]: https://docs.rs/crate/idna/latest
+//! [2]: https://internals.rust-lang.org/t/pre-rfc-mutually-excusive-global-features/19618
+//! [3]: https://docs.rs/crate/idna_adapter/latest
+
+#![no_std]

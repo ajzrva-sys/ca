@@ -1,0 +1,29 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== src/error.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== src/lib.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+//! Implementation detail of the `pin-project` crate. - **do not use directly**
+
+#![doc(test(
+
+===== src/pin_project/args.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== src/pin_project/attribute.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== src/pin_project/derive.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== src/pin_project/mod.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== src/pinned_drop.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+===== src/utils.rs =====
+// SPDX-License-Identifier: Apache-2.0 OR MIT

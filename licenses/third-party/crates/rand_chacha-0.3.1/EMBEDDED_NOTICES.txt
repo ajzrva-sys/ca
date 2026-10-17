@@ -1,0 +1,46 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== README.md =====
+# License
+
+`rand_chacha` is distributed under the terms of both the MIT license and the
+Apache License (Version 2.0).
+
+See [LICENSE-APACHE](LICENSE-APACHE) and [LICENSE-MIT](LICENSE-MIT), and
+[COPYRIGHT](COPYRIGHT) for details.
+
+===== src/chacha.rs =====
+// Copyright 2018 Developers of the Rand project.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// https://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or https://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+//! The ChaCha random number generator.
+
+===== src/guts.rs =====
+// Copyright 2019 The CryptoCorrosion Contributors
+// Copyright 2020 Developers of the Rand project.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// https://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or https://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+//! The ChaCha random number generator.
+
+===== src/lib.rs =====
+// Copyright 2018 Developers of the Rand project.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// https://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or https://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+//! The ChaCha random number generator.
+
+#![doc(

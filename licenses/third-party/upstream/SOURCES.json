@@ -1,0 +1,421 @@
+{
+  "schema_version": 1,
+  "limitations": [
+    "This is a conservative Cargo.lock source inventory. It does not establish which code or notices are required for an individual executable, native system library, feature selection or target. Verify native linkage and packaged assets per release.",
+    "Original legal files and leading comment/README attribution sections are retained. Embedded comment extraction is heuristic and is not a line-by-line ownership clearance of every source file. Upstream source ownership and the right to relicense third-party material are not inferred from Cargo metadata.",
+    "Syntect supplemental licenses come from the submodule commits pinned by syntect v5.3.0. Its serialized assets do not carry a reproducible provenance manifest establishing the precise generation inputs. A bounded upstream syntax license scan identified C#, YAML and Rust exceptions; this is not exhaustive legal clearance of every compiled asset.",
+    "Some archives omit standalone license files. Supplements retrieved at their recorded source commit preserve upstream notices where available; source comments and declared SPDX metadata remain distinct from the original full license text. Unresolved missing texts are listed explicitly.",
+    "The original objc2/dispatch2 upstream LICENSE.md records uncertainty concerning Apple-SDK-derived bindings and Xcode SDK terms. Those upstream statements are preserved; a Rust SPDX identifier does not independently clear third-party SDK material."
+  ],
+  "sources": [
+    {
+      "license_template": "Apache-2.0",
+      "component": "Canonical Apache-2.0 license template; copyright placeholders are not claims about any package",
+      "file": "license-templates/Apache-2.0.txt",
+      "url": "https://raw.githubusercontent.com/spdx/license-list-data/v3.26.0/text/Apache-2.0.txt",
+      "origin_note": "Standard full license text for declared metadata; does not supply missing original copyright notices or prove ownership.",
+      "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+    },
+    {
+      "license_template": "MIT",
+      "component": "Canonical MIT license template; copyright placeholders are not claims about any package",
+      "file": "license-templates/MIT.txt",
+      "url": "https://raw.githubusercontent.com/spdx/license-list-data/v3.26.0/text/MIT.txt",
+      "origin_note": "Standard full license text for declared metadata; does not supply missing original copyright notices or prove ownership.",
+      "sha256": "6d7c9e9d7d12c8d3753bdb24417b84819ba4d6c2f025c37948113d86dc81eef9"
+    },
+    {
+      "license_template": "Zlib",
+      "component": "Canonical Zlib license template; copyright placeholders are not claims about any package",
+      "file": "license-templates/Zlib.txt",
+      "url": "https://raw.githubusercontent.com/spdx/license-list-data/v3.26.0/text/Zlib.txt",
+      "origin_note": "Standard full license text for declared metadata; does not supply missing original copyright notices or prove ownership.",
+      "sha256": "bfb1112d49db5b1daecdfef24bd7e2f3ea0bafb33aa67aa0ab51e2bf8407c03d"
+    },
+    {
+      "component": "syntect C# syntax MIT notice",
+      "file": "syntect-assets/CSharp-NOTICE.txt",
+      "url": "https://raw.githubusercontent.com/sublimehq/Packages/fa6b8629c95041bf262d4c1dab95c456a0530122/C%23/C%23.sublime-syntax",
+      "sha256": "95988a75e7faeea8819c6bdf345585cb44d98e9673236bd30f9da324e7f20d01",
+      "origin_note": "License/header text from exact syntect v5.3.0 submodule revision; grammar body omitted where applicable."
+    },
+    {
+      "component": "syntect InspiredGitHub theme MIT",
+      "file": "syntect-assets/InspiredGitHub-LICENSE",
+      "url": "https://raw.githubusercontent.com/sethlopezme/InspiredGitHub.tmtheme/18ddb271179e118cfc2dd83abf88b915b7328a25/LICENSE",
+      "sha256": "64f9ec83cd852c2e9ae9c63cab529b48919427445de3c38af7683bcfcf8e5c5a",
+      "origin_note": "License/header text from exact syntect v5.3.0 submodule revision; grammar body omitted where applicable."
+    },
+    {
+      "component": "syntect Sublime Packages general license",
+      "file": "syntect-assets/Packages-LICENSE",
+      "url": "https://raw.githubusercontent.com/sublimehq/Packages/fa6b8629c95041bf262d4c1dab95c456a0530122/LICENSE",
+      "sha256": "6aa3901416905d6ed0fc6b0fcca75e6649f4066db3f610e9653d0e0049e139e7",
+      "origin_note": "License/header text from exact syntect v5.3.0 submodule revision; grammar body omitted where applicable."
+    },
+    {
+      "component": "syntect Rust syntax MIT notice",
+      "file": "syntect-assets/Rust-LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/sublimehq/Packages/fa6b8629c95041bf262d4c1dab95c456a0530122/Rust/LICENSE.txt",
+      "sha256": "89807acf2309bd285f033404ee78581602f3cd9b819a16ac2f0e5f60ff4a473e",
+      "origin_note": "License/header text from exact syntect v5.3.0 submodule revision; grammar body omitted where applicable."
+    },
+    {
+      "component": "syntect Solarized theme MIT",
+      "file": "syntect-assets/Solarized-LICENSE",
+      "url": "https://raw.githubusercontent.com/braver/Solarized/bcd6234b4f5f96d3fd27db079268b5757053072a/LICENSE",
+      "sha256": "5dc2079d54e3f8f30fa8c1bec303bddc84da7776b677700ef083252835c0f77c",
+      "origin_note": "License/header text from exact syntect v5.3.0 submodule revision; grammar body omitted where applicable."
+    },
+    {
+      "component": "syntect YAML syntax MIT notice",
+      "file": "syntect-assets/YAML-NOTICE.txt",
+      "url": "https://raw.githubusercontent.com/sublimehq/Packages/fa6b8629c95041bf262d4c1dab95c456a0530122/YAML/YAML.sublime-syntax",
+      "sha256": "1b38718e9ab965a5832ce39f616bd4c030c9d55c8501ec73ac2fbd080e2df21e",
+      "origin_note": "License/header text from exact syntect v5.3.0 submodule revision; grammar body omitted where applicable."
+    },
+    {
+      "component": "syntect spacegray themes MIT",
+      "file": "syntect-assets/spacegray-LICENSE",
+      "url": "https://raw.githubusercontent.com/kkga/spacegray/2703e93f559e212ef3895edd10d861a4383ce93d/LICENSE",
+      "sha256": "f7f5760fa33782054db76bf6b3df7f6b8a08de5fe92dbb435d758ab637cc6e9f",
+      "origin_note": "License/header text from exact syntect v5.3.0 submodule revision; grammar body omitted where applicable."
+    },
+    {
+      "package": "agent-client-protocol-derive@2.0.0",
+      "file": "agent-client-protocol-derive-2.0.0/LICENSE",
+      "url": "https://raw.githubusercontent.com/agentclientprotocol/rust-sdk/ce023279824149008659dd8f4b8b70266a7e8210/LICENSE",
+      "sha256": "6ed4f049cce59e05197d585bdf8a39980b45d546d6ea718ee344555f3a867c3a",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "agent-client-protocol-schema@1.5.0",
+      "file": "agent-client-protocol-schema-1.5.0/LICENSE",
+      "url": "https://raw.githubusercontent.com/agentclientprotocol/agent-client-protocol/d0549a115750a0a25c1c5631dd72e0d248859aa4/LICENSE",
+      "sha256": "f250d08cee4549b22b3b4aaaf3a743473336fd280316df5d0340717e5127a221",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "agent-client-protocol@2.0.0",
+      "file": "agent-client-protocol-2.0.0/LICENSE",
+      "url": "https://raw.githubusercontent.com/agentclientprotocol/rust-sdk/ce023279824149008659dd8f4b8b70266a7e8210/LICENSE",
+      "sha256": "6ed4f049cce59e05197d585bdf8a39980b45d546d6ea718ee344555f3a867c3a",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "alloc-stdlib@0.2.4",
+      "file": "alloc-stdlib-0.2.4/LICENSE",
+      "url": "https://raw.githubusercontent.com/dropbox/rust-alloc-no-stdlib/ae42d22078b98549e987d2f03d12df7b984fde47/LICENSE",
+      "sha256": "c0c56f26d9c051cac4d200c34c84e7ae9aaa853e01a982a1df08b09931e518ae",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "clipboard-win@5.4.1",
+      "file": "clipboard-win-5.4.1/LICENSE",
+      "url": "https://raw.githubusercontent.com/DoumanAsh/clipboard-win/3b27cf2bfd1adcfa6e0264eb51c1025ddaf0f342/LICENSE",
+      "sha256": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "dasp_sample@0.11.0",
+      "file": "dasp_sample-0.11.0/LICENSE-APACHE",
+      "url": "https://raw.githubusercontent.com/rustaudio/sample/97c3bb9b2363c0b46ac1633858bf1054fd02a980/LICENSE-APACHE",
+      "sha256": "756c8d2ab2dc24f256e1455b5f03937f4933d83d7bc9f2d55009fc962377d512",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "dasp_sample@0.11.0",
+      "file": "dasp_sample-0.11.0/LICENSE-MIT",
+      "url": "https://raw.githubusercontent.com/rustaudio/sample/97c3bb9b2363c0b46ac1633858bf1054fd02a980/LICENSE-MIT",
+      "sha256": "b1d6df41ed3aa96806e74c729444d7c121d90e6660a6aed01d298e03fde475a0",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "defmt-parser@1.0.0",
+      "file": "defmt-parser-1.0.0/LICENSE-APACHE",
+      "url": "https://raw.githubusercontent.com/knurling-rs/defmt/4a8cdb44891ed57b8ff5a023b6bec7137c48708f/LICENSE-APACHE",
+      "sha256": "8173d5c29b4f956d532781d2b86e4e30f83e6b7878dce18c919451d6ba707c90",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "defmt-parser@1.0.0",
+      "file": "defmt-parser-1.0.0/LICENSE-MIT",
+      "url": "https://raw.githubusercontent.com/knurling-rs/defmt/4a8cdb44891ed57b8ff5a023b6bec7137c48708f/LICENSE-MIT",
+      "sha256": "2710a622a896bba67356913d4d0492cab5465f61b2ecce6d880aeb483834fb50",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "dispatch2@0.3.1",
+      "file": "dispatch2-0.3.1/LICENSE.md",
+      "url": "https://raw.githubusercontent.com/madsmtm/objc2/8852b424193ca41602281b3d7540d7c8ed51e49a/LICENSE.md",
+      "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "hashify@0.2.9",
+      "file": "hashify-0.2.9/LICENSES/Apache-2.0.txt",
+      "url": "https://raw.githubusercontent.com/stalwartlabs/hashify/74bd8a251dff8a514039e035a6437eabf1b9fd57/LICENSES/Apache-2.0.txt",
+      "origin_note": "Original upstream LICENSES directory at published crate source commit.",
+      "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+    },
+    {
+      "package": "hashify@0.2.9",
+      "file": "hashify-0.2.9/LICENSES/MIT.txt",
+      "url": "https://raw.githubusercontent.com/stalwartlabs/hashify/74bd8a251dff8a514039e035a6437eabf1b9fd57/LICENSES/MIT.txt",
+      "origin_note": "Original upstream LICENSES directory at published crate source commit.",
+      "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+    },
+    {
+      "package": "imap-proto@0.16.7",
+      "file": "imap-proto-0.16.7/LICENSE-APACHE",
+      "url": "https://raw.githubusercontent.com/djc/tokio-imap/6593414bd66f93b3caa5b5f7f24241e53c3d7da4/LICENSE-APACHE",
+      "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "imap-proto@0.16.7",
+      "file": "imap-proto-0.16.7/LICENSE-MIT",
+      "url": "https://raw.githubusercontent.com/djc/tokio-imap/6593414bd66f93b3caa5b5f7f24241e53c3d7da4/LICENSE-MIT",
+      "sha256": "d8ab53f67f8b31421c425bcebd9f78b689bec5712c83b43fad60a997fd7ac61e",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "jni-macros@0.22.4",
+      "file": "jni-macros-0.22.4/LICENSE-APACHE",
+      "url": "https://raw.githubusercontent.com/jni-rs/jni-rs/33045a124105c939d1e2cbdcb5a39e5d868ffa03/LICENSE-APACHE",
+      "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "jni-macros@0.22.4",
+      "file": "jni-macros-0.22.4/LICENSE-MIT",
+      "url": "https://raw.githubusercontent.com/jni-rs/jni-rs/33045a124105c939d1e2cbdcb5a39e5d868ffa03/LICENSE-MIT",
+      "sha256": "fea1d5bf3dd71605ce5d7d2ff695c1837e914c77195e523a86b5391716477960",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "jni-sys-macros@0.4.1",
+      "file": "jni-sys-macros-0.4.1/LICENSE-APACHE",
+      "url": "https://raw.githubusercontent.com/jni-rs/jni-sys/64d77b7a5f119d7b55b4e2c169a4668067ff59e6/LICENSE-APACHE",
+      "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "jni-sys-macros@0.4.1",
+      "file": "jni-sys-macros-0.4.1/LICENSE-MIT",
+      "url": "https://raw.githubusercontent.com/jni-rs/jni-sys/64d77b7a5f119d7b55b4e2c169a4668067ff59e6/LICENSE-MIT",
+      "sha256": "1d85bd754b04ceec93e98e890edd1fa3c6a22e81bcb32135806beeccefa51cd1",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "jni@0.22.4",
+      "file": "jni-0.22.4/LICENSE-APACHE",
+      "url": "https://raw.githubusercontent.com/jni-rs/jni-rs/5ae9458a4ec44c5318f37ddc7569c1d4ae8a69e7/LICENSE-APACHE",
+      "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "jni@0.22.4",
+      "file": "jni-0.22.4/LICENSE-MIT",
+      "url": "https://raw.githubusercontent.com/jni-rs/jni-rs/5ae9458a4ec44c5318f37ddc7569c1d4ae8a69e7/LICENSE-MIT",
+      "sha256": "fea1d5bf3dd71605ce5d7d2ff695c1837e914c77195e523a86b5391716477960",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "ndk-context@0.1.1",
+      "file": "ndk-context-0.1.1/LICENSE-APACHE",
+      "url": "https://raw.githubusercontent.com/rust-windowing/android-ndk-rs/10f2ba388fca20f7349996ebae26ccda7a6fda5c/LICENSE-APACHE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "ndk-context@0.1.1",
+      "file": "ndk-context-0.1.1/LICENSE-MIT",
+      "url": "https://raw.githubusercontent.com/rust-windowing/android-ndk-rs/10f2ba388fca20f7349996ebae26ccda7a6fda5c/LICENSE-MIT",
+      "sha256": "508a77d2e7b51d98adeed32648ad124b7b30241a8e70b2e72c99f92d8e5874d1",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "ndk-sys@0.6.0+11769913",
+      "file": "ndk-sys-0.6.0+11769913/LICENSE-APACHE",
+      "url": "https://raw.githubusercontent.com/rust-mobile/ndk/49bbbba16c58ff63cb8a0ad0eca5a9fb7ecaec25/LICENSE-APACHE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "ndk-sys@0.6.0+11769913",
+      "file": "ndk-sys-0.6.0+11769913/LICENSE-MIT",
+      "url": "https://raw.githubusercontent.com/rust-mobile/ndk/49bbbba16c58ff63cb8a0ad0eca5a9fb7ecaec25/LICENSE-MIT",
+      "sha256": "508a77d2e7b51d98adeed32648ad124b7b30241a8e70b2e72c99f92d8e5874d1",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "ndk@0.9.0",
+      "file": "ndk-0.9.0/LICENSE-APACHE",
+      "url": "https://raw.githubusercontent.com/rust-mobile/ndk/49bbbba16c58ff63cb8a0ad0eca5a9fb7ecaec25/LICENSE-APACHE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "ndk@0.9.0",
+      "file": "ndk-0.9.0/LICENSE-MIT",
+      "url": "https://raw.githubusercontent.com/rust-mobile/ndk/49bbbba16c58ff63cb8a0ad0eca5a9fb7ecaec25/LICENSE-MIT",
+      "sha256": "508a77d2e7b51d98adeed32648ad124b7b30241a8e70b2e72c99f92d8e5874d1",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "objc2-app-kit@0.3.2",
+      "file": "objc2-app-kit-0.3.2/LICENSE.md",
+      "url": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+      "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "objc2-audio-toolbox@0.3.2",
+      "file": "objc2-audio-toolbox-0.3.2/LICENSE.md",
+      "url": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+      "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "objc2-core-audio-types@0.3.2",
+      "file": "objc2-core-audio-types-0.3.2/LICENSE.md",
+      "url": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+      "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "objc2-core-audio@0.3.2",
+      "file": "objc2-core-audio-0.3.2/LICENSE.md",
+      "url": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+      "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "objc2-core-foundation@0.3.2",
+      "file": "objc2-core-foundation-0.3.2/LICENSE.md",
+      "url": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+      "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "objc2-core-graphics@0.3.2",
+      "file": "objc2-core-graphics-0.3.2/LICENSE.md",
+      "url": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+      "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "objc2-encode@4.1.0",
+      "file": "objc2-encode-4.1.0/LICENSE.md",
+      "url": "https://raw.githubusercontent.com/madsmtm/objc2/8d214f5477365ffcbcbb7de058c86ed9a518efb7/LICENSE.md",
+      "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "objc2-io-surface@0.3.2",
+      "file": "objc2-io-surface-0.3.2/LICENSE.md",
+      "url": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+      "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "objc2@0.6.4",
+      "file": "objc2-0.6.4/LICENSE.md",
+      "url": "https://raw.githubusercontent.com/madsmtm/objc2/8852b424193ca41602281b3d7540d7c8ed51e49a/LICENSE.md",
+      "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "profiling-procmacros@1.0.18",
+      "file": "profiling-procmacros-1.0.18/LICENSE-APACHE",
+      "url": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-APACHE",
+      "sha256": "10d30a673cd5e9349bdc02aeb48f14b3386d27d0da32df8f0a555d4aa16aa551",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "profiling-procmacros@1.0.18",
+      "file": "profiling-procmacros-1.0.18/LICENSE-MIT",
+      "url": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-MIT",
+      "sha256": "c8167fdeeed46d3f244d3f85c5bf998ce889343691c32be2c61a8bc4b5c08333",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "profiling@1.0.18",
+      "file": "profiling-1.0.18/LICENSE-APACHE",
+      "url": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-APACHE",
+      "sha256": "10d30a673cd5e9349bdc02aeb48f14b3386d27d0da32df8f0a555d4aa16aa551",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "profiling@1.0.18",
+      "file": "profiling-1.0.18/LICENSE-MIT",
+      "url": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-MIT",
+      "sha256": "c8167fdeeed46d3f244d3f85c5bf998ce889343691c32be2c61a8bc4b5c08333",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "pulp-wasm-simd-flag@0.1.1",
+      "file": "pulp-wasm-simd-flag-0.1.1/LICENSE",
+      "url": "https://raw.githubusercontent.com/sarah-quinones/pulp/5eb07fd7b68edf0a5e19f71737d315f72a510295/LICENSE",
+      "sha256": "d64f878c89bd5f1e5ada7e4aad57690b122727cf5229b7b87ea1980c188da1d9",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "rmcp-macros@3.1.4",
+      "file": "rmcp-macros-3.1.4/LICENSE",
+      "url": "https://raw.githubusercontent.com/modelcontextprotocol/rust-sdk/4a738b9dd99eaca418b614afa433a0cbdaf8d056/LICENSE",
+      "sha256": "0382b0057770ca05e9c350a50aa3b1c1fea84da0bc81d723bf00b9aa841be58a",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "rmcp@3.1.2",
+      "file": "rmcp-3.1.2/LICENSE",
+      "url": "https://raw.githubusercontent.com/modelcontextprotocol/rust-sdk/02c62aef2e331e5cf79c06c744eb1eb052cc8ebd/LICENSE",
+      "sha256": "0382b0057770ca05e9c350a50aa3b1c1fea84da0bc81d723bf00b9aa841be58a",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "system-configuration@0.5.1",
+      "file": "system-configuration-0.5.1/LICENSE-APACHE",
+      "url": "https://raw.githubusercontent.com/mullvad/system-configuration-rs/56e415eb24b0897bef96a9a38fe7883cfbe2bb94/LICENSE-APACHE",
+      "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "system-configuration@0.5.1",
+      "file": "system-configuration-0.5.1/LICENSE-MIT",
+      "url": "https://raw.githubusercontent.com/mullvad/system-configuration-rs/56e415eb24b0897bef96a9a38fe7883cfbe2bb94/LICENSE-MIT",
+      "sha256": "35b228510156c3d7bf94b129c81b7e3cc72d347586e632be15686232b342562a",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "transmission-rpc@0.5.0",
+      "file": "transmission-rpc-0.5.0/LICENSE",
+      "url": "https://raw.githubusercontent.com/j0rsa/transmission-rpc/85f66770aca0bd73993044b95e9f482d40ea7aee/LICENSE",
+      "sha256": "79ce389f0ef96cdefb37753b5643487fa75d93bd27617868d6d7886027ef52ad",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "uuid-simd@0.8.0",
+      "file": "uuid-simd-0.8.0/LICENSE",
+      "url": "https://raw.githubusercontent.com/Nugine/simd/d74c030d9dc4f3cae02146d1f497ff62726ef09a/LICENSE",
+      "sha256": "71674605ec4c087fe9eb534e3e4f9e26eb2e4aabcd76a29fd156c6a844d44b3d",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "valuable@0.1.1",
+      "file": "valuable-0.1.1/LICENSE",
+      "url": "https://raw.githubusercontent.com/tokio-rs/valuable/9efc29b6e58cef28f6566a47aa7e142a55fead77/LICENSE",
+      "sha256": "ed60d479b8fd1f64e9cbc3de449a16a53ac1b3d1b6aeb9bf9d190a8e93061b44",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    },
+    {
+      "package": "vsimd@0.8.0",
+      "file": "vsimd-0.8.0/LICENSE",
+      "url": "https://raw.githubusercontent.com/Nugine/simd/d74c030d9dc4f3cae02146d1f497ff62726ef09a/LICENSE",
+      "sha256": "71674605ec4c087fe9eb534e3e4f9e26eb2e4aabcd76a29fd156c6a844d44b3d",
+      "origin_note": "Original upstream legal text at crate .cargo_vcs_info.json git commit; not present in published crate archive."
+    }
+  ]
+}

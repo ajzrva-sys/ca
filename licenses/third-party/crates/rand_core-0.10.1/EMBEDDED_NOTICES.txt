@@ -1,0 +1,22 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== README.md =====
+## License
+
+The crate is licensed under either of:
+
+* [Apache License, Version 2.0](http://www.apache.org/licenses/LICENSE-2.0)
+* [MIT license](http://opensource.org/licenses/MIT)
+
+at your option.
+
+[//]: # (badges)
+
+[crate-badge]: https://img.shields.io/crates/v/rand_core.svg
+[crate-link]: https://crates.io/crates/rand_core
+[docs-image]: https://docs.rs/rand_core/badge.svg
+[docs-link]: https://docs.rs/rand_core
+[license-image]: https://img.shields.io/badge/license-Apache2.0/MIT-blue.svg
+[build-image]: https://github.com/rust-random/rand_core/actions/workflows/test.yml/badge.svg?branch=master
+[license-link]: #license
+[build-link]: https://github.com/rust-random/rand_core/actions/workflows/test.yml?query=branch:master

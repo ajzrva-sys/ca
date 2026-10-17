@@ -1,0 +1,59 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== README.md =====
+## License
+
+Licensed under either of
+
+ * Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+ * MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+
+at your option.
+
+
+## Copyright
+
+Copyright (C) 2025, Stalwart Labs LLC
+
+===== benches/phf_bench.rs =====
+/*
+ * SPDX-FileCopyrightText: 2025 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/large.rs =====
+/*
+ * SPDX-FileCopyrightText: 2025 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/large_32.rs =====
+/*
+ * SPDX-FileCopyrightText: 2025 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/lib.rs =====
+#![doc = include_str!("../README.md")]
+/*
+ * SPDX-FileCopyrightText: 2025 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== src/tiny.rs =====
+/*
+ * SPDX-FileCopyrightText: 2025 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
+
+===== tests/test.rs =====
+/*
+ * SPDX-FileCopyrightText: 2025 Stalwart Labs LLC <hello@stalw.art>
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */

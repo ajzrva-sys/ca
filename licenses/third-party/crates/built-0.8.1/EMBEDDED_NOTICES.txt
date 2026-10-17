@@ -1,0 +1,253 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== src/lib.rs =====
+// MIT License
+//
+// Copyright (c) Lukas Lueg <lukas.lueg@gmail.com>
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+//
+
+#![allow(clippy::needless_doctest_main)]
+
+//! Provides a crate with information from the time it was built.
+//!
+//! `built` is used as a build-time dependency to collect various information
+//! about the build-environment, serialize this information into Rust-code and
+//! provide that to the crate. The information collected by `built` include:
+//!
+//!  * Various metadata like version, authors, homepage etc. as set by `Cargo.toml`
+//!  * The tag or commit id if the crate was being compiled from within a Git repository.
+//!  * The values of `CARGO_CFG_*` build script environment variables, like `CARGO_CFG_TARGET_OS` and `CARGO_CFG_TARGET_ARCH`.
+//!  * The features the crate was compiled with.
+//!  * The various dependencies, dependencies of dependencies and their versions Cargo ultimately chose to compile.
+//!  * The presence of a CI-platform like `Github Actions`, `Travis CI` and `AppVeyor`.
+//!  * The compiler and it's version; the documentation-generator and it's version.
+//!
+//! `built` does not add any further runtime-dependencies to a crate; all information
+//! is serialized as types from `stdlib`. One can include `built` as a
+//! runtime-dependency and use it's convenience functions.
+//!
+//! To add `built` to a crate, add it as a build-time dependency, use a build-script
+//! to collect and serialize the build-time information, and `include!` the generated code.
+//!
+//! Add this to `Cargo.toml`:
+//!
+//! ```toml
+//! [package]
+//! build = "build.rs"
+//!
+//! [build-dependencies]
+//! built = "0.8"
+//! ```
+//!
+//! Add or modify a build-script. In `build.rs`:
+//!
+//! ```rust,no_run
+//! fn main() {
+//!     built::write_built_file().expect("Failed to acquire build-time information");
+//! }
+//! ```
+//!
+//! The build-script will by default write a file named `built.rs` into Cargo's output
+//! directory. It can be picked up in `main.rs` (or anywhere else) like this:
+//!
+//! ```rust,ignore
+//! // Use of a mod or pub mod is not actually necessary.
+//! pub mod built_info {
+//!    // The file has been placed there by the build script.
+//!    include!(concat!(env!("OUT_DIR"), "/built.rs"));
+//! }
+//! ```
+//!
+//! ...and then used somewhere in the crate's code:
+//!
+//! ```rust
+//! # mod built_info {
+//! #    pub static PKG_VERSION_PRE: &str = "";
+//! #    pub static CI_PLATFORM: Option<&str> = None;
+//! #    pub static GIT_VERSION: Option<&str> = None;
+//! #    pub static DEPENDENCIES: [(&str, &str); 0] = [];
+//! #    pub static BUILT_TIME_UTC: &str = "Tue, 14 Feb 2017 05:21:41 GMT";
+//! # }
+//! #
+//! # enum LogLevel { TRACE, ERROR };
+//! /// Determine if current version is a pre-release or was built from a git-repo
+//! fn release_is_unstable() -> bool {
+//!     return !built_info::PKG_VERSION_PRE.is_empty() || built_info::GIT_VERSION.is_some()
+//! }
+//!
+//! /// Default log-level, enhanced on CI
+//! fn default_log_level() -> LogLevel {
+//!     if built_info::CI_PLATFORM.is_some() {
+//!         LogLevel::TRACE
+//!     } else {
+//!         LogLevel::ERROR
+//!     }
+//! }
+//!
+//! /// The time this crate was built
+//! #[cfg(feature = "chrono")]
+//! fn built_time() -> built::chrono::DateTime<built::chrono::Local> {
+//!     built::util::strptime(built_info::BUILT_TIME_UTC)
+//!         .with_timezone(&built::chrono::offset::Local)
+//! }
+//!
+//! /// If another crate pulls in a dependency we don't like, print a warning
+//! #[cfg(feature = "semver")]
+//! fn check_sane_dependencies() {
+//!     if built::util::parse_versions(&built_info::DEPENDENCIES)
+//!                     .any(|(name, ver)| name == "DeleteAllMyFiles"
+//!                                        && ver < built::semver::Version::parse("1.1.4").unwrap()) {
+//!         eprintln!("DeleteAllMyFiles < 1.1.4 may not delete all your files. Beware!");
+//!     }
+//! }
+//! ```
+//!
+//!
+//! ## Overrides
+//!
+//! Most values otherwise detected by `built` can be manually set using environment variables. The
+//! primary use-case for this is to allow automated build-systems and package-managers to enforce
+//! certain values, e.g. to hide the presence of a CI-platform and/or allow for reproducible
+//! builds.
+//!
+//! The values set via the environment take precedence over what `built` would otherwise detect.
+//! There is no mechanism to ensure that values derived from override-variables are sensible,
+//! besides enforcing the correct type.
+//!
+//! Override-variables are prefixed by `BUILT_OVERRIDE_{PKG_NAME}_`, where `{PKG_NAME}` is the name
+//! of the package as reported by `cargo`. For example, if the package is named "mypkg", and the value
+//! to be overridden is named "CI_PLATFORM", then the override-variable is named
+//! "BUILT_OVERRIDE_mypkg_CI_PLATFORM". Remember that more than one package in a dependency-graph
+//! might use `built` internally, so you might have to override multiple instances of the same
+//! value. If the original `{PKG_NAME}` contain hyphens `-`, they will be substituted by underscores `_`.
+//! For example, if the package name is `great-pkg`, the corresponding override-variable is named
+//! "BUILT_OVERRIDE_great_pkg_...".
+//! Unused override-variables result in a warning at compile time, albeit cargo only reports those
+//! for path-specific (e.g. local) packages.
+//!
+//! An override-variable's text-presentation must parse to the value's respective type:
+//! * Strings are used as-is.
+//! * Integers and `bool` must parse via their `std::str::FromStr`-implementation.
+//! * `std::option::Option<T>` parses the string `BUILT_OVERRIDE_NONE` as `Option::None`; every other value
+//!   must parse as `T`. For example, `BUILT_OVERRIDE_mypkg_CI_PLATFORM=BUILT_OVERRIDE_NONE` forces
+//!   `CI_PLATFORM.is_none()`.
+//! * List-like values are parsed as comma-separated values.
+//!
+//! If an override-variable can't be parsed, the build-process will abort with a `panic!()`.
+//!
+//! Notice that values that were overridden are recorded in `OVERRIDE_VARIABLES_USED`.
+//!
+//! Please refer to the respective item's documentation for more information on overrides.
+//!
+//! ## Feature flags
+//! The information that `built` collects and makes available in `built.rs` depends
+//! on the features that were enabled on the build-time dependency.
+//!
+//! Crates using `built` should avoid enabling unnecessary features on `built`: These features
+//! pull in other dependencies, which slows down the compilation-process; in the worst case,
+//! one of `built`'s dependencies may fail to build on the target-platform, causing a build-
+//! failure for the entire dependency-tree; there is nothing dependent crates can do to fix
+//! the build in these situations.  
+//! If your crate separates into multiple sub-crates, `built` should generally be used most close
+//! to the top-most crate (e.g. in the CLI crate).
+//!
+//! ### _Always available_
+//! The following information is available regardless of feature-flags.
+//!
+//! ```
+//! /// The Continuous Integration platform detected during compilation.
+//! /// Can be overridden with `BUILT_OVERRIDE_{pkg_name}_CI_PLATFORM`.
+//! pub static CI_PLATFORM: Option<&str> = None;
+//!
+//! /// The full version.
+//! /// Can be overridden with `BUILT_OVERRIDE_{pkg_name}_PKG_VERSION`.
+//! pub static PKG_VERSION: &str = "0.1.0";
+//! /// The major version.
+//! /// Can be overridden with `BUILT_OVERRIDE_{pkg_name}_PKG_MAJOR`.
+//! pub static PKG_VERSION_MAJOR: &str = "0";
+//! /// The minor version.
+//! /// Can be overridden with `BUILT_OVERRIDE_{pkg_name}_PKG_MINOR`.
+//! pub static PKG_VERSION_MINOR: &str = "1";
+//! /// "The patch version.
+//! /// Can be overridden with `BUILT_OVERRIDE_{pkg_name}_PKG_PATCH`.
+//! pub static PKG_VERSION_PATCH: &str = "0";
+//! /// "The pre-release version.
+//! /// Can be overridden with `BUILT_OVERRIDE_{pkg_name}_PKG_PRE`.
+//! pub static PKG_VERSION_PRE: &str = "";
+//!
+//! /// "A colon-separated list of authors.
+//! /// Can be overridden with `BUILT_OVERRIDE_{pkg_name}_PKG_AUTHORS`.
+//! pub static PKG_AUTHORS: &str = "Lukas Lueg <lukas.lueg@gmail.com>";
+//!
+//! /// The name of the package.
+//! /// Can be overridden with `BUILT_OVERRIDE_{pkg_name}_PKG_NAME`.
+//! pub static PKG_NAME: &str = "example_project";
+//! /// "The description.
+//! /// Can be overridden with `BUILT_OVERRIDE_{pkg_name}_PKG_DESCRIPTION`.
+//! pub static PKG_DESCRIPTION: &str = "";
+//! /// "The homepage.
+//! /// Can be overridden with `BUILT_OVERRIDE_{pkg_name}_PKG_HOMEPAGE`.
+//! pub static PKG_HOMEPAGE: &str = "";
+//! /// "The license.
+//! /// Can be overridden with `BUILT_OVERRIDE_{pkg_name}_PKG_LICENSE`.
+//! pub static PKG_LICENSE: &str = "MIT";
+//! /// The source repository as advertised in Cargo.toml.
+//! /// Can be overridden with `BUILT_OVERRIDE_{pkg_name}_PKG_REPOSITORY`.
+//! pub static PKG_REPOSITORY: &str = "";
+//!
+//! /// The target triple that was being compiled for.
+//! /// Can be overridden with `BUILT_OVERRIDE_{pkg_name}_TARGET`.
+//! pub static TARGET: &str = "x86_64-unknown-linux-gnu";
+//! /// The host triple of the rust compiler.
+//! /// Can be overridden with `BUILT_OVERRIDE_{pkg_name}_HOST`.
+//! pub static HOST: &str = "x86_64-unknown-linux-gnu";
+//! /// `release` for release builds, `debug` for other builds.
+//! /// Can be overridden with `BUILT_OVERRIDE_{pkg_name}_PROFILE`.
+//! pub static PROFILE: &str = "debug";
+//!
+//! /// The compiler that cargo resolved to use.
+//! /// Can be overridden with `BUILT_OVERRIDE_{pkg_name}_RUSTC`; notice that
+//! /// if `RUSTC` is overridden, `RUSTC_VERSION` *must* also be overridden.
+//! pub static RUSTC: &str = "rustc";
+//! /// The documentation-generator that cargo resolved to use.
+//! /// Can be overridden with `BUILT_OVERRIDE_{pkg_name}_RUSTDOC`; notice that if `RUSTDOC`
+//! /// is overridden, `RUSTDOC_VERSION` *must* also be overridden.
+//! pub static RUSTDOC: &str = "rustdoc";
+//! /// The output of `rustc -V`
+//! /// Can be overridden with `BUILT_OVERRIDE_{pkg_name}_RUSTC_VERSION`.
+//! pub static RUSTC_VERSION: &str = "rustc 1.43.1 (8d69840ab 2020-05-04)";
+//! /// The output of `rustdoc -V`
+//! /// Can be overridden with `BUILT_OVERRIDE_{pkg_name}_RUSTDOC_VERSION`.
+//! pub static RUSTDOC_VERSION: &str = "rustdoc 1.43.1 (8d69840ab 2020-05-04)";
+//!
+//! /// Value of `OPT_LEVEL` for the profile used during compilation.
+//! /// Can be overridden with `BUILT_OVERRIDE_{pkg_name}_OPT_LEVEL`.
+//! pub static OPT_LEVEL: &str = "0";
+//! /// The parallelism that was specified during compilation.
+//! /// If `SOURCE_DATE_EPOCH` is set, `NUM_JOBS` is forced to `1`.
+//! /// Can be overridden with `BUILT_OVERRIDE_{pkg_name}_NUM_JOBS`.
+//! pub static NUM_JOBS: u32 = 8;
+//! /// "Value of DEBUG for the profile used during compilation.
+//! /// Can be overridden with `BUILT_OVERRIDE_{pkg_name}_NUM_DEBUG`.
+//! pub static DEBUG: bool = true;
+//!
+//! /// The features that were enabled during compilation.
+//! /// Can be overridden with `BUILT_OVERRIDE_{pkg_name}_FEATURES`.

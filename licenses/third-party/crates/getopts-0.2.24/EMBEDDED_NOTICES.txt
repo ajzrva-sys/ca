@@ -1,0 +1,100 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== src/lib.rs =====
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
+// file at the top-level directory of this distribution and at
+// http://rust-lang.org/COPYRIGHT.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+//
+// ignore-lexer-test FIXME #15677
+
+//! Simple getopt alternative.
+//!
+//! Construct instance of `Options` and configure it by using  `reqopt()`,
+//! `optopt()` and other methods that add option configuration. Then call
+//! `parse()` method and pass into it a vector of actual arguments (not
+//! including `argv[0]`).
+//!
+//! You'll either get a failure code back, or a match. You'll have to verify
+//! whether the amount of 'free' arguments in the match is what you expect. Use
+//! `opt_*` accessors to get argument values out of the matches object.
+//!
+//! Single-character options are expected to appear on the command line with a
+//! single preceding dash; multiple-character options are expected to be
+//! proceeded by two dashes. Options that expect an argument accept their
+//! argument following either a space or an equals sign. Single-character
+//! options don't require the space. Everything after double-dash "--"  argument
+//! is considered to be a 'free' argument, even if it starts with dash.
+//!
+//! # Usage
+//!
+//! This crate is [on crates.io](https://crates.io/crates/getopts) and can be
+//! used by adding `getopts` to the dependencies in your project's `Cargo.toml`.
+//!
+//! ```toml
+//! [dependencies]
+//! getopts = "0.2"
+//! ```
+//!
+//! and this to your crate root:
+//!
+//! ```rust
+//! extern crate getopts;
+//! ```
+//!
+//! # Example
+//!
+//! The following example shows simple command line parsing for an application
+//! that requires an input file to be specified, accepts an optional output file
+//! name following `-o`, and accepts both `-h` and `--help` as optional flags.
+//!
+//! ```{.rust}
+//! extern crate getopts;
+//! use getopts::Options;
+//! use std::env;
+//!
+//! fn do_work(inp: &str, out: Option<String>) {
+//!     println!("{}", inp);
+//!     match out {
+//!         Some(x) => println!("{}", x),
+//!         None => println!("No Output"),
+//!     }
+//! }
+//!
+//! fn print_usage(program: &str, opts: Options) {
+//!     let brief = format!("Usage: {} FILE [options]", program);
+//!     print!("{}", opts.usage(&brief));
+//! }
+//!
+//! fn main() {
+//!     let args: Vec<String> = env::args().collect();
+//!     let program = args[0].clone();
+//!
+//!     let mut opts = Options::new();
+//!     opts.optopt("o", "", "set output file name", "NAME");
+//!     opts.optflag("h", "help", "print this help menu");
+//!     let matches = match opts.parse(&args[1..]) {
+//!         Ok(m) => { m }
+//!         Err(f) => { panic!("{}", f.to_string()) }
+//!     };
+//!     if matches.opt_present("h") {
+//!         print_usage(&program, opts);
+//!         return;
+//!     }
+//!     let output = matches.opt_str("o");
+//!     let input = if !matches.free.is_empty() {
+//!         matches.free[0].clone()
+//!     } else {
+//!         print_usage(&program, opts);
+//!         return;
+//!     };
+//!     do_work(&input, output);
+//! }
+//! ```
+
+#![doc(

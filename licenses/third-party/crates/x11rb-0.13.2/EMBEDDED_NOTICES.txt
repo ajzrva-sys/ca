@@ -1,0 +1,74 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== README.md =====
+## License
+
+Licensed under either of
+
+ * Apache License, Version 2.0
+   ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+ * MIT license
+   ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+
+at your option.
+
+The subdirectory xcb-proto-1.17.0 contains a vendored copy of the
+package of the same name. It is covered by the MIT license. See
+[xcb-proto-1.17.0/COPYING](xcb-proto-1.17.0/COPYING) for details.
+
+===== examples/hypnomoire.rs =====
+// This is a (rough) port of hypnomoire from the xcb-demo repository.
+// The original file has Copyright (C) 2001-2002 Bart Massey and Jamey Sharp and is licensed under
+// a MIT license.
+
+===== examples/record.rs =====
+// This example shows how to use the record extension.
+//
+// The short version is: You do not want to use the record extension.
+//
+// The long version is: It's ugly and here is how it works.
+//
+// If you want to learn more about the record extension, it is recommended to read
+// https://www.x.org/releases/X11R7.6/doc/recordproto/record.html
+//
+// This example is based on
+// https://github.com/nibrahim/showkeys/blob/master/tests/record-example.c, which is GPLv3 and
+// contains no copyright information. According to the git history, it was written by
+// Noufal Ibrahim <noufal@nibrahim.net.in> in 2011.
+
+===== examples/tutorial.rs =====
+///////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// This file contains a tutorial of both this crate and the X11 protocol. It was created by porting
+// an existing libxcb tutorial that is available here:
+//
+//  https://www.x.org/releases/X11R7.7/doc/libxcb/tutorial/index.html
+//
+// References to libxcb in the text were retained. Only the code examples were adapted, where
+// possible. Some detailed explanations of libxcb required heavier editing.
+//
+// Since the libxcb tutorial is part of the libxcb source code, I assume that its MIT LICENSE
+// applies. The exact situation is a bit unclear (libxcb's COPYING file has "Copyright (C)
+// 2001-2006 Bart Massey, Jamey Sharp, and Josh Triplett.", but the git history says that the
+// tutorial was only started in 2006 and was last touched in 2014).
+//
+// This tutorial is in a Rust file to ensure that the contained code actually compiles and
+// everything works as intended. Nothing is worse than bitrotted tutorial. Here are all the
+// imports:
+
+===== src/cursor/find_cursor.rs =====
+//! Find the right cursor file from a cursor name
+
+// Based on libxcb-cursor's load_cursor.c which has:
+//
+//   Copyright © 2013 Michael Stapelberg
+//   Copyright © 2002 Keith Packard
+//
+// and is licensed under MIT/X Consortium License
+
+===== src/cursor/parse_cursor.rs =====
+//! Parse the contents of a cursor file
+
+// This code is loosely based on parse_cursor_file.c from libxcb-cursor, which is:
+//   Copyright © 2013 Michael Stapelberg
+// and is covered by MIT/X Consortium License

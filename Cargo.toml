@@ -17,10 +17,14 @@ default-members = [
 ]
 resolver = "2"
 
+[workspace.package]
+license = "MIT OR Apache-2.0"
+
 [package]
 name = "ca"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 default-run = "ca"
 
 [features]

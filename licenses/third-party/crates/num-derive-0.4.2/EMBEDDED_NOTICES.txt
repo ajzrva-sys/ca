@@ -1,0 +1,121 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== README.md =====
+## License
+
+Licensed under either of
+
+ * [Apache License, Version 2.0](http://www.apache.org/licenses/LICENSE-2.0)
+ * [MIT license](http://opensource.org/licenses/MIT)
+
+at your option.
+
+===== src/lib.rs =====
+// Copyright 2012-2015 The Rust Project Developers. See the COPYRIGHT
+// file at the top-level directory of this distribution and at
+// http://rust-lang.org/COPYRIGHT.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+#![crate_type = "proc-macro"]
+#![doc(html_root_url = "https://docs.rs/num-derive/0.3")]
+#![recursion_limit = "512"]
+
+//! Procedural macros to derive numeric traits in Rust.
+//!
+//! ## Usage
+//!
+//! Add this to your `Cargo.toml`:
+//!
+//! ```toml
+//! [dependencies]
+//! num-traits = "0.2"
+//! num-derive = "0.3"
+//! ```
+//!
+//! Then you can derive traits on your own types:
+//!
+//! ```rust
+//! #[macro_use]
+//! extern crate num_derive;
+//!
+//! #[derive(FromPrimitive, ToPrimitive)]
+//! enum Color {
+//!     Red,
+//!     Blue,
+//!     Green,
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! ## Explicit import
+//!
+//! By default the `num_derive` procedural macros assume that the
+//! `num_traits` crate is a direct dependency. If `num_traits` is instead
+//! a transitive dependency, the `num_traits` helper attribute can be
+//! used to tell `num_derive` to use a specific identifier for its imports.
+//!
+//! ```rust
+//! #[macro_use]
+//! extern crate num_derive;
+//! // Lets pretend this is a transitive dependency from another crate
+//! // reexported as `some_other_ident`.
+//! extern crate num_traits as some_other_ident;
+//!
+//! #[derive(FromPrimitive, ToPrimitive)]
+//! #[num_traits = "some_other_ident"]
+//! enum Color {
+//!     Red,
+//!     Blue,
+//!     Green,
+//! }
+//! # fn main() {}
+//! ```
+
+===== tests/empty_enum.rs =====
+// Copyright 2013-2015 The Rust Project Developers. See the COPYRIGHT
+// file at the top-level directory of this distribution and at
+// http://rust-lang.org/COPYRIGHT.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+===== tests/num_derive_without_num.rs =====
+// Copyright 2013-2015 The Rust Project Developers. See the COPYRIGHT
+// file at the top-level directory of this distribution and at
+// http://rust-lang.org/COPYRIGHT.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+===== tests/trivial.rs =====
+// Copyright 2013-2015 The Rust Project Developers. See the COPYRIGHT
+// file at the top-level directory of this distribution and at
+// http://rust-lang.org/COPYRIGHT.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+===== tests/with_custom_values.rs =====
+// Copyright 2013-2015 The Rust Project Developers. See the COPYRIGHT
+// file at the top-level directory of this distribution and at
+// http://rust-lang.org/COPYRIGHT.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.

@@ -1,0 +1,20 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== README.md =====
+## License
+
+This project's source code and documentation are licensed under the MIT [License].
+
+[Crate Badge]: https://img.shields.io/crates/v/instability
+[Build Badge]: https://img.shields.io/github/actions/workflow/status/ratatui/instability/check.yml
+[Docs Badge]: https://img.shields.io/docsrs/instability
+[License Badge]: https://img.shields.io/crates/l/instability
+[MSRV Badge]: https://img.shields.io/crates/msrv/instability
+[Crate]: https://crates.io/crates/instability
+[Build]: https://github.com/ratatui/instability/actions/workflows/check.yml
+[Docs]: https://docs.rs/instability
+[License]: ./LICENSE.md
+[stability]: https://crates.io/crates/stability
+[@Sagebind]: https://github.com/sagebind
+[fork]: https://github.com/sagebind/stability/issues/12
+[instability-example]: https://crates.io/crates/instability-example

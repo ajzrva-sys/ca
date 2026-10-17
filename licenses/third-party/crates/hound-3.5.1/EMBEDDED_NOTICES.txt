@@ -1,0 +1,159 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== examples/append.rs =====
+// Hound -- A wav encoding and decoding library in Rust
+// Copyright 2018 Ruud van Asseldonk
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// A copy of the License has been included in the root of the repository.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// This example appends one second of a 440 Hz sine wave to the file "sine.wav".
+// If the file does not exist, it is created instead.
+
+===== examples/cpal.rs =====
+// Hound -- A wav encoding and decoding library in Rust
+// Copyright (C) 2015 Ruud van Asseldonk
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// A copy of the License has been included in the root of the repository.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// This example shows how to play a wav file using the cpal crate.
+
+===== examples/mean.rs =====
+// Hound -- A wav encoding and decoding library in Rust
+// Copyright (C) 2015 Ruud van Asseldonk
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// A copy of the License has been included in the root of the repository.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// This example computes the mean value and rms of a file, where samples are
+// first interpreted as 16-bit signed integer, and then as a 16-bit unsigned
+// integer. This should allow us to determine whether the samples stored are
+// signed or unsigned: for signed the average value is expected to be 0, and
+// for unsigned the value is expected to be 2^16 - 1.
+//   Note that this example is not a particularly good example of proper coding
+// style; it does not handle failure properly, and it assumes that the provided
+// file has 16 bits per sample.
+
+// TODO: This example should probably be removed, it is just here for verifying
+// and assumption at this point.
+
+===== examples/rms.rs =====
+// Hound -- A wav encoding and decoding library in Rust
+// Copyright (C) 2017 Ruud van Asseldonk
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// A copy of the License has been included in the root of the repository.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// This example computes the root mean square (rms) of an audio file with
+// integer or float samples, of at most 32 bits per sample. It is a slightly
+// more elaborate version of the example found in the readme, mostly useful for
+// checking whether Hound can read a specific file.
+
+===== src/lib.rs =====
+// Hound -- A wav encoding and decoding library in Rust
+// Copyright (C) 2015 Ruud van Asseldonk
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// A copy of the License has been included in the root of the repository.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Hound, a wav encoding and decoding library.
+//!
+//! Examples
+//! ========
+//!
+//! The following example renders a 440 Hz sine wave, and stores it as as a
+//! mono wav file with a sample rate of 44.1 kHz and 16 bits per sample.
+//!
+//! ```
+//! use std::f32::consts::PI;
+//! use std::i16;
+//! use hound;
+//!
+//! let spec = hound::WavSpec {
+//!     channels: 1,
+//!     sample_rate: 44100,
+//!     bits_per_sample: 16,
+//!     sample_format: hound::SampleFormat::Int,
+//! };
+//! let mut writer = hound::WavWriter::create("sine.wav", spec).unwrap();
+//! for t in (0 .. 44100).map(|x| x as f32 / 44100.0) {
+//!     let sample = (t * 440.0 * 2.0 * PI).sin();
+//!     let amplitude = i16::MAX as f32;
+//!     writer.write_sample((sample * amplitude) as i16).unwrap();
+//! }
+//! writer.finalize().unwrap();
+//! ```
+//!
+//! The following example computes the root mean square (RMS) of an audio file
+//! with at most 16 bits per sample.
+//!
+//! ```
+//! use hound;
+//!
+//! let mut reader = hound::WavReader::open("testsamples/pop.wav").unwrap();
+//! let sqr_sum = reader.samples::<i16>()
+//!                     .fold(0.0, |sqr_sum, s| {
+//!     let sample = s.unwrap() as f64;
+//!     sqr_sum + sample * sample
+//! });
+//! println!("RMS is {}", (sqr_sum / reader.len() as f64).sqrt());
+//! ```
+
+#![warn(missing_docs)]
+
+===== src/read.rs =====
+// Hound -- A wav encoding and decoding library in Rust
+// Copyright (C) 2015 Ruud van Asseldonk
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// A copy of the License has been included in the root of the repository.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+===== src/write.rs =====
+// Hound -- A wav encoding and decoding library in Rust
+// Copyright (C) 2015 Ruud van Asseldonk
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// A copy of the License has been included in the root of the repository.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.

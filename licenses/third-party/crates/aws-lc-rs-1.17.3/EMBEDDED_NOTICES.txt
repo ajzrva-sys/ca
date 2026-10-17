@@ -1,0 +1,2458 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== README.md =====
+## License
+
+This library is licensed under the Apache-2.0 or the ISC License.
+
+===== build.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== examples/cipher.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+//! cipher - Perform symmetric cipher encryption/decryption on utf8 plaintext.
+//!
+//! *cipher* is an example program demonstrating the `aws_lc_rs::cipher` API for *aws-lc-rs*.
+//! It demonstrates CTR & CBC mode encryption using AES 128 or 256 bit keys.
+//!
+//! The program can be run from the command line using cargo:
+//! ```sh
+//! $ cargo run --example cipher -- encrypt --mode ctr  "Hello World"
+//! key: b331133eb742497c67ced9520c9a7de3
+//! iv: 4e967c7b799e0670431888e2e959e154
+//! ciphertext: 88bcbd8d1656d60de739c5
+//!
+//! $ cargo run --example cipher -- decrypt --mode ctr --key b331133eb742497c67ced9520c9a7de3 --iv 4e967c7b799e0670431888e2e959e154 88bcbd8d1656d60de739c5
+//! Hello World
+//!
+//! $ cargo run --example cipher -- encrypt --mode cbc "Hello World"
+//! key: 6489d8ce0c4facf18b872705a05d5ee4
+//! iv: 5cd56fb752830ec2459889226c5431bd
+//! ciphertext: 6311c14e8104730be124ce1e57e51fe3
+//!
+//! $ cargo run --example cipher -- decrypt --mode cbc --key 6489d8ce0c4facf18b872705a05d5ee4 --iv 5cd56fb752830ec2459889226c5431bd 6311c14e8104730be124ce1e57e51fe3
+//! Hello World
+//! ```
+
+===== examples/digest.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+//! digest - display the checksum for files.
+//!
+//! *digest* is an example program using *aws-lc-rs*. It can compute the digest (i.e., "checksum")
+//! of files using any of the digest algorithms supported by *aws-lc-rs*.
+//!
+//! The program can be run from the command line using cargo:
+//! ```
+//! > cargo run --example digest -- -d sha256 LICENSE
+//! ```
+
+===== scripts/run-rustls-integration.sh =====
+#!/bin/bash -exu
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0 OR ISC
+
+# This script tests aws-lc-rs integration with the rustls ecosystem (rcgen, webpki, rustls).
+# It uses Cargo's [patch.crates-io] feature to override dependencies, which is more robust
+# than modifying individual dependency declarations.
+
+===== scripts/run-s2n-quic-integration.sh =====
+#!/bin/bash -exu
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== scripts/run-valgrind.sh =====
+#!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0 OR ISC
+
+# # Helper script for running aws-lc-rs tests under Valgrind
+
+===== scripts/run-windows-debug-crt-static-test.sh =====
+#!/bin/bash -exu
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0 OR ISC
+
+# Parse command line arguments
+
+===== src/aead/aead_ctx.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/aead/aes_gcm.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/aead/chacha.rs =====
+// Copyright 2016 Brian Smith.
+// Portions Copyright (c) 2016, Google Inc.
+// SPDX-License-Identifier: ISC
+// Modifications copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/aead/chacha20_poly1305_openssh.rs =====
+// Copyright 2016 Brian Smith.
+// SPDX-License-Identifier: ISC
+// Modifications copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+//! The [chacha20-poly1305@openssh.com] AEAD-ish construct.
+//!
+//! This should only be used by SSH implementations. It has a similar, but
+//! different API from `aws_lc_rs::aead` because the construct cannot use the same
+//! API as `aws_lc_rs::aead` due to the way the construct handles the encrypted
+//! packet length.
+//!
+//! The concatenation of a and b is denoted `a||b`. `K_1` and `K_2` are defined
+//! in the [chacha20-poly1305@openssh.com] specification. `packet_length`,
+//! `padding_length`, `payload`, and `random padding` are defined in
+//! [RFC 4253]. The term `plaintext` is used as a shorthand for
+//! `padding_length||payload||random padding`.
+//!
+//! [chacha20-poly1305@openssh.com]:
+//!    http://cvsweb.openbsd.org/cgi-bin/cvsweb/src/usr.bin/ssh/PROTOCOL.chacha20poly1305?annotate=HEAD
+//! [RFC 4253]: https://tools.ietf.org/html/rfc4253
+//!
+//! # FIPS
+//! The APIs offered in this module must not be used.
+
+===== src/aead/nonce.rs =====
+// Copyright 2018 Brian Smith.
+// SPDX-License-Identifier: ISC
+// Modifications copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/aead/nonce_sequence/counter32.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/aead/nonce_sequence/counter64.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/aead/nonce_sequence.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+//! Implementations of `NonceSequence` for use with `BoundKey`s.
+
+===== src/aead/poly1305.rs =====
+// Copyright 2015-2016 Brian Smith.
+// SPDX-License-Identifier: ISC
+// Modifications copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+// TODO: enforce maximum input length.
+
+===== src/aead/quic.rs =====
+// Copyright 2018 Brian Smith.
+// SPDX-License-Identifier: ISC
+// Modifications copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+//! QUIC Header Protection.
+//!
+//! See draft-ietf-quic-tls.
+
+===== src/aead/rand_nonce.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/aead/tests/fips/chacha20_poly1305_openssh.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/aead/tests/fips/quic.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/aead/tests/fips.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+#![cfg(debug_assertions)]
+
+===== src/aead/tls.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/aead/unbound_key.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/aead.rs =====
+// Copyright 2015-2016 Brian Smith.
+// SPDX-License-Identifier: ISC
+// Modifications copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+//! Authenticated Encryption with Associated Data (AEAD).
+//!
+//! See [Authenticated encryption: relations among notions and analysis of the
+//! generic composition paradigm][AEAD] for an introduction to the concept of
+//! AEADs.
+//!
+//! [AEAD]: https://eprint.iacr.org/2000/025
+//! [`crypto.cipher.AEAD`]: https://golang.org/pkg/crypto/cipher/#AEAD
+//!
+//! # Randomized Nonce API
+//!
+//! [`RandomizedNonceKey`] provides a simplified API interface that doesn't
+//! require the caller to handle construction of a `NonceSequence` or `Nonce` values
+//! themselves.
+//!
+//! ```rust
+//! # use std::error::Error;
+//! #
+//! # fn main() -> Result<(), Box<dyn Error>> {
+//! use aws_lc_rs::aead::{Aad, RandomizedNonceKey, AES_128_GCM};
+//!
+//! let key_bytes = &[
+//!     0xa5, 0xf3, 0x8d, 0x0d, 0x2d, 0x7c, 0x48, 0x56, 0xe7, 0xf3, 0xc3, 0x63, 0x0d, 0x40, 0x5b,
+//!     0x9e,
+//! ];
+//!
+//! // Create AES-128-GCM key
+//! let key = RandomizedNonceKey::new(&AES_128_GCM, key_bytes)?;
+//!
+//! let message = "test message";
+//! let mut in_out = Vec::from(message);
+//!
+//! // Seal the plaintext message (in_out) and append the tag to the ciphertext.
+//! // The randomized nonce used for encryption will be returned.
+//! let nonce = key.seal_in_place_append_tag(Aad::empty(), &mut in_out)?;
+//!
+//! // Open the ciphertext message (in_out), using the provided nonce, and validating the tag.
+//! let plaintext = key.open_in_place(nonce, Aad::empty(), &mut in_out)?;
+//!
+//! assert_eq!(message.as_bytes(), plaintext);
+//! #   Ok(())
+//! # }
+//! ```
+//!
+//! # TLS AEAD APIs
+//!
+//! Systems developers creating TLS protocol implementations should use
+//! [`TlsRecordSealingKey`] and [`TlsRecordOpeningKey`] respectively for AEAD.
+//!
+//! # Nonce Sequence APIs
+//!
+//! The [`UnboundKey`], [`OpeningKey`], [`SealingKey`], and [`LessSafeKey`] types are the
+//! AEAD API's provided for compatibility with the original *ring* API.
+//!
+//! Users should prefer [`RandomizedNonceKey`] which provides a simplified experience around
+//! Nonce construction.
+//!
+//! ```
+//! use aws_lc_rs::aead::{
+//!     nonce_sequence, Aad, BoundKey, OpeningKey, SealingKey, UnboundKey, AES_128_GCM,
+//! };
+//! use aws_lc_rs::rand;
+//! use aws_lc_rs::test::from_hex;
+//!
+//! let plaintext = "plaintext value";
+//!
+//! // Generate random bytes for secret key
+//! let mut key_bytes = [0u8; 16];
+//! rand::fill(&mut key_bytes).expect("Unable to generate key");
+//!
+//! // Contextual information must match between encryption and decryption
+//! let aad_content = "aws-lc-rs documentation";
+//! let sequence_id = 0xabcdef01u32.to_be_bytes();
+//!
+//! // Buffer containing plaintext. This will be modified to contain the ciphertext.
+//! let mut in_out_buffer = Vec::from(plaintext);
+//!
+//! // Construct a SealingKey for encryption
+//! let unbound_key = UnboundKey::new(&AES_128_GCM, &key_bytes).unwrap();
+//! let nonce_sequence = nonce_sequence::Counter64Builder::new()
+//!     .identifier(sequence_id)
+//!     .build();
+//! let mut sealing_key = SealingKey::new(unbound_key, nonce_sequence);
+//!
+//! // Encrypt a value using the SealingKey
+//! let aad = Aad::from(aad_content);
+//! sealing_key
+//!     .seal_in_place_append_tag(aad, &mut in_out_buffer)
+//!     .expect("Encryption failed");
+//!
+//! // The buffer now contains the ciphertext followed by a "tag" value.
+//! let plaintext_len = in_out_buffer.len() - AES_128_GCM.tag_len();
+//!
+//! // Construct an OpeningKey for decryption
+//! let unbound_key = UnboundKey::new(&AES_128_GCM, &key_bytes).unwrap();
+//! let nonce_sequence = nonce_sequence::Counter64Builder::new()
+//!     .identifier(sequence_id)
+//!     .build();
+//! let mut opening_key = OpeningKey::new(unbound_key, nonce_sequence);
+//!
+//! // Decrypt the value using the OpeningKey
+//! let aad = Aad::from(aad_content);
+//! opening_key
+//!     .open_in_place(aad, &mut in_out_buffer)
+//!     .expect("Decryption failed");
+//!
+//! let decrypted_plaintext = core::str::from_utf8(&in_out_buffer[0..plaintext_len]).unwrap();
+//!
+//! assert_eq!(plaintext, decrypted_plaintext);
+//! ```
+//!
+//! ## Prepared Nonce API's with Nonce Sequence
+//!
+//! If you prefer to use the [NonceSequence] based API's, and need to know the [Nonce] explicit nonce used for a
+//! cryptographic key operation operation, then [SealingKeyPreparedNonce] and
+//! [OpeningKeyPreparedNonce] are available to you.
+//!
+//! ```rust
+//! # use std::error::Error;
+//! #
+//! # fn main() -> Result<(), Box<dyn Error>> {
+//! use aws_lc_rs::aead::{
+//!     nonce_sequence::Counter32Builder, Aad, BoundKey, OpeningKey, SealingKey, UnboundKey,
+//!     AES_128_GCM,
+//! };
+//! use std::vec::Vec;
+//!
+//! let key_bytes = &[
+//!     0xa5, 0xf3, 0x8d, 0x0d, 0x2d, 0x7c, 0x48, 0x56, 0xe7, 0xf3, 0xc3, 0x63, 0x0d, 0x40, 0x5b,
+//!     0x9e,
+//! ];
+//!
+//! // Create AES-128-GCM SealingKey
+//! let mut sealing_key = SealingKey::new(
+//!     UnboundKey::new(&AES_128_GCM, key_bytes)?,
+//!     Counter32Builder::new()
+//!         .identifier([0, 1, 2, 3, 4, 5, 6, 7])
+//!         .build(),
+//! );
+//!
+//! // Create AES-128-GCM OpeningKey
+//! let mut opening_key = OpeningKey::new(
+//!     UnboundKey::new(&AES_128_GCM, key_bytes)?,
+//!     Counter32Builder::new()
+//!         .identifier([0, 1, 2, 3, 4, 5, 6, 7])
+//!         .build(),
+//! );
+//!
+//! let message = "test message";
+//! let mut in_out = Vec::from(message);
+//!
+//! // Create a SealingKeyPreparedNonce which consumes a nonce from the underlying sequence
+//! let seal_prepared_nonce = sealing_key.prepare_nonce()?;
+//!
+//! // Query the nonce that will be used for our seal operation with our prepared nonce
+//! let seal_nonce_bytes = Vec::from(seal_prepared_nonce.nonce().as_ref().as_slice());
+//!
+//! // Use the prepared nonce and seal the plaintext
+//! seal_prepared_nonce.seal_in_place_append_tag(Aad::empty(), &mut in_out)?;
+//!
+//! // Create a OpeningKeyPreparedNonce which consumes a nonce from the underlying sequence
+//! let open_prepared_nonce = opening_key.prepare_nonce()?;
+//!
+//! // Query the nonce that will be used for our seal operation with our prepared nonce
+//! let open_nonce_bytes = Vec::from(open_prepared_nonce.nonce().as_ref().as_slice());
+//!
+//! // Since we initialized the Counter32Builder the same between both builders the nonce here
+//! // will match the one from the opening key.
+//! assert_eq!(seal_nonce_bytes.as_slice(), open_nonce_bytes.as_slice());
+//!
+//! let plaintext = open_prepared_nonce.open_in_place(Aad::empty(), &mut in_out)?;
+//!
+//! assert_eq!(message.as_bytes(), plaintext);
+//! #   Ok(())
+//! # }
+//! ```
+
+===== src/agreement/agreement_tests.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/agreement/ephemeral.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/agreement/parsed_public_key_tests.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/agreement/tests/fips.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+#![cfg(debug_assertions)]
+
+===== src/agreement.rs =====
+// Copyright 2015-2017 Brian Smith.
+// SPDX-License-Identifier: ISC
+// Modifications copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+//! Key Agreement: ECDH, including X25519.
+//!
+//! # Example
+//!
+//! Note that this example uses X25519, but ECDH using NIST P-256/P-384 is done
+//! exactly the same way, just substituting
+//! `agreement::ECDH_P256`/`agreement::ECDH_P384` for `agreement::X25519`.
+//!
+//! ```
+//! use aws_lc_rs::{agreement, rand};
+//!
+//! let rng = rand::SystemRandom::new();
+//!
+//! let my_private_key = agreement::EphemeralPrivateKey::generate(&agreement::X25519, &rng)?;
+//!
+//! // Make `my_public_key` a byte slice containing my public key. In a real
+//! // application, this would be sent to the peer in an encoded protocol
+//! // message.
+//! let my_public_key = my_private_key.compute_public_key()?;
+//!
+//! let peer_public_key = {
+//!     // In a real application, the peer public key would be parsed out of a
+//!     // protocol message. Here we just generate one.
+//!     let peer_public_key = {
+//!         let peer_private_key =
+//!             agreement::EphemeralPrivateKey::generate(&agreement::X25519, &rng)?;
+//!         peer_private_key.compute_public_key()?
+//!     };
+//!
+//!     agreement::UnparsedPublicKey::new(&agreement::X25519, peer_public_key)
+//! };
+//!
+//! agreement::agree_ephemeral(
+//!     my_private_key,
+//!     &peer_public_key,
+//!     aws_lc_rs::error::Unspecified,
+//!     |_key_material| {
+//!         // In a real application, we'd apply a KDF to the key material and the
+//!         // public keys (as recommended in RFC 7748) and then derive session
+//!         // keys from the result. We omit all that here.
+//!         Ok(())
+//!     },
+//! )?;
+//!
+//! # Ok::<(), aws_lc_rs::error::Unspecified>(())
+//! ```
+
+===== src/bn.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/buffer.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+//! This module exposes a buffer type used in crate APIs returning private keys and other "private"
+//! contents.
+
+#![allow(clippy::module_name_repetitions)]
+
+===== src/cbb.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/cbs.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/cipher/aes.rs =====
+// Copyright 2018 Brian Smith.
+// SPDX-License-Identifier: ISC
+// Modifications copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/cipher/block.rs =====
+// Copyright 2018 Brian Smith.
+// SPDX-License-Identifier: ISC
+// Modifications copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+/// An array of 16 bytes that can (in the `x86_64` and `AAarch64` ABIs, at least)
+/// be efficiently passed by value and returned by value (i.e. in registers),
+/// and which meets the alignment requirements of `u32` and `u64` (at least)
+/// for the target.
+
+===== src/cipher/chacha.rs =====
+// Copyright 2016 Brian Smith.
+// Portions Copyright (c) 2016, Google Inc.
+// SPDX-License-Identifier: ISC
+// Modifications copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/cipher/des.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/cipher/key.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/cipher/padded.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/cipher/streaming.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/cipher/tests/fips.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+#![cfg(debug_assertions)]
+
+===== src/cipher.rs =====
+// Copyright 2018 Brian Smith.
+// SPDX-License-Identifier: ISC
+// Modifications copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+//! Block and Stream Ciphers for Encryption and Decryption.
+//!
+//! # 🛑 Read Before Using
+//!
+//! This module provides access to block and stream cipher algorithms.
+//! The modes provided here only provide confidentiality, but **do not**
+//! provide integrity or authentication verification of ciphertext.
+//!
+//! These algorithms are provided solely for applications requiring them
+//! in order to maintain backwards compatibility in legacy applications.
+//!
+//! If you are developing new applications requiring data encryption see
+//! the algorithms provided in [`aead`](crate::aead).
+//!
+//! # Examples
+//!
+//! ## Encryption Modes
+//!
+//! ### AES-128 CBC
+//!
+//! ```rust
+//! # use std::error::Error;
+//! #
+//! # fn main() -> Result<(), Box<dyn Error>> {
+//! use aws_lc_rs::cipher::{
+//!     PaddedBlockDecryptingKey, PaddedBlockEncryptingKey, UnboundCipherKey, AES_128,
+//! };
+//! use std::io::Read;
+//!
+//! let original_message = "This is a secret message!".as_bytes();
+//! let mut in_out_buffer = Vec::from(original_message);
+//!
+//! let key_bytes: &[u8] = &[
+//!     0xff, 0x0b, 0xe5, 0x84, 0x64, 0x0b, 0x00, 0xc8, 0x90, 0x7a, 0x4b, 0xbf, 0x82, 0x7c, 0xb6,
+//!     0xd1,
+//! ];
+//!
+//! let key = UnboundCipherKey::new(&AES_128, key_bytes)?;
+//! let mut encrypting_key = PaddedBlockEncryptingKey::cbc_pkcs7(key)?;
+//! let context = encrypting_key.encrypt(&mut in_out_buffer)?;
+//!
+//! let key = UnboundCipherKey::new(&AES_128, key_bytes)?;
+//! let mut decrypting_key = PaddedBlockDecryptingKey::cbc_pkcs7(key)?;
+//! let plaintext = decrypting_key.decrypt(&mut in_out_buffer, context)?;
+//! assert_eq!(original_message, plaintext);
+//! #
+//! #
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ### AES-128 CTR
+//!
+//! ```rust
+//! # use std::error::Error;
+//! #
+//! # fn main() -> Result<(), Box<dyn Error>> {
+//! use aws_lc_rs::cipher::{DecryptingKey, EncryptingKey, UnboundCipherKey, AES_128};
+//!
+//! let original_message = "This is a secret message!".as_bytes();
+//! let mut in_out_buffer = Vec::from(original_message);
+//!
+//! let key_bytes: &[u8] = &[
+//!     0xff, 0x0b, 0xe5, 0x84, 0x64, 0x0b, 0x00, 0xc8, 0x90, 0x7a, 0x4b, 0xbf, 0x82, 0x7c, 0xb6,
+//!     0xd1,
+//! ];
+//!
+//! let key = UnboundCipherKey::new(&AES_128, key_bytes)?;
+//! let mut encrypting_key = EncryptingKey::ctr(key)?;
+//! let context = encrypting_key.encrypt(&mut in_out_buffer)?;
+//!
+//! let key = UnboundCipherKey::new(&AES_128, key_bytes)?;
+//! let mut decrypting_key = DecryptingKey::ctr(key)?;
+//! let plaintext = decrypting_key.decrypt(&mut in_out_buffer, context)?;
+//! assert_eq!(original_message, plaintext);
+//! #
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ### AES-128 CBC Streaming Cipher
+//!
+//! ```rust
+//! # use std::error::Error;
+//! #
+//! # fn main() -> Result<(), Box<dyn Error>> {
+//! use aws_lc_rs::cipher::{
+//!     StreamingDecryptingKey, StreamingEncryptingKey, UnboundCipherKey, AES_128,
+//! };
+//! let original_message = "This is a secret message!".as_bytes();
+//! let key_bytes: &[u8] = &[
+//!     0xff, 0x0b, 0xe5, 0x84, 0x64, 0x0b, 0x00, 0xc8, 0x90, 0x7a, 0x4b, 0xbf, 0x82, 0x7c,
+//!     0xb6, 0xd1,
+//! ];
+//! // Prepare ciphertext buffer
+//! let mut ciphertext_buffer = vec![0u8; original_message.len() + AES_128.block_len()];
+//! let ciphertext_slice = ciphertext_buffer.as_mut_slice();
+//!
+//! // Create StreamingEncryptingKey
+//! let key = UnboundCipherKey::new(&AES_128, key_bytes).unwrap();
+//! let mut encrypting_key = StreamingEncryptingKey::cbc_pkcs7(key).unwrap();
+//!
+//! // Encrypt
+//! let mut first_update = encrypting_key
+//!                            .update(original_message, ciphertext_slice)
+//!                            .unwrap();
+//! let first_update_len = first_update.written().len();
+//! let (context, final_update) = encrypting_key.finish(first_update.remainder_mut()).unwrap();
+//! let ciphertext_len = first_update_len + final_update.written().len();
+//! let ciphertext = &ciphertext_slice[0..ciphertext_len];
+//!
+//! // Prepare plaintext buffer
+//! let mut plaintext_buffer = vec![0u8; ciphertext_len + AES_128.block_len()];
+//! let plaintext_slice = plaintext_buffer.as_mut_slice();
+//!
+//! // Create StreamingDecryptingKey
+//! let key = UnboundCipherKey::new(&AES_128, key_bytes).unwrap();
+//! let mut decrypting_key = StreamingDecryptingKey::cbc_pkcs7(key, context).unwrap();
+//!
+//! // Decrypt
+//! let mut first_update = decrypting_key.update(ciphertext, plaintext_slice).unwrap();
+//! let first_update_len = first_update.written().len();
+//! let final_update = decrypting_key.finish(first_update.remainder_mut()).unwrap();
+//! let plaintext_len = first_update_len + final_update.written().len();
+//! let plaintext = &plaintext_slice[0..plaintext_len];
+//!
+//! assert_eq!(original_message, plaintext);
+//! #
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ### AES-128 CFB 128-bit mode
+//!
+//! ```rust
+//! # use std::error::Error;
+//! #
+//! # fn main() -> Result<(), Box<dyn Error>> {
+//! use aws_lc_rs::cipher::{DecryptingKey, EncryptingKey, UnboundCipherKey, AES_128};
+//!
+//! let original_message = "This is a secret message!".as_bytes();
+//! let mut in_out_buffer = Vec::from(original_message);
+//!
+//! let key_bytes: &[u8] = &[
+//!     0xff, 0x0b, 0xe5, 0x84, 0x64, 0x0b, 0x00, 0xc8, 0x90, 0x7a, 0x4b, 0xbf, 0x82, 0x7c, 0xb6,
+//!     0xd1,
+//! ];
+//!
+//! let key = UnboundCipherKey::new(&AES_128, key_bytes)?;
+//! let mut encrypting_key = EncryptingKey::cfb128(key)?;
+//! let context = encrypting_key.encrypt(&mut in_out_buffer)?;
+//!
+//! let key = UnboundCipherKey::new(&AES_128, key_bytes)?;
+//! let mut decrypting_key = DecryptingKey::cfb128(key)?;
+//! let plaintext = decrypting_key.decrypt(&mut in_out_buffer, context)?;
+//! assert_eq!(original_message, plaintext);
+//! #
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Constructing a `DecryptionContext` for decryption.
+//!
+//! ```rust
+//! # use std::error::Error;
+//! # fn main() -> Result<(), Box<dyn Error>> {
+//! use aws_lc_rs::cipher::{DecryptingKey, DecryptionContext, UnboundCipherKey, AES_128};
+//! use aws_lc_rs::iv::{FixedLength, IV_LEN_128_BIT};
+//!
+//! let context = DecryptionContext::Iv128(FixedLength::<IV_LEN_128_BIT>::from(&[
+//!     0x8d, 0xdb, 0x7d, 0xf1, 0x56, 0xf5, 0x1c, 0xde, 0x63, 0xe3, 0x4a, 0x34, 0xb0, 0xdf, 0x28,
+//!     0xf0,
+//! ]));
+//!
+//! let ciphertext: &[u8] = &[
+//!     0x79, 0x8c, 0x04, 0x58, 0xcf, 0x98, 0xb1, 0xe9, 0x97, 0x6b, 0xa1, 0xce,
+//! ];
+//!
+//! let mut in_out_buffer = Vec::from(ciphertext);
+//!
+//! let key = UnboundCipherKey::new(
+//!     &AES_128,
+//!     &[
+//!         0x5b, 0xfc, 0xe7, 0x5e, 0x57, 0xc5, 0x4d, 0xda, 0x2d, 0xd4, 0x7e, 0x07, 0x0a, 0xef,
+//!         0x43, 0x29,
+//!     ],
+//! )?;
+//! let mut decrypting_key = DecryptingKey::ctr(key)?;
+//! let plaintext = decrypting_key.decrypt(&mut in_out_buffer, context)?;
+//! assert_eq!("Hello World!".as_bytes(), plaintext);
+//!
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Feature flags
+//!
+//! ### `legacy-des`
+//!
+//! Enables single DES and Triple DES (`DES_FOR_LEGACY_USE_ONLY`,
+//! `DES_EDE_FOR_LEGACY_USE_ONLY`, `DES_EDE3_FOR_LEGACY_USE_ONLY`) for legacy
+//! interoperability. Only CBC and ECB modes are supported. All exposed items
+//! are `#[deprecated]`. See the crate-level [feature flag
+//! documentation](crate#legacy-des) for details and security caveats.
+//!
+//! ## Getting an immutable reference to the IV slice.
+//!
+//! `TryFrom<&DecryptionContext>` is implemented for `&[u8]` allowing immutable references
+//! to IV bytes returned from cipher encryption operations. Note this is implemented as a `TryFrom` as it
+//! may fail for future enum variants that aren't representable as a single slice.
+//!
+//! ```rust
+//! # use std::error::Error;
+//! # fn main() -> Result<(), Box<dyn Error>> {
+//! # use aws_lc_rs::cipher::DecryptionContext;
+//! # use aws_lc_rs::iv::FixedLength;
+//! # let x: DecryptionContext = DecryptionContext::Iv128(FixedLength::from([0u8; 16]));
+//! // x is type `DecryptionContext`
+//! let iv: &[u8] = (&x).try_into()?;
+//! # Ok(())
+//! # }
+//! ```
+
+#![allow(clippy::module_name_repetitions)]
+
+===== src/cmac/tests/fips.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+#![cfg(debug_assertions)]
+
+===== src/cmac.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+//! CMAC is specified in [RFC 4493] and [NIST SP 800-38B].
+//!
+//! After a `Key` is constructed, it can be used for multiple signing or
+//! verification operations. Separating the construction of the key from the
+//! rest of the CMAC operation allows the per-key precomputation to be done
+//! only once, instead of it being done in every CMAC operation.
+//!
+//! Frequently all the data to be signed in a message is available in a single
+//! contiguous piece. In that case, the module-level `sign` function can be
+//! used. Otherwise, if the input is in multiple parts, `Context` should be
+//! used.
+//!
+//! # Examples:
+//!
+//! ## Signing a value and verifying it wasn't tampered with
+//!
+//! ```
+//! use aws_lc_rs::cmac;
+//!
+//! let key = cmac::Key::generate(cmac::AES_128)?;
+//!
+//! let msg = "hello, world";
+//!
+//! let tag = cmac::sign(&key, msg.as_bytes())?;
+//!
+//! // [We give access to the message to an untrusted party, and they give it
+//! // back to us. We need to verify they didn't tamper with it.]
+//!
+//! cmac::verify(&key, msg.as_bytes(), tag.as_ref())?;
+//!
+//! # Ok::<(), aws_lc_rs::error::Unspecified>(())
+//! ```
+//!
+//! ## Using the one-shot API:
+//!
+//! ```
+//! use aws_lc_rs::{cmac, rand};
+//!
+//! let msg = "hello, world";
+//!
+//! // The sender generates a secure key value and signs the message with it.
+//! // Note that in a real protocol, a key agreement protocol would be used to
+//! // derive `key_value`.
+//! let rng = rand::SystemRandom::new();
+//! let key_value: [u8; 16] = rand::generate(&rng)?.expose();
+//!
+//! let s_key = cmac::Key::new(cmac::AES_128, key_value.as_ref())?;
+//! let tag = cmac::sign(&s_key, msg.as_bytes())?;
+//!
+//! // The receiver (somehow!) knows the key value, and uses it to verify the
+//! // integrity of the message.
+//! let v_key = cmac::Key::new(cmac::AES_128, key_value.as_ref())?;
+//! cmac::verify(&v_key, msg.as_bytes(), tag.as_ref())?;
+//!
+//! # Ok::<(), aws_lc_rs::error::Unspecified>(())
+//! ```
+//!
+//! ## Using the multi-part API:
+//! ```
+//! use aws_lc_rs::{cmac, rand};
+//!
+//! let parts = ["hello", ", ", "world"];
+//!
+//! // The sender generates a secure key value and signs the message with it.
+//! // Note that in a real protocol, a key agreement protocol would be used to
+//! // derive `key_value`.
+//! let rng = rand::SystemRandom::new();
+//! let key_value: [u8; 32] = rand::generate(&rng)?.expose();
+//!
+//! let s_key = cmac::Key::new(cmac::AES_256, key_value.as_ref())?;
+//! let mut s_ctx = cmac::Context::with_key(&s_key);
+//! for part in &parts {
+//!     s_ctx.update(part.as_bytes())?;
+//! }
+//! let tag = s_ctx.sign()?;
+//!
+//! // The receiver (somehow!) knows the key value, and uses it to verify the
+//! // integrity of the message.
+//! let v_key = cmac::Key::new(cmac::AES_256, key_value.as_ref())?;
+//! let mut msg = Vec::<u8>::new();
+//! for part in &parts {
+//!     msg.extend(part.as_bytes());
+//! }
+//! cmac::verify(&v_key, &msg.as_ref(), tag.as_ref())?;
+//!
+//! # Ok::<(), aws_lc_rs::error::Unspecified>(())
+//! ```
+//! [RFC 4493]: https://tools.ietf.org/html/rfc4493
+//! [NIST SP 800-38B]: https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-38b.pdf
+
+===== src/constant_time.rs =====
+// Copyright 2015-2022 Brian Smith.
+// SPDX-License-Identifier: ISC
+// Modifications copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+//! Constant-time operations.
+
+===== src/debug.rs =====
+// Copyright 2018 Trent Clarke.
+// SPDX-License-Identifier: ISC
+// Modifications copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+// Generates an implementation of the Debug trait for a type that defers to the
+// Debug implementation for a given field.
+
+#![allow(missing_docs)]
+
+===== src/digest/digest_ctx.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/digest/sha.rs =====
+// Copyright 2015-2022 Brian Smith.
+// SPDX-License-Identifier: ISC
+// Modifications copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/digest/tests/fips.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+#![cfg(debug_assertions)]
+
+===== src/digest.rs =====
+// Copyright 2015-2019 Brian Smith.
+// SPDX-License-Identifier: ISC
+// Modifications copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+//! SHA-2 and the legacy SHA-1 digest algorithm.
+//!
+//! If all the data is available in a single contiguous slice then the `digest`
+//! function should be used. Otherwise, the digest can be calculated in
+//! multiple steps using `Context`.
+
+//! # Example
+//!
+//! ```
+//! use aws_lc_rs::digest;
+//!
+//! // Using `digest::digest`
+//! let one_shot = digest::digest(&digest::SHA384, b"hello, world");
+//!
+//! // Using `digest::Context`
+//! let mut ctx = digest::Context::new(&digest::SHA384);
+//! ctx.update(b"hello");
+//! ctx.update(b", ");
+//! ctx.update(b"world");
+//! let multi_part = ctx.finish();
+//!
+//! assert_eq!(&one_shot.as_ref(), &multi_part.as_ref());
+//! ```
+
+#![allow(non_snake_case)]
+
+===== src/ec/encoding.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/ec/key_pair.rs =====
+// Copyright 2015-2016 Brian Smith.
+// SPDX-License-Identifier: ISC
+// Modifications copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/ec/signature.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/ec.rs =====
+// Copyright 2015-2016 Brian Smith.
+// SPDX-License-Identifier: ISC
+// Modifications copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/ed25519.rs =====
+// Copyright 2015-2016 Brian Smith.
+// SPDX-License-Identifier: ISC
+// Modifications copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/encoding.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+//! Serialization formats
+
+===== src/endian.rs =====
+// Copyright 2015-2021 Brian Smith.
+// SPDX-License-Identifier: ISC
+// Modifications copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+/// An `Encoding` of a type `T` can be converted to/from its byte
+/// representation without any byte swapping or other computation.
+///
+/// The `Self: Copy` constraint addresses `clippy::declare_interior_mutable_const`.
+
+===== src/error.rs =====
+// Copyright 2015-2021 Brian Smith.
+// SPDX-License-Identifier: ISC
+// Modifications copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+//! Error reporting.
+
+===== src/evp_pkey.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/fips.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+/// Retrieve the FIPS module service status.
+
+===== src/hex.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+/// Converts bytes to a lower-case hex string
+
+===== src/hkdf/tests/fips.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+#![cfg(debug_assertions)]
+
+===== src/hkdf.rs =====
+// Copyright 2015 Brian Smith.
+// SPDX-License-Identifier: ISC
+// Modifications copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+//! HMAC-based Extract-and-Expand Key Derivation Function.
+//!
+//! HKDF is specified in [RFC 5869].
+//!
+//! [RFC 5869]: https://tools.ietf.org/html/rfc5869
+//!
+//! # Encoding `info`
+//!
+//! [`Prk::expand`] concatenates the `info` slices with no separator or length
+//! prefix. Callers must encode structured, variable-length context
+//! unambiguously to avoid deriving the same key from different inputs; see
+//! [`Prk::expand`].
+//!
+//! # Example
+//! ```
+//! use aws_lc_rs::{aead, hkdf, hmac, rand};
+//!
+//! // Generate a (non-secret) salt value
+//! let mut salt_bytes = [0u8; 32];
+//! rand::fill(&mut salt_bytes).unwrap();
+//!
+//! // Extract pseudo-random key from secret keying materials
+//! let salt = hkdf::Salt::new(hkdf::HKDF_SHA256, &salt_bytes);
+//! let pseudo_random_key = salt.extract(b"secret input keying material");
+//!
+//! // Derive HMAC key
+//! let hmac_key_material = pseudo_random_key
+//!     .expand(
+//!         &[b"hmac contextual info"],
+//!         hkdf::HKDF_SHA256.hmac_algorithm(),
+//!     )
+//!     .unwrap();
+//! let hmac_key = hmac::Key::from(hmac_key_material);
+//!
+//! // Derive UnboundKey for AES-128-GCM
+//! let aes_keying_material = pseudo_random_key
+//!     .expand(&[b"aes contextual info"], &aead::AES_128_GCM)
+//!     .unwrap();
+//! let aead_unbound_key = aead::UnboundKey::from(aes_keying_material);
+//! ```
+
+===== src/hmac/tests/fips.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+#![cfg(debug_assertions)]
+
+===== src/hmac.rs =====
+// Copyright 2015-2022 Brian Smith.
+// SPDX-License-Identifier: ISC
+// Modifications copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+//! HMAC is specified in [RFC 2104].
+//!
+//! After a `Key` is constructed, it can be used for multiple signing or
+//! verification operations. Separating the construction of the key from the
+//! rest of the HMAC operation allows the per-key precomputation to be done
+//! only once, instead of it being done in every HMAC operation.
+//!
+//! Frequently all the data to be signed in a message is available in a single
+//! contiguous piece. In that case, the module-level `sign` function can be
+//! used. Otherwise, if the input is in multiple parts, `Context` should be
+//! used.
+//!
+//! # Examples:
+//!
+//! ## Signing a value and verifying it wasn't tampered with
+//!
+//! ```
+//! use aws_lc_rs::{hmac, rand};
+//!
+//! let rng = rand::SystemRandom::new();
+//! let key = hmac::Key::generate(hmac::HMAC_SHA256, &rng)?;
+//!
+//! let msg = "hello, world";
+//!
+//! let tag = hmac::sign(&key, msg.as_bytes());
+//!
+//! // [We give access to the message to an untrusted party, and they give it
+//! // back to us. We need to verify they didn't tamper with it.]
+//!
+//! hmac::verify(&key, msg.as_bytes(), tag.as_ref())?;
+//!
+//! # Ok::<(), aws_lc_rs::error::Unspecified>(())
+//! ```
+//!
+//! ## Using the one-shot API:
+//!
+//! ```
+//! use aws_lc_rs::rand::SecureRandom;
+//! use aws_lc_rs::{digest, hmac, rand};
+//!
+//! let msg = "hello, world";
+//!
+//! // The sender generates a secure key value and signs the message with it.
+//! // Note that in a real protocol, a key agreement protocol would be used to
+//! // derive `key_value`.
+//! let rng = rand::SystemRandom::new();
+//! let key_value: [u8; digest::SHA256_OUTPUT_LEN] = rand::generate(&rng)?.expose();
+//!
+//! let s_key = hmac::Key::new(hmac::HMAC_SHA256, key_value.as_ref());
+//! let tag = hmac::sign(&s_key, msg.as_bytes());
+//!
+//! // The receiver (somehow!) knows the key value, and uses it to verify the
+//! // integrity of the message.
+//! let v_key = hmac::Key::new(hmac::HMAC_SHA256, key_value.as_ref());
+//! hmac::verify(&v_key, msg.as_bytes(), tag.as_ref())?;
+//!
+//! # Ok::<(), aws_lc_rs::error::Unspecified>(())
+//! ```
+//!
+//! ## Using the multi-part API:
+//! ```
+//! use aws_lc_rs::rand::SecureRandom;
+//! use aws_lc_rs::{digest, hmac, rand};
+//!
+//! let parts = ["hello", ", ", "world"];
+//!
+//! // The sender generates a secure key value and signs the message with it.
+//! // Note that in a real protocol, a key agreement protocol would be used to
+//! // derive `key_value`.
+//! let rng = rand::SystemRandom::new();
+//! let mut key_value: [u8; digest::SHA384_OUTPUT_LEN] = rand::generate(&rng)?.expose();
+//!
+//! let s_key = hmac::Key::new(hmac::HMAC_SHA384, key_value.as_ref());
+//! let mut s_ctx = hmac::Context::with_key(&s_key);
+//! for part in &parts {
+//!     s_ctx.update(part.as_bytes());
+//! }
+//! let tag = s_ctx.sign();
+//!
+//! // The receiver (somehow!) knows the key value, and uses it to verify the
+//! // integrity of the message.
+//! let v_key = hmac::Key::new(hmac::HMAC_SHA384, key_value.as_ref());
+//! let mut msg = Vec::<u8>::new();
+//! for part in &parts {
+//!     msg.extend(part.as_bytes());
+//! }
+//! hmac::verify(&v_key, &msg.as_ref(), tag.as_ref())?;
+//!
+//! # Ok::<(), aws_lc_rs::error::Unspecified>(())
+//! ```
+//! [RFC 2104]: https://tools.ietf.org/html/rfc2104
+
+===== src/io/der.rs =====
+// Copyright 2015 Brian Smith.
+// SPDX-License-Identifier: ISC
+// Modifications copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+//! Building blocks for parsing DER-encoded ASN.1 structures.
+//!
+//! This module contains the foundational parts of an ASN.1 DER parser.
+
+===== src/io/positive.rs =====
+// Copyright 2018 Brian Smith.
+// SPDX-License-Identifier: ISC
+// Modifications copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+//! Serialization and deserialization.
+
+/// A serialized positive integer.
+
+===== src/io.rs =====
+// Copyright 2018 Brian Smith.
+// SPDX-License-Identifier: ISC
+// Modifications copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+//! Serialization and deserialization.
+
+===== src/iv.rs =====
+// Copyright 2018 Brian Smith.
+// SPDX-License-Identifier: ISC
+// Modifications copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+#![allow(dead_code)]
+
+//! Initialization Vector (IV) cryptographic primitives
+
+===== src/kdf/kbkdf.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+#![allow(clippy::module_name_repetitions)]
+
+===== src/kdf/sskdf.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+#![allow(clippy::module_name_repetitions)]
+
+===== src/kdf.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+//! # Key-based Key Derivation Function (KBKDF) in Counter Mode
+//!
+//! [`kbkdf_ctr_hmac`] provides an implementation of KDF in Counter Mode using HMAC PRF specified in
+//! [NIST SP 800-108r1-upd1](https://doi.org/10.6028/NIST.SP.800-108r1-upd1) section 4.1. Further details
+//! regarding the implementation can be found on the accompanying function documentation.
+//!
+//! Key-based key derivation functions are used to derive additional keys from an existing cryptographic key.
+//!
+//! ##  Example: Usage with HMAC-SHA256 PRF
+//!
+//! ```rust
+//! # use std::error::Error;
+//! use aws_lc_rs::kdf::{
+//!         get_kbkdf_ctr_hmac_algorithm, kbkdf_ctr_hmac, KbkdfCtrHmacAlgorithm,
+//!         KbkdfCtrHmacAlgorithmId,
+//!     };
+//! #
+//! # fn main() -> Result<(), Box<dyn Error>> {
+//! use aws_lc_rs::error::Unspecified;
+//!
+//! const OUTPUT_KEY_LEN: usize = 16;
+//!
+//! let key: &[u8] = &[
+//!     0x01, 0x85, 0xfb, 0x76, 0x61, 0xf6, 0xdd, 0x40, 0x8d, 0x98, 0x2f, 0x81, 0x0f, 0xcd, 0x50,
+//!     0x04,
+//! ];
+//!
+//! let info: &[u8] = &[
+//!     0xc3, 0xf1, 0x71, 0x2a, 0x82, 0x61, 0x36, 0x43, 0xe0, 0xf7, 0x63, 0xa7, 0xa0, 0xa3, 0x15,
+//!     0x88, 0xb6, 0xae, 0xd9, 0x50, 0x56, 0xdf, 0xc5, 0x12, 0x55, 0x0c, 0xf2, 0xd0, 0x0d, 0x68,
+//!     0xa3, 0x2d,
+//! ];
+//!
+//! let mut output_key = [0u8; OUTPUT_KEY_LEN];
+//!
+//! let kbkdf_ctr_hmac_sha256: &KbkdfCtrHmacAlgorithm =
+//!     get_kbkdf_ctr_hmac_algorithm(KbkdfCtrHmacAlgorithmId::Sha256).ok_or(Unspecified)?;
+//!
+//! kbkdf_ctr_hmac(kbkdf_ctr_hmac_sha256, key, info, &mut output_key)?;
+//!
+//! assert_eq!(
+//!     output_key,
+//!     [
+//!         0xc6, 0x3f, 0x74, 0x7b, 0x67, 0xbe, 0x71, 0xf5, 0x7b, 0xa4, 0x56, 0x21, 0x17, 0xdd,
+//!         0x29, 0x4
+//!     ]
+//! );
+//!
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ##  Example: Usage with HMAC-SHA256 PRF using NIST FixedInfo Construction
+//!
+//! ```rust
+//! # use std::error::Error;
+//! use aws_lc_rs::kdf::{
+//!         get_kbkdf_ctr_hmac_algorithm, kbkdf_ctr_hmac, KbkdfCtrHmacAlgorithm,
+//!         KbkdfCtrHmacAlgorithmId,
+//!     };
+//!
+//!
+//! # fn main() -> Result<(), Box<dyn Error>> {
+//! use aws_lc_rs::error::Unspecified;
+//! const OUTPUT_KEY_LEN: usize = 16;
+//!
+//! let key: &[u8] = &[
+//!     0x01, 0x85, 0xfb, 0x76, 0x61, 0xf6, 0xdd, 0x40, 0x8d, 0x98, 0x2f, 0x81, 0x0f, 0xcd, 0x50,
+//!     0x04,
+//! ];
+//!
+//! let label: &[u8] = b"KBKDF HMAC Counter Label";
+//! let context: &[u8] = b"KBKDF HMAC Counter Context";
+//!
+//! let output_len_bits_be: [u8; 4] = {
+//!     // Multiply `output_len` by eight to convert from bytes to bits
+//!     // Convert value to a 32-bit big-endian representation
+//!     let len: u32 = (OUTPUT_KEY_LEN * 8).try_into()?;
+//!     len.to_be_bytes()
+//! };
+//!
+//! // FixedInfo String: Label || 0x00 || Context || [L]
+//! let mut info = Vec::<u8>::new();
+//! info.extend_from_slice(label);
+//! info.push(0x0);
+//! info.extend_from_slice(context);
+//! info.extend_from_slice(&output_len_bits_be);
+//!
+//! let mut output_key = [0u8; OUTPUT_KEY_LEN];
+//!
+//! let kbkdf_ctr_hmac_sha256: &KbkdfCtrHmacAlgorithm =
+//!     get_kbkdf_ctr_hmac_algorithm(KbkdfCtrHmacAlgorithmId::Sha256).ok_or(Unspecified)?;
+//!
+//! kbkdf_ctr_hmac(kbkdf_ctr_hmac_sha256, key, &info, &mut output_key)?;
+//!
+//! assert_eq!(
+//!     output_key,
+//!     [
+//!         0xcd, 0xe0, 0x92, 0xc8, 0xfe, 0x96, 0x21, 0x51, 0x88, 0xd4, 0x3d, 0xe4, 0x6c, 0xf6,
+//!         0x37, 0xcb
+//!     ]
+//! );
+//!
+//! # Ok(())
+//! # }
+//! ```
+//! # Single-step Key Derivation Function (SSKDF)
+//!
+//! [`sskdf_digest`] and [`sskdf_hmac`] provided implementations of a one-step key derivation function defined in
+//! section 4 of [NIST SP 800-56Cr2](https://doi.org/10.6028/NIST.SP.800-56Cr2).
+//!
+//! These functions are used to derive keying material from a shared secret during a key establishment scheme.
+//!
+//! ## SSKDF using digest
+//!
+//! ```rust
+//! # use std::error::Error;
+//! use aws_lc_rs::kdf::{
+//!         get_sskdf_digest_algorithm, sskdf_digest, SskdfDigestAlgorithm, SskdfDigestAlgorithmId,
+//!     };
+//!
+//! # fn main() -> Result<(), Box<dyn Error>> {
+//! use aws_lc_rs::error::Unspecified;
+//!
+//! const OUTPUT_KEY_LEN: usize = 16;
+//!
+//! let shared_secret: &[u8] = &[
+//!     0x59, 0x09, 0x6b, 0x7b, 0xb7, 0x2b, 0x94, 0xc5, 0x55, 0x5c, 0x36, 0xc9, 0x76, 0x8f, 0xd8,
+//!     0xe4, 0xed, 0x8f, 0x39, 0x5e, 0x78, 0x48, 0x5e, 0xb9, 0xf9, 0xdd, 0x43, 0x65, 0x55, 0x00,
+//!     0xed, 0x7a,
+//! ];
+//!
+//! let info: &[u8] = &[
+//!     0x9b, 0xca, 0xd7, 0xe8, 0xee, 0xf7, 0xb2, 0x1a, 0x98, 0xff, 0x18, 0x60, 0x5c, 0x68, 0x16,
+//!     0xbd,
+//! ];
+//!
+//! let mut output_key = [0u8; OUTPUT_KEY_LEN];
+//!
+//! let sskdf_digest_sha256: &SskdfDigestAlgorithm =
+//!     get_sskdf_digest_algorithm(SskdfDigestAlgorithmId::Sha256).ok_or(Unspecified)?;
+//!
+//! sskdf_digest(sskdf_digest_sha256, shared_secret, info, &mut output_key)?;
+//!
+//! assert_eq!(
+//!     output_key,
+//!     [
+//!         0x21, 0x79, 0x35, 0x6c, 0xdc, 0x30, 0x1, 0xe6, 0x3f, 0x91, 0xb3, 0xc8, 0x10, 0x7, 0xba,
+//!         0x31
+//!     ]
+//! );
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## SSKDF using HMAC
+//!
+//! ```rust
+//! # use std::error::Error;
+//! use aws_lc_rs::kdf::{
+//!         get_sskdf_hmac_algorithm, sskdf_hmac, SskdfHmacAlgorithm, SskdfHmacAlgorithmId,
+//!     };
+//!
+//!
+//! # fn main() -> Result<(), Box<dyn Error>> {
+//! use aws_lc_rs::error::Unspecified;
+//!
+//!
+//! const OUTPUT_KEY_LEN: usize = 16;
+//!
+//! let shared_secret: &[u8] = &[
+//!     0x59, 0x09, 0x6b, 0x7b, 0xb7, 0x2b, 0x94, 0xc5, 0x55, 0x5c, 0x36, 0xc9, 0x76, 0x8f, 0xd8,
+//!     0xe4, 0xed, 0x8f, 0x39, 0x5e, 0x78, 0x48, 0x5e, 0xb9, 0xf9, 0xdd, 0x43, 0x65, 0x55, 0x00,
+//!     0xed, 0x7a,
+//! ];
+//!
+//! let info: &[u8] = &[
+//!     0x9b, 0xca, 0xd7, 0xe8, 0xee, 0xf7, 0xb2, 0x1a, 0x98, 0xff, 0x18, 0x60, 0x5c, 0x68, 0x16,
+//!     0xbd,
+//! ];
+//!
+//! let salt: &[u8] = &[
+//!     0x2b, 0xc5, 0xf1, 0x6c, 0x48, 0x34, 0x72, 0xd8, 0xda, 0x53, 0xf6, 0xc3, 0x0f, 0x0a, 0xf4,
+//!     0x02,
+//! ];
+//!
+//! let mut output_key = [0u8; OUTPUT_KEY_LEN];
+//!
+//! let sskdf_hmac_sha256: &SskdfHmacAlgorithm =
+//!     get_sskdf_hmac_algorithm(SskdfHmacAlgorithmId::Sha256).ok_or(Unspecified)?;
+//!
+//! sskdf_hmac(
+//!     sskdf_hmac_sha256,
+//!     shared_secret,
+//!     info,
+//!     salt,
+//!     &mut output_key,
+//! )?;
+//!
+//! assert_eq!(
+//!     output_key,
+//!     [
+//!         0x4c, 0x36, 0x80, 0x2d, 0xf5, 0xd8, 0xd6, 0x1b, 0xd5, 0xc2, 0x4, 0x7e, 0x5, 0x5a, 0x6d,
+//!         0xcb
+//!     ]
+//! );
+//! # Ok(())
+//! # }
+//! ```
+
+===== src/kem.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+//! Key-Encapsulation Mechanisms (KEMs), including support for Kyber Round 3 Submission.
+//!
+//! # Example
+//!
+//! Note that this example uses the Kyber-512 Round 3 algorithm, but other algorithms can be used
+//! in the exact same way by substituting
+//! `kem::<desired_algorithm_here>` for `kem::KYBER512_R3`.
+//!
+//! ```rust
+//! use aws_lc_rs::{
+//!     kem::{Ciphertext, DecapsulationKey, EncapsulationKey},
+//!     kem::{ML_KEM_512}
+//! };
+//!
+//! // Alice generates their (private) decapsulation key.
+//! let decapsulation_key = DecapsulationKey::generate(&ML_KEM_512)?;
+//!
+//! // Alices computes the (public) encapsulation key.
+//! let encapsulation_key = decapsulation_key.encapsulation_key()?;
+//!
+//! let encapsulation_key_bytes = encapsulation_key.key_bytes()?;
+//!
+//! // Alice sends the encapsulation key bytes to bob through some
+//! // protocol message.
+//! let encapsulation_key_bytes = encapsulation_key_bytes.as_ref();
+//!
+//! // Bob constructs the (public) encapsulation key from the key bytes provided by Alice.
+//! let retrieved_encapsulation_key = EncapsulationKey::new(&ML_KEM_512, encapsulation_key_bytes)?;
+//!
+//! // Bob executes the encapsulation algorithm to to produce their copy of the secret, and associated ciphertext.
+//! let (ciphertext, bob_secret) = retrieved_encapsulation_key.encapsulate()?;
+//!
+//! // Alice receives ciphertext bytes from bob
+//! let ciphertext_bytes = ciphertext.as_ref();
+//!
+//! // Bob sends Alice the ciphertext computed from the encapsulation algorithm, Alice runs decapsulation to derive their
+//! // copy of the secret.
+//! let alice_secret = decapsulation_key.decapsulate(Ciphertext::from(ciphertext_bytes))?;
+//!
+//! // Alice and Bob have now arrived to the same secret
+//! assert_eq!(alice_secret.as_ref(), bob_secret.as_ref());
+//!
+//! # Ok::<(), aws_lc_rs::error::Unspecified>(())
+//! ```
+
+===== src/key_wrap/tests/fips.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+#![cfg(debug_assertions)]
+
+===== src/key_wrap/tests.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+#![cfg(test)]
+
+===== src/key_wrap.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+//! Key Wrap Algorithms.
+//!
+//! # Examples
+//! ```rust
+//! # use std::error::Error;
+//! # fn main() -> Result<(), Box<dyn Error>> {
+//! use aws_lc_rs::key_wrap::{AesKek, KeyWrapPadded, AES_128};
+//!
+//! const KEY: &[u8] = &[
+//!     0xa8, 0xe0, 0x6d, 0xa6, 0x25, 0xa6, 0x5b, 0x25, 0xcf, 0x50, 0x30, 0x82, 0x68, 0x30, 0xb6,
+//!     0x61,
+//! ];
+//! const PLAINTEXT: &[u8] = &[0x43, 0xac, 0xff, 0x29, 0x31, 0x20, 0xdd, 0x5d];
+//!
+//! let kek = AesKek::new(&AES_128, KEY)?;
+//!
+//! let mut output = vec![0u8; PLAINTEXT.len() + 15];
+//!
+//! let ciphertext = kek.wrap_with_padding(PLAINTEXT, &mut output)?;
+//!
+//! let kek = AesKek::new(&AES_128, KEY)?;
+//!
+//! let mut output = vec![0u8; ciphertext.len()];
+//!
+//! let plaintext = kek.unwrap_with_padding(&*ciphertext, &mut output)?;
+//!
+//! assert_eq!(PLAINTEXT, plaintext);
+//! # Ok(())
+//! # }
+//! ```
+
+===== src/lib.rs =====
+// Copyright 2015-2016 Brian Smith.
+// SPDX-License-Identifier: ISC
+// Modifications copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+#![cfg_attr(not(clippy), allow(unexpected_cfgs))]
+#![cfg_attr(not(clippy), allow(unknown_lints))]
+#![allow(clippy::doc_markdown)]
+//! A [*ring*](https://github.com/briansmith/ring)-compatible crypto library using the cryptographic
+//! operations provided by [*AWS-LC*](https://github.com/aws/aws-lc). It uses either the
+//! auto-generated [*aws-lc-sys*](https://crates.io/crates/aws-lc-sys) or
+//! [*aws-lc-fips-sys*](https://crates.io/crates/aws-lc-fips-sys)
+//! Foreign Function Interface (FFI) crates found in this repository for invoking *AWS-LC*.
+//!
+//! # Build
+//!
+//! `aws-lc-rs` is available through [crates.io](https://crates.io/crates/aws-lc-rs). It can
+//! be added to your project in the [standard way](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html)
+//! using `Cargo.toml`:
+//!
+//! ```toml
+//! [dependencies]
+//! aws-lc-rs = "1"
+//! ```
+//! Consuming projects will need a C/C++ compiler to build.
+//!
+//! **Non-FIPS builds (default):**
+//! * CMake is **never** required
+//! * Bindgen is **never** required (pre-generated bindings are provided)
+//! * Go is **never** required
+//!
+//! **FIPS builds:** Require **CMake**, **Go**, and potentially **bindgen** depending on the target platform.
+//!
+//! See our [User Guide](https://aws.github.io/aws-lc-rs/) for guidance on installing build requirements.
+//!
+//! # Feature Flags
+//!
+//! #### alloc (default)
+//!
+//! Allows implementation to allocate values of arbitrary size. (The meaning of this feature differs
+//! from the "alloc" feature of *ring*.) Currently, this is required by the `io::writer` module.
+//!
+//! #### ring-io (default)
+//!
+//! Enable feature to access the  `io`  module.
+//!
+//! #### ring-sig-verify (default)
+//!
+//! Enable feature to preserve compatibility with ring's `signature::VerificationAlgorithm::verify`
+//! function. This adds a requirement on `untrusted = "0.7.1"`.
+//!
+//! #### fips
+//!
+//! Enable this feature to have aws-lc-rs use the [*aws-lc-fips-sys*](https://crates.io/crates/aws-lc-fips-sys)
+//! crate for the cryptographic implementations. The aws-lc-fips-sys crate provides bindings to the
+//! latest version of the AWS-LC-FIPS module that has completed FIPS validation testing by an
+//! accredited lab and has been submitted to NIST for certification. This will continue to be the
+//! case as we periodically submit new versions of the AWS-LC-FIPS module to NIST for certification.
+//! Currently, aws-lc-fips-sys binds to
+//! [AWS-LC-FIPS 3.0.x](https://github.com/aws/aws-lc/tree/fips-2024-09-27).
+//!
+//! Consult with your local FIPS compliance team to determine the version of AWS-LC-FIPS module that you require. Consumers
+//! needing to remain on a previous version of the AWS-LC-FIPS module should pin to specific versions of aws-lc-rs to avoid
+//! automatically being upgraded to a newer module version.
+//! (See [cargo's documentation](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html)
+//! on how to specify dependency versions.)
+//!
+//! | AWS-LC-FIPS module | aws-lc-rs |
+//! |--------------------|-----------|
+//! | 2.0.x              | \<1.12.0  |
+//! | 3.0.x              | *latest*  |
+//!
+//! Refer to the
+//! [NIST Cryptographic Module Validation Program's Modules In Progress List](https://csrc.nist.gov/Projects/cryptographic-module-validation-program/modules-in-process/Modules-In-Process-List)
+//! for the latest status of the static or dynamic AWS-LC Cryptographic Module. Please see the
+//! [FIPS.md in the aws-lc repository](https://github.com/aws/aws-lc/blob/main/crypto/fipsmodule/FIPS.md)
+//! for relevant security policies and information on supported operating environments.
+//! We will also update our release notes and documentation to reflect any changes in FIPS certification status.
+//!
+//! #### non-fips
+//!
+//! Enable this feature to guarantee that the non-FIPS [*aws-lc-sys*](https://crates.io/crates/aws-lc-sys)
+//! crate is used for cryptographic implementations. This feature is mutually exclusive with the `fips`
+//! feature - enabling both will result in a compile-time error. Use this feature when you need a
+//! compile-time guarantee that your build is using the non-FIPS cryptographic module.
+//!
+//! #### asan
+//!
+//! Performs an "address sanitizer" build. This can be used to help detect memory leaks. See the
+//! ["Address Sanitizer" section](https://doc.rust-lang.org/beta/unstable-book/compiler-flags/sanitizer.html#addresssanitizer)
+//! of the [Rust Unstable Book](https://doc.rust-lang.org/beta/unstable-book/).
+//!
+//! **Preferred alternative:** Instead of the `asan` feature flag, you can set the
+//! `AWS_LC_SYS_SANITIZER` environment variable (or `AWS_LC_FIPS_SYS_SANITIZER` for FIPS builds)
+//! to one of: `asan`, `msan`, `tsan`. This approach does not require forwarding a feature through
+//! the dependency graph and also supports MemorySanitizer and ThreadSanitizer.
+//! MSAN and TSAN require the standard library to be rebuilt with sanitizer instrumentation, so
+//! you must install the `rust-src` component and pass `-Zbuild-std` to Cargo. For example:
+//!
+//! ```bash
+//! rustup component add rust-src --toolchain nightly
+//! AWS_LC_SYS_SANITIZER=msan RUSTFLAGS="-Zsanitizer=memory -Zsanitizer-memory-track-origins" \
+//!     cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu
+//! ```
+//!
+//! **Note:** MSAN is not currently supported for FIPS builds due to a missing preprocessor guard
+//! in the upstream AWS-LC `bcm.c` integrity check.
+//!
+//! #### bindgen
+//!
+//! Causes `aws-lc-sys` or `aws-lc-fips-sys` to generates fresh bindings for AWS-LC instead of using
+//! the pre-generated bindings. This feature requires `libclang` to be installed. See the
+//! [requirements](https://rust-lang.github.io/rust-bindgen/requirements.html)
+//! for [rust-bindgen](https://github.com/rust-lang/rust-bindgen)
+//!
+//! #### prebuilt-nasm
+//!
+//! Enables the use of crate provided prebuilt NASM objects under certain conditions. This only affects builds for
+//! Windows x86-64 platforms. This feature is ignored if the "fips" feature is also enabled.
+//!
+//! Use of prebuilt NASM objects is prevented if either of the following conditions are true:
+//! * The NASM assembler is detected in the build environment
+//! * `AWS_LC_SYS_PREBUILT_NASM` environment variable is set with a value of `0`
+//!
+//! Be aware that [features are additive](https://doc.rust-lang.org/cargo/reference/features.html#feature-unification);
+//! by enabling this feature, it is enabled for all crates within the same build.
+//!
+//! #### dev-tests-only
+//!
+//! Enables the `rand::unsealed` module, which re-exports the normally sealed `SecureRandom` trait.
+//! This allows consumers to provide their own implementations of `SecureRandom` (e.g., a
+//! deterministic RNG) for testing purposes. When enabled, a `mut_fill` method is also available on
+//! `SecureRandom`.
+//!
+//! This feature is restricted to **dev/debug profile builds only** — attempting to use it in a
+//! release build will result in a compile-time error.
+//!
+//! It can be enabled in two ways:
+//! * **Feature flag:** `cargo test --features dev-tests-only`
+//! * **Environment variable:** `AWS_LC_RS_DEV_TESTS_ONLY=1 cargo test`
+//!
+//! **⚠️ Warning:** This feature is intended **only** for development and testing. It must not be
+//! used in production builds. The `rand::unsealed` module and `mut_fill` method are not part of the
+//! stable public API and may change without notice.
+//!
+//! #### legacy-des
+//!
+//! Enables single DES and Triple DES as opt-in symmetric ciphers under the
+//! [`cipher`] module, exposing `DES_FOR_LEGACY_USE_ONLY` (single DES),
+//! `DES_EDE_FOR_LEGACY_USE_ONLY` (2-key Triple DES) and
+//! `DES_EDE3_FOR_LEGACY_USE_ONLY` (3-key Triple DES), together with the
+//! supporting key-length and IV-length constants. Only CBC and ECB operating
+//! modes are supported.
+//!
+//! **⚠️ Warning:** Single DES and Triple DES are legacy algorithms. Single DES
+//! provides only 56 bits of effective security and has been considered insecure
+//! for decades. Triple DES has been disallowed for encryption by
+//! [NIST SP 800-131A Rev. 2](https://csrc.nist.gov/publications/detail/sp/800-131a/rev-2/final):
+//! 2-key Triple DES after 2015, and 3-key Triple DES after 2023. This feature
+//! exists solely to support interoperability. All exposed items are marked
+//! `#[deprecated]` so that any use site produces a compiler warning. **Do not
+//! use single DES or Triple DES in new designs.** If you only need
+//! confidentiality, prefer AES-GCM or another AEAD from the [`aead`] module;
+//! if you specifically need a block cipher, prefer one of the AES algorithms
+//! in [`cipher`].
+//!
+//! **Build-time impact:** The default `aws-lc-sys` bindings do not expose the
+//! low-level `DES_*` symbols this feature relies on, so enabling `legacy-des`
+//! also enables `aws-lc-sys?/all-bindings`. Concretely:
+//!
+//! * On platforms with pre-generated per-target bindings, the build switches
+//!   from the universal bindings to the per-target bindings (no extra
+//!   tooling required).
+//! * On platforms *without* pre-generated bindings for the selected target,
+//!   `bindgen` is invoked at build time, which requires `libclang` to be
+//!   installed in the build environment.
+//!
+//! Because [features are
+//! additive](https://doc.rust-lang.org/cargo/reference/features.html#feature-unification),
+//! enabling `legacy-des` anywhere in your dependency graph applies the
+//! above to the entire build.
+//!
+//! # Use of prebuilt NASM objects
+//!
+//! Prebuilt NASM objects are **only** applicable to Windows x86-64 platforms. They are **never** used on any other platform (Linux, macOS, etc.).
+//!
+//! For Windows x86 and x86-64, NASM is required for assembly code compilation. On these platforms,
+//! we recommend that you install [the NASM assembler](https://www.nasm.us/). **If NASM is
+//! detected in the build environment, it is always used** to compile the assembly files. Prebuilt NASM objects are only used as a fallback.
+//!
+//! If a NASM assembler is not available, and the "fips" feature is not enabled, then the build fails unless one of the following conditions are true:
+//!
+//! * You are building for `x86-64` and either:
+//!    * The `AWS_LC_SYS_PREBUILT_NASM` environment variable is found and has a value of "1"; OR
+//!    * `AWS_LC_SYS_PREBUILT_NASM` is *not found* in the environment AND the "prebuilt-nasm" feature has been enabled.
+//!
+//! If the above cases apply, then the crate provided prebuilt NASM objects will be used for the build. To prevent usage of prebuilt NASM
+//! objects, install NASM in the build environment and/or set the variable `AWS_LC_SYS_PREBUILT_NASM` to `0` in the build environment to prevent their use.
+//!
+//! ## About prebuilt NASM objects
+//!
+//! Prebuilt NASM objects are generated using automation similar to the crate provided pregenerated bindings. See the repository's
+//! [GitHub workflow configuration](https://github.com/aws/aws-lc-rs/blob/main/.github/workflows/sys-bindings-generator.yml) for more information.
+//! The prebuilt NASM objects are checked into the repository
+//! and are [available for inspection](https://github.com/aws/aws-lc-rs/tree/main/aws-lc-sys/builder/prebuilt-nasm).
+//! For each PR submitted,
+//! [CI verifies](https://github.com/aws/aws-lc-rs/blob/main/.github/workflows/tests.yml)
+//! that the NASM objects newly built from source match the NASM objects currently in the repository.
+//!
+//! # *ring*-compatibility
+//!
+//! Although this library attempts to be fully compatible with *ring* (v0.16.x), there are a few places where our
+//! behavior is observably different.
+//!
+//! * Our implementation requires the `std` library. We currently do not support a
+//!   [`#![no_std]`](https://docs.rust-embedded.org/book/intro/no-std.html) build.
+//! * `aws-lc-rs` supports the platforms supported by `aws-lc-sys` and AWS-LC. See the
+//!   [Platform Support](https://aws.github.io/aws-lc-rs/platform_support.html) page in our User Guide.
+//! * `Ed25519KeyPair::from_pkcs8` and `Ed25519KeyPair::from_pkcs8_maybe_unchecked` both support
+//!   parsing of v1 or v2 PKCS#8 documents. If a v2 encoded key is provided to either function,
+//!   public key component, if present, will be verified to match the one derived from the encoded
+//!   private key.
+//!
+//! # Post-Quantum Cryptography
+//!
+//! Details on the post-quantum algorithms supported by aws-lc-rs can be found at
+//! [PQREADME](https://github.com/aws/aws-lc/tree/main/crypto/fipsmodule/PQREADME.md).
+//!
+//! # Motivation
+//!
+//! Rust developers increasingly need to deploy applications that meet US and Canadian government
+//! cryptographic requirements. We evaluated how to deliver FIPS validated cryptography in idiomatic
+//! and performant Rust, built around our AWS-LC offering. We found that the popular ring (v0.16)
+//! library fulfilled much of the cryptographic needs in the Rust community, but it did not meet the
+//! needs of developers with FIPS requirements. Our intention is to contribute a drop-in replacement
+//! for ring that provides FIPS support and is compatible with the ring API. Rust developers with
+//! prescribed cryptographic requirements can seamlessly integrate aws-lc-rs into their applications
+//! and deploy them into AWS Regions.
+
+#![warn(missing_docs)]
+#![warn(clippy::exhaustive_enums)]
+#![cfg_attr(aws_lc_rs_docsrs, feature(doc_cfg))]
+
+===== src/pbkdf2/tests/fips.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+#![cfg(debug_assertions)]
+
+===== src/pbkdf2.rs =====
+// Copyright 2015-2022 Brian Smith.
+// SPDX-License-Identifier: ISC
+// Modifications copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+//! PBKDF2 derivation and verification.
+//!
+//! Use `derive` to derive PBKDF2 outputs. Use `verify` to verify secret
+//! against previously-derived outputs.
+//!
+//! PBKDF2 is specified in [RFC 2898 Section 5.2] with test vectors given in
+//! [RFC 6070]. See also [NIST Special Publication 800-132].
+//!
+//! [RFC 2898 Section 5.2]: https://tools.ietf.org/html/rfc2898#section-5.2
+//! [RFC 6070]: https://tools.ietf.org/html/rfc6070
+//! [NIST Special Publication 800-132]:
+//!    http://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-132.pdf
+//!
+//! # Examples
+//!
+//! ## Password Database Example
+//!
+//! ```
+//! use aws_lc_rs::{digest, pbkdf2};
+//! use std::{collections::HashMap, num::NonZeroU32};
+//!
+//! static PBKDF2_ALG: pbkdf2::Algorithm = pbkdf2::PBKDF2_HMAC_SHA256;
+//! const CREDENTIAL_LEN: usize = digest::SHA256_OUTPUT_LEN;
+//! pub type Credential = [u8; CREDENTIAL_LEN];
+//!
+//! enum Error {
+//!     WrongUsernameOrPassword
+//! }
+//!
+//! struct PasswordDatabase {
+//!     pbkdf2_iterations: NonZeroU32,
+//!     db_salt_component: [u8; 16],
+//!
+//!     // Normally this would be a persistent database.
+//!     storage: HashMap<String, Credential>,
+//! }
+//!
+//! impl PasswordDatabase {
+//!     pub fn store_password(&mut self, username: &str, password: &str) {
+//!         let salt = self.salt(username);
+//!         let mut to_store: Credential = [0u8; CREDENTIAL_LEN];
+//!         pbkdf2::derive(PBKDF2_ALG, self.pbkdf2_iterations, &salt,
+//!                        password.as_bytes(), &mut to_store);
+//!         self.storage.insert(String::from(username), to_store);
+//!     }
+//!
+//!     pub fn verify_password(&self, username: &str, attempted_password: &str)
+//!                            -> Result<(), Error> {
+//!         match self.storage.get(username) {
+//!            Some(actual_password) => {
+//!                let salt = self.salt(username);
+//!                pbkdf2::verify(PBKDF2_ALG, self.pbkdf2_iterations, &salt,
+//!                               attempted_password.as_bytes(),
+//!                               actual_password)
+//!                     .map_err(|_| Error::WrongUsernameOrPassword)
+//!            },
+//!
+//!            None => Err(Error::WrongUsernameOrPassword)
+//!         }
+//!     }
+//!
+//!     // The salt should have a user-specific component so that an attacker
+//!     // cannot crack one password for multiple users in the database. It
+//!     // should have a database-unique component so that an attacker cannot
+//!     // crack the same user's password across databases in the unfortunate
+//!     // but common case that the user has used the same password for
+//!     // multiple systems.
+//!     fn salt(&self, username: &str) -> Vec<u8> {
+//!         let mut salt = Vec::with_capacity(self.db_salt_component.len() +
+//!                                           username.as_bytes().len());
+//!         salt.extend(self.db_salt_component.as_ref());
+//!         salt.extend(username.as_bytes());
+//!         salt
+//!     }
+//! }
+//!
+//! fn main() {
+//!     // Normally these parameters would be loaded from a configuration file.
+//!     let mut db = PasswordDatabase {
+//!         pbkdf2_iterations: NonZeroU32::new(100_000).unwrap(),
+//!         db_salt_component: [
+//!             // This value was generated from a secure PRNG.
+//!             0xd6, 0x26, 0x98, 0xda, 0xf4, 0xdc, 0x50, 0x52,
+//!             0x24, 0xf2, 0x27, 0xd1, 0xfe, 0x39, 0x01, 0x8a
+//!         ],
+//!         storage: HashMap::new(),
+//!     };
+//!
+//!     db.store_password("alice", "@74d7]404j|W}6u");
+//!
+//!     // An attempt to log in with the wrong password fails.
+//!     assert!(db.verify_password("alice", "wrong password").is_err());
+//!
+//!     // Normally there should be an expoentially-increasing delay between
+//!     // attempts to further protect against online attacks.
+//!
+//!     // An attempt to log in with the right password succeeds.
+//!     assert!(db.verify_password("alice", "@74d7]404j|W}6u").is_ok());
+//! }
+
+===== src/pkcs8.rs =====
+// Copyright 2017 Brian Smith.
+// SPDX-License-Identifier: ISC
+// Modifications copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+//! PKCS#8 is specified in [RFC 5208].
+//!
+//! [RFC 5208]: https://tools.ietf.org/html/rfc5208.
+
+===== src/pqdsa/key_pair.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/pqdsa/signature.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/pqdsa.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/ptr.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/rand.rs =====
+// Copyright 2015-2016 Brian Smith.
+// SPDX-License-Identifier: ISC
+// Modifications copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+//! Cryptographic pseudo-random number generation.
+//!
+//! An application should create a single `SystemRandom` and then use it for
+//! all randomness generation. See `SystemRandom`'s documentation for more
+//! details.
+
+//! # Example
+//! ```
+//! use aws_lc_rs::{rand, rand::SecureRandom};
+//!
+//! //  Using `rand::fill`
+//! let mut rand_bytes = [0u8; 32];
+//! rand::fill(&mut rand_bytes).unwrap();
+//!
+//! // Using `SystemRandom`
+//! let rng = rand::SystemRandom::new();
+//! rng.fill(&mut rand_bytes).unwrap();
+//!
+//! // Using `rand::generate`
+//! let random_array = rand::generate(&rng).unwrap();
+//! let more_rand_bytes: [u8; 64] = random_array.expose();
+//! ```
+
+===== src/rsa/encoding.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+/// [RFC 8017](https://www.rfc-editor.org/rfc/rfc8017.html)
+///
+/// PKCS #1: RSA Cryptography Specifications Version 2.2
+
+===== src/rsa/encryption/oaep.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+#![allow(clippy::module_name_repetitions)]
+
+===== src/rsa/encryption/pkcs1.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+#![allow(clippy::module_name_repetitions)]
+
+===== src/rsa/encryption.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/rsa/key.rs =====
+// Copyright 2015-2016 Brian Smith.
+// SPDX-License-Identifier: ISC
+// Modifications copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/rsa/signature.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/rsa/tests/fips.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+#![cfg(debug_assertions)]
+
+===== src/rsa.rs =====
+// Copyright 2015-2016 Brian Smith.
+// SPDX-License-Identifier: ISC
+// Modifications copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+//! RSA Signature and Encryption Support.
+//!
+//! # OAEP Encryption / Decryption
+//!
+//! ```rust
+//! # use std::error::Error;
+//! # fn main() -> Result<(), Box<dyn Error>> {
+//! use aws_lc_rs::{
+//!     encoding::{AsDer, Pkcs8V1Der, PublicKeyX509Der},
+//!     rsa::{KeySize, OAEP_SHA256_MGF1SHA256, OaepPublicEncryptingKey, OaepPrivateDecryptingKey, PublicEncryptingKey, PrivateDecryptingKey}
+//! };
+//!
+//! // Generate a RSA 2048-bit key.
+//! let private_key = PrivateDecryptingKey::generate(KeySize::Rsa2048)?;
+//!
+//! // Serialize the RSA private key to DER encoded PKCS#8 format for later usage.
+//! let private_key_der = AsDer::<Pkcs8V1Der>::as_der(&private_key)?;
+//! let private_key_der_bytes = private_key_der.as_ref();
+//!
+//! // Load a RSA private key from DER encoded PKCS#8 document.
+//! let private_key = PrivateDecryptingKey::from_pkcs8(private_key_der_bytes)?;
+//!
+//! // Retrieve the RSA public key
+//! let public_key = private_key.public_key();
+//!
+//! // Serialize the RSA public key to DER encoded X.509 SubjectPublicKeyInfo for later usage.
+//! let public_key_der = AsDer::<PublicKeyX509Der>::as_der(&public_key)?;
+//! let public_key_der_bytes = public_key_der.as_ref();
+//!
+//! // Load a RSA public key from DER encoded X.509 SubjectPublicKeyInfo.
+//! let public_key = PublicEncryptingKey::from_der(public_key_der_bytes)?;
+//!
+//! // Construct a RSA-OAEP public encrypting key
+//! let public_key = OaepPublicEncryptingKey::new(public_key)?;
+//!
+//! // The maximum size plaintext can be determined by calling `OaepPublicEncryptingKey::max_plaintext_size`
+//! let message = b"hello world";
+//! let mut ciphertext = vec![0u8; public_key.ciphertext_size()]; // Output will be the size of the RSA key length in bytes rounded up.
+//!
+//! // Encrypt a message with the public key without the optional label provided.
+//! let ciphertext = public_key.encrypt(&OAEP_SHA256_MGF1SHA256, message, &mut ciphertext, None)?;
+//!
+//! assert_ne!(message, ciphertext);
+//!
+//! // Construct a RSA-OAEP private decrypting key
+//! let private_key = OaepPrivateDecryptingKey::new(private_key)?;
+//!
+//! // Decrypt a message with the private key.
+//! let mut plaintext = vec![0u8; private_key.min_output_size()];
+//! let plaintext = private_key.decrypt(&OAEP_SHA256_MGF1SHA256, ciphertext, &mut plaintext, None)?;
+//!
+//! assert_eq!(message, plaintext);
+//!
+//! # Ok(())
+//! # }
+//! ```
+
+// *R* and *r* in Montgomery math refer to different things, so we always use
+// `R` to refer to *R* to avoid confusion, even when that's against the normal
+// naming conventions. Also the standard camelCase names are used for `KeyPair`
+// components.
+
+===== src/signature/parsed_public_key_tests.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+===== src/signature/tests/fips/keys.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+// Only needed if you need to add additional test cases for signature verifications
+
+===== src/signature/tests/fips.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+#![cfg(debug_assertions)]
+
+===== src/signature.rs =====
+// Copyright 2015-2017 Brian Smith.
+// SPDX-License-Identifier: ISC
+// Modifications copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+//! Public key signatures: signing and verification.
+//!
+//! Use the `verify` function to verify signatures, passing a reference to the
+//! algorithm that identifies the algorithm. See the documentation for `verify`
+//! for examples.
+//!
+//! For signature verification, this API treats each combination of parameters
+//! as a separate algorithm. For example, instead of having a single "RSA"
+//! algorithm with a verification function that takes a bunch of parameters,
+//! there are `RSA_PKCS1_2048_8192_SHA256`, `RSA_PKCS1_2048_8192_SHA384`, etc.,
+//! which encode sets of parameter choices into objects. This is designed to
+//! reduce the risks of algorithm agility and to provide consistency with ECDSA
+//! and `EdDSA`.
+//!
+//! Currently this module does not support digesting the message to be signed
+//! separately from the public key operation, as it is currently being
+//! optimized for Ed25519 and for the implementation of protocols that do not
+//! requiring signing large messages. An interface for efficiently supporting
+//! larger messages may be added later.
+//!
+//!
+//! # Algorithm Details
+//!
+//! ## `ECDSA_*_ASN1` Details: ASN.1-encoded ECDSA Signatures
+//!
+//! The signature is a ASN.1 DER-encoded `Ecdsa-Sig-Value` as described in
+//! [RFC 3279 Section 2.2.3]. This is the form of ECDSA signature used in
+//! X.509-related structures and in TLS's `ServerKeyExchange` messages.
+//!
+//! The public key is encoding in uncompressed form using the
+//! Octet-String-to-Elliptic-Curve-Point algorithm in
+//! [SEC 1: Elliptic Curve Cryptography, Version 2.0].
+//!
+//! During verification, the public key is validated using the ECC Partial
+//! Public-Key Validation Routine from Section 5.6.2.3.3 of
+//! [NIST Special Publication 800-56A, revision 2] and Appendix A.3 of the
+//! NSA's [Suite B implementer's guide to FIPS 186-3]. Note that, as explained
+//! in the NSA guide, ECC Partial Public-Key Validation is equivalent to ECC
+//! Full Public-Key Validation for prime-order curves like this one.
+//!
+//! ## `ECDSA_*_FIXED` Details: Fixed-length (PKCS#11-style) ECDSA Signatures
+//!
+//! The signature is *r*||*s*, where || denotes concatenation, and where both
+//! *r* and *s* are both big-endian-encoded values that are left-padded to the
+//! maximum length. A P-256 signature will be 64 bytes long (two 32-byte
+//! components) and a P-384 signature will be 96 bytes long (two 48-byte
+//! components). This is the form of ECDSA signature used PKCS#11 and DNSSEC.
+//!
+//! The public key is encoding in uncompressed form using the
+//! Octet-String-to-Elliptic-Curve-Point algorithm in
+//! [SEC 1: Elliptic Curve Cryptography, Version 2.0].
+//!
+//! During verification, the public key is validated using the ECC Partial
+//! Public-Key Validation Routine from Section 5.6.2.3.3 of
+//! [NIST Special Publication 800-56A, revision 2] and Appendix A.3 of the
+//! NSA's [Suite B implementer's guide to FIPS 186-3]. Note that, as explained
+//! in the NSA guide, ECC Partial Public-Key Validation is equivalent to ECC
+//! Full Public-Key Validation for prime-order curves like this one.
+//!
+//! ## `RSA_PKCS1_*` Details: RSA PKCS#1 1.5 Signatures
+//!
+//! The signature is an RSASSA-PKCS1-v1_5 signature as described in
+//! [RFC 3447 Section 8.2].
+//!
+//! The public key is encoded as an ASN.1 `RSAPublicKey` as described in
+//! [RFC 3447 Appendix-A.1.1]. The public key modulus length, rounded *up* to
+//! the nearest (larger) multiple of 8 bits, must be in the range given in the
+//! name of the algorithm. The public exponent must be an odd integer of 2-33
+//! bits, inclusive.
+//!
+//!
+//! ## `RSA_PSS_*` Details: RSA PSS Signatures
+//!
+//! The signature is an RSASSA-PSS signature as described in
+//! [RFC 3447 Section 8.1].
+//!
+//! The public key is encoded as an ASN.1 `RSAPublicKey` as described in
+//! [RFC 3447 Appendix-A.1.1]. The public key modulus length, rounded *up* to
+//! the nearest (larger) multiple of 8 bits, must be in the range given in the
+//! name of the algorithm. The public exponent must be an odd integer of 2-33
+//! bits, inclusive.
+//!
+//! During verification, signatures will only be accepted if the MGF1 digest
+//! algorithm is the same as the message digest algorithm and if the salt
+//! length is the same length as the message digest. This matches the
+//! requirements in TLS 1.3 and other recent specifications.
+//!
+//! During signing, the message digest algorithm will be used as the MGF1
+//! digest algorithm. The salt will be the same length as the message digest.
+//! This matches the requirements in TLS 1.3 and other recent specifications.
+//! Additionally, the entire salt is randomly generated separately for each
+//! signature using the secure random number generator passed to `sign()`.
+//!
+//!
+//! [SEC 1: Elliptic Curve Cryptography, Version 2.0]:
+//!     http://www.secg.org/sec1-v2.pdf
+//! [NIST Special Publication 800-56A, revision 2]:
+//!     http://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-56Ar2.pdf
+//! [Suite B implementer's guide to FIPS 186-3]:
+//!     https://github.com/briansmith/ring/blob/main/doc/ecdsa.pdf
+//! [RFC 3279 Section 2.2.3]:
+//!     https://tools.ietf.org/html/rfc3279#section-2.2.3
+//! [RFC 3447 Section 8.2]:
+//!     https://tools.ietf.org/html/rfc3447#section-7.2
+//! [RFC 3447 Section 8.1]:
+//!     https://tools.ietf.org/html/rfc3447#section-8.1
+//! [RFC 3447 Appendix-A.1.1]:
+//!     https://tools.ietf.org/html/rfc3447#appendix-A.1.1
+//!
+//!
+//! # Examples
+//!
+//! ## Signing and verifying with Ed25519
+//!
+//! ```
+//! use aws_lc_rs::{
+//!     rand,
+//!     signature::{self, KeyPair},
+//! };
+//!
+//! fn main() -> Result<(), aws_lc_rs::error::Unspecified> {
+//!     // Generate a new key pair for Ed25519.
+//!     let key_pair = signature::Ed25519KeyPair::generate()?;
+//!
+//!     // Sign the message "hello, world".
+//!     const MESSAGE: &[u8] = b"hello, world";
+//!     let sig = key_pair.sign(MESSAGE);
+//!
+//!     // Normally an application would extract the bytes of the signature and
+//!     // send them in a protocol message to the peer(s). Here we just get the
+//!     // public key key directly from the key pair.
+//!     let peer_public_key_bytes = key_pair.public_key().as_ref();
+//!
+//!     // Verify the signature of the message using the public key. Normally the
+//!     // verifier of the message would parse the inputs to this code out of the
+//!     // protocol message(s) sent by the signer.
+//!     let peer_public_key =
+//!         signature::UnparsedPublicKey::new(&signature::ED25519, peer_public_key_bytes);
+//!     peer_public_key.verify(MESSAGE, sig.as_ref())?;
+//!
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ## Signing and verifying with RSA (PKCS#1 1.5 padding)
+//!
+//! By default OpenSSL writes RSA public keys in `SubjectPublicKeyInfo` format,
+//! not `RSAPublicKey` format, and Base64-encodes them (“PEM” format).
+//!
+//! To convert the PEM `SubjectPublicKeyInfo` format (“BEGIN PUBLIC KEY”) to the
+//! binary `RSAPublicKey` format needed by `verify()`, use:
+//!
+//! ```sh
+//! openssl rsa -pubin \
+//!             -in public_key.pem \
+//!             -inform PEM \
+//!             -RSAPublicKey_out \
+//!             -outform DER \
+//!             -out public_key.der
+//! ```
+//!
+//! To extract the RSAPublicKey-formatted public key from an ASN.1 (binary)
+//! DER-encoded `RSAPrivateKey` format private key file, use:
+//!
+//! ```sh
+//! openssl rsa -in private_key.der \
+//!             -inform DER \
+//!             -RSAPublicKey_out \
+//!             -outform DER \
+//!             -out public_key.der
+//! ```
+//!
+//! ```
+//! use aws_lc_rs::{rand, signature};
+//!
+//! fn sign_and_verify_rsa(
+//!     private_key_path: &std::path::Path,
+//!     public_key_path: &std::path::Path,
+//! ) -> Result<(), MyError> {
+//!     // Create an `RsaKeyPair` from the DER-encoded bytes. This example uses
+//!     // a 2048-bit key, but larger keys are also supported.
+//!     let private_key_der = read_file(private_key_path)?;
+//!     let key_pair = signature::RsaKeyPair::from_der(&private_key_der)
+//!         .map_err(|_| MyError::BadPrivateKey)?;
+//!
+//!     // Sign the message "hello, world", using PKCS#1 v1.5 padding and the
+//!     // SHA256 digest algorithm.
+//!     const MESSAGE: &'static [u8] = b"hello, world";
+//!     let rng = rand::SystemRandom::new();
+//!     let mut signature = vec![0; key_pair.public_modulus_len()];
+//!     key_pair
+//!         .sign(&signature::RSA_PKCS1_SHA256, &rng, MESSAGE, &mut signature)
+//!         .map_err(|_| MyError::OOM)?;
+//!
+//!     // Verify the signature.
+//!     let public_key = signature::UnparsedPublicKey::new(
+//!         &signature::RSA_PKCS1_2048_8192_SHA256,
+//!         read_file(public_key_path)?,
+//!     );
+//!     public_key
+//!         .verify(MESSAGE, &signature)
+//!         .map_err(|_| MyError::BadSignature)
+//! }
+//!
+//! #[derive(Debug)]
+//! enum MyError {
+//!     IO(std::io::Error),
+//!     BadPrivateKey,
+//!     OOM,
+//!     BadSignature,
+//! }
+//!
+//! fn read_file(path: &std::path::Path) -> Result<Vec<u8>, MyError> {
+//!     use std::io::Read;
+//!
+//!     let mut file = std::fs::File::open(path).map_err(|e| MyError::IO(e))?;
+//!     let mut contents: Vec<u8> = Vec::new();
+//!     file.read_to_end(&mut contents)
+//!         .map_err(|e| MyError::IO(e))?;
+//!     Ok(contents)
+//! }
+//!
+//! fn main() {
+//! #   if !cfg!(target_arch = "wasm32") {
+//!     let private_key_path =
+//!         std::path::Path::new("tests/data/signature_rsa_example_private_key.der");
+//!     let public_key_path =
+//!         std::path::Path::new("tests/data/signature_rsa_example_public_key.der");
+//!     sign_and_verify_rsa(&private_key_path, &public_key_path).unwrap()
+//! #   }
+//! }
+//! ```
+
+===== src/test.rs =====
+// Copyright 2015-2016 Brian Smith.
+// SPDX-License-Identifier: ISC
+// Modifications copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+//! Testing framework.
+//!
+//! Unlike the rest of *aws-lc-rs*, this testing framework uses panics pretty
+//! liberally. It was originally designed for internal use--it drives most of
+//! *aws-lc-rs*'s internal tests, and so it is optimized for getting *aws-lc-rs*'s tests
+//! written quickly at the expense of some usability. The documentation is
+//! lacking. The best way to learn it is to look at some examples. The digest
+//! tests are the most complicated because they use named sections. Other tests
+//! avoid named sections and so are easier to understand.
+//!
+//! # Examples
+//!
+//! ## Writing Tests
+//!
+//! Input files look like this:
+//!
+//! ```text
+//! # This is a comment.
+//!
+//! HMAC = SHA1
+//! Input = "My test data"
+//! Key = ""
+//! Output = 61afdecb95429ef494d61fdee15990cabf0826fc
+//!
+//! HMAC = SHA256
+//! Input = "Sample message for keylen<blocklen"
+//! Key = 000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F
+//! Output = A28CF43130EE696A98F14A37678B56BCFCBDD9E5CF69717FECF5480F0EBDF790
+//! ```
+//!
+//! Test cases are separated with blank lines. Note how the bytes of the `Key`
+//! attribute are specified as a quoted string in the first test case and as
+//! hex in the second test case; you can use whichever form is more convenient
+//! and you can mix and match within the same file. The empty sequence of bytes
+//! can only be represented with the quoted string form (`""`).
+//!
+//! Here's how you would consume the test data:
+//!
+//! ```ignore
+//! use aws_lc_rs::test;
+//!
+//! test::run(test::test_file!("hmac_tests.txt"), |section, test_case| {
+//!     assert_eq!(section, ""); // This test doesn't use named sections.
+//!
+//!     let digest_alg = test_case.consume_digest_alg("HMAC");
+//!     let input = test_case.consume_bytes("Input");
+//!     let key = test_case.consume_bytes("Key");
+//!     let output = test_case.consume_bytes("Output");
+//!
+//!     // Do the actual testing here
+//! });
+//! ```
+//!
+//! Note that `consume_digest_alg` automatically maps the string "SHA1" to a
+//! reference to `digest::SHA1_FOR_LEGACY_USE_ONLY`, "SHA256" to
+//! `digest::SHA256`, etc.
+//!
+//! ## Output When a Test Fails
+//!
+//! When a test case fails, the framework automatically prints out the test
+//! case. If the test case failed with a panic, then the backtrace of the panic
+//! will be printed too. For example, let's say the failing test case looks
+//! like this:
+//!
+//! ```text
+//! Curve = P-256
+//! a = 2b11cb945c8cf152ffa4c9c2b1c965b019b35d0b7626919ef0ae6cb9d232f8af
+//! b = 18905f76a53755c679fb732b7762251075ba95fc5fedb60179e730d418a9143c
+//! r = 18905f76a53755c679fb732b7762251075ba95fc5fedb60179e730d418a9143c
+//! ```
+//! If the test fails, this will be printed (if `$RUST_BACKTRACE` is `1`):
+//!
+//! ```text
+//! src/example_tests.txt: Test panicked.
+//! Curve = P-256
+//! a = 2b11cb945c8cf152ffa4c9c2b1c965b019b35d0b7626919ef0ae6cb9d232f8af
+//! b = 18905f76a53755c679fb732b7762251075ba95fc5fedb60179e730d418a9143c
+//! r = 18905f76a53755c679fb732b7762251075ba95fc5fedb60179e730d418a9143c
+//! thread 'example_test' panicked at 'Test failed.', src\test.rs:206
+//! stack backtrace:
+//!    0:     0x7ff654a05c7c - std::rt::lang_start::h61f4934e780b4dfc
+//!    1:     0x7ff654a04f32 - std::rt::lang_start::h61f4934e780b4dfc
+//!    2:     0x7ff6549f505d - std::panicking::rust_panic_with_hook::hfe203e3083c2b544
+//!    3:     0x7ff654a0825b - rust_begin_unwind
+//!    4:     0x7ff6549f63af - std::panicking::begin_panic_fmt::h484cd47786497f03
+//!    5:     0x7ff654a07e9b - rust_begin_unwind
+//!    6:     0x7ff654a0ae95 - core::panicking::panic_fmt::h257ceb0aa351d801
+//!    7:     0x7ff654a0b190 - core::panicking::panic::h4bb1497076d04ab9
+//!    8:     0x7ff65496dc41 - from_file<closure>
+//!                         at C:\Users\Example\example\<core macros>:4
+//!    9:     0x7ff65496d49c - example_test
+//!                         at C:\Users\Example\example\src\example.rs:652
+//!   10:     0x7ff6549d192a - test::stats::Summary::new::ha139494ed2e4e01f
+//!   11:     0x7ff6549d51a2 - test::stats::Summary::new::ha139494ed2e4e01f
+//!   12:     0x7ff654a0a911 - _rust_maybe_catch_panic
+//!   13:     0x7ff6549d56dd - test::stats::Summary::new::ha139494ed2e4e01f
+//!   14:     0x7ff654a03783 - std::sys::thread::Thread::new::h2b08da6cd2517f79
+//!   15:     0x7ff968518101 - BaseThreadInitThunk
+//! ```
+//!
+//! Notice that the output shows the name of the data file
+//! (`src/example_tests.txt`), the test inputs that led to the failure, and the
+//! stack trace to the line in the test code that panicked: entry 9 in the
+//! stack trace pointing to line 652 of the file `example.rs`.
+
+#![doc(hidden)]
+
+===== src/tls_prf/tests/fips.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+#![cfg(debug_assertions)]
+
+===== src/tls_prf.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+//! TLS 1.2 PRF API's for usage in [RFC 5246](https://www.rfc-editor.org/rfc/rfc5246) and [RFC 7627](https://www.rfc-editor.org/rfc/rfc7627).
+//!
+//! # Example
+//!
+//! ```rust
+//! # use std::error::Error;
+//! #
+//! # fn main() -> Result<(), Box<dyn Error>> {
+//! use aws_lc_rs::tls_prf::{Secret, P_SHA256};
+//!
+//! let pre_master_secret = &[42; 32]; // Value is established during key exchange
+//! let session_hash = &[7; 32]; // Session hash of handshake log
+//!
+//! let secret = Secret::new(&P_SHA256, pre_master_secret)?;
+//!
+//! let derived_secret = secret.derive(b"extended master secret", session_hash, 48)?;
+//!
+//! let derived_secret_bytes = derived_secret.as_ref();
+//!
+//! assert_eq!(derived_secret_bytes.len(), 48);
+//! # Ok(())
+//! # }
+//! ```
+
+===== src/unstable/signature.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+//! This module contains unstable/experimental APIs.
+//!
+//! # ⚠️ Warning
+//! The APIs under this module are not stable and may change in the future.
+//! They are not covered by semver guarantees.
+//!
+//! # Signing and verifying with MLDSA-44
+//!
+//! ```rust
+//! # use std::error::Error;
+//! # fn main() -> Result<(), Box<dyn Error>> {
+//!     use aws_lc_rs::encoding::AsDer;
+//!     use aws_lc_rs::signature::{KeyPair, UnparsedPublicKey};
+//!     use aws_lc_rs::unstable::signature::{PqdsaKeyPair, MLDSA_44_SIGNING, MLDSA_44};
+//!
+//!     let signing_alg = &MLDSA_44_SIGNING;
+//!     let key_pair = PqdsaKeyPair::generate(signing_alg)?;
+//!
+//!     const MESSAGE: &'static [u8] = b"hello, world";
+//!     let mut signature = vec![0; signing_alg.signature_len()];
+//!
+//!     let signature_len = key_pair.sign(MESSAGE, &mut signature)?;
+//!     assert_eq!(signature_len, signature.len());
+//!
+//!     // Verify the signature.
+//!     let public_key_bytes = key_pair.public_key().as_der()?;
+//!     let public_key = UnparsedPublicKey::new(&MLDSA_44, public_key_bytes.as_ref());
+//!
+//!     assert!(public_key.verify(MESSAGE, &signature).is_ok());
+//! #   Ok(())
+//! # }
+//! ```
+//!
+
+===== src/unstable.rs =====
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+
+#![cfg(feature = "unstable")]
+
+//! This module contains unstable/experimental APIs.
+//!
+//! # ⚠️ Warning
+//! The APIs under this module are not stable and may change in the future.
+//! They are not covered by semver guarantees.
+//!

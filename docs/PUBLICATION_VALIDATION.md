@@ -18,6 +18,14 @@ archives are excluded. Historical records retain dated paths and references to
 omitted files; current user guides distinguish that history from portable setup.
 No project-wide license is invented by this publication.
 
+This paragraph records the October 6 publication state. On October 17, 2026,
+the repository owner selected MIT OR Apache-2.0 for CA-owned material. The
+subsequent licensing change adds the license texts, package declarations,
+contribution terms and dependency notices without rewriting the initial import
+or claiming additional rights over third-party components. See
+[licensing scope and provenance](LICENSING.md) and
+[the licensing change record](exec-plans/completed/LIC-2026-10-17-dual-licensing.md).
+
 ## Fresh validation
 
 | Check | Result |

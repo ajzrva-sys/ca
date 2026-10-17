@@ -1,0 +1,53 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== README.md =====
+## License
+
+This project is licensed under either of
+
+* [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0)
+* [MIT License](https://opensource.org/licenses/MIT)
+
+at your option.
+
+===== src/format/parse.rs =====
+// This is a part of Chrono.
+// Portions copyright (c) 2015, John Nagle.
+// See README.md and LICENSE.txt for details.
+
+//! Date and time parsing routines.
+
+===== src/offset/local/unix.rs =====
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
+// file at the top-level directory of this distribution and at
+// http://rust-lang.org/COPYRIGHT.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+===== src/offset/local/windows.rs =====
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
+// file at the top-level directory of this distribution and at
+// http://rust-lang.org/COPYRIGHT.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+===== src/time_delta.rs =====
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
+// file at the top-level directory of this distribution and at
+// http://rust-lang.org/COPYRIGHT.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+//! Temporal quantification

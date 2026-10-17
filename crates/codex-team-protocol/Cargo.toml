@@ -2,7 +2,7 @@
 name = "codex-team-protocol"
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license.workspace = true
 description = "Compatibility contract facade for ca automation"
 
 [dependencies]

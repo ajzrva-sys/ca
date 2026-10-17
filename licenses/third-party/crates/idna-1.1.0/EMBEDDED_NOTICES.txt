@@ -1,0 +1,125 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== src/deprecated.rs =====
+// Copyright 2013-2014 The rust-url developers.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+//! Deprecated API for [*Unicode IDNA Compatibility Processing*
+//! (Unicode Technical Standard #46)](http://www.unicode.org/reports/tr46/)
+
+#![allow(deprecated)]
+
+===== src/lib.rs =====
+// Copyright 2016 The rust-url developers.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+//! This Rust crate implements IDNA
+//! [per the WHATWG URL Standard](https://url.spec.whatwg.org/#idna).
+//!
+//! It also exposes the underlying algorithms from [*Unicode IDNA Compatibility Processing*
+//! (Unicode Technical Standard #46)](http://www.unicode.org/reports/tr46/)
+//! and [Punycode (RFC 3492)](https://tools.ietf.org/html/rfc3492).
+//!
+//! Quoting from [UTS #46’s introduction](http://www.unicode.org/reports/tr46/#Introduction):
+//!
+//! > Initially, domain names were restricted to ASCII characters.
+//! > A system was introduced in 2003 for internationalized domain names (IDN).
+//! > This system is called Internationalizing Domain Names for Applications,
+//! > or IDNA2003 for short.
+//! > This mechanism supports IDNs by means of a client software transformation
+//! > into a format known as Punycode.
+//! > A revision of IDNA was approved in 2010 (IDNA2008).
+//! > This revision has a number of incompatibilities with IDNA2003.
+//! >
+//! > The incompatibilities force implementers of client software,
+//! > such as browsers and emailers,
+//! > to face difficult choices during the transition period
+//! > as registries shift from IDNA2003 to IDNA2008.
+//! > This document specifies a mechanism
+//! > that minimizes the impact of this transition for client software,
+//! > allowing client software to access domains that are valid under either system.
+#![no_std]
+
+// For forwards compatibility
+
+===== src/punycode.rs =====
+// Copyright 2013 The rust-url developers.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+//! Punycode ([RFC 3492](http://tools.ietf.org/html/rfc3492)) implementation.
+//!
+//! Since Punycode fundamentally works on unicode code points,
+//! `encode` and `decode` take and return slices and vectors of `char`.
+//! `encode_str` and `decode_to_string` provide convenience wrappers
+//! that convert from and to Rust’s UTF-8 based `str` and `String` types.
+
+===== src/uts46.rs =====
+// Copyright The rust-url developers.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+//! This module provides the lower-level API for UTS 46.
+//!
+//! [`Uts46::process`] is the core that the other convenience
+//! methods build on.
+//!
+//! UTS 46 flags map to this API as follows:
+//!
+//! * _CheckHyphens_ - _true_: [`Hyphens::Check`], _false_: [`Hyphens::Allow`]; the WHATWG URL Standard sets this to _false_ for normal (non-conformance-checker) user agents.
+//! * _CheckBidi_ - Always _true_; cannot be configured, since this flag is _true_ even when WHATWG URL Standard _beStrict_ is _false_.
+//! * _CheckJoiners_ - Always _true_; cannot be configured, since this flag is _true_ even when WHATWG URL Standard _beStrict_ is _false_.
+//! * _UseSTD3ASCIIRules_ - _true_: [`AsciiDenyList::STD3`], _false_: [`AsciiDenyList::EMPTY`]; however, the check the WHATWG URL Standard performs right after the UTS 46 invocation corresponds to [`AsciiDenyList::URL`].
+//! * _Transitional_Processing_ - Always _false_ but could be implemented as a preprocessing step. This flag is deprecated and for Web purposes the transition is over in the sense that all of Firefox, Safari, or Chrome set this flag to _false_.
+//! * _VerifyDnsLength_ - _true_: [`DnsLength::Verify`], _false_: [`DnsLength::Ignore`]; the WHATWG URL Standard sets this to _false_ for normal (non-conformance-checker) user agents.
+//! * _IgnoreInvalidPunycode_ - Always _false_; cannot be configured. (Not yet covered by the WHATWG URL Standard, but 2 out of 3 major browser clearly behave as if this was _false_).
+
+===== tests/deprecated.rs =====
+// Copyright 2013-2014 The rust-url developers.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+#![allow(clippy::assigning_clones)]
+#![allow(deprecated)]
+
+===== tests/punycode.rs =====
+// Copyright 2013 The rust-url developers.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+===== tests/uts46.rs =====
+// Copyright 2013-2014 The rust-url developers.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+#![allow(clippy::assigning_clones)]

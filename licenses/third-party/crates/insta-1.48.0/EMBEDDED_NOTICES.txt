@@ -1,0 +1,20 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== README.md =====
+## License and Links
+
+- [Project Website](https://insta.rs/)
+- [Documentation](https://docs.rs/insta/)
+- [Issue Tracker](https://github.com/mitsuhiko/insta/issues)
+- License: [Apache-2.0](https://github.com/mitsuhiko/insta/blob/master/LICENSE)
+
+===== src/content/yaml/vendored/mod.rs =====
+//! Copyright 2015, Yuheng Chen. Apache 2 licensed.
+//!
+//! This vendored code used to be yaml-rust.  It's intended to be replaced in
+//! the next major version with a yaml-rust2 which is an actively maintained
+//! version of this.  Is it has different snapshot formats and different
+//! MSRV requirements, we vendor it temporarily.
+
+#![allow(unused)]
+#![allow(clippy::needless_raw_strings)]
