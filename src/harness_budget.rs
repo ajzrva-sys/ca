@@ -753,6 +753,8 @@ pub(crate) mod tests {
         let plan = plan(&frozen);
         start_harness_cycle(&vault, &plan, 0).unwrap();
         let provider = crate::config::ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: url,
             api_key: "synthetic-test-token".into(),
             protocol: ProviderProtocol::ChatCompletions,

@@ -187,8 +187,8 @@ fn write_preflight_receipt(receipt: &RoleRunPreflight, writer: &mut dyn Write) -
 
 async fn run_role(cli: RoleRunCli) -> i32 {
     let run_id = uuid::Uuid::new_v4();
-    let mut stdout = std::io::stdout().lock();
-    let mut stderr = std::io::stderr().lock();
+    let mut stdout = std::io::stdout();
+    let mut stderr = std::io::stderr();
 
     let current_dir = match std::env::current_dir() {
         Ok(path) => path,
@@ -309,12 +309,31 @@ async fn run_role(cli: RoleRunCli) -> i32 {
     };
     let output_redactions =
         crate::headless::HeadlessOutputRedactions::exact([route.provider.api_key.clone()]);
-    let client = crate::agent::AgentClient::with_request_store(
+    let mut client = crate::agent::AgentClient::with_request_store(
         route.provider_id.clone(),
         &route.provider,
         &route.model_id,
         crate::request::RequestStore::default(),
     );
+    if let Some(bounds) = request.request.learning_bounds {
+        client = match client
+            .with_one_attempt_policy()
+            .with_input_byte_cap(bounds.input_bytes)
+            .and_then(|c| c.with_output_token_cap(bounds.output_tokens))
+        {
+            Ok(client) => client,
+            Err(_) => {
+                return emit_role_failure(
+                    run_id,
+                    crate::headless::HeadlessFailureKind::Setup,
+                    "bounded learning provider policy is unavailable",
+                    3,
+                    &mut stdout,
+                    &mut stderr,
+                )
+            }
+        };
+    }
     crate::scratch::set_active(crate::scratch::ScratchStore::unavailable(
         request.workspace(),
     ));
@@ -355,8 +374,12 @@ async fn run_role(cli: RoleRunCli) -> i32 {
                 request.workspace().to_path_buf(),
                 request.workspace().to_path_buf(),
             ),
-            max_turns: ROLE_RUN_MAX_TURNS,
-            single_turn: false,
+            max_turns: if request.request.learning_bounds.is_some() {
+                1
+            } else {
+                ROLE_RUN_MAX_TURNS
+            },
+            single_turn: request.request.learning_bounds.is_some(),
             command_timeout_secs: ROLE_RUN_TOOL_TIMEOUT_SECONDS,
             command_output_policy: crate::config::CommandOutputPolicy::Bounded,
             output_format: crate::headless::OutputFormat::Jsonl,
@@ -380,10 +403,14 @@ async fn run_role(cli: RoleRunCli) -> i32 {
             skills,
             mcp: None,
             mechanistic: crate::config::MechanisticMcpConfig::default(),
+            native_mechanistic: false,
+            proactive_delegation: false,
+            review_changes: false,
             lsp: None,
             email: None,
             tool_policy,
             tool_constraints: crate::tool_selection::ToolSelectionConstraints {
+                native_mechanistic_enabled: false,
                 tools_supported,
                 images_supported: false,
                 skills_enabled: capabilities.skills,
@@ -456,6 +483,14 @@ pub struct RoleRunRequest {
     output_schema: PathBuf,
     tools: Vec<String>,
     grants: Vec<RoleRunGrant>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    learning_bounds: Option<RoleLearningBounds>,
+}
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct RoleLearningBounds {
+    input_bytes: usize,
+    output_tokens: u32,
 }
 
 impl std::fmt::Debug for RoleRunRequest {
@@ -822,6 +857,14 @@ pub fn validate_request(
     current_dir: &Path,
 ) -> Result<ValidatedRoleRunRequest, RoleRunError> {
     validate_request_text(&request)?;
+    if request.learning_bounds.is_some_and(|b| {
+        b.input_bytes == 0
+            || b.input_bytes > 131_072
+            || b.output_tokens == 0
+            || b.output_tokens > 8_192
+    }) {
+        return Err(RoleRunError::InvalidPrompt);
+    }
     let workspace = validate_workspace(&request.workspace, current_dir)?;
     let workspace_identity = capture_role_run_workspace_identity(&workspace)?;
     let permission_grants = validate_authority(&workspace, &request.tools, &request.grants)?;
@@ -1488,6 +1531,9 @@ pub async fn execute_role_run_read(
 #[cfg(unix)]
 struct RoleRunBoundFile {
     file: std::fs::File,
+    #[cfg(target_os = "freebsd")]
+    metadata: Box<std::fs::Metadata>,
+    #[cfg(not(target_os = "freebsd"))]
     metadata: std::fs::Metadata,
 }
 
@@ -1865,7 +1911,13 @@ fn open_role_run_child(parent: &std::fs::File, name: &str) -> Result<RoleRunBoun
         if metadata.nlink() != 1 || metadata.len() > MAX_ROLE_RUN_FILE_BYTES {
             return Err(());
         }
-        Ok(RoleRunBoundNode::File(RoleRunBoundFile { file, metadata }))
+        Ok(RoleRunBoundNode::File(RoleRunBoundFile {
+            file,
+            #[cfg(target_os = "freebsd")]
+            metadata: Box::new(metadata),
+            #[cfg(not(target_os = "freebsd"))]
+            metadata,
+        }))
     } else if metadata.is_dir() {
         Ok(RoleRunBoundNode::Directory(file))
     } else {
@@ -3205,7 +3257,10 @@ fn open_role_run_absolute_directory(path: &Path) -> Result<std::fs::File, ()> {
 }
 
 fn trusted_role_run_git_binary() -> Result<PathBuf, RoleRunProcessError> {
-    for candidate in [Path::new("/usr/bin/git"), Path::new("/bin/git")] {
+    for candidate in [
+        Path::new(ca_automation::git_metadata::EXECUTABLE),
+        Path::new("/bin/git"),
+    ] {
         let Ok(metadata) = std::fs::symlink_metadata(candidate) else {
             continue;
         };

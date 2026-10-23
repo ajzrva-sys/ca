@@ -3,7 +3,7 @@ use crate::app::{
     ToolStatus,
 };
 use crate::context::ShellHistory;
-use crate::tui::test_support::{render_to_text, test_state};
+use crate::tui::test_support::{render_to_text, test_state, try_render_to_text};
 use ratatui::backend::{Backend, TestBackend};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Position;
@@ -63,6 +63,116 @@ fn readable_plan_state() -> AppState {
             .review(),
     );
     state
+}
+
+fn plan_workflow_render_state() -> AppState {
+    use crate::plan_workflow::{PlanWorkflowArgs, WorkflowRole, WorkflowStep};
+    let mut state = readable_plan_state();
+    let route = crate::agent::subagent::AgentRoute {
+        provider: "first-provider".into(),
+        model: "planning-model".into(),
+    };
+    let mut work = state.work_state.lock().unwrap();
+    crate::plan_workflow::apply_action(
+        &mut work,
+        PlanWorkflowArgs::Start {
+            goal: "Plan café and 界面, review on another provider, then return to the author"
+                .into(),
+            participants: Vec::new(),
+            steps: vec![
+                WorkflowStep {
+                    role: WorkflowRole::Author,
+                    participant: "author".into(),
+                    route: Some(route.clone()),
+                    instructions: String::new(),
+                },
+                WorkflowStep {
+                    role: WorkflowRole::Review,
+                    participant: "reviewer".into(),
+                    route: Some(crate::agent::subagent::AgentRoute {
+                        provider: "second-provider".into(),
+                        model: "review-model".into(),
+                    }),
+                    instructions: String::new(),
+                },
+                WorkflowStep {
+                    role: WorkflowRole::Revise,
+                    participant: "author".into(),
+                    route: None,
+                    instructions: String::new(),
+                },
+            ],
+            review_loop: None,
+            implementation: None,
+        },
+        &route,
+        None,
+    )
+    .unwrap();
+    let workflow = work.plan_workflow.as_mut().unwrap();
+    workflow.status = crate::plan_workflow::WorkflowStatus::Paused;
+    workflow.cursor = 2;
+    workflow.steps[0].status = crate::plan_workflow::WorkflowStageStatus::Completed;
+    workflow.steps[0].result_snapshot = Some(0);
+    workflow.steps[1].status = crate::plan_workflow::WorkflowStageStatus::Completed;
+    workflow.steps[1].accepted = Some(false);
+    workflow.steps[1].feedback = Some("Preserve the Unicode names and test cancellation.".into());
+    workflow.steps[2].status = crate::plan_workflow::WorkflowStageStatus::Interrupted;
+    workflow.notice = Some("Paused after interruption; resume explicitly".into());
+    drop(work);
+    state.plan_workflow_graph = Some(Default::default());
+    state
+}
+
+#[test]
+fn plan_workflow_graph_and_participant_return_snapshots() {
+    let mut state = plan_workflow_render_state();
+    for (width, height) in [(100, 30), (60, 24)] {
+        let screen = render_to_text(&state, width, height);
+        for expected in [
+            "Plan workflow",
+            "first-provider/planning-model",
+            "second-provider/review-model",
+            "3. Revise",
+            "Interrupted",
+            "S Send",
+            "Tab agents/handoffs",
+        ] {
+            assert!(screen.contains(expected), "{expected}: {screen}");
+        }
+    }
+    insta::assert_snapshot!(
+        "plan_workflow_graph",
+        wide_narrow(
+            render_to_text(&state, 100, 30),
+            render_to_text(&state, 60, 24)
+        )
+    );
+    state.plan_workflow_graph.as_mut().unwrap().participants = true;
+    state.plan_workflow_graph.as_mut().unwrap().selected_idx = 1;
+    insta::assert_snapshot!(
+        "plan_workflow_participants",
+        wide_narrow(
+            render_to_text(&state, 100, 30),
+            render_to_text(&state, 60, 24)
+        )
+    );
+    let before = state.work_state.lock().unwrap().clone();
+    for (width, height) in [(24, 12), (12, 8)] {
+        assert!(try_render_to_text(&state, width, height).is_ok());
+    }
+    assert_eq!(*state.work_state.lock().unwrap(), before);
+}
+
+#[test]
+fn plan_workflow_empty_graph_explains_the_next_action() {
+    let mut state = test_state();
+    state.plan_workflow_graph = Some(Default::default());
+    for (width, height) in [(100, 30), (60, 24)] {
+        let screen = render_to_text(&state, width, height);
+        assert!(screen.contains("No plan workflow yet"), "{screen}");
+        assert!(screen.contains("/plan run"), "{screen}");
+    }
 }
 
 #[test]
@@ -262,6 +372,48 @@ fn rendered_frame(state: &AppState, width: u16, height: u16) -> (Position, Buffe
 }
 
 #[test]
+fn version_is_visible_in_normal_and_compact_conversations() {
+    let label = concat!("ca v", env!("CARGO_PKG_VERSION"));
+    for compact in [false, true] {
+        let mut state = test_state();
+        state.ui_compact_mode = compact;
+        state.cwd = "/workspace/界面/a-very-long-workspace-name".repeat(8);
+        state.current_context_tokens = 900_000;
+        state.current_context_window_tokens = Some(1_000_000);
+        for active in [false, true] {
+            if active {
+                state.turn_lifecycle.begin();
+            }
+            for width in [12, 24, 60, 100] {
+                let screen =
+                    try_render_to_text(&state, width, 30).expect("test terminal should render");
+                assert!(screen.lines().next().unwrap().contains(label), "{screen}");
+            }
+        }
+    }
+}
+
+#[test]
+fn version_is_visible_in_dashboard_and_personality_setup() {
+    let label = concat!("ca v", env!("CARGO_PKG_VERSION"));
+    for personality in [false, true] {
+        let mut state = test_state();
+        if personality {
+            state.personality_editor = Some(crate::tui::personality::Editor::loading(
+                "default".to_string(),
+            ));
+        } else {
+            crate::tui::dashboard::open(&mut state);
+        }
+        for width in [12, 24, 60, 100] {
+            let screen =
+                try_render_to_text(&state, width, 30).expect("test terminal should render");
+            assert!(screen.lines().next().unwrap().contains(label), "{screen}");
+        }
+    }
+}
+
+#[test]
 fn test_state_uses_in_memory_shell_history() {
     let mut state = AppState::new(ShellHistory::in_memory());
     state.shell_history.push("echo test-only");
@@ -273,19 +425,254 @@ fn test_state_uses_in_memory_shell_history() {
 }
 
 #[test]
+fn active_filter_keeps_a_banner_on_the_top_row() {
+    use std::sync::atomic::Ordering;
+
+    let mut state = test_state();
+    state.filter_banner.store(true, Ordering::Relaxed);
+    for (width, height) in [(12_u16, 16), (24, 20), (60, 24), (100, 30)] {
+        let (_, buffer) = rendered_frame(&state, width, height);
+        let banner = (0..width)
+            .map(|x| buffer[(x, 0)].symbol())
+            .collect::<String>();
+        let label = crate::tui::render::FILTER_BANNER_LABEL;
+        assert_eq!(banner.matches(label).count(), 1, "{banner}");
+        let start = banner.find(label).expect("label");
+        let right = width as usize - (start + label.len());
+        assert!(start.abs_diff(right) <= 1, "centered once: {banner}");
+        assert!(!banner.to_ascii_lowercase().contains("provider"));
+        assert!(!banner.contains("phrase"));
+        assert!(!banner.contains("url"));
+        for x in 0..width {
+            let cell = &buffer[(x, 0)];
+            assert_eq!(cell.bg, crate::tui::render::FILTER_BANNER_BG);
+            assert_eq!(cell.fg, crate::tui::render::FILTER_BANNER_FG);
+            assert!(cell.modifier.contains(Modifier::BOLD));
+        }
+        let title = (0..width)
+            .map(|x| buffer[(x, 2)].symbol())
+            .collect::<String>();
+        assert!(
+            title.contains(crate::tui::VERSION_LABEL),
+            "version stays under the summary row:\n{title}"
+        );
+    }
+
+    crate::tui::dashboard::open(&mut state);
+    state.slash_palette_open = true;
+    let (_, buffer) = rendered_frame(&state, 100, 30);
+    let banner = (0..100)
+        .map(|x| buffer[(x, 0)].symbol())
+        .collect::<String>();
+    assert!(banner.contains(crate::tui::render::FILTER_BANNER_LABEL));
+    assert_eq!(buffer[(0, 0)].bg, crate::tui::render::FILTER_BANNER_BG);
+    assert_eq!(buffer[(99, 0)].bg, crate::tui::render::FILTER_BANNER_BG);
+
+    let plain = test_state();
+    let screen = render_to_text(&plain, 100, 30);
+    assert!(!screen.lines().next().unwrap().contains("FILTER ON"));
+}
+
+#[test]
+fn provider_copy_pane_uses_the_classified_banner_and_scrolls() {
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    let mut state = test_state();
+    state.filter_banner.store(true, Ordering::Relaxed);
+    let mut body = String::from("«provider-page»\n");
+    for index in 0..40 {
+        body.push_str(&format!("row-{index:02}\n"));
+    }
+    state.provider_pane.note(1, Arc::from(body));
+
+    let narrow = render_to_text(&state, 60, 24);
+    assert!(
+        !narrow.contains("TO PROVIDER"),
+        "a narrow terminal keeps the conversation:\n{narrow}"
+    );
+
+    let (_, buffer) = rendered_frame(&state, 100, 30);
+    let top = (0..100)
+        .map(|x| buffer[(x, 0)].symbol())
+        .collect::<String>();
+    assert!(top.contains(crate::tui::render::FILTER_BANNER_LABEL));
+    assert!(!top.to_ascii_lowercase().contains("provider"));
+
+    let header = (60..100)
+        .map(|x| buffer[(x, 2)].symbol())
+        .collect::<String>();
+    let pane_label = crate::tui::render::PROVIDER_PANE_LABEL;
+    assert_eq!(header.matches(pane_label).count(), 1, "{header}");
+    let pane_start = header.find(pane_label).expect("pane label");
+    let pane_right = header.len() - (pane_start + pane_label.len());
+    assert!(
+        pane_start.abs_diff(pane_right) <= 1,
+        "centered once: {header}"
+    );
+    let footer = (60..100)
+        .map(|x| buffer[(x, 29)].symbol())
+        .collect::<String>();
+    assert!(footer.contains(crate::tui::render::PROVIDER_PANE_LABEL));
+    for x in 60..100 {
+        assert_eq!(buffer[(x, 2)].bg, crate::tui::render::FILTER_BANNER_BG);
+        assert_eq!(buffer[(x, 2)].fg, crate::tui::render::FILTER_BANNER_FG);
+        assert!(buffer[(x, 2)].modifier.contains(Modifier::BOLD));
+        assert_eq!(buffer[(x, 29)].bg, crate::tui::render::FILTER_BANNER_BG);
+    }
+    assert_eq!(buffer[(60, 3)].bg, crate::tui::render::FILTER_BANNER_BG);
+    let page = (61..100)
+        .map(|x| buffer[(x, 3)].symbol())
+        .collect::<String>();
+    assert!(page.contains("«provider-page»"), "{page}");
+    assert!(state.provider_pane.contains(70, 4));
+    assert!(!state.provider_pane.contains(10, 4));
+
+    assert!(crate::tui::input::handle_event(
+        &mut state,
+        &crate::tui::event::Event::MouseScroll(crate::tui::event::MouseScrollEvent {
+            direction: crate::tui::event::ScrollDirection::Down,
+            column: 70,
+            row: 4,
+        }),
+        "/workspace/ca",
+    ));
+    let (_, scrolled) = rendered_frame(&state, 100, 30);
+    let first = (61..100)
+        .map(|x| scrolled[(x, 3)].symbol())
+        .collect::<String>();
+    assert!(
+        !first.contains("«provider-page»"),
+        "the pane scrolled:\n{first}"
+    );
+    assert!(first.contains("row-02"), "{first}");
+
+    let hidden = test_state();
+    hidden.provider_pane.note(1, Arc::from("«provider-page»"));
+    let screen = render_to_text(&hidden, 100, 30);
+    assert!(!screen.contains("TO PROVIDER"));
+    assert!(!screen.contains("«provider-page»"));
+}
+
+#[test]
+fn provider_copy_pane_can_scroll_to_the_end_of_word_wrapped_text() {
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    let state = test_state();
+    state.filter_banner.store(true, Ordering::Relaxed);
+    let body = std::iter::repeat_n("abcdefghijklmnopqrst", 40)
+        .collect::<Vec<_>>()
+        .join(" ")
+        + " TAIL-SENTINEL";
+    state.provider_pane.note(1, Arc::from(body));
+
+    render_to_text(&state, 80, 28);
+    state.provider_pane.scroll_by(i32::MAX);
+    let screen = render_to_text(&state, 80, 28);
+    assert!(screen.contains("TAIL-SENTINEL"), "{screen}");
+}
+
+#[test]
+fn filter_summary_is_on_the_second_row_and_in_the_pane() {
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    let state = test_state();
+    state.filter_banner.store(true, Ordering::Relaxed);
+    let screen = render_to_text(&state, 100, 30);
+    assert!(!screen.contains("TO PROVIDER"));
+
+    *state.filter_summary.lock().expect("summary") = "stop 1 word".into();
+    let (_, buffer) = rendered_frame(&state, 100, 30);
+    let top = (0..100)
+        .map(|x| buffer[(x, 0)].symbol())
+        .collect::<String>();
+    assert!(top.contains(crate::tui::render::FILTER_BANNER_LABEL));
+    assert!(!top.contains("word"));
+    assert!(!top.contains("url"));
+    let summary = (0..100)
+        .map(|x| buffer[(x, 1)].symbol())
+        .collect::<String>();
+    assert!(summary.starts_with("stop 1 word"), "{summary}");
+    assert_eq!(buffer[(0, 1)].bg, crate::tui::render::FILTER_BANNER_BG);
+    assert_eq!(buffer[(0, 1)].fg, crate::tui::render::FILTER_BANNER_FG);
+    let pane = (61..100)
+        .map(|x| buffer[(x, 3)].symbol())
+        .collect::<String>();
+    assert!(pane.contains("stop 1 word"), "{pane}");
+    let header = (60..100)
+        .map(|x| buffer[(x, 2)].symbol())
+        .collect::<String>();
+    assert!(header.contains(crate::tui::render::PROVIDER_PANE_LABEL));
+
+    let narrow = render_to_text(&state, 60, 24);
+    assert!(
+        !narrow.contains("TO PROVIDER"),
+        "a narrow terminal keeps the conversation:\n{narrow}"
+    );
+
+    state.provider_pane.note(1, Arc::from("«body»\n"));
+    let (_, buffer) = rendered_frame(&state, 100, 30);
+    let first = (61..100)
+        .map(|x| buffer[(x, 3)].symbol())
+        .collect::<String>();
+    assert!(first.contains("stop 1 word"), "{first}");
+    let second = (61..100)
+        .map(|x| buffer[(x, 4)].symbol())
+        .collect::<String>();
+    assert!(second.contains("«body»"), "{second}");
+
+    let (_, short) = rendered_frame(&state, 40, 2);
+    let banner = (0..40).map(|x| short[(x, 0)].symbol()).collect::<String>();
+    assert!(banner.contains(crate::tui::render::FILTER_BANNER_LABEL));
+    let status = (0..40).map(|x| short[(x, 1)].symbol()).collect::<String>();
+    assert!(status.contains("stop 1 word"), "{status}");
+    assert_ne!(short[(0, 1)].bg, crate::tui::render::FILTER_BANNER_BG);
+
+    let (_, tiny) = rendered_frame(&state, 20, 1);
+    let only = (0..20).map(|x| tiny[(x, 0)].symbol()).collect::<String>();
+    assert!(only.contains("FILTER"));
+    assert!(!only.contains("word"));
+}
+
+#[test]
+fn snapshot_title_preserves_the_runtime_right_edge_across_version_widths() {
+    let state = test_state();
+    for width in [60, 100] {
+        let snapshot = render_to_text(&state, width, 30);
+        let runtime = try_render_to_text(&state, width, 30).unwrap();
+        let snapshot_title = snapshot.lines().next().unwrap();
+        let runtime_title = runtime.lines().next().unwrap();
+        assert!(snapshot_title.starts_with(" ca v0.0.0 │ /workspace/ca"));
+        assert_eq!(
+            snapshot_title.find("[Dashboard]"),
+            runtime_title.find("[Dashboard]")
+        );
+        assert_eq!(
+            unicode_width::UnicodeWidthStr::width(snapshot_title),
+            usize::from(width) - 1
+        );
+    }
+}
+
+#[test]
 fn startup_renders_without_a_real_terminal() {
     let state = test_state();
-    let rendered = render_to_text(&state, 100, 30);
+    let rendered = try_render_to_text(&state, 100, 30).expect("test terminal should render");
 
     let visible = rendered
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>();
-    assert_eq!(visible.len(), 3, "idle chrome:\n{rendered}");
-    assert!(visible[0].starts_with("ca · agent · auto"));
-    assert!(visible[1].starts_with("→ "));
-    assert_eq!(visible[2], "/ commands");
+    assert_eq!(visible.len(), 5, "idle chrome:\n{rendered}");
+    assert!(visible[0].starts_with(crate::tui::VERSION_LABEL));
+    assert!(visible[0].contains("/workspace/ca"));
+    assert!(visible[0].ends_with("[Dashboard]"));
+    assert!(visible[2].contains("› "));
+    assert!(visible[3].contains("agent · auto"));
+    assert_eq!(visible[4], "/ commands");
     for duplicate in [
         "Workspace ·",
         "drop a folder or type a request",
@@ -649,6 +1036,7 @@ fn cursor_blink_uses_a_stable_half_second_phase_and_resets_after_input() {
 fn streaming_jump_regression_state() -> AppState {
     let mut state = test_state();
     state.streaming = Some(StreamingState {
+        provider_text: Default::default(),
         content: "The repository already has most of the safe async TUI machinery from LRN-168, so I’ll extend that rather than create a second path. The working tree is heavily pre-existing dirty; I’ll constrain edits to the learning/TUI orchestration, focused tests/snapshots, and required plan/harness files, and won’t touch unrelated changes.".into(),
         tool_calls: Vec::new(),
         thinking: None,
@@ -814,6 +1202,98 @@ fn composer_white_cursor_tracks_hard_lines_soft_wraps_and_exact_width_wraps() {
     let (native_cursor, buffer) = rendered_frame(&soft_wrap, 20, 30);
     assert_eq!(native_cursor, Position::ORIGIN);
     assert_eq!(buffer[(4, 27)].bg, Color::White);
+}
+
+#[test]
+fn composer_hit_map_places_caret_from_rendered_rows() {
+    let mut state = test_state();
+    state.input = "one\ntwo".into();
+    state.input_cursor = state.input.len();
+    let (_native_cursor, _buffer) = rendered_frame(&state, 100, 30);
+
+    let hit = state.composer_ui.hit_map.borrow().clone();
+    let (area_x, area_y, _, _) = hit.text_area.expect("render records composer text area");
+    assert_eq!(area_y, 26);
+    assert_eq!(area_x, 1);
+    assert_eq!(hit.rows.len(), 2);
+    assert!(!hit.empty_placeholder);
+
+    // Click the caret cell at end of "two" keeps the caret at the end.
+    assert_eq!(hit.cursor_for_click(&state.input, 6, 27), Some(7));
+    // First column of the second hard line is byte 4.
+    assert_eq!(hit.cursor_for_click(&state.input, 3, 27), Some(4));
+    // First hard line prompt column maps to the start of "one".
+    assert_eq!(hit.cursor_for_click(&state.input, 3, 26), Some(0));
+
+    state.input_cursor = 0;
+    assert!(crate::tui::input::handle_event(
+        &mut state,
+        &crate::tui::Event::MouseSelection(crate::tui::event::MouseSelectionEvent {
+            phase: crate::tui::event::MouseSelectionPhase::Start,
+            column: 4,
+            row: 26,
+        }),
+        "/workspace/ca",
+    ));
+    assert_eq!(state.input_cursor, 1);
+    assert!(state.composer_ui.mouse_capture_active);
+}
+
+#[test]
+fn long_user_prompt_card_is_capped_with_scroll_affordance() {
+    let mut state = test_state();
+    let body = (0..20)
+        .map(|i| format!("paste line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    state.messages.push(Message {
+        role: Role::User,
+        content: body,
+        tool_calls: None,
+        thinking: None,
+        timestamp: fixed_time(),
+        response_items: Vec::new(),
+    });
+    let screen = render_to_text(&state, 100, 40);
+    assert!(screen.contains("paste line 0"), "{screen}");
+    assert!(
+        screen.contains("↓") && screen.contains("more"),
+        "expected overflow marker in capped card: {screen}"
+    );
+    assert!(
+        !screen.contains("paste line 19"),
+        "card should not show the final line before scroll: {screen}"
+    );
+
+    state.user_prompt_scroll.insert(0, 14);
+    let scrolled = render_to_text(&state, 100, 40);
+    assert!(scrolled.contains("paste line 19"), "{scrolled}");
+    assert!(scrolled.contains("↑"), "{scrolled}");
+    assert!(
+        !scrolled.contains("↓"),
+        "end of card should not show overflow marker: {scrolled}"
+    );
+}
+
+#[test]
+fn large_paste_preview_strip_shows_payload_window() {
+    let mut state = test_state();
+    let payload = (0..20)
+        .map(|i| format!("payload {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let marker = crate::tui::composer::large_paste_placeholder(payload.chars().count());
+    state.input = format!("review {marker}");
+    state.input_cursor = 7;
+    state
+        .composer_ui
+        .register_large_paste(7..7 + marker.len(), payload.clone());
+    let screen = render_to_text(&state, 100, 40);
+    assert!(screen.contains("Pasted Content"), "{screen}");
+    assert!(screen.contains("payload 0"), "{screen}");
+    assert!(!screen.contains("payload 10"), "{screen}");
+    let hit = *state.composer_ui.paste_preview_hit.borrow();
+    assert!(hit.height > 0, "preview strip records a hit rect");
 }
 
 #[test]
@@ -2343,6 +2823,7 @@ fn streaming_snapshots() {
         response_items: Vec::new(),
     });
     state.streaming = Some(StreamingState {
+        provider_text: Default::default(),
         usage_handle: crate::usage::UsageHandle::test_handle(),
         content: "I am checking the relevant files.".to_string(),
         tool_calls: vec![PartialToolCall {
@@ -2441,7 +2922,10 @@ fn pre_output_recovery_snapshots() {
     for (name, error) in [
         (
             "failed_turn_http400_recovery",
-            crate::agent::stream::ProviderError::Http { status: 400 },
+            crate::agent::stream::ProviderError::Http {
+                status: 400,
+                body_excerpt: None,
+            },
         ),
         (
             "failed_turn_exhausted_recovery",
@@ -2665,6 +3149,10 @@ fn inline_agent_activity_collapsed_and_focused_snapshots() {
             purpose: crate::agent::subagent::AgentRunPurpose::Subagent,
             status: crate::agent::subagent::AgentStatus::Running,
             task: "Audit learning hooks and tools".into(),
+            role: Some("Explorer".into()),
+            model: Some("fixture-model".into()),
+            provider: Some("fixture".into()),
+            phase: crate::agent::subagent::AgentExecutionPhase::Tool,
             current_action: Some("read_file".into()),
             created_at: fixed_time(),
             updated_at: fixed_time(),
@@ -2684,6 +3172,10 @@ fn inline_agent_activity_collapsed_and_focused_snapshots() {
             purpose: crate::agent::subagent::AgentRunPurpose::Subagent,
             status: crate::agent::subagent::AgentStatus::WaitingApproval,
             task: "Audit session structure".into(),
+            role: Some("Reviewer".into()),
+            model: Some("review-model".into()),
+            provider: Some("fixture".into()),
+            phase: crate::agent::subagent::AgentExecutionPhase::WaitingApproval,
             current_action: Some("run_command".into()),
             created_at: fixed_time() + chrono::Duration::seconds(1),
             updated_at: fixed_time() + chrono::Duration::seconds(1),
@@ -2699,16 +3191,16 @@ fn inline_agent_activity_collapsed_and_focused_snapshots() {
 
     let collapsed = render_to_text(&state, 100, 30);
     assert!(
-        collapsed.contains("✿ Background Agent — Audit learning hooks and tools"),
+        collapsed.contains("✿ Explorer Audit learning hooks and tools · Running read_file"),
         "first worker should have a stable flower icon:\n{collapsed}"
     );
     assert!(
-        collapsed.contains("◆ Waiting for approval — Audit session structure"),
+        collapsed.contains("◆ Reviewer Audit session structure · Waiting for approval"),
         "second worker should have a distinct stable icon:\n{collapsed}"
     );
     let (_, collapsed_buffer) = rendered_frame(&state, 100, 30);
-    assert_eq!(collapsed_buffer[(2, 4)].symbol(), "✿");
-    assert_eq!(collapsed_buffer[(2, 4)].fg, Color::Rgb(244, 107, 147));
+    assert_eq!(collapsed_buffer[(2, 5)].symbol(), "✿");
+    assert_eq!(collapsed_buffer[(2, 5)].fg, Color::Rgb(244, 107, 147));
     assert_eq!(collapsed_buffer[(2, 6)].symbol(), "◆");
     assert_eq!(collapsed_buffer[(2, 6)].fg, Color::Rgb(173, 127, 255));
 
@@ -2741,6 +3233,10 @@ fn inline_agent_activity_collapsed_and_focused_snapshots() {
         turn_id,
         purpose: crate::agent::subagent::AgentRunPurpose::Subagent,
         task: "Audit session structure".into(),
+        role: Some("Reviewer".into()),
+        model: Some("review-model".into()),
+        provider: Some("fixture".into()),
+        created_at: Some(fixed_time()),
         status: crate::agent::subagent::AgentStatus::Completed,
         summary: "Session boundaries verified".into(),
         updated_at: fixed_time() + chrono::Duration::seconds(2),
@@ -2752,6 +3248,202 @@ fn inline_agent_activity_collapsed_and_focused_snapshots() {
             render_to_text(&state, 60, 24)
         )
     );
+}
+
+fn charcoal_reference_state() -> AppState {
+    let mut state = test_state();
+    let turn_id = uuid::Uuid::parse_str("33333333-3333-4333-8333-333333333333").unwrap();
+    let at = fixed_time();
+    state.agent_activity_now = at + chrono::Duration::seconds(427);
+    state.current_context_tokens = 78_000;
+    state.current_context_window_tokens = Some(256_000);
+    state.current_model = Some(ModelInfo {
+        id: "fixture-model".into(),
+        provider: "fixture".into(),
+        display_name: "Fixture".into(),
+    });
+    state.reasoning_effort = Some(crate::config::ReasoningEffort::High);
+    state.messages = vec![
+        Message {
+            role: Role::User,
+            content: "Review this workspace for public release.".into(),
+            tool_calls: None,
+            thinking: None,
+            timestamp: at - chrono::Duration::seconds(1),
+            response_items: Vec::new(),
+        },
+        Message {
+            role: Role::Assistant,
+            content: "I am checking the release surfaces.\n\n```rust\nfn ready(checks: usize) -> bool { checks > 0 }\n```".into(),
+            tool_calls: None,
+            thinking: Some("Inspect the release surfaces and run an independent review.".into()),
+            timestamp: at,
+            response_items: Vec::new(),
+        },
+    ];
+    state.transcript_annotations = vec![crate::app::TranscriptMessageAnnotation {
+        message_timestamp: at,
+        turn_id,
+        reasoning_duration_ms: Some(29_700),
+        provider: Some("fixture".into()),
+        model: Some("fixture-model".into()),
+        total_turn_duration_ms: None,
+        terminal_outcome: None,
+    }];
+    state.live_agent_activity = vec![crate::agent::subagent::AgentActivitySnapshot {
+        id: crate::agent::subagent::AgentId(
+            uuid::Uuid::parse_str("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb").unwrap(),
+        ),
+        parent_turn: turn_id,
+        parent: None,
+        origin: crate::agent::subagent::AgentRunOrigin::AutomaticReview,
+        purpose: crate::agent::subagent::AgentRunPurpose::Subagent,
+        status: crate::agent::subagent::AgentStatus::Running,
+        task: "Public release".into(),
+        role: Some("Reviewer".into()),
+        model: Some("fixture-review-model".into()),
+        provider: Some("fixture".into()),
+        phase: crate::agent::subagent::AgentExecutionPhase::WaitingForResponse,
+        current_action: None,
+        created_at: at,
+        updated_at: at,
+        result_summary: None,
+        recent_output: String::new(),
+        events: Vec::new(),
+    }];
+    state
+}
+
+#[test]
+fn charcoal_conversation_reference_snapshots_and_colors() {
+    for (width, height) in [(184, 40), (100, 30), (60, 24)] {
+        let state = charcoal_reference_state();
+        let (_, buffer) = rendered_frame(&state, width, height);
+        let text = render_to_text(&state, width, height);
+        assert!(text.contains("78K / 256K"), "{text}");
+        assert!(text.contains("[Dashboard]"), "{text}");
+        assert!(text.contains("Subagents 1"), "{text}");
+        assert!(text.contains("Reviewer"), "{text}");
+        assert!(text.contains("7m07s"), "{text}");
+        assert!(text.contains("Thought for 29.7s"), "{text}");
+        assert_eq!(buffer[(0, 0)].bg, Color::Rgb(17, 17, 17));
+        assert!(buffer.content.iter().all(|cell| cell.bg != Color::Reset));
+        let prompt_row = text
+            .lines()
+            .position(|line| line.contains("› Review this"))
+            .unwrap_or_else(|| panic!("prompt card was not visible:\n{text}"))
+            as u16;
+        for column in 0..width {
+            assert_eq!(buffer[(column, prompt_row)].bg, Color::Rgb(38, 38, 38));
+            assert_eq!(buffer[(column, prompt_row - 1)].bg, Color::Rgb(38, 38, 38));
+            assert_eq!(buffer[(column, prompt_row + 1)].bg, Color::Rgb(38, 38, 38));
+        }
+        let agent_row = text
+            .lines()
+            .position(|line| line.contains("Reviewer"))
+            .unwrap() as u16;
+        let agent_line = text.lines().nth(agent_row as usize).unwrap();
+        let reviewer_byte = agent_line.find("Reviewer").unwrap();
+        let reviewer_column =
+            unicode_width::UnicodeWidthStr::width(&agent_line[..reviewer_byte]) as u16;
+        assert_eq!(
+            buffer[(reviewer_column, agent_row)].fg,
+            Color::Rgb(189, 147, 249)
+        );
+        insta::assert_snapshot!(format!("charcoal_conversation_{width}"), text);
+    }
+}
+
+#[test]
+fn inline_agent_timer_advances_once_per_second_and_freezes_on_completion() {
+    let mut state = charcoal_reference_state();
+    assert!(render_to_text(&state, 100, 30).contains("7m07s"));
+    let builds = state.transcript_cache.debug_stats().0;
+    state.agent_activity_now += chrono::Duration::milliseconds(200);
+    assert!(render_to_text(&state, 100, 30).contains("7m07s"));
+    assert_eq!(state.transcript_cache.debug_stats().0, builds);
+    state.agent_activity_now += chrono::Duration::seconds(1);
+    assert!(render_to_text(&state, 100, 30).contains("7m08s"));
+    assert_eq!(state.transcript_cache.debug_stats().0, builds + 1);
+    let agent = &mut state.live_agent_activity[0];
+    agent.status = crate::agent::subagent::AgentStatus::Completed;
+    agent.phase = crate::agent::subagent::AgentExecutionPhase::Finished;
+    agent.updated_at = agent.created_at + chrono::Duration::seconds(430);
+    agent.result_summary = Some("Release reviewed".into());
+    state.transcript_cache.invalidate();
+    assert!(render_to_text(&state, 100, 30).contains("7m10s"));
+    let builds = state.transcript_cache.debug_stats().0;
+    state.agent_activity_now += chrono::Duration::hours(1);
+    let completed = render_to_text(&state, 100, 30);
+    assert!(completed.contains("7m10s"));
+    assert!(completed.contains("Completed"));
+    assert_eq!(state.transcript_cache.debug_stats().0, builds);
+}
+
+#[test]
+fn dashboard_uses_selected_theme_and_reversible_preview() {
+    let mut state = test_state();
+    state.dashboard.open = true;
+    for (theme, background) in [
+        (crate::ui_settings::UiTheme::Default, Color::Rgb(17, 17, 17)),
+        (crate::ui_settings::UiTheme::Ocean, Color::Rgb(18, 34, 48)),
+        (crate::ui_settings::UiTheme::Amber, Color::Rgb(38, 31, 20)),
+        (crate::ui_settings::UiTheme::Mono, Color::Black),
+    ] {
+        state.ui_theme = theme;
+        let (_, buffer) = rendered_frame(&state, 100, 30);
+        assert_eq!(buffer[(0, 0)].bg, background);
+    }
+    state.theme_manager = Some(crate::app::ThemeManagerState {
+        selected_idx: crate::ui_settings::UiTheme::ALL
+            .iter()
+            .position(|theme| *theme == crate::ui_settings::UiTheme::Ocean)
+            .unwrap(),
+        saved_theme: state.ui_theme,
+        filter: String::new(),
+        busy: false,
+        notice: None,
+        error: None,
+    });
+    let (_, preview) = rendered_frame(&state, 100, 30);
+    assert_eq!(preview[(0, 0)].bg, Color::Rgb(18, 34, 48));
+    state.theme_manager = None;
+    let (_, restored) = rendered_frame(&state, 100, 30);
+    assert_eq!(restored[(0, 0)].bg, Color::Black);
+}
+
+#[test]
+fn automatic_light_appearance_reaches_cached_prompt_cards_and_dashboard() {
+    let mut state = charcoal_reference_state();
+    state.terminal_theme_auto = true;
+    state.terminal_appearance = Some(crate::terminal_awareness::TerminalAppearance::Light);
+    let (_, buffer) = rendered_frame(&state, 100, 30);
+    let text = render_to_text(&state, 100, 30);
+    let prompt_row = text
+        .lines()
+        .position(|line| line.contains("› Review this"))
+        .unwrap() as u16;
+    assert_eq!(buffer[(0, 0)].bg, Color::White);
+    assert_eq!(buffer[(0, prompt_row)].bg, Color::Gray);
+    assert_eq!(buffer[(3, prompt_row)].fg, Color::Black);
+    state.dashboard.open = true;
+    let (_, dashboard) = rendered_frame(&state, 100, 30);
+    assert_eq!(dashboard[(0, 0)].bg, Color::White);
+}
+
+#[test]
+fn narrow_composer_keeps_mode_and_long_model_visible() {
+    let mut state = test_state();
+    state.mode = crate::app::AgentMode::Plan;
+    state.current_model = Some(ModelInfo {
+        id: "a-long-model".into(),
+        provider: "fixture".into(),
+        display_name: "Long model name with extra detail that exceeds the available composer width"
+            .into(),
+    });
+    let text = render_to_text(&state, 60, 24);
+    assert!(text.contains("plan · Long model name"), "{text}");
+    assert!(text.contains("[Dashboard]"), "{text}");
 }
 
 #[test]
@@ -3168,6 +3860,8 @@ fn persistent_plan_tasks_snapshots() {
     );
     *state.work_state.lock().unwrap() = crate::work::WorkState {
         pending_automation_proposal: None,
+        plan_workflow: None,
+        pending_plan_workflow: None,
         plan_feedback: crate::plan_feedback::PlanFeedbackLedger::default(),
         plan: Some(crate::work::PlanArtifact {
             body: None,
@@ -4455,6 +5149,7 @@ fn provider_editor_snapshots() {
         origin: crate::app::ProviderEditorOrigin::ModelPicker,
         mode: crate::app::ProviderEditorMode::EditModel,
         draft: crate::app::ProviderModelDraft {
+            google: None,
             original_model: Some("mimo-v2.5".into()),
             provider: "mimo".into(),
             base_url: "https://token-plan-sgp.xiaomimimo.com/v1".into(),
@@ -4488,6 +5183,7 @@ fn provider_editor_add_model_snapshots() {
         origin: crate::app::ProviderEditorOrigin::ModelPicker,
         mode: crate::app::ProviderEditorMode::AddModel,
         draft: crate::app::ProviderModelDraft {
+            google: None,
             original_model: None,
             provider: "mimo".into(),
             base_url: "https://token-plan-sgp.xiaomimimo.com/v1".into(),
@@ -4521,6 +5217,7 @@ fn direct_openai_provider_editor_legacy_prompt_cache_snapshots() {
         origin: crate::app::ProviderEditorOrigin::ProviderManager,
         mode: crate::app::ProviderEditorMode::EditProvider,
         draft: crate::app::ProviderModelDraft {
+            google: None,
             original_model: None,
             provider: "openai".into(),
             base_url: crate::pricing::OPENAI_API_BASE_URL.into(),
@@ -4554,6 +5251,7 @@ fn provider_editor_add_provider_snapshots() {
         origin: crate::app::ProviderEditorOrigin::ModelPicker,
         mode: crate::app::ProviderEditorMode::AddProvider,
         draft: crate::app::ProviderModelDraft {
+            google: None,
             original_model: None,
             provider: String::new(),
             base_url: String::new(),
@@ -4587,6 +5285,7 @@ fn provider_editor_openai_template_snapshots() {
         origin: crate::app::ProviderEditorOrigin::ProviderSetup,
         mode: crate::app::ProviderEditorMode::AddProvider,
         draft: crate::app::ProviderModelDraft {
+            google: None,
             original_model: None,
             provider: crate::config::OPENAI_PROVIDER_TEMPLATE_ID.into(),
             base_url: crate::config::OPENAI_PROVIDER_TEMPLATE_BASE_URL.into(),
@@ -4621,6 +5320,7 @@ fn provider_editor_anthropic_template_snapshots() {
         mode: crate::app::ProviderEditorMode::AddProvider,
         origin: crate::app::ProviderEditorOrigin::ProviderSetup,
         draft: crate::app::ProviderModelDraft {
+            google: None,
             original_model: None,
             provider: template.provider_id.into(),
             base_url: template.base_url.unwrap().into(),
@@ -5081,6 +5781,7 @@ fn provider_settings_editor_masks_saved_credentials_snapshots() {
         origin: crate::app::ProviderEditorOrigin::ProviderManager,
         mode: crate::app::ProviderEditorMode::EditProvider,
         draft: crate::app::ProviderModelDraft {
+            google: None,
             original_model: None,
             provider: "saved".into(),
             base_url: "https://saved.invalid/v1".into(),
@@ -5313,6 +6014,13 @@ fn provider_setup_finish_and_no_passing_snapshots() {
 
 #[test]
 fn provider_command_palette_snapshots() {
+    assert_eq!(
+        crate::tui::commands::matching_commands("provider", false)
+            .iter()
+            .map(|command| command.name)
+            .collect::<Vec<_>>(),
+        ["provider", "plan", "errors", "trace", "filter"]
+    );
     let mut state = test_state();
     state.input = "/provider".into();
     state.input_cursor = state.input.len();
@@ -5622,9 +6330,20 @@ fn reviewed_archive_learning_pager_snapshots() {
     );
 
     let mut proposal = test_state();
-    proposal.pager_content = "Generated archive-learning proposal (inert)\nEvidence digest: 8c675308b4ab93d41d21c2762b02be7b7deca092bd8f46cb26d1f70a2caf8d26\nRoute: openai/gpt-5.6-terra\nProposal runs: 2\nExact proposal digest: 93114028fd7be3278956f3f7eb9ac6cfebd1e1b69a495209eef83413784c8b1c\n\n- 9f596ff0-d920-4dd1-a21e-91b60b33a4c0 · workspace 42f5d194034e · 1 memory operation(s) · 1 skill package(s)\n  memory item bbb3a430c14d1b2e793330543706592f30c78bfef16e39716669704ebcb9e0a8 · Workspace Add: Keep diffs local.\n  skill item 0d722f881bcd53a69c05aab6c86f5095378672193540854350113949147eea29: Build focused validation fixtures.\n\nEnter opens in-app actions.\nDrag copies selected text; C copies the full page.\nCLI fallback: ca learn proposal apply 93114028fd7be3278956f3f7eb9ac6cfebd1e1b69a495209eef83413784c8b1c --item bbb3a430c14d1b2e793330543706592f30c78bfef16e39716669704ebcb9e0a8".into();
+    proposal.pager_content = "Generated archive-learning proposal (inert)\nEvidence digest: 8c675308b4ab93d41d21c2762b02be7b7deca092bd8f46cb26d1f70a2caf8d26\nRoute: openai/gpt-5.6-terra\nProposal runs: 2\nExact proposal digest: 93114028fd7be3278956f3f7eb9ac6cfebd1e1b69a495209eef83413784c8b1c\n\n- 9f596ff0-d920-4dd1-a21e-91b60b33a4c0 · workspace 42f5d194034e · 1 memory operation(s) · 1 skill package(s)\n  memory item bbb3a430c14d1b2e793330543706592f30c78bfef16e39716669704ebcb9e0a8 · Workspace Add: Keep diffs local.\n  skill item 0d722f881bcd53a69c05aab6c86f5095378672193540854350113949147eea29: Build focused validation fixtures.\n\ny applies these changes. n leaves them pending.".into();
     proposal.pager_open = true;
     proposal.learning_review_pager_open = true;
+    proposal.learning_review_view = Some(crate::codex_learning::TuiLearningView {
+        kind: crate::codex_learning::TuiLearningViewKind::Proposal,
+        content: proposal.pager_content.clone(),
+        evidence: None,
+        proposal: Some(crate::codex_learning::TuiProposalBinding {
+            digest: "93114028fd7be3278956f3f7eb9ac6cfebd1e1b69a495209eef83413784c8b1c".into(),
+            memory_items: 1,
+            skill_items: 1,
+        }),
+    });
+    crate::open_learning_proposal_confirmation(&mut proposal);
     insta::assert_snapshot!(
         "reviewed_archive_learning_proposal",
         wide_narrow(
@@ -6062,6 +6781,7 @@ fn session_delete_confirmation_snapshots() {
         storage_key: "session-one".into(),
         session_id: uuid::Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap(),
         title: "Repository review".into(),
+        archived: false,
         delete_selected: false,
         busy: false,
         error: None,
@@ -6074,6 +6794,11 @@ fn session_delete_confirmation_snapshots() {
             render_to_text(&state, 60, 24)
         )
     );
+    state.session_delete_confirmation.as_mut().unwrap().archived = true;
+    let archived = render_to_text(&state, 100, 30);
+    assert!(archived.contains("Purge archived session?"));
+    assert!(archived.contains("exactly this archived session"));
+    state.session_delete_confirmation.as_mut().unwrap().archived = false;
 
     state.session_delete_confirmation.as_mut().unwrap().error =
         Some("Session deletion failed: permission denied".into());
@@ -6582,6 +7307,7 @@ fn fallback_marker_state(streaming: bool) -> AppState {
         });
     if streaming {
         state.streaming = Some(StreamingState {
+            provider_text: Default::default(),
             content: "The backup provider is answering now.".into(),
             tool_calls: Vec::new(),
             thinking: None,
@@ -8097,6 +8823,10 @@ fn task_graph_render_state() -> AppState {
             },
             worktree_id: None,
             accept_cross_lane_handoff: false,
+            produces: Vec::new(),
+            consumes: Vec::new(),
+            task_kind: crate::agent_graph::AgentTaskKind::Agent,
+            merge_policy: crate::agent_graph::AgentMergePolicy::RejectConflict,
             max_attempts: 2,
             evidence: evidence.clone(),
             verification_contract: Some(crate::agent_graph::EvidenceContractV1 {
@@ -8122,6 +8852,8 @@ fn task_graph_render_state() -> AppState {
     };
     let mut work = crate::work::WorkState {
         pending_automation_proposal: None,
+        plan_workflow: None,
+        pending_plan_workflow: None,
         plan_feedback: crate::plan_feedback::PlanFeedbackLedger::default(),
         plan: Some(crate::work::PlanArtifact {
             body: None,
@@ -8159,6 +8891,7 @@ fn task_graph_render_state() -> AppState {
                 .unwrap(),
             ),
             budget_usage: crate::agent_graph::AgentGraphBudgetUsageV1::default(),
+            handoff_ledger: Vec::new(),
         },
         historical_notice: None,
     };
@@ -8242,6 +8975,8 @@ fn task_graph_running_failure_retry_and_complete_snapshots() {
                 verification_receipt: None,
                 workspace_snapshot: None,
                 host_verification: None,
+                handoff_outputs: Vec::new(),
+                handoff_inputs: Vec::new(),
                 budget_usage: crate::agent_graph::AgentGraphBudgetUsageV1::default(),
             });
     }
@@ -8361,6 +9096,8 @@ fn task_graph_labels_a_stale_pass_receipt_as_invalid() {
                 verification_receipt: Some(receipt),
                 workspace_snapshot: Some(host_snapshot),
                 host_verification: Some(host_verification),
+                handoff_outputs: Vec::new(),
+                handoff_inputs: Vec::new(),
                 budget_usage: crate::agent_graph::AgentGraphBudgetUsageV1::default(),
             });
         work.agent_graph.approved_revision = Some(binding.approved_revision + 1);
@@ -10053,6 +10790,7 @@ fn activity_grouping_includes_partial_streaming_calls_without_losing_status() {
         "@@ /workspace/ca/src/complete.rs (Created, 4 bytes) @@\n+done",
     )])];
     state.streaming = Some(StreamingState {
+        provider_text: Default::default(),
         content: String::new(),
         tool_calls: vec![PartialToolCall {
             index: 0,
@@ -10568,4 +11306,244 @@ fn agent_dashboard_snapshots() {
             render_to_text(&usage, 60, 24)
         )
     );
+}
+
+fn bug292_await_call(job: &crate::jobs::JobInfo, id: &str) -> ToolCall {
+    ToolCall {
+        id: id.into(),
+        name: "await_job".into(),
+        arguments: serde_json::json!({"job_id": job.id.to_string()}).to_string(),
+        status: ToolStatus::Running,
+        output: None,
+    }
+}
+
+fn bug292_waiting_job_state() -> AppState {
+    let mut state = jobs_state();
+    state.jobs_view_open = false;
+    state.messages.clear();
+    state.messages.push(Message {
+        role: Role::Assistant,
+        content: String::new(),
+        tool_calls: Some(vec![bug292_await_call(&state.job_list[0], "await-1")]),
+        thinking: None,
+        timestamp: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+        response_items: Vec::new(),
+    });
+    state.turn_lifecycle.begin();
+    state
+        .turn_lifecycle
+        .set_phase(crate::activity::ActivityPhase::Tool);
+    state.status_message = Some("Waiting for managed job…".into());
+    state
+}
+
+#[test]
+fn bug292_await_preview_shows_current_stdout_and_stderr_tails_together() {
+    let mut state = bug292_waiting_job_state();
+    state.job_list[0].stdout = "old-stdout\nstdout-one\nstdout-two".into();
+    state.job_list[0].stderr = "old-stderr\nstderr-one\nstderr-two".into();
+    for (width, height) in [(100, 30), (60, 24)] {
+        let screen = render_to_text(&state, width, height);
+        for expected in [
+            "stdout: stdout-one",
+            "stdout: stdout-two",
+            "stderr: stderr-one",
+            "stderr: stderr-two",
+        ] {
+            assert!(screen.contains(expected), "missing {expected}:\n{screen}");
+        }
+        assert!(!screen.contains("old-stdout"), "{screen}");
+        assert!(!screen.contains("old-stderr"), "{screen}");
+        assert_eq!(
+            screen
+                .lines()
+                .filter(|line| line.contains("stdout:"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            screen
+                .lines()
+                .filter(|line| line.contains("stderr:"))
+                .count(),
+            2
+        );
+    }
+}
+
+#[test]
+fn bug292_quiet_await_preview_shows_fresh_elapsed_without_mutating_tool_output() {
+    let mut state = bug292_waiting_job_state();
+    state.job_list[0].stdout.clear();
+    state.job_list[0].stderr.clear();
+    state.job_list[0].elapsed = std::time::Duration::from_secs(12);
+    let before_messages = state.messages.clone();
+    let first = render_to_text(&state, 100, 30);
+    assert!(first.contains("No output yet"), "{first}");
+    assert!(first.contains("running · 12s"), "{first}");
+    state.job_list[0].elapsed = std::time::Duration::from_secs(13);
+    let second = render_to_text(&state, 100, 30);
+    assert!(second.contains("running · 13s"), "{second}");
+    assert_eq!(state.messages, before_messages);
+    let call = &state.messages[0].tool_calls.as_ref().unwrap()[0];
+    assert_eq!(call.status, ToolStatus::Running);
+    assert!(call.output.is_none());
+}
+
+#[test]
+fn bug292_await_preview_bounds_unicode_ansi_and_carriage_return_progress() {
+    let mut state = bug292_waiting_job_state();
+    state.job_list[0].stdout = format!(
+        "older-output\n\u{1b}]0;hidden-window-title\u{7}\u{1b}[31mlatest-line\u{1b}[0m\rpartial-{}",
+        "界".repeat(500)
+    );
+    state.job_list[0].stderr = "old-warning\rnew-warning\ncurrent-warning".into();
+    for (width, height) in [(100, 30), (60, 24)] {
+        let screen = render_to_text(&state, width, height);
+        assert!(screen.contains("stdout: latest-line"), "{screen}");
+        assert!(screen.contains("stdout: partial-"), "{screen}");
+        assert!(screen.contains("stderr: new-warning"), "{screen}");
+        assert!(screen.contains("stderr: current-warning"), "{screen}");
+        assert!(!screen.contains("older-output"), "{screen}");
+        assert!(!screen.contains("hidden-window-title"), "{screen}");
+        assert!(!screen.contains('\u{1b}'));
+        assert!(!screen.contains('\r'));
+        assert!(screen.lines().count() <= height as usize);
+        let progress = screen
+            .lines()
+            .find(|line| line.contains("stdout: partial-"))
+            .unwrap();
+        assert!(
+            progress
+                .chars()
+                .filter(|character| *character == '界')
+                .count()
+                <= width as usize / 2
+        );
+    }
+}
+
+#[test]
+fn bug292_multiple_awaits_prefer_matching_latest_activity_then_call_order() {
+    let mut state = bug292_waiting_job_state();
+    let mut second = state.job_list[0].clone();
+    second.id = "00000000-0000-4000-8000-000000000003".parse().unwrap();
+    second.command = "second-running-command".into();
+    let second_call = bug292_await_call(&second, "await-2");
+    state.job_list.push(second.clone());
+    state.messages[0]
+        .tool_calls
+        .as_mut()
+        .unwrap()
+        .push(second_call);
+    state.latest_background_activity = Some(crate::app::BackgroundActivityRef::Job(second.id));
+    assert_eq!(
+        crate::tui::render::awaited_managed_job(&state).unwrap().id,
+        second.id
+    );
+    state.latest_background_activity =
+        Some(crate::app::BackgroundActivityRef::Job(state.job_list[1].id));
+    assert_eq!(
+        crate::tui::render::awaited_managed_job(&state).unwrap().id,
+        state.job_list[0].id
+    );
+    state.latest_background_activity = None;
+    assert_eq!(
+        crate::tui::render::awaited_managed_job(&state).unwrap().id,
+        state.job_list[0].id
+    );
+}
+
+#[test]
+fn bug292_terminal_job_and_resolved_await_do_not_keep_preview_visible() {
+    let mut state = bug292_waiting_job_state();
+    state.job_list[0].stdout = "completed-preview-sentinel".into();
+    state.job_list[0].status = crate::jobs::JobStatus::Completed { exit_code: 0 };
+    assert!(crate::tui::render::awaited_managed_job(&state).is_none());
+    let screen = render_to_text(&state, 100, 30);
+    assert!(!screen.contains("completed-preview-sentinel"), "{screen}");
+
+    state.job_list[0].status = crate::jobs::JobStatus::Running;
+    for status in [ToolStatus::Done, ToolStatus::Error, ToolStatus::Pending] {
+        state.messages[0].tool_calls.as_mut().unwrap()[0].status = status;
+        assert!(
+            crate::tui::render::awaited_managed_job(&state).is_none(),
+            "only an executing await may show a waiting preview"
+        );
+    }
+    state.messages[0].tool_calls.as_mut().unwrap()[0].status = ToolStatus::Running;
+    state.messages.push(Message {
+        role: Role::User,
+        content: "A later turn must not resurrect an earlier await".into(),
+        tool_calls: None,
+        thinking: None,
+        timestamp: chrono::DateTime::from_timestamp(1, 0).unwrap(),
+        response_items: Vec::new(),
+    });
+    assert!(crate::tui::render::awaited_managed_job(&state).is_none());
+}
+
+#[test]
+fn bug292_await_preview_preserves_composer_controls_in_short_terminals() {
+    let mut state = bug292_waiting_job_state();
+    state.job_list[0].stdout = "stdout-first\nstdout-second".into();
+    state.job_list[0].stderr = "stderr-first\nstderr-second".into();
+    for (width, height) in [(100, 30), (60, 24), (60, 8)] {
+        let screen = render_to_text(&state, width, height);
+        for control in ["Esc stop", "Enter interrupt", "Alt+Enter queue"] {
+            assert!(screen.contains(control), "missing {control}:\n{screen}");
+        }
+        assert!(screen.contains("Add a follow-up"), "{screen}");
+        assert!(screen.contains("Waiting for managed job"), "{screen}");
+        assert_eq!(screen.lines().count(), height as usize);
+    }
+}
+
+#[test]
+fn google_vertex_setup_fields_are_readable_at_wide_and_narrow_sizes() {
+    let mut state = test_state();
+    state.provider_editor = Some(crate::app::ProviderEditorState {
+        mode: crate::app::ProviderEditorMode::AddProvider,
+        origin: crate::app::ProviderEditorOrigin::ProviderSetup,
+        draft: crate::app::ProviderModelDraft {
+            google: Some(crate::google_auth::Config {
+                mode: crate::google_auth::Mode::Vertex,
+                project_id: Some("example-project".into()),
+                location: Some("global".into()),
+                quota_project_id: Some("quota-project".into()),
+            }),
+            original_model: None,
+            provider: "vertex".into(),
+            base_url: "https://aiplatform.googleapis.com/v1".into(),
+            api_key_env: String::new(),
+            model: "gemini-3-flash".into(),
+        },
+        api_key: Default::default(),
+        credential_configured: false,
+        credential_in_keychain: false,
+        protocol_override: Some(crate::agent::ProviderProtocol::GoogleGenerateContent),
+        prompt_cache_mode: Default::default(),
+        field: crate::app::ProviderEditorField::GoogleProject,
+        cursor: 0,
+        error: None,
+        saving: false,
+    });
+    for (width, height) in [(100, 30), (60, 24)] {
+        let rendered = render_to_text(&state, width, height);
+        for expected in [
+            "Project ID",
+            "Location",
+            "global",
+            "Quota project",
+            "Application Default Credentials",
+            "gemini-3-flash",
+        ] {
+            assert!(
+                rendered.contains(expected),
+                "missing {expected} at {width}: {rendered}"
+            );
+        }
+        assert!(!rendered.contains("API key env"));
+    }
 }

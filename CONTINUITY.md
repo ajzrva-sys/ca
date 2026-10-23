@@ -1,5 +1,55 @@
 # Continuity
 
+## 2026-10-23 current FreeBSD delivery
+
+Final native verification input inventory: `c4ca6055a1f8967fef89a0c676fb19dbd5172143d89bf16fb6ead840f492d155`
+(1,169 files). Combined macOS full-gate inventory: `69d36efaca22361e14d0281afe7b4f47e483a79dd93c51fc11917e289c01a3d1`
+(1,168 files). Differences are the existing public notice generator and the
+FreeBSD-only MCP test-shell fixture. The release runtime prefix is byte-identical;
+each artifact retains its distinct actual source identity.
+
+Responses metadata, literal `$HOME` detection and DeepSeek schema-URI filtering
+are repaired. The filter repair has 62 focused passes and one minimal live
+DeepSeek success. Final native MCP/filter tests (22/62) and formatting pass. Native v8 passes all eight stages and evaluator: default 4,297 / 0 / 43 over
+29 targets and all features 4,451 / 0 / 44 over 30, zero filtered. The copied/stripped native installation candidate passes all three original
+workflows. Native ca `0.1.41` is installed once with verified recovery and
+ordinary-user PATH/version/help readbacks, SHA-256
+`60563263dde655bcb16fa949189c9c09eda425b43dc324a56a19cce3de0aa074`.
+The source snapshot is identified by the input digest above; its associated
+commit is identified by GitHub history.
+The preceding native v7 failed two MCP environment fixtures with `sysctl`
+`ENOMEM` before cleanup assertions; that failure was not reproduced in bounded
+diagnostics. Choosing native `/bin/sh` for POSIX fixtures is a portability repair,
+not a proven causal fix for Bash/kernel behavior. Runtime/assertions are unchanged.
+
+Codex is installed from its immutable native family (CLI SHA-256
+`2e56101de2c8926f1f0bc46d65b7fb53a6f7ee0d632975f553ea0f5c0b466714`)
+and pushed to GitHub `main` at `d8df4524bac5123ba470d787b35aacca538efcb2`.
+Installed direct and Sol-default jail workflows pass. A live supported-model
+request also ran the real sandboxed printf command and returned `FREEBSD_OK`;
+the earlier unsupported-model HTTP 400 remains separate evidence. Ten native workflows,
+47 jail checks and 174 code-mode units pass; its broader scoped core still has
+17 failures (1,263 passed, 11 ignored), not a clean complete suite.
+
+The combined macOS gate passes all eight stages/evaluator: default 4,328 passed,
+0 failed, 43 ignored across 29 targets; all features 4,484 / 0 / 44 across 30;
+zero filtered. All nine native terminal cases pass. Signed ca `0.1.41` was
+installed exactly once (SHA-256
+`71fb5770bec9101ffbae59d4a7e941f797723f38d5a03ecfdd0d0c6a1df2fadc`),
+with verified recovery, signature, identity, mode/ownership and version/help.
+Its normal PATH entry point passes the live DeepSeek no-session prompt with the
+filter enabled. The preceding candidate's initial 15-second/no-request terminal
+failure remains historical uncertainty; the final gate passes, but that earlier
+failure's cause remains unestablished. The coding
+benchmark was canceled before any scored native attempts. See
+[current publication evidence](docs/PUBLICATION_VALIDATION.md) and
+[FreeBSD prerequisites/limits](docs/FREEBSD.md). Everything below is dated history.
+
+Installed native ca also passes the real required-jail provider/tool loop:
+run_command executes printf successfully and final output is `FREEBSD_OK`.
+The earlier symlinked-auth setup `TooManyLinks` failure remains separate evidence;
+the successful isolated-state check used normal existing authentication.
+
 ## 2026-10-17 dual MIT/Apache-2.0 licensing
 
 The owner selected MIT OR Apache-2.0 for CA-owned material. The six workspace

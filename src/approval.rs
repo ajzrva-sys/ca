@@ -19,17 +19,242 @@ pub enum BrokerDecision {
     NetworkPrompt,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrokerReason {
+    RuleDeny,
+    ExplicitAsk,
+    HostWorkflowShape,
+    SeparateNetworkGate,
+    RuleAllow,
+    NoMatchingRule,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DecisionCaller {
+    #[default]
+    Unknown,
+    Interactive,
+    Headless,
+    Service,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecisionReceipt {
+    pub sequence: u64,
+    pub tool: String,
+    pub caller: DecisionCaller,
+    pub approval_origin: &'static str,
+    pub tool_origin: &'static str,
+    pub policy: crate::permission::PermissionEvaluation,
+    pub decision: BrokerDecision,
+    pub reason: BrokerReason,
+    pub network_requested: bool,
+    pub network_combined: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct DecisionSnapshot {
+    pub receipts: Vec<DecisionReceipt>,
+    pub skipped: u64,
+}
+
+const MAX_DECISION_RECEIPTS: usize = 64;
+static SKIPPED_DECISIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[derive(Default)]
+struct DecisionLedger {
+    sequence: u64,
+    receipts: std::collections::VecDeque<DecisionReceipt>,
+}
+
+impl DecisionLedger {
+    fn record(&mut self, mut receipt: DecisionReceipt) {
+        self.sequence = self.sequence.saturating_add(1);
+        receipt.sequence = self.sequence;
+        if self.receipts.len() == MAX_DECISION_RECEIPTS {
+            self.receipts.pop_front();
+        }
+        self.receipts.push_back(receipt);
+    }
+}
+
+fn decision_ledger() -> &'static std::sync::Mutex<DecisionLedger> {
+    static LEDGER: std::sync::OnceLock<std::sync::Mutex<DecisionLedger>> =
+        std::sync::OnceLock::new();
+    LEDGER.get_or_init(|| std::sync::Mutex::new(DecisionLedger::default()))
+}
+
+/// A snapshot of evaluated broker decisions, never a fresh evaluation of old inputs.
+/// Contention skips diagnostics rather than delaying a tool or the UI.
+pub fn recent_explanations() -> Option<DecisionSnapshot> {
+    let ledger = decision_ledger().try_lock().ok()?;
+    Some(DecisionSnapshot {
+        receipts: ledger.receipts.iter().cloned().collect(),
+        skipped: SKIPPED_DECISIONS.load(std::sync::atomic::Ordering::Relaxed),
+    })
+}
+
+pub fn render_recent_explanations() -> String {
+    recent_explanations().map_or_else(
+        || "Permission decision explanations are busy; try /permissions why again.".into(),
+        |snapshot| render_explanations(&snapshot),
+    )
+}
+
+/// Pure rendering of bounded, value-free captured metadata.
+pub fn render_explanations(snapshot: &DecisionSnapshot) -> String {
+    use crate::permission::{MatcherCategory, PolicySource};
+    let mut text = String::from(
+        "Permission decision explanations\n\nRecent broker classifications, newest first; process-local, at most 64.\nPolicy source/index was captured at evaluation time; settings may since have changed.\nThese are not execution receipts or final manual/model-review decisions.\nPreparation failures before policy evaluation and later caller-specific gates are not recorded.\n",
+    );
+    if snapshot.skipped != 0 {
+        text.push_str(&format!(
+            "Diagnostics skipped while busy: {}\n",
+            snapshot.skipped
+        ));
+    }
+    if snapshot.receipts.is_empty() {
+        text.push_str("\nNo permission broker decisions recorded in this process.\n");
+    }
+    for receipt in snapshot.receipts.iter().rev().take(MAX_DECISION_RECEIPTS) {
+        let source = match receipt.policy.source {
+            PolicySource::LegacyRule => "legacy rule",
+            PolicySource::PermissionRule => "permission rule",
+            PolicySource::SessionGrant => "session grant",
+            PolicySource::OutboundApprovalGate => "exact outbound approval gate",
+            PolicySource::NoMatch => "no matching policy",
+        };
+        let index = receipt.policy.index.map_or_else(String::new, |index| {
+            format!(" #{} (index {index})", index.saturating_add(1))
+        });
+        let matcher = match receipt.policy.matcher {
+            Some(MatcherCategory::Tool) => "tool",
+            Some(MatcherCategory::Path) => "path",
+            Some(MatcherCategory::CommandPrefix) => "command prefix",
+            Some(MatcherCategory::ExactInvocation) => "exact invocation",
+            None => "none",
+        };
+        let reason = match receipt.reason {
+            BrokerReason::RuleDeny => "matching Deny rule",
+            BrokerReason::ExplicitAsk => "explicit Ask rule; interactive approval required",
+            BrokerReason::HostWorkflowShape => {
+                "host-authorized workflow shape; executor still verifies workflow authority"
+            }
+            BrokerReason::SeparateNetworkGate => "separate network approval required",
+            BrokerReason::RuleAllow => "matching Allow rule or session grant",
+            BrokerReason::NoMatchingRule => {
+                "no matching authorization; caller approval mode applies"
+            }
+        };
+        text.push_str(&format!(
+            "\n#{} {} · caller {:?} · approval origin {} · tool origin {}\n  Policy: {:?}; {source}{index}; matcher {matcher}\n  Broker: {:?}; {reason}\n  Network requested: {}; combined with tool decision: {}\n",
+            receipt.sequence, receipt.tool, receipt.caller, receipt.approval_origin, receipt.tool_origin,
+            receipt.policy.outcome, receipt.decision, receipt.network_requested,
+            receipt.network_combined,
+        ));
+    }
+    text
+}
+
+fn classify_decision(
+    evaluation: crate::permission::PermissionEvaluation,
+    name: &str,
+    arguments: &serde_json::Value,
+    separate_network_gate: bool,
+) -> (BrokerDecision, BrokerReason) {
+    match evaluation.outcome {
+        crate::permission::PermissionOutcome::Deny => {
+            (BrokerDecision::DeniedByRule, BrokerReason::RuleDeny)
+        }
+        crate::permission::PermissionOutcome::Ask => {
+            (BrokerDecision::ExplicitPrompt, BrokerReason::ExplicitAsk)
+        }
+        _ if crate::permission::host_authorized_workflow_shape(name, arguments) => (
+            BrokerDecision::AllowedByRule,
+            BrokerReason::HostWorkflowShape,
+        ),
+        _ if separate_network_gate => (
+            BrokerDecision::NetworkPrompt,
+            BrokerReason::SeparateNetworkGate,
+        ),
+        crate::permission::PermissionOutcome::Allow => {
+            (BrokerDecision::AllowedByRule, BrokerReason::RuleAllow)
+        }
+        crate::permission::PermissionOutcome::NoMatch => {
+            (BrokerDecision::Prompt, BrokerReason::NoMatchingRule)
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ApprovalBroker<'a> {
     workspace: &'a crate::workspace::WorkspaceContext,
     rules: &'a [ApprovalRule],
     permission_rules: &'a [crate::permission::PermissionRule],
     session_grants: &'a [crate::permission::PermissionMatcher],
+    caller: DecisionCaller,
     #[allow(dead_code)]
     pub origin: ApprovalOrigin,
 }
 
 impl<'a> ApprovalBroker<'a> {
+    fn explain_decision(
+        &self,
+        prepared: &crate::workspace::PreparedToolInvocation,
+        policy: crate::permission::PermissionEvaluation,
+        classification: (BrokerDecision, BrokerReason),
+        network_combined: bool,
+    ) -> DecisionReceipt {
+        // Only a bounded identifier is retained. Arguments, matchers and arbitrary
+        // agent/server identities never enter the diagnostic store.
+        let tool = if !prepared.name.is_empty()
+            && prepared.name.len() <= 128
+            && prepared
+                .name
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'_')
+        {
+            prepared.name.clone()
+        } else {
+            "[invalid tool identifier]".into()
+        };
+        DecisionReceipt {
+            sequence: 0,
+            tool,
+            caller: self.caller,
+            approval_origin: match &self.origin {
+                ApprovalOrigin::Main => "main",
+                ApprovalOrigin::Review => "review",
+                ApprovalOrigin::Agent(_) => "agent",
+                ApprovalOrigin::Mcp(_) => "MCP",
+            },
+            tool_origin: match &prepared.origin {
+                crate::agent::registry::ToolOrigin::BuiltIn => "built-in",
+                crate::agent::registry::ToolOrigin::Mcp(_) => "MCP",
+            },
+            policy,
+            decision: classification.0,
+            reason: classification.1,
+            network_requested: prepared.network_requested,
+            network_combined,
+        }
+    }
+
+    fn record_decision(
+        &self,
+        prepared: &crate::workspace::PreparedToolInvocation,
+        policy: crate::permission::PermissionEvaluation,
+        classification: (BrokerDecision, BrokerReason),
+        network_combined: bool,
+    ) {
+        let receipt = self.explain_decision(prepared, policy, classification, network_combined);
+        let Ok(mut ledger) = decision_ledger().try_lock() else {
+            SKIPPED_DECISIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return;
+        };
+        ledger.record(receipt);
+    }
+
     #[allow(dead_code)] // compatibility constructor for legacy callers and tests
     pub fn new(
         workspace: &'a crate::workspace::WorkspaceContext,
@@ -41,6 +266,7 @@ impl<'a> ApprovalBroker<'a> {
             rules,
             permission_rules: &[],
             session_grants: &[],
+            caller: DecisionCaller::Unknown,
             origin,
         }
     }
@@ -57,8 +283,14 @@ impl<'a> ApprovalBroker<'a> {
             rules,
             permission_rules,
             session_grants,
+            caller: DecisionCaller::Unknown,
             origin,
         }
+    }
+
+    pub fn with_caller(mut self, caller: DecisionCaller) -> Self {
+        self.caller = caller;
+        self
     }
 
     pub fn prepare(
@@ -84,23 +316,50 @@ impl<'a> ApprovalBroker<'a> {
         let prepared =
             crate::workspace::prepare_tool_invocation(self.workspace, name, arguments, tool_origin)
                 .map_err(|error| error.to_string())?;
-        let rule_decision = crate::permission::evaluate(
+        let evaluation = crate::permission::evaluate_explained(
             name,
             &prepared.arguments,
             self.rules,
             self.permission_rules,
             self.session_grants,
         );
-        let decision = match rule_decision {
-            crate::permission::PermissionOutcome::Deny => BrokerDecision::DeniedByRule,
-            crate::permission::PermissionOutcome::Ask => BrokerDecision::ExplicitPrompt,
-            _ if crate::permission::host_authorized_workflow_shape(name, &prepared.arguments) => {
-                BrokerDecision::AllowedByRule
-            }
-            _ if prepared.network_requested && !combine_network => BrokerDecision::NetworkPrompt,
-            crate::permission::PermissionOutcome::Allow => BrokerDecision::AllowedByRule,
-            crate::permission::PermissionOutcome::NoMatch => BrokerDecision::Prompt,
-        };
+        let classification = classify_decision(
+            evaluation,
+            name,
+            &prepared.arguments,
+            prepared.network_requested && !combine_network,
+        );
+        self.record_decision(&prepared, evaluation, classification, combine_network);
+        Ok((prepared, classification.0))
+    }
+
+    pub async fn prepare_formatted(
+        &self,
+        name: &str,
+        arguments: &serde_json::Value,
+        origin: crate::agent::registry::ToolOrigin,
+        combine_network: bool,
+        sandbox: crate::sandbox::SandboxMode,
+    ) -> Result<(crate::workspace::PreparedToolInvocation, BrokerDecision), String> {
+        let (mut prepared, decision) =
+            self.prepare_with_combined_network_decision(name, arguments, origin, combine_network)?;
+        if decision != BrokerDecision::DeniedByRule {
+            crate::formatting::prepare_with_authority(
+                name,
+                &mut prepared.arguments,
+                self.workspace,
+                sandbox,
+                |invocation| {
+                    self.prepare(
+                        "run_command",
+                        invocation,
+                        crate::agent::registry::ToolOrigin::BuiltIn,
+                    )
+                    .is_ok_and(|(_, decision)| decision == BrokerDecision::AllowedByRule)
+                },
+            )
+            .await?;
+        }
         Ok((prepared, decision))
     }
 
@@ -117,24 +376,16 @@ impl<'a> ApprovalBroker<'a> {
             origin: tool_origin,
             network_requested,
         };
-        let rule_decision = crate::permission::evaluate(
+        let evaluation = crate::permission::evaluate_explained(
             name,
             arguments,
             self.rules,
             self.permission_rules,
             self.session_grants,
         );
-        let decision = match rule_decision {
-            crate::permission::PermissionOutcome::Deny => BrokerDecision::DeniedByRule,
-            crate::permission::PermissionOutcome::Ask => BrokerDecision::ExplicitPrompt,
-            _ if crate::permission::host_authorized_workflow_shape(name, arguments) => {
-                BrokerDecision::AllowedByRule
-            }
-            _ if network_requested => BrokerDecision::NetworkPrompt,
-            crate::permission::PermissionOutcome::Allow => BrokerDecision::AllowedByRule,
-            crate::permission::PermissionOutcome::NoMatch => BrokerDecision::Prompt,
-        };
-        (prepared, decision)
+        let classification = classify_decision(evaluation, name, arguments, network_requested);
+        self.record_decision(&prepared, evaluation, classification, false);
+        (prepared, classification.0)
     }
 }
 
@@ -202,6 +453,197 @@ pub fn check_approval(
 mod tests {
     use super::*;
     use crate::config::ApprovalRule;
+
+    #[test]
+    fn agy295_broker_explanations_preserve_network_and_workflow_ceilings() {
+        let arguments = serde_json::json!({"workflow_id":"fixture"});
+        let evaluate = |outcome| crate::permission::PermissionEvaluation {
+            outcome,
+            source: crate::permission::PolicySource::NoMatch,
+            index: None,
+            matcher: None,
+        };
+        use crate::permission::PermissionOutcome;
+        for (outcome, expected, reason) in [
+            (
+                PermissionOutcome::Deny,
+                BrokerDecision::DeniedByRule,
+                BrokerReason::RuleDeny,
+            ),
+            (
+                PermissionOutcome::Ask,
+                BrokerDecision::ExplicitPrompt,
+                BrokerReason::ExplicitAsk,
+            ),
+            (
+                PermissionOutcome::Allow,
+                BrokerDecision::AllowedByRule,
+                BrokerReason::HostWorkflowShape,
+            ),
+            (
+                PermissionOutcome::NoMatch,
+                BrokerDecision::AllowedByRule,
+                BrokerReason::HostWorkflowShape,
+            ),
+        ] {
+            assert_eq!(
+                classify_decision(
+                    evaluate(outcome),
+                    "run_automation_workflow",
+                    &arguments,
+                    true
+                ),
+                (expected, reason)
+            );
+        }
+        let allow = evaluate(PermissionOutcome::Allow);
+        assert_eq!(
+            classify_decision(allow, "run_command", &serde_json::json!({}), true),
+            (
+                BrokerDecision::NetworkPrompt,
+                BrokerReason::SeparateNetworkGate
+            )
+        );
+        assert_eq!(
+            classify_decision(allow, "run_command", &serde_json::json!({}), false),
+            (BrokerDecision::AllowedByRule, BrokerReason::RuleAllow)
+        );
+        assert_eq!(
+            classify_decision(
+                evaluate(PermissionOutcome::NoMatch),
+                "run_command",
+                &serde_json::json!({}),
+                false
+            ),
+            (BrokerDecision::Prompt, BrokerReason::NoMatchingRule)
+        );
+    }
+
+    #[test]
+    fn agy295_receipts_are_value_free_bounded_and_keep_evaluated_policy() {
+        let root = std::path::PathBuf::from("/workspace");
+        let workspace = crate::workspace::WorkspaceContext::from_primary(root.clone(), root);
+        let arguments =
+            serde_json::json!({"path":"/private/matcher-value", "api_key":"credential-value"});
+        let mut rules = [crate::permission::PermissionRule {
+            decision: crate::permission::PermissionDecision::Allow,
+            matcher: crate::permission::PermissionMatcher::Invocation {
+                tool: "mcp_why_fixture".into(),
+                arguments: arguments.clone(),
+            },
+        }];
+        let receipt = {
+            let broker = ApprovalBroker::with_policy(
+                &workspace,
+                &[],
+                &rules,
+                &[],
+                ApprovalOrigin::Agent("private-agent-value".into()),
+            )
+            .with_caller(DecisionCaller::Headless);
+            let (prepared, actual) = broker.prepare_dynamic(
+                "mcp_why_fixture",
+                &arguments,
+                crate::agent::registry::ToolOrigin::Mcp("private-server-value".into()),
+                false,
+            );
+            let evaluation = crate::permission::evaluate_explained(
+                "mcp_why_fixture",
+                &arguments,
+                &[],
+                &rules,
+                &[],
+            );
+            let classification =
+                classify_decision(evaluation, &prepared.name, &prepared.arguments, false);
+            assert_eq!(actual, classification.0);
+            broker.explain_decision(&prepared, evaluation, classification, false)
+        };
+        rules[0].decision = crate::permission::PermissionDecision::Deny;
+        assert_eq!(
+            crate::permission::evaluate("mcp_why_fixture", &arguments, &[], &rules, &[]),
+            crate::permission::PermissionOutcome::Deny
+        );
+        let mut ledger = DecisionLedger::default();
+        for _ in 0..70 {
+            ledger.record(receipt.clone());
+        }
+        assert_eq!(ledger.receipts.len(), 64);
+        assert_eq!(ledger.receipts.front().unwrap().sequence, 7);
+        assert_eq!(ledger.receipts.back().unwrap().sequence, 70);
+        let snapshot = DecisionSnapshot {
+            receipts: ledger.receipts.into_iter().collect(),
+            skipped: 2,
+        };
+        let text = render_explanations(&snapshot);
+        assert!(text.contains("AllowedByRule"));
+        assert!(text.contains("permission rule #1 (index 0)"));
+        assert!(text.contains("exact invocation"));
+        assert!(text.contains("caller Headless"));
+        assert!(text.contains("Diagnostics skipped while busy: 2"));
+        assert!(text.find("#70 ").unwrap() < text.find("#7 ").unwrap());
+        let debug = format!("{snapshot:?}");
+        for value in [
+            "matcher-value",
+            "credential-value",
+            "private-agent-value",
+            "private-server-value",
+            "api_key",
+        ] {
+            assert!(!text.contains(value));
+            assert!(!debug.contains(value));
+        }
+    }
+
+    #[test]
+    fn agy295_busy_ledger_never_blocks_decisions_and_reports_skipped_diagnostics() {
+        let root = std::path::PathBuf::from("/workspace");
+        let workspace = crate::workspace::WorkspaceContext::from_primary(root.clone(), root);
+        let broker = ApprovalBroker::new(&workspace, &[], ApprovalOrigin::Main);
+        let _guard = decision_ledger().lock().unwrap();
+        let before = SKIPPED_DECISIONS.load(std::sync::atomic::Ordering::Relaxed);
+        let (_, actual) = broker.prepare_dynamic(
+            "mcp_why_busy",
+            &serde_json::json!({}),
+            crate::agent::registry::ToolOrigin::Mcp("fixture".into()),
+            false,
+        );
+        assert_eq!(actual, BrokerDecision::Prompt);
+        assert!(SKIPPED_DECISIONS.load(std::sync::atomic::Ordering::Relaxed) > before);
+        assert!(recent_explanations().is_none());
+        assert!(render_recent_explanations().contains("are busy"));
+    }
+
+    #[test]
+    fn agy295_invalid_tool_identifiers_and_empty_history_are_truthful() {
+        let root = std::path::PathBuf::from("/workspace");
+        let workspace = crate::workspace::WorkspaceContext::from_primary(root.clone(), root);
+        let broker = ApprovalBroker::new(&workspace, &[], ApprovalOrigin::Main);
+        let (prepared, decision) = broker.prepare_dynamic(
+            "bad\n\u{1b}[31mtool",
+            &serde_json::json!({}),
+            crate::agent::registry::ToolOrigin::Mcp("fixture".into()),
+            false,
+        );
+        let evaluation = crate::permission::evaluate_explained(
+            &prepared.name,
+            &prepared.arguments,
+            &[],
+            &[],
+            &[],
+        );
+        let receipt = broker.explain_decision(
+            &prepared,
+            evaluation,
+            (decision, BrokerReason::NoMatchingRule),
+            false,
+        );
+        assert_eq!(receipt.tool, "[invalid tool identifier]");
+        assert_eq!(receipt.caller, DecisionCaller::Unknown);
+        let empty = render_explanations(&DecisionSnapshot::default());
+        assert!(empty.contains("No permission broker decisions recorded"));
+        assert!(empty.contains("not execution receipts or final manual/model-review decisions"));
+    }
 
     // ─── M1: ApprovalQueue model tests ────────────────────────────
 

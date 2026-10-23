@@ -144,6 +144,25 @@ fn normalize_cli_values(values: Vec<String>) -> Result<Vec<String>, ToolSelectio
     Ok(normalized)
 }
 
+fn bind_agent_grant_schema(schema: &mut serde_json::Value, grants: &[String]) {
+    if let Some(items) = schema.pointer_mut("/properties/tools/items") {
+        items["enum"] = serde_json::json!(grants);
+    }
+    match schema {
+        serde_json::Value::Object(fields) => {
+            for value in fields.values_mut() {
+                bind_agent_grant_schema(value, grants);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for value in items {
+                bind_agent_grant_schema(value, grants);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn bounded_name(name: &str) -> String {
     if name.is_empty() {
         "<empty>".to_string()
@@ -165,6 +184,7 @@ pub struct ToolSelectionConstraints {
     pub skill_view_ids: Option<Vec<String>>,
     pub mcp_enabled: bool,
     pub mechanistic_delegation_enabled: bool,
+    pub native_mechanistic_enabled: bool,
     pub transparent_mechanistic_enabled: bool,
     pub remote_mechanistic_enabled: bool,
     pub automation_setup_enabled: bool,
@@ -185,6 +205,7 @@ impl Default for ToolSelectionConstraints {
             skill_view_ids: None,
             mcp_enabled: true,
             mechanistic_delegation_enabled: false,
+            native_mechanistic_enabled: false,
             transparent_mechanistic_enabled: false,
             remote_mechanistic_enabled: false,
             automation_setup_enabled: false,
@@ -443,6 +464,19 @@ fn resolve(
             }
         }
     }
+    if constraints.native_mechanistic_enabled {
+        for name in TRANSPARENT_MECHANISTIC_TOOL_NAMES {
+            if eligible.contains(name)
+                && !policy.exclude.iter().any(|excluded| excluded == name)
+                && policy
+                    .replacement
+                    .as_ref()
+                    .is_none_or(|names| names.iter().any(|selected| selected == name))
+            {
+                selected.insert(name.into());
+            }
+        }
+    }
     if !constraints.lsp_enabled {
         selected.retain(|name| !name.starts_with("lsp_"));
     }
@@ -499,6 +533,28 @@ fn resolve(
                 );
             }
         }
+        if matches!(spec.name.as_str(), "spawn_agent" | "spawn_agent_batch") {
+            let grants = registry
+                .specs()
+                .iter()
+                .filter(|candidate| {
+                    selected.contains(&candidate.name.as_str().to_ascii_lowercase())
+                        && candidate.profiles.contains(&ToolProfile::Subagent)
+                        && !candidate
+                            .capabilities
+                            .contains(&crate::agent::registry::ToolCapability::Subagent)
+                        && !matches!(
+                            candidate.name.as_str(),
+                            "propose_plan"
+                                | "configure_agent_graph"
+                                | "activate_skill"
+                                | "propose_memory"
+                        )
+                })
+                .map(|candidate| candidate.name.as_str().to_string())
+                .collect::<Vec<_>>();
+            bind_agent_grant_schema(&mut definition.function.parameters, &grants);
+        }
         definitions.push(definition.clone());
         match &spec.origin {
             ToolOrigin::BuiltIn => built_in.push(definition),
@@ -526,6 +582,53 @@ fn canonical_eligible(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_repository_tools_and_agent_grants_match_effective_catalog() {
+        let policy = ToolSelectionPolicy::replacing(&["spawn_agent", "read_file", "git_status"]);
+        let constraints = ToolSelectionConstraints {
+            native_mechanistic_enabled: true,
+            ..Default::default()
+        };
+        let resolved = resolve_tools(
+            ToolRegistry::builtins(),
+            ToolProfile::Main,
+            &policy,
+            &constraints,
+        )
+        .unwrap();
+        assert!(resolved
+            .definitions()
+            .iter()
+            .any(|tool| tool.function.name == "git_status"));
+        let spawn = resolved
+            .definitions()
+            .iter()
+            .find(|tool| tool.function.name == "spawn_agent")
+            .unwrap();
+        let grants = spawn
+            .function
+            .parameters
+            .pointer("/properties/tools/items/enum")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        assert!(grants.iter().any(|name| name == "read_file"));
+        assert!(!grants
+            .iter()
+            .any(|name| name == "spawn_agent" || name == "write_file"));
+        let disabled = resolve_tools(
+            ToolRegistry::builtins(),
+            ToolProfile::Main,
+            &policy,
+            &ToolSelectionConstraints::default(),
+        )
+        .unwrap();
+        assert!(!disabled
+            .definitions()
+            .iter()
+            .any(|tool| tool.function.name == "git_status"));
+    }
+
     use super::*;
 
     fn names(set: &ResolvedToolSet) -> Vec<&str> {
@@ -533,6 +636,47 @@ mod tests {
             .iter()
             .map(|definition| definition.function.name.as_str())
             .collect()
+    }
+
+    #[test]
+    fn agent_route_discovery_obeys_parent_catalog_and_is_not_a_child_grant() {
+        let registry = ToolRegistry::builtins();
+        let constraints = ToolSelectionConstraints::default();
+        let policy =
+            ToolSelectionPolicy::replacing(&["spawn_agent", "list_agent_routes", "read_file"]);
+        let main = resolve_tools(registry, ToolProfile::Main, &policy, &constraints).unwrap();
+        assert!(names(&main).contains(&"list_agent_routes"));
+        let spawn = main
+            .definitions()
+            .iter()
+            .find(|tool| tool.function.name == "spawn_agent")
+            .unwrap();
+        let grants = spawn
+            .function
+            .parameters
+            .pointer("/properties/tools/items/enum")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        assert_eq!(grants, &[serde_json::json!("read_file")]);
+        let excluded_policy =
+            ToolSelectionPolicy::from_cli(None, Vec::new(), vec!["list_agent_routes".into()])
+                .unwrap();
+        let excluded =
+            resolve_tools(registry, ToolProfile::Main, &excluded_policy, &constraints).unwrap();
+        assert!(!names(&excluded).contains(&"list_agent_routes"));
+        for profile in [
+            ToolProfile::Subagent,
+            ToolProfile::Plan,
+            ToolProfile::Review,
+            ToolProfile::Checkpoint,
+        ] {
+            let restricted = resolve_tools(registry, profile, &policy, &constraints).unwrap();
+            assert_eq!(
+                names(&restricted).contains(&"list_agent_routes"),
+                profile == ToolProfile::Plan
+            );
+        }
     }
 
     #[test]

@@ -66,7 +66,7 @@ impl VmLease {
             .tempdir()?;
         let out = std::fs::File::create(directory.path().join("events.jsonl"))?;
         let err = std::fs::File::create(directory.path().join("supervisor.log"))?;
-        let mut command = tokio::process::Command::new("/usr/bin/python3");
+        let mut command = tokio::process::Command::new(crate::harness_vm::HOST_PYTHON);
         command
             .args(["-I", "-B", "-c", SUPERVISOR])
             .env_clear()
@@ -278,7 +278,15 @@ mod tests {
             .split("'''")
             .next()
             .unwrap();
-        std::fs::write(&tart, mock).unwrap();
+        std::fs::write(
+            &tart,
+            mock.replacen(
+                "#!/usr/bin/python3",
+                &format!("#!{}", crate::harness_vm::HOST_PYTHON),
+                1,
+            ),
+        )
+        .unwrap();
         std::fs::set_permissions(&tart, std::fs::Permissions::from_mode(0o700)).unwrap();
         codex_team::self_improvement::HarnessVmProfile {
             tart,
@@ -354,7 +362,7 @@ mod tests {
             include_str!("test_supervisor.py"),
         )
         .unwrap();
-        let mut command = tokio::process::Command::new("/usr/bin/python3");
+        let mut command = tokio::process::Command::new(crate::harness_vm::HOST_PYTHON);
         command
             .args(["-I", "-B"])
             .arg(directory.path().join("test_supervisor.py"));

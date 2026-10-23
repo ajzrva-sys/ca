@@ -1,9 +1,8 @@
 ---
 source: src/tui/render_tests.rs
-assertion_line: 5476
 expression: "wide_narrow(render_to_text(&state, 120, 44), render_to_text(&state, 64, 80))"
 ---
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                                                                                  [Dashboard]
 
   ┌─────────────────────┬─────────────┬────────────┬─────────┬──────────────────────────────────┐
   │ Workflow            │ Evidence    │ Confidence │ Outcome │ Reason / existing assets         │
@@ -43,12 +42,12 @@ Structural validation: passed.
 Details: /learn status 11111111-1111-4111-8111-111111111111
 
 
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                                                                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
 1 messages · / commands
 -- narrow --
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                          [Dashboard]
   • Sources: CA 18 · Codex 1000 · MiMo 578.
   • Workflow clusters: 2/2 page(s) delivered · 119 searchable ·
 119 explicitly decided.
@@ -124,7 +123,7 @@ Structural validation: passed.
 Details: /learn status 11111111-1111-4111-8111-111111111111
 
 
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                               │
+╰──────────────────────────────────────────────── agent · auto ╯
 1 messages · / commands

@@ -130,6 +130,24 @@ pub(crate) struct CaRoleRequest {
     output_schema: String,
     tools: Vec<String>,
     grants: Vec<CaGrant>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    learning_bounds: Option<CaLearningBounds>,
+}
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+struct CaLearningBounds {
+    input_bytes: usize,
+    output_tokens: u32,
+}
+#[derive(Debug, Clone, Default)]
+pub(crate) struct CaPhysicalUsage {
+    pub(crate) input_tokens: u64,
+    pub(crate) output_tokens: u64,
+    pub(crate) requests: u64,
+}
+#[derive(Debug)]
+pub(crate) struct CaLearningOutput {
+    pub(crate) content: String,
+    pub(crate) usage: Option<CaPhysicalUsage>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -164,6 +182,7 @@ pub(crate) fn build_role_request(
         output_schema: path_string(&schema_path)?,
         tools,
         grants,
+        learning_bounds: None,
     })
 }
 
@@ -479,7 +498,31 @@ fn run_ca_process(
     request: CaRunRequest<'_>,
     cancellation: &CaCancellationToken,
 ) -> Result<String> {
-    let machine_request = build_role_request(paths, config.clone(), &request)?;
+    run_ca_process_inner(paths, config, request, cancellation, false).map(|value| value.content)
+}
+
+pub(crate) fn run_ca_learning(
+    paths: &Paths,
+    config: CaProcessConfig<'_>,
+    request: CaRunRequest<'_>,
+    cancellation: &CaCancellationToken,
+) -> Result<CaLearningOutput> {
+    run_ca_process_inner(paths, config, request, cancellation, true)
+}
+fn run_ca_process_inner(
+    paths: &Paths,
+    config: CaProcessConfig<'_>,
+    request: CaRunRequest<'_>,
+    cancellation: &CaCancellationToken,
+    learning: bool,
+) -> Result<CaLearningOutput> {
+    let mut machine_request = build_role_request(paths, config.clone(), &request)?;
+    if learning {
+        machine_request.learning_bounds = Some(CaLearningBounds {
+            input_bytes: 131_072,
+            output_tokens: 8_192,
+        });
+    }
     let encoded = serde_json::to_vec(&machine_request)?;
     if encoded.len() > MAX_REQUEST_BYTES {
         bail!("ca role request exceeds the 1 MiB limit");
@@ -588,7 +631,12 @@ fn run_ca_process(
         );
     }
     let structured = parse_ca_jsonl(&stdout.bytes)?;
-    serde_json::to_string(&structured).context("failed to serialize ca structured output")
+    let usage = parse_physical_usage(&stdout.bytes)?;
+    Ok(CaLearningOutput {
+        content: serde_json::to_string(&structured)
+            .context("failed to serialize ca structured output")?,
+        usage,
+    })
 }
 
 fn run_ca_preflight(config: CaProcessConfig<'_>) -> Result<CaPreflightReceipt> {
@@ -2132,7 +2180,7 @@ reasoning_request_format = "reasoning_effort"
         let workspace = root.join("workspace");
         fs::create_dir_all(&home)?;
         fs::create_dir_all(&workspace)?;
-        let git = Command::new("/usr/bin/git")
+        let git = Command::new(crate::git_metadata::EXECUTABLE)
             .args(["init", "--quiet"])
             .arg(&workspace)
             .env("HOME", &home)
@@ -2512,6 +2560,52 @@ reasoning_request_format = "reasoning_effort"
         assert_process_exits(child_pid);
         assert_process_exits(grandchild_pid);
         fs::remove_dir_all(root)?;
+        Ok(())
+    }
+}
+
+fn parse_physical_usage(bytes: &[u8]) -> Result<Option<CaPhysicalUsage>> {
+    let mut total = CaPhysicalUsage::default();
+    for line in bytes.split(|b| *b == b'\n').filter(|line| !line.is_empty()) {
+        let value: Value = serde_json::from_slice(line)?;
+        let event = value.get("event").unwrap_or(&value);
+        if event.get("type").and_then(Value::as_str) != Some("usage") {
+            continue;
+        }
+        let usage = event.get("usage").context("ca usage missing payload")?;
+        let input = usage
+            .get("prompt_tokens")
+            .and_then(Value::as_u64)
+            .context("ca input usage unavailable")?;
+        let output = usage
+            .get("completion_tokens")
+            .and_then(Value::as_u64)
+            .context("ca output usage unavailable")?;
+        // Learning uses exactly one physical attempt. A provider may publish
+        // an interim Usage and repeat the final cumulative snapshot at Finish.
+        total.input_tokens = input;
+        total.output_tokens = output;
+        total.requests = 1;
+    }
+    Ok((total.requests > 0).then_some(total))
+}
+
+#[cfg(test)]
+mod learning_usage_tests {
+    use super::*;
+    #[test]
+    fn bounded_single_attempt_usage_reads_v2_and_keeps_missing_unknown() -> Result<()> {
+        assert!(parse_physical_usage(b"{\"event\":{\"type\":\"completion\"}}\n")?.is_none());
+        let bytes=b"{\"event\":{\"type\":\"usage\",\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":2}}}\n{\"event\":{\"type\":\"usage\",\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":5}}}\n";
+        let usage = parse_physical_usage(bytes)?.unwrap();
+        assert_eq!(
+            (usage.requests, usage.input_tokens, usage.output_tokens),
+            (1, 7, 5)
+        );
+        assert!(parse_physical_usage(
+            b"{\"event\":{\"type\":\"usage\",\"usage\":{\"prompt_tokens\":7}}}\n"
+        )
+        .is_err());
         Ok(())
     }
 }

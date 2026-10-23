@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(rendered, render_to_text(&state, 60, 24))"
 ---
- ca · agent
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
            ┌ Statusline ────────────────────────────────────────────────────────────────┐
            │Custom status: enabled · refresh 5s                                         │
@@ -28,12 +28,12 @@ expression: "wide_narrow(rendered, render_to_text(&state, 60, 24))"
            │Shift+T test · Enter save · Esc cancel                                      │
            │Custom status succeeded                                                     │
            │                                                                            │
-           └────────────────────────────────────────────────────────────────────────────┘
- → ▌Ask anything…
-
+╭──────────└────────────────────────────────────────────────────────────────────────────┘──────────╮
+│› ▌Ask anything…                                                                                   │
+╰─────────────────────────────────────────────────────────────────────────────────────────── agent ╯
 model mimo-v2.5-pro · tests green · / commands
 -- narrow --
- ca · agent
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
  ┌ Statusline ────────────────────────────────────────────┐
  │Custom status: enabled · refresh 5s                     │
  │last: tests green                                       │
@@ -53,7 +53,7 @@ model mimo-v2.5-pro · tests green · / commands
  │ [ 4] Commands hint                                     │
  │Space toggle · ⇧↑↓ reorder · e custom                   │
  │⇧T test · Enter save · Esc cancel                       │
- │Custom status succeeded                                 │
- │                                                        │
- └────────────────────────────────────────────────────────┘
+╭│Custom status succeeded                                 │╮
+││                                                        ││
+╰└────────────────────────────────────────────────────────┘╯
 model mimo-v2.5-pro · tests green · / commands

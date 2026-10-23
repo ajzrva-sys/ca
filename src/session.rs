@@ -573,6 +573,8 @@ pub struct SessionV4 {
     pub context_checkpoint: Option<ContextCheckpoint>,
     #[serde(default)]
     pub queued_inputs: Vec<crate::queue::PendingInput>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_inbox: Option<crate::service_inbox::Inbox>,
     #[serde(default)]
     pub fallback_provenance: Vec<crate::fallback::TurnProviderProvenance>,
     #[serde(default)]
@@ -636,6 +638,7 @@ impl SessionV4 {
             messages,
             context_checkpoint: None,
             queued_inputs: Vec::new(),
+            service_inbox: None,
             fallback_provenance: Vec::new(),
             import_provenance: None,
             goal_state: None,
@@ -1682,6 +1685,7 @@ impl SessionStore {
     }
 
     pub fn save_inert_import(&self, session: &mut SessionV2) -> io::Result<PathBuf> {
+        session.service_inbox = None;
         let _lease = self.try_writer_lease(session.id)?;
         validate_import_provenance(session)?;
         if self.unique_identity_location(session.id)?.is_some() {
@@ -1724,6 +1728,18 @@ impl SessionStore {
         })
     }
 
+    /// Permanently remove one saved session from the active list or the archive.
+    /// Recovery state for that session is removed with it. The sessions directory
+    /// itself stays in place.
+    pub fn purge(&self, storage_key: &str, expected_uuid: Uuid, archived: bool) -> io::Result<()> {
+        if archived {
+            self.in_root(self.archive_root()?)
+                .delete(storage_key, expected_uuid)
+        } else {
+            self.delete(storage_key, expected_uuid)
+        }
+    }
+
     fn delete_with<F>(
         &self,
         storage_key: &str,
@@ -1747,11 +1763,24 @@ impl SessionStore {
                     format!("session was deleted, but history cleanup failed: {error}"),
                 )
             })?;
+            self.purge_side_state(expected_uuid);
             return Ok(());
         }
         let session = read_session_file(&path, storage_key)?;
         verify_session_id(&session, expected_uuid)?;
-        unlink(&path)
+        unlink(&path)?;
+        self.purge_side_state(expected_uuid);
+        Ok(())
+    }
+
+    /// Drop per-session recovery state left behind after the session bundle is
+    /// gone. Recovery journals key off the session id and have nothing left to
+    /// recover once the conversation is deleted. The `.session-access` lock is
+    /// intentionally left in place: it is the flock target for this very lease,
+    /// and unlinking it would let two processes lock different inodes.
+    fn purge_side_state(&self, expected_uuid: Uuid) {
+        let scope = self.access.scope();
+        let _ = std::fs::remove_dir_all(scope.join("recovery").join(expected_uuid.to_string()));
     }
 
     pub fn delete_retention_batch(
@@ -2696,6 +2725,11 @@ fn next_metadata_revision(revision: u64) -> io::Result<u64> {
 }
 
 fn validate_import_provenance(session: &SessionV2) -> io::Result<()> {
+    if let Some(workflow) = &session.work_state.plan_workflow {
+        workflow
+            .validate()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    }
     session
         .bookmarks
         .validate()
@@ -3147,6 +3181,7 @@ fn convert_v1(legacy: SessionV1, storage_key: &str) -> SessionV2 {
             .collect(),
         context_checkpoint: None,
         queued_inputs: Vec::new(),
+        service_inbox: None,
         fallback_provenance: Vec::new(),
         import_provenance: None,
         goal_state: None,
@@ -4041,6 +4076,10 @@ mod tests {
             turn_id,
             purpose: crate::agent::subagent::AgentRunPurpose::Subagent,
             task: "audit UI".into(),
+            role: None,
+            model: None,
+            provider: None,
+            created_at: None,
             status: crate::agent::subagent::AgentStatus::Completed,
             summary: "UI audited".into(),
             updated_at: DateTime::from_timestamp(4, 0).unwrap(),
@@ -4357,6 +4396,9 @@ mod tests {
         let original = serde_json::to_vec_pretty(&session).unwrap();
         std::fs::write(&path, &original).unwrap();
 
+        // Prepare the intentionally large legacy identity outside the bounded
+        // writer probe, as normal worker-backed loading does.
+        store.prepare_identity_inventory().unwrap();
         let mut loaded = store.load("large-legacy").unwrap();
         let error = store.save(&mut loaded).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
@@ -4720,6 +4762,54 @@ mod tests {
         assert!(!source_log.exists());
         let preserved = store.load(&branch.id.to_string()).unwrap();
         assert_eq!(preserved.parent, branch_parent);
+    }
+
+    #[test]
+    fn delete_also_drops_the_sessions_recovery_state() {
+        let root = TempDir::new().unwrap();
+        let store = SessionStore::new(root.path());
+        let mut source = test_session();
+        store.save(&mut source).unwrap();
+        // A recovery journal for this session, as a prior crash or an undo
+        // capture would have left behind.
+        let recovery = root.path().join("recovery").join(source.id.to_string());
+        std::fs::create_dir_all(&recovery).unwrap();
+        std::fs::write(recovery.join("journal.json"), b"{}").unwrap();
+
+        store.delete(&source.id.to_string(), source.id).unwrap();
+
+        assert!(!recovery.exists());
+    }
+
+    #[test]
+    fn purge_removes_one_archived_session_and_leaves_the_directory() {
+        let temp = TempDir::new().unwrap();
+        let active_root = temp.path().join("sessions");
+        let archive_root = temp.path().join("archive");
+        let store = SessionStore::with_archive(&active_root, &archive_root);
+        let mut kept = SessionV2::new("Kept", "/workspace", "p", "m", Vec::new());
+        let mut archived = SessionV2::new("Archived", "/workspace", "p", "m", Vec::new());
+        store.save(&mut kept).unwrap();
+        store.save(&mut archived).unwrap();
+        store
+            .archive(&archived.id.to_string(), archived.id)
+            .unwrap();
+        let recovery = temp.path().join("recovery").join(archived.id.to_string());
+        std::fs::create_dir_all(&recovery).unwrap();
+        std::fs::write(recovery.join("journal.json"), b"{}").unwrap();
+        let archived_path = archive_root.join(format!("{}.json", archived.id));
+        assert!(archived_path.is_file());
+
+        store
+            .purge(&archived.id.to_string(), archived.id, true)
+            .unwrap();
+
+        assert!(!archived_path.exists());
+        assert!(!recovery.exists());
+        assert!(archive_root.is_dir());
+        assert!(active_root.is_dir());
+        assert_eq!(store.load(&kept.id.to_string()).unwrap().title, "Kept");
+        assert!(store.list_archived().unwrap().is_empty());
     }
 
     #[test]
@@ -5362,6 +5452,10 @@ mod tests {
                 turn_id: first_turn,
                 purpose: crate::agent::subagent::AgentRunPurpose::Subagent,
                 task: "first task".into(),
+                role: None,
+                model: None,
+                provider: None,
+                created_at: None,
                 status: crate::agent::subagent::AgentStatus::Completed,
                 summary: "first summary".into(),
                 updated_at: DateTime::from_timestamp(5, 0).unwrap(),
@@ -5371,6 +5465,10 @@ mod tests {
                 turn_id: second_turn,
                 purpose: crate::agent::subagent::AgentRunPurpose::Subagent,
                 task: "second task".into(),
+                role: None,
+                model: None,
+                provider: None,
+                created_at: None,
                 status: crate::agent::subagent::AgentStatus::Completed,
                 summary: "second summary".into(),
                 updated_at: DateTime::from_timestamp(6, 0).unwrap(),

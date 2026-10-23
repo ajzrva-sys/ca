@@ -16,7 +16,9 @@ pub const OPENAI_SOL_SOURCE: &str = "https://developers.openai.com/api/docs/mode
 pub const OPENAI_TERRA_SOURCE: &str = "https://developers.openai.com/api/docs/models/gpt-5.6-terra";
 pub const OPENAI_LUNA_SOURCE: &str = "https://developers.openai.com/api/docs/models/gpt-5.6-luna";
 pub const MIMO_PAYG_SOURCE: &str = "https://mimo.mi.com/docs/en-US/price/pay-as-you-go";
-pub const MIMO_TOKEN_PLAN_SOURCE: &str = "https://mimo.mi.com/docs/en-US/tokenplan/subscription";
+pub const MIMO_TOKEN_PLAN_SOURCE: &str =
+    "https://mimo.mi.com/docs/en-US/tokenplan/Token%20Plan/subscription";
+const LEGACY_MIMO_TOKEN_PLAN_SOURCE: &str = "https://mimo.mi.com/docs/en-US/tokenplan/subscription";
 pub const DEEPSEEK_PRICING_SOURCE: &str = "https://api-docs.deepseek.com/quick_start/pricing/";
 pub const OPENAI_API_BASE_URL: &str = "https://api.openai.com/v1";
 pub const MIMO_PAYG_BASE_URL: &str = "https://api.xiaomimimo.com/v1";
@@ -416,7 +418,10 @@ impl OfficialPriceCatalog {
                 }
                 "mimo" => match card.pricing {
                     CardPricing::MeteredUsd { .. } => card.source_url == MIMO_PAYG_SOURCE,
-                    CardPricing::MimoTokenPlan { .. } => card.source_url == MIMO_TOKEN_PLAN_SOURCE,
+                    CardPricing::MimoTokenPlan { .. } => {
+                        card.source_url == MIMO_TOKEN_PLAN_SOURCE
+                            || card.source_url == LEGACY_MIMO_TOKEN_PLAN_SOURCE
+                    }
                 },
                 "deepseek" => card.source_url == DEEPSEEK_PRICING_SOURCE,
                 _ => false,
@@ -1764,10 +1769,35 @@ fn validate_mimo_source(body: &str) -> Result<(), PricingError> {
         "16:00",
         "24:00",
     ];
-    if body.len() > MAX_SOURCE_BYTES || required.iter().any(|item| !body.contains(item)) {
+    if body.len() > MAX_SOURCE_BYTES {
         return Err(PricingError::InvalidOfficialSource);
     }
-    Ok(())
+    if required.iter().all(|item| body.contains(item)) {
+        return Ok(());
+    }
+    // The current official page expresses quotas in billions and uses a comma
+    // in the annual Max price. Bind both existing model conversion rows and
+    // every price/quota to the same checked page before refreshing old routes.
+    let tags = regex::Regex::new("<[^>]*>").expect("constant HTML tag regex");
+    let stripped = tags.replace_all(body, " ");
+    let text = stripped
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace(',', "");
+    let current = [
+        "$6/month", "$16/month", "$50/month", "$100/month",
+        "Fixed Monthly Quota 4.1 billion Credits 11 billion Credits 38 billion Credits 82 billion Credits",
+        "$63.36/year", "$168.96/year", "USD 528.00/year", "USD 1056.00/year",
+        "Annual Fixed Quota 49.2 billion Credits 132 billion Credits 456 billion Credits 984 billion Credits",
+        "mimo-v2.5-pro 2.5 Credits 300 Credits 600 Credits mimo-v2.5 2 Credits 100 Credits 200 Credits",
+        "16:00", "24:00", "0.8x",
+    ];
+    if current.iter().all(|item| text.contains(item)) {
+        Ok(())
+    } else {
+        Err(PricingError::InvalidOfficialSource)
+    }
 }
 
 fn validate_mimo_payg_source(body: &str) -> Result<(), PricingError> {
@@ -1981,12 +2011,23 @@ impl DelegationRouter {
         task: &str,
         context_summary: &str,
     ) -> Result<RouteSelection, String> {
+        self.select_matching(complexity, task, context_summary, |_, _| true)
+    }
+
+    pub(crate) fn select_matching(
+        &self,
+        complexity: Complexity,
+        task: &str,
+        context_summary: &str,
+        matches_route: impl Fn(&str, &str) -> bool,
+    ) -> Result<RouteSelection, String> {
         let estimated_input_tokens =
             crate::context::estimate_text_tokens(&format!("{task}\n{context_summary}"));
         let mut candidates = self
             .routes
             .iter()
             .filter(|route| route.capability >= complexity)
+            .filter(|route| matches_route(&route.provider, &route.model))
             .filter_map(|route| {
                 let forecast = forecast_for(
                     &route.card,
@@ -2691,6 +2732,27 @@ mod tests {
     }
 
     #[test]
+    fn current_mimo_subscription_page_binds_quotas_prices_and_existing_routes() {
+        let page = "$6/month $16/month $50/month $100/month Fixed Monthly Quota 4.1 billion Credits 11 billion Credits 38 billion Credits 82 billion Credits $63.36/year $168.96/year USD 528.00/year USD 1,056.00/year Annual Fixed Quota 49.2 billion Credits 132 billion Credits 456 billion Credits 984 billion Credits mimo-v2.5-pro 2.5 Credits 300 Credits 600 Credits mimo-v2.5 2 Credits 100 Credits 200 Credits 16:00–24:00 UTC 0.8x";
+        assert!(validate_mimo_source(page).is_ok());
+        for (old, new) in [
+            ("300 Credits", "301 Credits"),
+            ("4.1 billion", "4.2 billion"),
+            ("$50/month", "$55/month"),
+            ("1,056.00", "1,057.00"),
+        ] {
+            assert!(validate_mimo_source(&page.replace(old, new)).is_err());
+        }
+        let mut legacy = OfficialPriceCatalog::seeded();
+        for card in &mut legacy.cards {
+            if matches!(card.pricing, CardPricing::MimoTokenPlan { .. }) {
+                card.source_url = LEGACY_MIMO_TOKEN_PLAN_SOURCE.into();
+            }
+        }
+        legacy.validate().unwrap();
+    }
+
+    #[test]
     fn legacy_four_card_catalog_shape_remains_valid_without_inventing_new_rates() {
         let mut catalog = OfficialPriceCatalog::seeded();
         catalog.cards.retain(|card| {
@@ -2823,6 +2885,8 @@ mod tests {
 
     fn provider(base_url: &str, key: &str, models: &[&str]) -> crate::config::ProviderConfig {
         crate::config::ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: base_url.into(),
             api_key: key.into(),
             protocol: crate::agent::ProviderProtocol::ChatCompletions,

@@ -1,5 +1,23 @@
 # Next Steps
 
+## CBX-297 — current delivery status (2026-10-23)
+
+- [x] Repair Responses metadata, literal `$HOME` and DeepSeek schema-URI filtering.
+- [x] Accept the narrowly reviewed native MCP POSIX fixture adjustment; preserve prior failed gate and causal uncertainty.
+- [x] Update, qualify and recoverably install Codex FreeBSD; installed direct and Sol-default jail workflows pass.
+- [x] Push Codex `main` and confirm `d8df4524bac5123ba470d787b35aacca538efcb2` remotely.
+- [x] Pass the combined macOS full gate and nine native terminal cases; install signed ca `0.1.41` exactly once with recovery and live installed DeepSeek proof.
+- [x] Pass final native MCP/filter regressions (22/62) and formatting.
+- [x] Pass the unchanged complete native gate v8 and evaluator on final source (4,297 default / 4,451 all-feature passed; zero failed/filtered).
+- [x] Qualify the stripped native ca candidate in all three workflows; install ca `0.1.41` once with recovery, PATH readbacks and a real required-jail provider/tool loop.
+- [x] Prepare the validated source snapshot and portable publication record; identify tested inputs by digest and the resulting commit through GitHub history.
+
+The coding benchmark was canceled before scored native attempts. See
+[current evidence](docs/PUBLICATION_VALIDATION.md) and
+[native FreeBSD setup](docs/FREEBSD.md). Prior native v7 `ENOMEM` failures and the
+previous macOS terminal timeout remain retained, not treated as proven repairs.
+Everything below retains its historical date and status.
+
 ## LIC-2026-10-17 dual licensing — implementation complete
 
 Owner-selected MIT OR Apache-2.0 terms, workspace/fixture metadata, contribution

@@ -67,6 +67,8 @@ pub(crate) struct Ticket {
     context: ContextBudget,
     path: String,
     request: String,
+    daily: Option<codex_team::self_improvement::DailyLearningTicket>,
+    local: bool,
 }
 
 pub(super) fn cost_usd(microusd: u64) -> Result<crate::usage::DecimalUsd> {
@@ -111,15 +113,43 @@ pub(crate) async fn reserve(
     bounds: (u64, u64, u64, u32),
 ) -> Result<Option<Ticket>> {
     let (input, output, cost, tools) = bounds;
-    let Ok(context) = BUDGET.try_with(Clone::clone) else {
-        return Ok(None);
+    let context = match BUDGET.try_with(Clone::clone) {
+        Ok(context) => context,
+        Err(_) => {
+            if cost == 0 {
+                return Ok(None);
+            }
+            let root = shared_daily_root(vault)?;
+            let run_id = uuid::Uuid::new_v4().to_string();
+            let daily = codex_team::self_improvement::reserve_daily_learning(
+                &root,
+                &format!("harness:{run_id}:{request}"),
+                cost,
+                chrono::Utc::now(),
+            )?;
+            let budget = AutomationBudgetV1::per_run_default();
+            return Ok(Some(Ticket {
+                context: ContextBudget {
+                    run_id,
+                    budget: budget.clone(),
+                    digest: canonical_digest(&budget)?,
+                },
+                path: String::new(),
+                request: request.into(),
+                daily: Some(daily),
+                local: false,
+            }));
+        }
     };
-    let ticket = Ticket {
+    let mut ticket = Ticket {
         path: format!("harness/automation/{}.json", context.run_id),
         context,
         request: request.into(),
+        daily: None,
+        local: true,
     };
     let operation = ticket.clone();
+    let original_vault = vault.clone();
     let vault = vault.clone();
     let plan_digest = plan_digest.to_owned();
     tokio::task::spawn_blocking(move || {
@@ -181,6 +211,22 @@ pub(crate) async fn reserve(
         Ok::<_, anyhow::Error>(())
     })
     .await??;
+    if cost > 0 {
+        let root = shared_daily_root(&original_vault)?;
+        let id = format!("harness:{}:{}", ticket.context.run_id, request);
+        match codex_team::self_improvement::reserve_daily_learning(
+            &root,
+            &id,
+            cost,
+            chrono::Utc::now(),
+        ) {
+            Ok(daily) => ticket.daily = Some(daily),
+            Err(error) => {
+                finish(&original_vault, Some(ticket), None, true).await?;
+                return Err(error);
+            }
+        }
+    }
     Ok(Some(ticket))
 }
 
@@ -191,6 +237,18 @@ pub(crate) async fn finish(
     proven_absent: bool,
 ) -> Result<()> {
     let Some(ticket) = ticket else { return Ok(()) };
+    let daily = ticket.daily.clone();
+    let daily_actual = actual.map(|(_, _, cost, _)| cost);
+    if !ticket.local {
+        if let Some(daily) = daily {
+            codex_team::self_improvement::settle_daily_learning(
+                &daily,
+                daily_actual,
+                proven_absent,
+            )?;
+        }
+        return Ok(());
+    }
     let vault = vault.clone();
     tokio::task::spawn_blocking(move || {
         let _lock = vault.acquire_lock()?;
@@ -238,7 +296,11 @@ pub(crate) async fn finish(
         // With neither confirmed completion nor proven absence, keep the charge.
         vault.write_mutable(&ticket.path, &ledger).map(|_| ())
     })
-    .await?
+    .await??;
+    if let Some(daily) = daily {
+        codex_team::self_improvement::settle_daily_learning(&daily, daily_actual, proven_absent)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn current_usage(vault: &LearningVault) -> Result<Option<AutomationUsageCountersV1>> {
@@ -257,9 +319,52 @@ pub(crate) fn current_usage(vault: &LearningVault) -> Result<Option<AutomationUs
         .transpose()
 }
 
+fn shared_daily_root(vault: &LearningVault) -> Result<std::path::PathBuf> {
+    #[cfg(test)]
+    {
+        Ok(vault.root().join("fixture-daily-budget"))
+    }
+    #[cfg(not(test))]
+    {
+        let _ = vault;
+        Ok(codex_team::self_improvement::daily_learning_budget_root(
+            &crate::runtime::RuntimePaths::discover()?.home,
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn manual_harness_experiments_share_daily_cap_and_unknown_usage_stays_reserved() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = LearningVault::open_at(temp.path().join("harness")).unwrap();
+        let first = reserve(&vault, &"a".repeat(64), "manual-a", (1, 1, 1_500_000, 0))
+            .await
+            .unwrap();
+        finish(&vault, first.clone(), None, false).await.unwrap();
+        assert!(
+            reserve(&vault, &"a".repeat(64), "manual-b", (1, 1, 500_001, 0))
+                .await
+                .is_err()
+        );
+        finish(&vault, first, Some((1, 1, 100_000, 0)), false)
+            .await
+            .unwrap();
+        reserve(&vault, &"a".repeat(64), "manual-c", (1, 1, 1_900_000, 0))
+            .await
+            .unwrap();
+        let status = codex_team::self_improvement::daily_learning_budget_status(
+            &shared_daily_root(&vault).unwrap(),
+            chrono::Utc::now(),
+        )
+        .unwrap();
+        assert_eq!(status.remaining_microusd, 0);
+        assert_eq!(status.spent_microusd, 100_000);
+        assert_eq!(status.reserved_microusd, 1_900_000);
+    }
+
     #[tokio::test]
     async fn common_budget_reserves_before_effect_and_keeps_unknown_charges() {
         let temp = tempfile::tempdir().unwrap();

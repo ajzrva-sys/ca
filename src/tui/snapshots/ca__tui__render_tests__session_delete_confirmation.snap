@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
 
     Sessions                                                                                 Esc
@@ -13,13 +13,13 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
       No recent sessions
 
     Enter open  ·  Ct┌────────────────────────────────────────────────────────┐
-    Shift+P pin  ·  S│Delete saved session?                                   │
+    Shift+P pin  ·  S│Purge saved session?                                    │
                      │                                                        │
                      │Repository review · 11111111                            │
                      │This permanently removes exactly this saved session.    │
                      │Branches and their history are not deleted.             │
                      │                                                        │
-                     │ Cancel     Delete                                      │
+                     │ Cancel     Purge                                       │
                      │←/→ choose · Enter confirm · Esc cancel                 │
                      └────────────────────────────────────────────────────────┘
 
@@ -28,12 +28,12 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
 
 
 
-
- →
-
+╭─                                                                                                ─╮
+│›                                                                                                 │
+╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
 / commands
 -- narrow --
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
 
 
     Sessions                                         Esc
@@ -41,19 +41,19 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
      Recent 0    Archived 0   Tab changes list
     Search  Type to search names, folders, or IDs
   ┌──────────────────────────────────────────────────────┐
-  │Delete saved session?                                 │
+  │Purge saved session?                                  │
   │                                                      │
   │Repository review · 11111111                          │
   │This permanently removes exactly this saved session.  │
   │Branches and their history are not deleted.           │
   │                                                      │
-  │ Cancel     Delete                                    │
+  │ Cancel     Purge                                     │
   │←/→ choose · Enter confirm · Esc cancel               │
   └──────────────────────────────────────────────────────┘
 
 
 
-
- →
-
+╭─                                                        ─╮
+│›                                                         │
+╰──────────────────────────────────────────── agent · auto ╯
 / commands

@@ -22,10 +22,12 @@ struct Key {
     ),
     stream: Option<(usize, usize, usize, u64)>,
     expanded: Vec<TranscriptBlockKey>,
+    user_prompt_scroll: Vec<(usize, usize)>,
     flags: (bool, bool, bool, bool),
     annotations: (usize, usize, usize),
     history: Option<crate::app::SessionHistoryState>,
     agent_focus: Option<crate::app::AgentActivityFocusState>,
+    agent_clock: Option<i64>,
 }
 
 impl Key {
@@ -52,6 +54,15 @@ impl Key {
                 )
             }),
             expanded: state.expanded_blocks.clone(),
+            user_prompt_scroll: {
+                let mut pairs: Vec<(usize, usize)> = state
+                    .user_prompt_scroll
+                    .iter()
+                    .map(|(k, v)| (*k, *v))
+                    .collect();
+                pairs.sort_unstable();
+                pairs
+            },
             flags: (
                 state.show_thinking,
                 state.show_line_numbers,
@@ -65,6 +76,18 @@ impl Key {
             ),
             history: state.session_history.clone(),
             agent_focus: state.agent_activity_focus.clone(),
+            agent_clock: state
+                .live_agent_activity
+                .iter()
+                .any(|agent| {
+                    !agent.status.terminal()
+                        && matches!(
+                            agent.origin,
+                            crate::agent::subagent::AgentRunOrigin::Conversation
+                                | crate::agent::subagent::AgentRunOrigin::AutomaticReview
+                        )
+                })
+                .then(|| state.agent_activity_now.timestamp()),
         }
     }
 
@@ -84,6 +107,7 @@ struct Block {
     rows: Vec<u32>,
     bytes: usize,
     last_used: std::sync::atomic::AtomicU64,
+    ticket: Option<crate::cache_memory::Ticket>,
 }
 
 #[derive(Debug)]
@@ -91,9 +115,12 @@ struct Layout {
     starts: Vec<u32>,
     blocks: BTreeMap<usize, Arc<Block>>,
     headers: Vec<ActivityHeaderLine>,
+    user_prompt_cards: Vec<crate::tui::render::UserPromptCardSpan>,
     links: Vec<crate::markdown::MarkdownLink>,
     bytes: usize,
     fallback: (u16, ratatui::buffer::Buffer),
+    _active_surface: crate::cache_memory::Essential,
+    cache_epoch: Option<u64>,
 }
 
 fn line_bytes(line: &Line<'_>) -> usize {
@@ -120,7 +147,12 @@ impl Layout {
         for (id, lines) in content.lines.chunks(BLOCK_LINES).enumerate() {
             let block = previous
                 .get(&id)
-                .filter(|old| old.lines == lines)
+                .filter(|old| {
+                    old.ticket
+                        .as_ref()
+                        .is_some_and(crate::cache_memory::Ticket::valid)
+                        && old.lines == lines
+                })
                 .cloned()
                 .unwrap_or_else(|| {
                     let rows = lines
@@ -132,8 +164,11 @@ impl Layout {
                                 .min(u32::MAX as usize) as u32
                         })
                         .collect();
+                    let bytes = lines.iter().map(line_bytes).sum::<usize>()
+                        + lines.len() * std::mem::size_of::<u32>();
                     Arc::new(Block {
-                        bytes: lines.iter().map(line_bytes).sum(),
+                        bytes,
+                        ticket: crate::cache_memory::reserve("transcript layout blocks", bytes),
                         lines: lines.to_vec(),
                         rows,
                         last_used: std::sync::atomic::AtomicU64::new(0),
@@ -142,7 +177,9 @@ impl Layout {
             for rows in &block.rows {
                 starts.push(starts.last().unwrap().saturating_add(*rows));
             }
-            blocks.insert(id, block);
+            if block.ticket.is_some() {
+                blocks.insert(id, block);
+            }
         }
         let maximum = starts.last().copied().unwrap_or(0).min(u16::MAX as u32) as u16;
         let top = maximum
@@ -158,13 +195,28 @@ impl Layout {
             &mut fallback,
             Rect::new(0, 0, width, height),
         );
+        let surface =
+            crate::cache_memory::Essential::new("active transcript surfaces and row indexes");
+        surface.set(
+            starts.capacity() * std::mem::size_of::<u32>()
+                + fallback.content.len() * std::mem::size_of::<ratatui::buffer::Cell>()
+                + content
+                    .links
+                    .iter()
+                    .map(|link| link.label.len() + link.destination.len())
+                    .sum::<usize>(),
+        );
         let mut layout = Self {
             starts,
             blocks,
             headers: content.activity_headers,
+            user_prompt_cards: content.user_prompt_cards,
             links: content.links,
             bytes: 0,
             fallback: (top, fallback),
+            _active_surface: surface,
+            cache_epoch: ACTIVE_MEMO
+                .with(|slot| slot.borrow().as_ref().map(|context| context.expected)),
         };
         layout.bytes = layout.blocks.values().map(|block| block.bytes).sum();
         let first_visible = layout
@@ -180,6 +232,9 @@ impl Layout {
             .unwrap_or(0)
             .saturating_add(1);
         if let Some(block) = layout.blocks.get(&first_visible) {
+            if let Some(ticket) = &block.ticket {
+                ticket.touch();
+            }
             block
                 .last_used
                 .store(next_clock, std::sync::atomic::Ordering::Relaxed);
@@ -233,6 +288,9 @@ impl Layout {
         {
             for index in begin..end.min(self.starts.len().saturating_sub(1)) {
                 let block = &self.blocks[&(index / BLOCK_LINES)];
+                if let Some(ticket) = &block.ticket {
+                    ticket.touch();
+                }
                 block
                     .last_used
                     .store(clock, std::sync::atomic::Ordering::Relaxed);
@@ -274,6 +332,7 @@ fn draw_line(
         .saturating_sub(start.max(u32::from(top))) as u16;
     ratatui::widgets::Widget::render(
         Paragraph::new(line.clone())
+            .style(line.style)
             .wrap(Wrap { trim: false })
             .scroll((skip, 0)),
         Rect::new(area.x, area.y + y, area.width, height),
@@ -318,6 +377,7 @@ pub(crate) struct TranscriptCache {
     revision: Cell<u64>,
     inner: RefCell<Inner>,
     memo: Arc<Mutex<MarkdownMemo>>,
+    epoch: Arc<std::sync::atomic::AtomicU64>,
     #[cfg(test)]
     async_build: Cell<bool>,
 }
@@ -325,6 +385,32 @@ pub(crate) struct TranscriptCache {
 impl TranscriptCache {
     pub(crate) fn invalidate(&self) {
         self.revision.set(self.revision.get().wrapping_add(1));
+    }
+    /// Reclamation runs at the owner boundary, never while a worker holds its memo.
+    pub(crate) fn maintain(&self) {
+        let mut reclaimed = false;
+        if let Ok(mut inner) = self.inner.try_borrow_mut() {
+            if let Some(layout) = &mut inner.layout {
+                let previous = layout.blocks.len();
+                layout.blocks.retain(|_, block| {
+                    block
+                        .ticket
+                        .as_ref()
+                        .is_some_and(crate::cache_memory::Ticket::valid)
+                });
+                layout.bytes = layout.blocks.values().map(|block| block.bytes).sum();
+                reclaimed |= previous != layout.blocks.len();
+            }
+        }
+        if let Ok(mut memo) = self.memo.try_lock() {
+            let previous = memo.documents.len();
+            memo.reclaim();
+            reclaimed |= previous != memo.documents.len();
+        }
+        if reclaimed {
+            self.epoch
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
     }
     pub(crate) fn pending(&self) -> bool {
         self.inner.borrow().worker.is_some()
@@ -356,6 +442,7 @@ impl TranscriptCache {
         if area.is_empty() {
             return 0;
         }
+        self.maintain();
         let key = Key::for_state(state, area.width, focused);
         let mut inner = self.inner.borrow_mut();
         if let Some(result) = inner.worker.as_ref().and_then(|rx| match rx.try_recv() {
@@ -364,9 +451,17 @@ impl TranscriptCache {
             Err(mpsc::TryRecvError::Empty) => None,
         }) {
             inner.worker = None;
-            if let Some((built_key, layout)) =
+            if let Some((built_key, mut layout)) =
                 result.filter(|(k, _)| k.compatible(&key) && k.generation == key.generation)
             {
+                // Content revisions may advance during streaming. Display the compatible
+                // snapshot while catching up; reclaimed generations retain only their viewport.
+                if layout.cache_epoch.is_some_and(|epoch| {
+                    epoch != self.epoch.load(std::sync::atomic::Ordering::Relaxed)
+                }) {
+                    layout.blocks.clear();
+                    layout.bytes = 0;
+                }
                 inner.key = Some(built_key);
                 inner.layout = Some(layout);
                 inner.builds += 1;
@@ -397,7 +492,14 @@ impl TranscriptCache {
         });
         if (inner.key.as_ref() != Some(&key) || missing_view) && inner.worker.is_none() {
             let build = snapshot(state, area.width, focused);
-            let memo = self.memo.clone();
+            let worker_payload =
+                crate::cache_memory::Essential::new("active transcript worker buffers");
+            worker_payload.set(state.memory_observer.history_estimate());
+            let memo = MemoContext {
+                memo: self.memo.clone(),
+                epoch: self.epoch.clone(),
+                expected: self.epoch.load(std::sync::atomic::Ordering::Relaxed),
+            };
             let previous = inner
                 .layout
                 .as_ref()
@@ -424,6 +526,7 @@ impl TranscriptCache {
                 let width = area.width;
                 let height = area.height;
                 tokio::task::spawn_blocking(move || {
+                    let _worker_payload = worker_payload;
                     let _ = tx.send((
                         key,
                         with_memo(memo, || {
@@ -462,11 +565,44 @@ impl TranscriptCache {
                 })
                 .collect();
             state.transcript_scroll.set_activity_hit_targets(targets);
+            let user_targets = layout
+                .user_prompt_cards
+                .iter()
+                .filter_map(|card| {
+                    let first_row = *layout.starts.get(card.first_line)?;
+                    let last_row = layout
+                        .starts
+                        .get(card.first_line + card.height.saturating_sub(1))
+                        .copied()
+                        .unwrap_or(first_row);
+                    let visible_top = u32::from(scroll);
+                    let visible_bottom = visible_top + u32::from(area.height);
+                    if last_row < visible_top || first_row >= visible_bottom {
+                        return None;
+                    }
+                    let y_start = first_row.saturating_sub(visible_top);
+                    let y_end = last_row
+                        .saturating_sub(visible_top)
+                        .min(u32::from(area.height));
+                    let height = y_end.saturating_sub(y_start).max(1);
+                    Some(crate::tui::transcript::UserPromptHitTarget {
+                        message_index: card.message_index,
+                        x: area.x,
+                        y: area.y.saturating_add(y_start as u16),
+                        width: area.width,
+                        height: height as u16,
+                    })
+                })
+                .collect();
+            state
+                .transcript_scroll
+                .set_user_prompt_hit_targets(user_targets);
             if state.terminal_hyperlinks_supported {
                 apply_hyperlinks(frame.buffer_mut(), area, &layout.links, &state.workspace);
             }
         } else {
             state.transcript_scroll.clear_activity_hit_targets();
+            state.transcript_scroll.clear_user_prompt_hit_targets();
         }
         let mut row = u32::from(base_rows);
         for line in &controls {
@@ -520,6 +656,7 @@ fn snapshot(
         transcript_annotations,
         transcript_agent_summaries,
         live_agent_activity,
+        agent_activity_now,
         agent_activity_focus,
         active_agent_turn_id,
         context_checkpoint,
@@ -530,6 +667,7 @@ fn snapshot(
         show_transcript_timestamps,
         show_assistant_footers,
         expanded_blocks,
+        user_prompt_scroll,
         workspace,
         command_presentations,
         file_activity_presentations,
@@ -549,15 +687,40 @@ struct MemoKey {
 
 #[derive(Debug, Default)]
 struct MarkdownMemo {
-    documents: HashMap<MemoKey, (crate::markdown::MarkdownDocument, usize, u64)>,
+    documents: HashMap<
+        MemoKey,
+        (
+            crate::markdown::MarkdownDocument,
+            usize,
+            u64,
+            crate::cache_memory::Ticket,
+        ),
+    >,
     bytes: usize,
     clock: u64,
 }
 
-thread_local! { static ACTIVE_MEMO: RefCell<Option<Arc<Mutex<MarkdownMemo>>>> = const { RefCell::new(None) }; }
+impl MarkdownMemo {
+    fn reclaim(&mut self) {
+        self.documents.retain(|_, (_, _, _, ticket)| ticket.valid());
+        self.bytes = self.documents.values().map(|(_, bytes, _, _)| *bytes).sum();
+    }
+}
+#[derive(Clone)]
+struct MemoContext {
+    memo: Arc<Mutex<MarkdownMemo>>,
+    epoch: Arc<std::sync::atomic::AtomicU64>,
+    expected: u64,
+}
+impl MemoContext {
+    fn valid(&self) -> bool {
+        self.epoch.load(std::sync::atomic::Ordering::Relaxed) == self.expected
+    }
+}
+thread_local! { static ACTIVE_MEMO: RefCell<Option<MemoContext>> = const { RefCell::new(None) }; }
 
-fn with_memo<T>(memo: Arc<Mutex<MarkdownMemo>>, operation: impl FnOnce() -> T) -> T {
-    struct Restore(Option<Arc<Mutex<MarkdownMemo>>>);
+fn with_memo<T>(memo: MemoContext, operation: impl FnOnce() -> T) -> T {
+    struct Restore(Option<MemoContext>);
     impl Drop for Restore {
         fn drop(&mut self) {
             ACTIVE_MEMO.with(|slot| *slot.borrow_mut() = self.0.take());
@@ -584,11 +747,16 @@ pub(super) fn memo_document(
     theme: ThemePalette,
 ) -> Option<crate::markdown::MarkdownDocument> {
     let memo = ACTIVE_MEMO.with(|slot| slot.borrow().clone())?;
+    if !memo.valid() {
+        return None;
+    }
     let key = memo_key(input, width, numbers, theme);
-    let mut memo = memo.lock().unwrap_or_else(|p| p.into_inner());
+    let mut memo = memo.memo.lock().unwrap_or_else(|p| p.into_inner());
+    memo.reclaim();
     memo.clock = memo.clock.saturating_add(1);
     let clock = memo.clock;
-    memo.documents.get_mut(&key).map(|(doc, _, age)| {
+    memo.documents.get_mut(&key).map(|(doc, _, age, ticket)| {
+        ticket.touch();
         *age = clock;
         doc.clone()
     })
@@ -604,6 +772,9 @@ pub(super) fn memo_insert(
     let Some(memo) = ACTIVE_MEMO.with(|slot| slot.borrow().clone()) else {
         return;
     };
+    if !memo.valid() {
+        return;
+    }
     let bytes = doc.lines.iter().map(line_bytes).sum::<usize>()
         + doc
             .links
@@ -614,23 +785,34 @@ pub(super) fn memo_insert(
         return;
     }
     let key = memo_key(input, width, numbers, theme);
-    let mut memo = memo.lock().unwrap_or_else(|p| p.into_inner());
-    if let Some((_, previous, _)) = memo.documents.remove(&key) {
+    let Ok(mut guard) = memo.memo.try_lock() else {
+        return;
+    };
+    if !memo.valid() {
+        return;
+    }
+    let memo = &mut *guard;
+    memo.reclaim();
+    if let Some((_, previous, _, _)) = memo.documents.remove(&key) {
         memo.bytes -= previous;
     }
     while memo.bytes + bytes > PAYLOAD_BUDGET {
         let Some(old) = memo
             .documents
             .iter()
-            .min_by_key(|(_, (_, _, age))| *age)
+            .min_by_key(|(_, (_, _, age, _))| *age)
             .map(|(key, _)| key.clone())
         else {
             break;
         };
         memo.bytes -= memo.documents.remove(&old).unwrap().1;
     }
+    let Some(ticket) = crate::cache_memory::reserve("Markdown memo entries", bytes) else {
+        return;
+    };
     let clock = memo.clock;
-    memo.documents.insert(key, (doc.clone(), bytes, clock));
+    memo.documents
+        .insert(key, (doc.clone(), bytes, clock, ticket));
     memo.bytes += bytes;
 }
 
@@ -657,6 +839,7 @@ mod tests {
                 ConversationContent {
                     lines: lines.clone(),
                     activity_headers: Vec::new(),
+                    user_prompt_cards: Vec::new(),
                     links: Vec::new(),
                 },
                 width,
@@ -758,6 +941,7 @@ mod tests {
         let build = |lines| ConversationContent {
             lines,
             activity_headers: Vec::new(),
+            user_prompt_cards: Vec::new(),
             links: Vec::new(),
         };
         let layout = Layout::build(build(lines.clone()), 80, 0, 24, 0, BTreeMap::new());
@@ -827,6 +1011,106 @@ mod tests {
                 break;
             }
             assert!(std::time::Instant::now() < deadline);
+        }
+    }
+    #[test]
+    fn ocx_memory_pressure_releases_payloads_and_regenerates_identical_view() {
+        for width in [60, 100] {
+            let mut state = crate::tui::test_support::test_state();
+            state.messages.push(crate::app::Message {
+                role: crate::app::Role::Assistant,
+                content: "**Memory** renders Unicode 你好 and `code`.\n".repeat(100),
+                thinking: None,
+                tool_calls: None,
+                response_items: vec![crate::agent::stream::ProviderResponseItem::NativeContent { source: crate::agent::stream::ProviderStateSourceV1::for_test("memory-fixture", crate::agent::ProviderProtocol::AnthropicMessages), model: "memory-model".into(), prefix_sha256: "a".repeat(64), content: vec![serde_json::json!({"type":"thinking", "thinking":"", "signature":"OPAQUE_MEMORY_REPLAY"})] }],
+                timestamp: chrono::Utc::now(),
+            });
+            let canonical = state.messages.clone();
+            let before = crate::tui::test_support::render_to_text(&state, width, 30);
+            let before_bytes = state.transcript_cache.debug_stats().2.unwrap();
+            assert!(before_bytes > 0);
+            {
+                let inner = state.transcript_cache.inner.borrow();
+                for block in inner.layout.as_ref().unwrap().blocks.values() {
+                    block.ticket.as_ref().unwrap().revoke_for_test();
+                }
+            }
+            {
+                let memo = state.transcript_cache.memo.lock().unwrap();
+                for (_, _, _, ticket) in memo.documents.values() {
+                    ticket.revoke_for_test();
+                }
+            }
+            state.transcript_cache.maintain();
+            assert!(state.transcript_cache.debug_stats().2.unwrap() < before_bytes);
+            state.transcript_cache.invalidate();
+            let after = crate::tui::test_support::render_to_text(&state, width, 30);
+            assert_eq!(after, before);
+            assert_eq!(state.messages, canonical);
+        }
+    }
+    #[test]
+    fn ocx_memory_invalidated_workers_cannot_repopulate_markdown_memo() {
+        let cache = TranscriptCache::default();
+        let stale = MemoContext {
+            memo: cache.memo.clone(),
+            epoch: cache.epoch.clone(),
+            expected: 0,
+        };
+        cache
+            .epoch
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let doc = crate::markdown::MarkdownDocument {
+            lines: vec![Line::from("late worker")],
+            links: Vec::new(),
+        };
+        let theme = palette(&crate::tui::test_support::test_state());
+        with_memo(stale, || memo_insert("late worker", 80, false, theme, &doc));
+        assert!(cache.memo.lock().unwrap().documents.is_empty());
+    }
+    #[test]
+    fn ocx_memory_pane_teardown_releases_shared_block_reservations() {
+        let content = ConversationContent {
+            lines: vec![Line::from("owned pane payload")],
+            activity_headers: Vec::new(),
+            user_prompt_cards: Vec::new(),
+            links: Vec::new(),
+        };
+        let layout = Layout::build(content, 80, 0, 20, 0, BTreeMap::new());
+        let ticket = layout.blocks[&0].ticket.as_ref().unwrap();
+        let weak = std::sync::Arc::downgrade(&layout.blocks[&0]);
+        assert!(ticket.valid());
+        drop(layout);
+        assert!(weak.upgrade().is_none());
+    }
+    #[tokio::test]
+    async fn ocx_memory_streaming_revisions_do_not_starve_snapshot_display() {
+        let mut state = crate::tui::test_support::test_state();
+        state.transcript_cache.async_build.set(true);
+        state.messages.push(crate::app::Message {
+            role: crate::app::Role::Assistant,
+            content: "Streaming snapshot remains visible ".repeat(2048),
+            thinking: None,
+            tool_calls: None,
+            response_items: Vec::new(),
+            timestamp: chrono::Utc::now(),
+        });
+        crate::tui::test_support::render_to_text(&state, 100, 30);
+        assert!(state.transcript_cache.pending());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            state.messages[0].content.push_str(" delta");
+            state.transcript_cache.invalidate();
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            let rendered = crate::tui::test_support::render_to_text(&state, 100, 30);
+            if state.transcript_cache.inner.borrow().builds > 0 {
+                assert!(rendered.contains("snapshot remains visible"));
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "compatible snapshots must display before streaming stops"
+            );
         }
     }
 }

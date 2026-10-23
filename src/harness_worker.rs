@@ -199,6 +199,9 @@ pub async fn run_stdio() -> i32 {
         message("user", &setup.task),
     ];
     let config = crate::headless::HeadlessRunConfig {
+        native_mechanistic: false,
+        proactive_delegation: false,
+        review_changes: false,
         workspace_activity_scope: None,
         automation_policy: None,
         outcome_sink: None,

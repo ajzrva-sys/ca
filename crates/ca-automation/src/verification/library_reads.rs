@@ -1,8 +1,11 @@
 //! Fixed trusted-tool Mach-O dependency metadata for physical isolation.
 use crate::cancellation::CancellationToken;
 use anyhow::Result;
-use std::path::{Path, PathBuf};
+#[cfg(not(target_os = "freebsd"))]
+use std::path::Path;
+use std::path::PathBuf;
 
+#[cfg(not(target_os = "freebsd"))]
 pub(super) fn trusted_library_reads(
     executable: &Path,
     cancellation: &CancellationToken,

@@ -105,6 +105,8 @@ fn resolve_subagent_route(
                 (
                     "ollama".into(),
                     crate::config::ProviderConfig {
+                        google: None,
+                        tool_schema_policy: Default::default(),
                         base_url: "http://127.0.0.1:11434/v1".into(),
                         api_key: "ollama".into(),
                         protocol: crate::agent::ProviderProtocol::default(),
@@ -123,6 +125,8 @@ fn resolve_subagent_route(
         .get(&provider_id)
         .cloned()
         .unwrap_or_else(|| crate::config::ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: "http://127.0.0.1:11434/v1".into(),
             api_key: "ollama".into(),
             protocol: crate::agent::ProviderProtocol::default(),
@@ -282,11 +286,7 @@ pub async fn execute_prepared_tool_in_workspace_policy_owned_with_job_policy(
         cwd: workspace.cwd().to_path_buf(),
         timeout_secs,
         profile: ToolProfile::Main,
-        workspace_roots: workspace
-            .roots()
-            .iter()
-            .map(|root| root.path.clone())
-            .collect(),
+        workspace_roots: workspace.execution_roots(),
         sandbox_mode,
         network_allowed,
         job_owner,
@@ -403,7 +403,7 @@ pub async fn execute_tool_with_context(
             context.profile
         ));
     }
-    if let Err(error) = registry.validate(name, args) {
+    if let Err(error) = registry.validate(name, &crate::formatting::plain_arguments(args)) {
         return ToolExecutionResult::Failure(error.to_string());
     }
     if matches!(
@@ -476,7 +476,7 @@ pub async fn execute_tool_with_context(
         };
     }
     if matches!(spec.handler, ToolHandler::InstallBinary) {
-        return execute_install_binary(args).await;
+        return execute_install_binary(args, context).await;
     }
     if matches!(
         spec.handler,
@@ -527,8 +527,8 @@ async fn read_undo_state(path: &std::path::Path) -> Result<crate::undo::FileStat
 }
 
 #[derive(Debug)]
-struct HashlineEditOutput {
-    content: String,
+pub(crate) struct HashlineEditOutput {
+    pub content: String,
     start_line: usize,
     end_line: usize,
 }
@@ -572,7 +572,7 @@ fn line_anchor(line: &str) -> String {
     )
 }
 
-fn apply_hashline_edit(
+pub(crate) fn apply_hashline_edit(
     content: &str,
     start_anchor: &str,
     end_anchor: &str,
@@ -654,175 +654,194 @@ async fn execute_file_mutation(
     args: &Value,
     context: &ToolContext,
 ) -> ToolExecutionResult {
-    let path = args["path"].as_str().unwrap_or("");
-    let resolved = std::path::PathBuf::from(resolve_path(path, &context.cwd.to_string_lossy()));
-    let before = match read_undo_state(&resolved).await {
-        Ok(state) => state,
-        Err(error) => {
-            return ToolExecutionResult::Failure(format!(
-                "Error preparing {} for a reversible mutation: {error}",
-                resolved.display()
-            ))
+    let (prepared, marker) = if crate::formatting::has_ticket(args) {
+        match crate::formatting::consume(
+            match handler {
+                ToolHandler::WriteFile => "write_file",
+                ToolHandler::EditFile => "edit_file",
+                ToolHandler::ApplyPatch => "apply_patch",
+                ToolHandler::HashlineEdit => "hashline_edit",
+                _ => "",
+            },
+            args,
+        ) {
+            Ok(edit) => edit,
+            Err(error) => return ToolExecutionResult::Failure(error),
         }
-    };
-    let (action, after, marker) = match handler {
-        ToolHandler::WriteFile => {
-            let content = args["content"].as_str().unwrap_or("").to_string();
-            let after = match crate::undo::FileState::utf8(content.clone()) {
-                Ok(state) => state,
-                Err(error) => return ToolExecutionResult::Failure(format!("Error: {error}")),
-            };
-            let verb = if matches!(before, crate::undo::FileState::Missing) {
-                "Created"
-            } else {
-                "Modified"
-            };
-            let line_count = content.lines().count();
-            let preview = content
-                .lines()
-                .take(10)
-                .map(|line| format!("+{line}"))
-                .collect::<Vec<_>>()
-                .join("\n");
-            let more = if line_count > 10 {
-                format!("\n… ({} more lines)", line_count - 10)
-            } else {
-                String::new()
-            };
-            (
-                "write_file",
-                after,
-                format!(
-                    "@@ {} ({verb}, {} bytes) @@\n{preview}{more}",
-                    resolved.display(),
-                    content.len()
-                ),
-            )
-        }
-        ToolHandler::EditFile => {
-            let crate::undo::FileState::Utf8(content) = &before else {
+    } else {
+        let path = args["path"].as_str().unwrap_or("");
+        let resolved = std::path::PathBuf::from(resolve_path(path, &context.cwd.to_string_lossy()));
+        let before = match read_undo_state(&resolved).await {
+            Ok(state) => state,
+            Err(error) => {
                 return ToolExecutionResult::Failure(format!(
-                    "Error reading {}: file does not exist",
+                    "Error preparing {} for a reversible mutation: {error}",
                     resolved.display()
-                ));
-            };
-            let old_string = args["old_string"].as_str().unwrap_or("");
-            let new_string = args["new_string"].as_str().unwrap_or("");
-            let count = content.matches(old_string).count();
-            if count == 0 {
-                return ToolExecutionResult::Failure(format!(
-                    "Error: '{old_string}' not found in {}",
-                    resolved.display()
-                ));
+                ))
             }
-            if count > 1 {
-                return ToolExecutionResult::Failure(format!(
+        };
+        let (action, after, marker) = match handler {
+            ToolHandler::WriteFile => {
+                let content = args["content"].as_str().unwrap_or("").to_string();
+                let after = match crate::undo::FileState::utf8(content.clone()) {
+                    Ok(state) => state,
+                    Err(error) => return ToolExecutionResult::Failure(format!("Error: {error}")),
+                };
+                let verb = if matches!(before, crate::undo::FileState::Missing) {
+                    "Created"
+                } else {
+                    "Modified"
+                };
+                let line_count = content.lines().count();
+                let preview = content
+                    .lines()
+                    .take(10)
+                    .map(|line| format!("+{line}"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let more = if line_count > 10 {
+                    format!("\n… ({} more lines)", line_count - 10)
+                } else {
+                    String::new()
+                };
+                (
+                    "write_file",
+                    after,
+                    format!(
+                        "@@ {} ({verb}, {} bytes) @@\n{preview}{more}",
+                        resolved.display(),
+                        content.len()
+                    ),
+                )
+            }
+            ToolHandler::EditFile => {
+                let crate::undo::FileState::Utf8(content) = &before else {
+                    return ToolExecutionResult::Failure(format!(
+                        "Error reading {}: file does not exist",
+                        resolved.display()
+                    ));
+                };
+                let old_string = args["old_string"].as_str().unwrap_or("");
+                let new_string = args["new_string"].as_str().unwrap_or("");
+                let count = content.matches(old_string).count();
+                if count == 0 {
+                    return ToolExecutionResult::Failure(format!(
+                        "Error: '{old_string}' not found in {}",
+                        resolved.display()
+                    ));
+                }
+                if count > 1 {
+                    return ToolExecutionResult::Failure(format!(
                     "Error: search string found {count} times in {}. Use a more unique string to edit only the intended location.",
                     resolved.display()
                 ));
-            }
-            let new_content = content.replacen(old_string, new_string, 1);
-            let after = match crate::undo::FileState::utf8(new_content.clone()) {
-                Ok(state) => state,
-                Err(error) => return ToolExecutionResult::Failure(format!("Error: {error}")),
-            };
-            let old_display: String = old_string.chars().take(120).collect();
-            let new_display: String = new_string.chars().take(120).collect();
-            (
-                "edit_file",
-                after,
-                format!(
-                    "@@ {} @@\n-{old_display}\n+{new_display}",
-                    resolved.display()
-                ),
-            )
-        }
-        ToolHandler::HashlineEdit => {
-            let crate::undo::FileState::Utf8(content) = &before else {
-                return ToolExecutionResult::Failure(format!(
-                    "Error reading {}: file does not exist",
-                    resolved.display()
-                ));
-            };
-            let start_anchor = args["start_anchor"].as_str().unwrap_or_default();
-            let end_anchor = args["end_anchor"].as_str().unwrap_or_default();
-            let replacement = args["replacement"].as_str().unwrap_or_default();
-            let anchored = match apply_hashline_edit(content, start_anchor, end_anchor, replacement)
-            {
-                Ok(anchored) => anchored,
-                Err(error) => return ToolExecutionResult::Failure(format!("Error: {error}")),
-            };
-            let after = match crate::undo::FileState::utf8(anchored.content.clone()) {
-                Ok(state) => state,
-                Err(error) => return ToolExecutionResult::Failure(format!("Error: {error}")),
-            };
-            (
-                "hashline_edit",
-                after,
-                format!(
-                    "@@ {} (anchored lines {}-{}) @@\n{}",
-                    resolved.display(),
-                    anchored.start_line,
-                    anchored.end_line,
-                    bounded_replacement_preview(replacement)
-                ),
-            )
-        }
-        ToolHandler::ApplyPatch => {
-            let crate::undo::FileState::Utf8(original) = &before else {
-                return ToolExecutionResult::Failure(format!(
-                    "Error reading {}: file does not exist",
-                    resolved.display()
-                ));
-            };
-            let patch = args["patch"].as_str().unwrap_or("");
-            let patched = match apply_unified_patch(original, patch) {
-                Ok(patched) => patched,
-                Err(error) => {
-                    return ToolExecutionResult::Failure(format!(
-                        "Patch failed for {}: {error}",
-                        resolved.display()
-                    ))
                 }
-            };
-            let after = match crate::undo::FileState::utf8(patched.clone()) {
-                Ok(state) => state,
-                Err(error) => return ToolExecutionResult::Failure(format!("Error: {error}")),
-            };
-            (
-                "apply_patch",
-                after,
-                format!(
-                    "@@ {} (patched, {} -> {} chars) @@\n{patch}",
-                    resolved.display(),
-                    original.len(),
-                    patched.len()
-                ),
-            )
-        }
-        ToolHandler::DeleteFile => {
-            if matches!(before, crate::undo::FileState::Missing) {
-                return ToolExecutionResult::Failure(format!(
-                    "Error deleting {}: file does not exist",
-                    resolved.display()
-                ));
+                let new_content = content.replacen(old_string, new_string, 1);
+                let after = match crate::undo::FileState::utf8(new_content.clone()) {
+                    Ok(state) => state,
+                    Err(error) => return ToolExecutionResult::Failure(format!("Error: {error}")),
+                };
+                let old_display: String = old_string.chars().take(120).collect();
+                let new_display: String = new_string.chars().take(120).collect();
+                (
+                    "edit_file",
+                    after,
+                    format!(
+                        "@@ {} @@\n-{old_display}\n+{new_display}",
+                        resolved.display()
+                    ),
+                )
             }
-            (
-                "delete_file",
-                crate::undo::FileState::Missing,
-                format!(
-                    "@@ {} (deleted) @@\n-{}",
-                    resolved.display(),
-                    resolved.display()
-                ),
-            )
-        }
-        _ => unreachable!("non-file handler routed to file mutation executor"),
-    };
-    let prepared = match crate::undo::PreparedFileMutation::single(resolved, action, before, after)
-    {
-        Ok(prepared) => prepared,
-        Err(error) => return ToolExecutionResult::Failure(error),
+            ToolHandler::HashlineEdit => {
+                let crate::undo::FileState::Utf8(content) = &before else {
+                    return ToolExecutionResult::Failure(format!(
+                        "Error reading {}: file does not exist",
+                        resolved.display()
+                    ));
+                };
+                let start_anchor = args["start_anchor"].as_str().unwrap_or_default();
+                let end_anchor = args["end_anchor"].as_str().unwrap_or_default();
+                let replacement = args["replacement"].as_str().unwrap_or_default();
+                let anchored =
+                    match apply_hashline_edit(content, start_anchor, end_anchor, replacement) {
+                        Ok(anchored) => anchored,
+                        Err(error) => {
+                            return ToolExecutionResult::Failure(format!("Error: {error}"))
+                        }
+                    };
+                let after = match crate::undo::FileState::utf8(anchored.content.clone()) {
+                    Ok(state) => state,
+                    Err(error) => return ToolExecutionResult::Failure(format!("Error: {error}")),
+                };
+                (
+                    "hashline_edit",
+                    after,
+                    format!(
+                        "@@ {} (anchored lines {}-{}) @@\n{}",
+                        resolved.display(),
+                        anchored.start_line,
+                        anchored.end_line,
+                        bounded_replacement_preview(replacement)
+                    ),
+                )
+            }
+            ToolHandler::ApplyPatch => {
+                let crate::undo::FileState::Utf8(original) = &before else {
+                    return ToolExecutionResult::Failure(format!(
+                        "Error reading {}: file does not exist",
+                        resolved.display()
+                    ));
+                };
+                let patch = args["patch"].as_str().unwrap_or("");
+                let patched = match apply_unified_patch(original, patch) {
+                    Ok(patched) => patched,
+                    Err(error) => {
+                        return ToolExecutionResult::Failure(format!(
+                            "Patch failed for {}: {error}",
+                            resolved.display()
+                        ))
+                    }
+                };
+                let after = match crate::undo::FileState::utf8(patched.clone()) {
+                    Ok(state) => state,
+                    Err(error) => return ToolExecutionResult::Failure(format!("Error: {error}")),
+                };
+                (
+                    "apply_patch",
+                    after,
+                    format!(
+                        "@@ {} (patched, {} -> {} chars) @@\n{patch}",
+                        resolved.display(),
+                        original.len(),
+                        patched.len()
+                    ),
+                )
+            }
+            ToolHandler::DeleteFile => {
+                if matches!(before, crate::undo::FileState::Missing) {
+                    return ToolExecutionResult::Failure(format!(
+                        "Error deleting {}: file does not exist",
+                        resolved.display()
+                    ));
+                }
+                (
+                    "delete_file",
+                    crate::undo::FileState::Missing,
+                    format!(
+                        "@@ {} (deleted) @@\n-{}",
+                        resolved.display(),
+                        resolved.display()
+                    ),
+                )
+            }
+            _ => unreachable!("non-file handler routed to file mutation executor"),
+        };
+        let prepared =
+            match crate::undo::PreparedFileMutation::single(resolved, action, before, after) {
+                Ok(prepared) => prepared,
+                Err(error) => return ToolExecutionResult::Failure(error),
+            };
+        (prepared, marker)
     };
     // Register before spawning: dropping the async waiter cannot hide a queued
     // blocking mutation from turn retirement and sealing.
@@ -934,6 +953,9 @@ async fn execute_view_image(args: &Value, context: &ToolContext) -> ToolExecutio
         Ok(bytes) => bytes,
         Err(_) => return ToolExecutionResult::Failure("Could not read image file".into()),
     };
+    if let Err(error) = crate::provider_filter::scan_outbound(&bytes) {
+        return ToolExecutionResult::Failure(crate::provider_filter::withheld_message(&error));
+    }
     let guessed = match image::guess_format(&bytes) {
         Ok(format) => format,
         Err(_) => return ToolExecutionResult::Failure("Image is malformed or unsupported".into()),
@@ -967,140 +989,46 @@ async fn execute_view_image(args: &Value, context: &ToolContext) -> ToolExecutio
     }
 }
 
-async fn execute_install_binary(args: &Value) -> ToolExecutionResult {
+async fn execute_install_binary(args: &Value, context: &ToolContext) -> ToolExecutionResult {
     let source = match args["source"].as_str() {
-        Some(s) if !s.is_empty() => s,
+        Some(source) if !source.trim().is_empty() => context.cwd.join(source),
         _ => {
             return ToolExecutionResult::Failure(
                 "install_binary requires a non-empty 'source' path".into(),
             )
         }
     };
-
-    let destination = match args["destination"].as_str() {
-        Some(d) if !d.is_empty() => d.to_string(),
-        _ => match std::env::current_exe() {
-            Ok(path) => path.to_string_lossy().into_owned(),
-            Err(error) => {
-                return ToolExecutionResult::Failure(format!(
-                    "Cannot determine current executable: {error}"
-                ))
-            }
-        },
-    };
-
+    let destination = args["destination"]
+        .as_str()
+        .filter(|path| !path.is_empty())
+        .map(std::path::PathBuf::from);
     let backup = args["backup"].as_bool().unwrap_or(true);
     let verify = args["verify"].as_bool().unwrap_or(true);
-
-    let source_path = std::path::PathBuf::from(source);
-    if !source_path.is_file() {
-        return ToolExecutionResult::Failure(format!("Source is not a regular file: {source}"));
-    }
-
-    let dest_path = std::path::PathBuf::from(&destination);
-    let dest_parent = match dest_path.parent() {
-        Some(parent) => parent,
-        None => return ToolExecutionResult::Failure("Destination has no parent directory".into()),
-    };
-    if !dest_parent.is_dir() {
-        return ToolExecutionResult::Failure(format!(
-            "Destination directory does not exist: {}",
-            dest_parent.display()
-        ));
-    }
-
-    if std::fs::symlink_metadata(&source_path).is_ok_and(|m| m.file_type().is_symlink()) {
-        return ToolExecutionResult::Failure("Source must not be a symlink".into());
-    }
-    if dest_path.exists()
-        && std::fs::symlink_metadata(&dest_path).is_ok_and(|m| m.file_type().is_symlink())
-    {
-        return ToolExecutionResult::Failure("Destination must not be a symlink".into());
-    }
-
-    let source_metadata = match std::fs::metadata(&source_path) {
-        Ok(m) => m,
+    let installed = tokio::task::spawn_blocking(move || {
+        let current_exe = std::env::current_exe()
+            .map_err(|error| format!("Cannot determine current executable: {error}"))?;
+        let destination = destination.unwrap_or_else(|| current_exe.clone());
+        let self_update = destination == current_exe
+            || std::fs::canonicalize(&destination)
+                .ok()
+                .zip(std::fs::canonicalize(&current_exe).ok())
+                .is_some_and(|(destination, executable)| destination == executable);
+        crate::binary_install::install(crate::binary_install::InstallRequest {
+            source,
+            destination,
+            backup,
+            verify,
+            self_update,
+        })
+    })
+    .await;
+    match installed {
+        Ok(Ok(receipt)) => ToolExecutionResult::Success(receipt),
+        Ok(Err(error)) => ToolExecutionResult::Failure(error),
         Err(error) => {
-            return ToolExecutionResult::Failure(format!("Cannot read source metadata: {error}"))
-        }
-    };
-    let source_size = source_metadata.len();
-    let source_sha256 = match crate::self_update::sha256_file(&source_path, source_size) {
-        Ok(hash) => hash,
-        Err(error) => {
-            return ToolExecutionResult::Failure(format!(
-                "Cannot compute source SHA-256: {error:?}"
-            ))
-        }
-    };
-
-    if backup && dest_path.exists() {
-        let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
-        let backup_path =
-            dest_path.with_extension(format!("bak.{timestamp}.{}", &source_sha256[..8]));
-        if let Err(error) = std::fs::copy(&dest_path, &backup_path) {
-            return ToolExecutionResult::Failure(format!(
-                "Cannot create backup at {}: {error}",
-                backup_path.display()
-            ));
+            ToolExecutionResult::Failure(format!("Binary installation task failed: {error}"))
         }
     }
-
-    if let Err(error) = crate::self_update::replace_executable(
-        &source_path,
-        &dest_path,
-        source_size,
-        &source_sha256,
-    ) {
-        return ToolExecutionResult::Failure(format!("Install failed: {error:?}"));
-    }
-
-    if verify {
-        let installed_metadata = match std::fs::metadata(&dest_path) {
-            Ok(m) => m,
-            Err(error) => {
-                return ToolExecutionResult::Failure(format!(
-                    "Post-install verification failed: cannot read installed metadata: {error}"
-                ))
-            }
-        };
-        let installed_sha256 =
-            match crate::self_update::sha256_file(&dest_path, installed_metadata.len()) {
-                Ok(hash) => hash,
-                Err(error) => {
-                    return ToolExecutionResult::Failure(format!(
-                        "Post-install verification failed: {error:?}"
-                    ))
-                }
-            };
-        if installed_sha256 != source_sha256 {
-            return ToolExecutionResult::Failure(format!(
-                "Post-install verification failed: SHA-256 mismatch. Expected {source_sha256}, got {installed_sha256}"
-            ));
-        }
-    }
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(&dest_path)
-            .map(|m| m.permissions().mode())
-            .unwrap_or(0);
-        if mode & 0o111 == 0 {
-            return ToolExecutionResult::Failure(format!(
-                "Installed file is not executable (mode {mode:o})"
-            ));
-        }
-    }
-
-    ToolExecutionResult::Success(format!(
-        "Installed {} -> {} (SHA-256: {}, {} bytes){}",
-        source_path.display(),
-        dest_path.display(),
-        &source_sha256[..16],
-        source_size,
-        if backup { " [backup created]" } else { "" }
-    ))
 }
 
 async fn execute_builtin(
@@ -1244,6 +1172,9 @@ async fn execute_builtin(
             match reqwest::get(&url).await {
                 Ok(resp) => match resp.text().await {
                     Ok(html) => {
+                        if let Err(error) = crate::provider_filter::scan_outbound(html.as_bytes()) {
+                            return crate::provider_filter::withheld_message(&error);
+                        }
                         let mut snippets = Vec::new();
                         for chunk in html.split("result__snippet") {
                             if let Some(start) = chunk.find('>') {
@@ -1303,6 +1234,11 @@ async fn execute_builtin(
                         break;
                     }
                     if let Ok(content) = std::fs::read_to_string(&entry) {
+                        if let Err(error) =
+                            crate::provider_filter::scan_outbound(content.as_bytes())
+                        {
+                            return crate::provider_filter::withheld_message(&error);
+                        }
                         for (line_num, line) in content.lines().enumerate() {
                             if re.is_match(line) {
                                 results.push(format!(
@@ -1349,6 +1285,7 @@ async fn execute_builtin(
             out
         }
         ToolHandler::ProposePlan
+        | ToolHandler::PlanWorkflow
         | ToolHandler::ProposeAutomation
         | ToolHandler::ListLocalAutomations
         | ToolHandler::ConfigureAgentGraph
@@ -1359,12 +1296,18 @@ async fn execute_builtin(
         ToolHandler::RequestUserInput | ToolHandler::AskQuestion => {
             "Error: interaction tools require orchestration".into()
         }
+        ToolHandler::RequestGraphClarification => {
+            "Error: request_graph_clarification requires the agent graph lane runner".into()
+        }
         ToolHandler::UpdateTodos => {
             let path = args["path"].as_str().unwrap_or("");
             let action = args["action"].as_str().unwrap_or("");
             let resolved = resolve_path(path, cwd);
             match tokio::fs::read_to_string(&resolved).await {
                 Ok(content) => {
+                    if let Err(error) = crate::provider_filter::scan_outbound(content.as_bytes()) {
+                        return crate::provider_filter::withheld_message(&error);
+                    }
                     let mut lines: Vec<String> = content.lines().map(String::from).collect();
                     match action {
                         "complete" => {
@@ -1511,9 +1454,9 @@ async fn execute_builtin(
             let image_b64 = if let Some(url) = image_url_arg {
                 if !url.is_empty() {
                     let img_data = if url.starts_with("http://") || url.starts_with("https://") {
-                        match client.get(url).send().await {
-                            Ok(r) => r.bytes().await.unwrap_or_default().to_vec(),
-                            Err(e) => return format!("Error downloading reference image: {}", e),
+                        match image_download_bytes(&client, url, false).await {
+                            Ok(bytes) => bytes,
+                            Err(error) => return error,
                         }
                     } else {
                         let resolved = resolve_path(url, cwd);
@@ -1524,6 +1467,9 @@ async fn execute_builtin(
                             }
                         }
                     };
+                    if let Err(error) = crate::provider_filter::scan_outbound(&img_data) {
+                        return crate::provider_filter::withheld_message(&error);
+                    }
                     use base64::Engine;
                     Some(base64::engine::general_purpose::STANDARD.encode(&img_data))
                 } else {
@@ -1539,49 +1485,31 @@ async fn execute_builtin(
             if let Some(b64) = &image_b64 {
                 body["image"] = serde_json::Value::String(format!("data:image/png;base64,{}", b64));
             }
-
-            let mut req = client
-                .post(&gen_url)
-                .header("Content-Type", "application/json")
-                .json(&body);
-            if !gen_key.is_empty() {
-                req = req.header("Authorization", format!("Bearer {}", gen_key));
-            }
-            match req.send().await {
-                Ok(resp) => {
-                    let status = resp.status();
-                    if !status.is_success() {
-                        let text = resp.text().await.unwrap_or_default();
-                        let preview: String = text.chars().take(200).collect();
-                        return format!("Image API error {}: {}", status, preview);
-                    }
-                    match resp.json::<serde_json::Value>().await {
-                        Ok(json) => {
-                            let img = &json["data"][0];
-                            let bytes: Vec<u8> = if let Some(url) = img["url"].as_str() {
-                                match reqwest::get(url).await {
-                                    Ok(r) => r.bytes().await.unwrap_or_default().to_vec(),
-                                    Err(e) => return format!("Error downloading image: {}", e),
-                                }
-                            } else if let Some(b64) = img["b64_json"].as_str() {
-                                use base64::Engine;
-                                base64::engine::general_purpose::STANDARD
-                                    .decode(b64)
-                                    .unwrap_or_default()
-                            } else {
-                                return "No image data in response".into();
-                            };
-                            match tokio::fs::write(&out_path, &bytes).await {
-                                Ok(_) => format!("Image saved to {}", out_path),
-                                Err(e) => format!("Error saving image: {}", e),
-                            }
+            match image_provider_response(&client, &gen_url, &body, &gen_key, None).await {
+                Ok(json) => {
+                    let img = &json["data"][0];
+                    let bytes: Vec<u8> = if let Some(url) = img["url"].as_str() {
+                        match image_download_bytes(&client, url, true).await {
+                            Ok(bytes) => bytes,
+                            Err(error) => return error,
                         }
-                        Err(e) => format!("Error parsing response: {}", e),
+                    } else if let Some(b64) = img["b64_json"].as_str() {
+                        use base64::Engine;
+                        base64::engine::general_purpose::STANDARD
+                            .decode(b64)
+                            .unwrap_or_default()
+                    } else {
+                        return "No image data in response".into();
+                    };
+                    match tokio::fs::write(&out_path, &bytes).await {
+                        Ok(_) => format!("Image saved to {}", out_path),
+                        Err(e) => format!("Error saving image: {}", e),
                     }
                 }
-                Err(e) => format!("Error contacting image API: {}", e),
+                Err(error) => error,
             }
         }
+        ToolHandler::RequestWriteAccess => "Error: request_write_access is available only through the host-owned interactive folder approval".into(),
         ToolHandler::InstallBinary => "Error: install_binary bypassed typed execution".into(),
         ToolHandler::Task => {
             let name = args["subagent_name"].as_str().unwrap_or("");
@@ -1636,6 +1564,7 @@ async fn execute_builtin(
         | ToolHandler::CancelAgent
         | ToolHandler::SetAgentSpawning
         | ToolHandler::CancelAgentJob
+        | ToolHandler::ListAgentRoutes
         | ToolHandler::ListAgents => "Error: agent manager context is unavailable".into(),
         ToolHandler::ActivateSkill | ToolHandler::SkillView | ToolHandler::SkillManage => {
             "Error: skill context is unavailable".into()
@@ -1702,6 +1631,11 @@ async fn execute_job_tool_with_policy(
     let manager = crate::jobs::JobManager::process();
     match handler {
         ToolHandler::RunCommand => {
+            if let Err(error) =
+                crate::command_mutations::begin(context.job_owner, &context.workspace_roots).await
+            {
+                return ToolExecutionResult::Failure(error);
+            }
             let command = args["command"].as_str().unwrap_or("");
             let dir = args["cwd"].as_str().map_or_else(
                 || context.cwd.to_string_lossy().into_owned(),
@@ -1849,6 +1783,7 @@ fn classify_job_result(job: crate::jobs::JobInfo, network_requested: bool) -> To
                 network_requested,
             ),
             success,
+            mutation: None,
         },
     }
 }
@@ -1948,6 +1883,7 @@ async fn read_file_range(
     let mut file = tokio::fs::File::open(resolved)
         .await
         .map_err(|error| error.to_string())?;
+    let mut outbound = Vec::new();
     let mut buffer = [0_u8; 8192];
     let mut pending_utf8 = Vec::new();
     let mut current_line = 1_usize;
@@ -1966,6 +1902,9 @@ async fn read_file_range(
             break;
         }
         let chunk = &buffer[..count];
+        if let Err(error) = crate::provider_filter::scan_outbound_chunk(&mut outbound, chunk) {
+            return Err(crate::provider_filter::withheld_message(&error));
+        }
         validate_utf8_chunk(&mut pending_utf8, chunk)?;
         total_bytes = total_bytes.saturating_add(count);
 
@@ -1994,6 +1933,9 @@ async fn read_file_range(
         if (start..=end).contains(&current_line) {
             current.push(remaining);
         }
+    }
+    if let Err(error) = crate::provider_filter::scan_outbound_chunk(&mut outbound, &[]) {
+        return Err(crate::provider_filter::withheld_message(&error));
     }
     if !pending_utf8.is_empty() {
         return Err("file ends with incomplete UTF-8".into());
@@ -2104,6 +2046,9 @@ fn extract_pdf_pages(
     start: usize,
     end: usize,
 ) -> Result<String, String> {
+    if let Err(error) = crate::provider_filter::scan_outbound(&bytes) {
+        return Err(crate::provider_filter::withheld_message(&error));
+    }
     let document = pdf_extract::Document::load_mem(&bytes)
         .map_err(|_| "PDF is malformed or unsupported".to_string())?;
     if document.is_encrypted() {
@@ -2142,6 +2087,11 @@ fn extract_pdf_pages(
         };
         shown_end = ordinal;
         if extraction.is_err() {
+            if crate::provider_filter::is_tripped() {
+                return Err(crate::provider_filter::withheld_message(
+                    &crate::provider_filter::current().stopped_error(),
+                ));
+            }
             if writer.truncated {
                 truncated_page = Some(ordinal);
                 break;
@@ -2194,6 +2144,7 @@ struct PdfTextWriter {
     bytes: Vec<u8>,
     cap: usize,
     truncated: bool,
+    outbound: Vec<u8>,
 }
 
 impl PdfTextWriter {
@@ -2202,12 +2153,21 @@ impl PdfTextWriter {
             bytes: Vec::with_capacity(cap),
             cap,
             truncated: false,
+            outbound: Vec::new(),
         }
     }
 }
 
 impl std::io::Write for PdfTextWriter {
     fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        if let Err(error) = crate::provider_filter::scan_outbound_chunk(&mut self.outbound, buffer)
+        {
+            self.bytes.clear();
+            self.truncated = true;
+            return Err(std::io::Error::other(
+                crate::provider_filter::withheld_message(&error),
+            ));
+        }
         if self.truncated {
             return Err(std::io::Error::other("PDF output limit reached"));
         }
@@ -2297,10 +2257,14 @@ async fn web_fetch_bounded(url: &str, timeout: Duration) -> Result<String, Strin
         .content_length()
         .is_some_and(|length| length > WEB_FETCH_MAX_DECODED_BYTES as u64);
     let mut stream = response.bytes_stream();
+    let mut outbound = Vec::new();
     let mut body = Vec::with_capacity(WEB_FETCH_MAX_DECODED_BYTES.min(64 * 1024));
     let mut unread = declared_oversize;
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(safe_fetch_error)?;
+        if let Err(error) = crate::provider_filter::scan_fetched_page_chunk(&mut outbound, &chunk) {
+            return Err(crate::provider_filter::withheld_message(&error));
+        }
         let remaining = WEB_FETCH_MAX_DECODED_BYTES.saturating_sub(body.len());
         if chunk.len() > remaining {
             body.extend_from_slice(&chunk[..remaining]);
@@ -2322,6 +2286,12 @@ async fn web_fetch_bounded(url: &str, timeout: Duration) -> Result<String, Strin
         }
     }
 
+    if !unread {
+        if let Err(error) = crate::provider_filter::scan_fetched_page_chunk(&mut outbound, &[]) {
+            return Err(crate::provider_filter::withheld_message(&error));
+        }
+    }
+
     let decoded = match std::str::from_utf8(&body) {
         Ok(value) => value,
         Err(error) if unread && error.error_len().is_none() => {
@@ -2330,7 +2300,11 @@ async fn web_fetch_bounded(url: &str, timeout: Duration) -> Result<String, Strin
         }
         Err(_) => return Err("response is not valid UTF-8".into()),
     };
-    let text = strip_html(decoded);
+    let text = if crate::provider_filter::keeps_html_source() {
+        decoded.to_string()
+    } else {
+        strip_html(decoded)
+    };
     let unread_marker = "\n[… remaining response was not read …]";
     let budget = if unread {
         WEB_FETCH_MAX_RESULT_BYTES.saturating_sub(unread_marker.len())
@@ -2447,7 +2421,7 @@ impl PatchHunk {
     }
 }
 
-fn apply_unified_patch(original: &str, patch: &str) -> Result<String, String> {
+pub(crate) fn apply_unified_patch(original: &str, patch: &str) -> Result<String, String> {
     if patch.len() > MAX_UNIFIED_PATCH_BYTES {
         return Err(patch_failure("patch exceeds the bounded input limit"));
     }
@@ -2973,6 +2947,7 @@ fn bounded_file_query(
                     }
                 };
                 let mut bytes = Vec::new();
+                let mut outbound = Vec::new();
                 let mut buffer = [0u8; 8192];
                 loop {
                     if cancelled.load(std::sync::atomic::Ordering::Acquire) {
@@ -2983,7 +2958,14 @@ fn bounded_file_query(
                         break;
                     }
                     let count = match file.read(&mut buffer) {
-                        Ok(0) => break,
+                        Ok(0) => {
+                            if let Err(error) =
+                                crate::provider_filter::scan_outbound_chunk(&mut outbound, &[])
+                            {
+                                return crate::provider_filter::withheld_message(&error);
+                            }
+                            break;
+                        }
                         Ok(count) => count,
                         Err(_) => {
                             skipped += 1;
@@ -2991,6 +2973,11 @@ fn bounded_file_query(
                         }
                     };
                     total_bytes += count;
+                    if let Err(error) =
+                        crate::provider_filter::scan_outbound_chunk(&mut outbound, &buffer[..count])
+                    {
+                        return crate::provider_filter::withheld_message(&error);
+                    }
                     if bytes.len() + count > QUERY_MAX_FILE_BYTES
                         || total_bytes > QUERY_MAX_TOTAL_BYTES
                     {
@@ -3114,6 +3101,9 @@ fn is_hidden_or_skippable_file(p: &std::path::Path) -> bool {
 }
 
 fn truncate_output(s: &str, max: usize) -> String {
+    if let Err(error) = crate::provider_filter::scan_outbound(s.as_bytes()) {
+        return crate::provider_filter::withheld_message(&error);
+    }
     if s.len() <= max {
         return s.to_string();
     }
@@ -3171,11 +3161,362 @@ fn strip_html(html: &str) -> String {
     result.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+// Asset fetches use the real URL, but a process trip must cancel their I/O too.
+async fn image_download_bytes(
+    client: &reqwest::Client,
+    url: &str,
+    provider_response: bool,
+) -> Result<Vec<u8>, String> {
+    let download = async { client.get(url).send().await?.bytes().await };
+    let bytes = image_filter_guarded(&crate::provider_filter::current, download)
+        .await?
+        .map_err(|error| format!("Error downloading image: {error}"))?;
+    if provider_response {
+        let filter = crate::provider_filter::current();
+        let mut carry = Vec::new();
+        filter
+            .observe_response(&mut carry, &bytes)
+            .and_then(|()| filter.observe_response(&mut carry, &[]))
+            .map_err(|error| crate::provider_filter::withheld_message(&error))?;
+    }
+    Ok(bytes.to_vec())
+}
+
+// Image generation has its own HTTP endpoint, but uses the same process gate.
+async fn image_provider_response(
+    client: &reqwest::Client,
+    url: &str,
+    body: &Value,
+    api_key: &str,
+    filter_override: Option<std::sync::Arc<crate::provider_filter::ProviderFilter>>,
+) -> Result<Value, String> {
+    let active_filter = || {
+        filter_override
+            .clone()
+            .unwrap_or_else(crate::provider_filter::current)
+    };
+    let filter = active_filter();
+    let encoded = serde_json::to_vec(body)
+        .map_err(|error| format!("Error preparing image request: {error}"))?;
+    let encoded = filter
+        .prepare_request(&encoded)
+        .map_err(|error| crate::provider_filter::withheld_message(&error))?;
+    if filter.shows_banner() {
+        crate::provider_filter::publish_outbound_body(&encoded);
+    }
+    let mut request = client
+        .post(url)
+        .header("Content-Type", "application/json")
+        .body(encoded);
+    if !api_key.is_empty() {
+        request = request.bearer_auth(api_key);
+    }
+    let response = image_filter_guarded(&active_filter, request.send())
+        .await?
+        .map_err(|error| format!("Error contacting image API: {error}"))?;
+    let status = response.status();
+    let mut stream = response.bytes_stream();
+    let mut bytes = Vec::new();
+    let mut carry = Vec::new();
+    while let Some(chunk) = image_filter_guarded(&active_filter, stream.next()).await? {
+        let chunk = chunk.map_err(|error| format!("Error reading image response: {error}"))?;
+        active_filter()
+            .observe_response(&mut carry, &chunk)
+            .map_err(|error| crate::provider_filter::withheld_message(&error))?;
+        bytes.extend_from_slice(&chunk);
+    }
+    active_filter()
+        .observe_response(&mut carry, &[])
+        .map_err(|error| crate::provider_filter::withheld_message(&error))?;
+    // JSON escapes are transport syntax; stop rules also see decoded strings.
+    let parsed = serde_json::from_slice::<Value>(&bytes);
+    if let Ok(value) = &parsed {
+        scan_image_response_strings(&active_filter(), value)?;
+    }
+    if !status.is_success() {
+        let preview: String = String::from_utf8_lossy(&bytes).chars().take(200).collect();
+        return Err(format!("Image API error {status}: {preview}"));
+    }
+    parsed.map_err(|error| format!("Error parsing response: {error}"))
+}
+
+async fn image_filter_guarded<F: std::future::Future>(
+    active_filter: &impl Fn() -> std::sync::Arc<crate::provider_filter::ProviderFilter>,
+    operation: F,
+) -> Result<F::Output, String> {
+    tokio::pin!(operation);
+    loop {
+        let filter = active_filter();
+        tokio::select! {
+            biased;
+            _ = filter.until_tripped() => {
+                return Err(crate::provider_filter::withheld_message(&filter.stopped_error()));
+            }
+            result = &mut operation => return Ok(result),
+            // /filter on replaces the process snapshot while this I/O waits.
+            _ = tokio::time::sleep(Duration::from_millis(200)) => {}
+        }
+    }
+}
+
+fn scan_image_response_strings(
+    filter: &crate::provider_filter::ProviderFilter,
+    value: &Value,
+) -> Result<(), String> {
+    match value {
+        Value::String(text) => {
+            let mut carry = Vec::new();
+            filter
+                .observe_response(&mut carry, text.as_bytes())
+                .and_then(|()| filter.observe_response(&mut carry, &[]))
+                .map_err(|error| crate::provider_filter::withheld_message(&error))
+        }
+        Value::Array(items) => {
+            for item in items {
+                scan_image_response_strings(filter, item)?;
+            }
+            Ok(())
+        }
+        Value::Object(map) => {
+            for item in map.values() {
+                scan_image_response_strings(filter, item)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod image_provider_filter_tests {
+    use super::*;
+    use crate::provider_filter::{FilterHide, ProviderFilter, ProviderFilterConfig};
+    use std::sync::Arc;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn read_request(stream: &mut tokio::net::TcpStream) -> Value {
+        let mut bytes = Vec::new();
+        let mut buffer = [0u8; 4096];
+        loop {
+            let count = stream.read(&mut buffer).await.unwrap();
+            assert!(count > 0);
+            bytes.extend_from_slice(&buffer[..count]);
+            if let Some(header_end) = bytes.windows(4).position(|part| part == b"\r\n\r\n") {
+                let headers = String::from_utf8_lossy(&bytes[..header_end]);
+                let length: usize = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (key, value) = line.split_once(':')?;
+                        key.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse().unwrap())
+                    })
+                    .unwrap();
+                if bytes.len() >= header_end + 4 + length {
+                    return serde_json::from_slice(&bytes[header_end + 4..header_end + 4 + length])
+                        .unwrap();
+                }
+            }
+        }
+    }
+
+    async fn image_fixture(reply: &'static [u8]) -> (String, tokio::task::JoinHandle<Value>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "http://{}/images/generations",
+            listener.local_addr().unwrap()
+        );
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request = read_request(&mut stream).await;
+            stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n", reply.len()).as_bytes()).await.unwrap();
+            stream.write_all(reply).await.unwrap();
+            request
+        });
+        (url, server)
+    }
+
+    #[tokio::test]
+    async fn image_provider_filter_sends_the_rewritten_prompt_and_placeholder() {
+        let filter = Arc::new(
+            ProviderFilter::compile(&ProviderFilterConfig {
+                enabled: true,
+                hide: FilterHide {
+                    words: vec!["secret".into()],
+                    ..Default::default()
+                },
+                placeholder_images: true,
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let (url, server) = image_fixture(br#"{"data":[{"b64_json":"b2s="}]}"#).await;
+        let result = image_provider_response(&reqwest::Client::new(), &url, &serde_json::json!({
+            "model":"image-model", "prompt":"paint SECRET", "image":"data:image/png;base64,c2VjcmV0"
+        }), "", Some(filter)).await;
+        assert!(result.is_ok(), "{result:?}");
+        let sent = server.await.unwrap();
+        assert_eq!(sent["model"], "image-model");
+        assert_eq!(sent["prompt"], "paint ca-kw-01");
+        assert_eq!(sent["image"], "[image]");
+    }
+
+    #[tokio::test]
+    async fn image_provider_filter_stops_a_response_before_delivering_it() {
+        let filter = Arc::new(
+            ProviderFilter::compile(&ProviderFilterConfig {
+                enabled: true,
+                phrases: vec!["secret".into()],
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let (url, server) = image_fixture(br#"{"data":[],"revised_prompt":"SECRET"}"#).await;
+        let result = image_provider_response(
+            &reqwest::Client::new(),
+            &url,
+            &serde_json::json!({"prompt":"paint sky"}),
+            "",
+            Some(filter.clone()),
+        )
+        .await;
+        server.await.unwrap();
+        assert!(filter.is_tripped());
+        assert!(result.unwrap_err().contains("phrase-1"));
+    }
+
+    #[tokio::test]
+    async fn image_provider_filter_stops_decoded_json_response_text() {
+        let filter = Arc::new(
+            ProviderFilter::compile(&ProviderFilterConfig {
+                enabled: true,
+                phrases: vec!["secret".into()],
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let (url, server) = image_fixture(br#"{"data":[],"revised_prompt":"\u0073ecret"}"#).await;
+        let result = image_provider_response(
+            &reqwest::Client::new(),
+            &url,
+            &serde_json::json!({"prompt":"paint sky"}),
+            "",
+            Some(filter.clone()),
+        )
+        .await;
+        server.await.unwrap();
+        assert!(filter.is_tripped());
+        assert!(result.unwrap_err().contains("phrase-1"));
+    }
+
+    #[tokio::test]
+    async fn image_provider_filter_stops_before_sending_a_blocked_prompt() {
+        let filter = Arc::new(
+            ProviderFilter::compile(&ProviderFilterConfig {
+                enabled: true,
+                phrases: vec!["secret".into()],
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "http://{}/images/generations",
+            listener.local_addr().unwrap()
+        );
+        let result = image_provider_response(
+            &reqwest::Client::new(),
+            &url,
+            &serde_json::json!({"prompt":"paint SECRET"}),
+            "",
+            Some(filter),
+        )
+        .await;
+        assert!(result.unwrap_err().contains("phrase-1"));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn image_provider_filter_interrupts_an_inflight_request() {
+        let filter = Arc::new(
+            ProviderFilter::compile(&ProviderFilterConfig {
+                enabled: true,
+                phrases: vec!["secret".into()],
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "http://{}/images/generations",
+            listener.local_addr().unwrap()
+        );
+        let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let _ = read_request(&mut stream).await;
+            accepted_tx.send(()).unwrap();
+            let mut byte = [0];
+            let _ = stream.read(&mut byte).await;
+        });
+        let worker_filter = filter.clone();
+        let mut worker = tokio::spawn(async move {
+            image_provider_response(
+                &reqwest::Client::new(),
+                &url,
+                &serde_json::json!({"prompt":"paint sky"}),
+                "",
+                Some(worker_filter),
+            )
+            .await
+        });
+        accepted_rx.await.unwrap();
+        assert!(filter.admit_outbound(b"secret").is_err());
+        let outcome = tokio::time::timeout(Duration::from_secs(1), &mut worker).await;
+        if outcome.is_err() {
+            worker.abort();
+        }
+        server.abort();
+        assert!(
+            outcome.is_ok(),
+            "image request must stop when the process filter trips"
+        );
+        assert!(outcome.unwrap().unwrap().unwrap_err().contains("phrase-1"));
+    }
+}
+
 #[cfg(test)]
 mod job_tool_tests {
     use super::*;
     use serde_json::json;
     use tokio::io::AsyncWriteExt;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn install_binary_resolves_ordinary_build_source_from_tool_cwd() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("build-output");
+        std::fs::copy("/bin/echo", &source).unwrap();
+        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let destination = temp.path().join("installed-tool");
+        let result = execute_tool(
+            "install_binary",
+            &json!({"source":"build-output", "destination":destination}),
+            temp.path().to_str().unwrap(),
+            5,
+        )
+        .await;
+        assert!(result.is_success(), "{}", result.model_text());
+        assert!(destination.is_file());
+        assert_eq!(
+            std::fs::metadata(destination).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+    }
 
     #[tokio::test]
     async fn retired_recovery_turn_cannot_start_a_typed_file_mutation() {
@@ -3500,6 +3841,8 @@ mod job_tool_tests {
             (
                 "deepseek".into(),
                 crate::config::ProviderConfig {
+                    google: None,
+                    tool_schema_policy: Default::default(),
                     base_url: "https://api.deepseek.com/v1".into(),
                     api_key: String::new(),
                     protocol: crate::agent::ProviderProtocol::ChatCompletions,
@@ -3511,6 +3854,8 @@ mod job_tool_tests {
             (
                 "openai".into(),
                 crate::config::ProviderConfig {
+                    google: None,
+                    tool_schema_policy: Default::default(),
                     base_url: "https://api.openai.com/v1".into(),
                     api_key: String::new(),
                     protocol: crate::agent::ProviderProtocol::OpenAiResponses,
@@ -3542,6 +3887,28 @@ mod job_tool_tests {
         );
         assert_eq!(client.provider_id(), "openai");
         assert_eq!(client.model_id(), "openai-model");
+    }
+
+    #[tokio::test]
+    async fn explicit_task_route_without_manager_fails_before_provider_resolution() {
+        let temp = tempfile::tempdir().unwrap();
+        let result = execute_tool(
+            "task",
+            &json!({
+                "subagent_name": "explore",
+                "prompt": "inspect this project",
+                "route": {"provider": "openai-codex", "model": "configured-model"}
+            }),
+            temp.path().to_str().unwrap(),
+            2,
+        )
+        .await;
+        assert!(
+            matches!(result, ToolExecutionResult::Failure(ref message)
+            if message == "Error: agent manager context is unavailable"),
+            "{}",
+            result.model_text()
+        );
     }
 
     #[tokio::test]
@@ -4724,16 +5091,20 @@ mod job_tool_tests {
 
     #[tokio::test]
     async fn await_job_timeout_returns_running_status_instead_of_hanging() {
-        let workspace = crate::workspace::WorkspaceContext::discover("/tmp").unwrap();
-        let started = execute_tool_in_workspace_policy(
+        let root = tempfile::tempdir().unwrap();
+        let workspace = crate::workspace::WorkspaceContext::discover(root.path()).unwrap();
+        let owner = crate::jobs::JobOwner::new(None);
+        let started = execute_tool_in_workspace_policy_owned(
             "run_command",
             &json!({"command": "sleep 30", "background": true}),
             &workspace,
             2,
             crate::sandbox::SandboxMode::PolicyOnly,
             false,
+            owner,
         )
         .await;
+        assert!(started.is_success(), "{}", started.model_text());
         let id = started
             .model_text()
             .strip_prefix("Started background job ")
@@ -4741,13 +5112,14 @@ mod job_tool_tests {
             .to_string();
 
         let began = std::time::Instant::now();
-        let awaited = execute_tool_in_workspace_policy(
+        let awaited = execute_tool_in_workspace_policy_owned(
             "await_job",
             &json!({"job_id": id, "timeout_secs": 2}),
             &workspace,
             2,
             crate::sandbox::SandboxMode::PolicyOnly,
             false,
+            owner,
         )
         .await;
         let waited = began.elapsed();
@@ -4764,20 +5136,36 @@ mod job_tool_tests {
             "expected a still-running snapshot, got: {}",
             awaited.model_text()
         );
+        crate::jobs::JobManager::process()
+            .stop_and_await_owned(
+                id.parse().unwrap(),
+                owner,
+                std::time::Duration::from_secs(2),
+            )
+            .await
+            .unwrap();
+        assert!(crate::command_mutations::finish(owner)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
     async fn await_job_omitted_timeout_uses_short_default_not_forever() {
-        let workspace = crate::workspace::WorkspaceContext::discover("/tmp").unwrap();
-        let started = execute_tool_in_workspace_policy(
+        let root = tempfile::tempdir().unwrap();
+        let workspace = crate::workspace::WorkspaceContext::discover(root.path()).unwrap();
+        let owner = crate::jobs::JobOwner::new(None);
+        let started = execute_tool_in_workspace_policy_owned(
             "run_command",
             &json!({"command": "sleep 300", "background": true}),
             &workspace,
             2,
             crate::sandbox::SandboxMode::PolicyOnly,
             false,
+            owner,
         )
         .await;
+        assert!(started.is_success(), "{}", started.model_text());
         let id = started
             .model_text()
             .strip_prefix("Started background job ")
@@ -4785,13 +5173,14 @@ mod job_tool_tests {
             .to_string();
 
         let began = std::time::Instant::now();
-        let awaited = execute_tool_in_workspace_policy(
+        let awaited = execute_tool_in_workspace_policy_owned(
             "await_job",
             &json!({"job_id": id}),
             &workspace,
             2,
             crate::sandbox::SandboxMode::PolicyOnly,
             false,
+            owner,
         )
         .await;
         let waited = began.elapsed();
@@ -4813,31 +5202,48 @@ mod job_tool_tests {
             "expected a still-running snapshot, got: {}",
             awaited.model_text()
         );
+        crate::jobs::JobManager::process()
+            .stop_and_await_owned(
+                id.parse().unwrap(),
+                owner,
+                std::time::Duration::from_secs(2),
+            )
+            .await
+            .unwrap();
+        assert!(crate::command_mutations::finish(owner)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
     async fn background_tool_returns_a_stable_awaitable_job_id() {
-        let workspace = crate::workspace::WorkspaceContext::discover("/tmp").unwrap();
-        let output = execute_tool_in_workspace_policy(
+        let root = tempfile::tempdir().unwrap();
+        let workspace = crate::workspace::WorkspaceContext::discover(root.path()).unwrap();
+        let owner = crate::jobs::JobOwner::new(None);
+        let output = execute_tool_in_workspace_policy_owned(
             "run_command",
             &json!({"command": "printf background-ok", "background": true}),
             &workspace,
             2,
             crate::sandbox::SandboxMode::PolicyOnly,
             false,
+            owner,
         )
         .await;
+        assert!(output.is_success(), "{}", output.model_text());
         let id = output
             .model_text()
             .strip_prefix("Started background job ")
             .expect("background job marker");
-        let awaited = execute_tool_in_workspace_policy(
+        let awaited = execute_tool_in_workspace_policy_owned(
             "await_job",
             &json!({"job_id": id, "timeout_secs": 2}),
             &workspace,
             2,
             crate::sandbox::SandboxMode::PolicyOnly,
             false,
+            owner,
         )
         .await;
         assert!(
@@ -4845,6 +5251,44 @@ mod job_tool_tests {
             "{}",
             awaited.model_text()
         );
+        assert!(crate::command_mutations::finish(owner)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn oversized_workspace_file_does_not_block_an_unrelated_command() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::File::create(root.path().join("oversized.txt"))
+            .unwrap()
+            .set_len(64 * 1024 * 1024 + 1)
+            .unwrap();
+        let workspace = crate::workspace::WorkspaceContext::discover(root.path()).unwrap();
+        let owner = crate::jobs::JobOwner::new(None);
+        let result = execute_tool_in_workspace_policy_owned(
+            "run_command",
+            &json!({"command": "printf must-not-run > marker"}),
+            &workspace,
+            2,
+            crate::sandbox::SandboxMode::PolicyOnly,
+            false,
+            owner,
+        )
+        .await;
+
+        assert!(result.is_success(), "{}", result.model_text());
+        assert!(root.path().join("marker").is_file());
+        let batches = crate::command_mutations::finish(owner).await.unwrap();
+        assert!(batches
+            .iter()
+            .flat_map(|batch| batch.receipts())
+            .any(|file| file.path.ends_with("marker")));
+        assert!(batches
+            .iter()
+            .flat_map(|batch| batch.receipts())
+            .all(|file| !file.path.ends_with("oversized.txt")));
+        assert!(!crate::command_mutations::has_pending(owner));
     }
 
     #[tokio::test]

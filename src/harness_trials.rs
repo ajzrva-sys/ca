@@ -838,6 +838,8 @@ pub(crate) mod tests {
             .write_mutable(&attempt.path().unwrap(), &attempt)
             .unwrap();
         let config = crate::config::ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: "http://127.0.0.1:1/v1".into(),
             api_key: "synthetic".into(),
             protocol: ProviderProtocol::ChatCompletions,
@@ -946,6 +948,8 @@ pub(crate) mod tests {
             }
         });
         let config = crate::config::ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: url,
             api_key: "synthetic-test-token".into(),
             protocol: ProviderProtocol::ChatCompletions,

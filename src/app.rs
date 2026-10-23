@@ -133,6 +133,14 @@ pub struct TranscriptAgentSummary {
     pub turn_id: uuid::Uuid,
     pub purpose: crate::agent::subagent::AgentRunPurpose,
     pub task: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
     pub status: crate::agent::subagent::AgentStatus,
     pub summary: String,
     pub updated_at: chrono::DateTime<chrono::Utc>,
@@ -294,6 +302,22 @@ pub enum ModelPickerTarget {
     Review,
     Delegation,
     MultiRun(crate::multi_run::CandidateId),
+    PlanWorkflow,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PlanWorkflowGraphState {
+    pub selected_idx: usize,
+    pub participants: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum PlanWorkflowPickerAction {
+    Send {
+        role: crate::plan_workflow::WorkflowRole,
+        instructions: String,
+    },
+    Execute(crate::work::PlanReview),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -537,6 +561,9 @@ pub enum ProviderEditorField {
     ApiKey,
     ApiKeyEnv,
     PromptCache,
+    GoogleProject,
+    GoogleLocation,
+    GoogleQuotaProject,
     Model,
 }
 
@@ -675,6 +702,7 @@ impl ProviderAuthState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderModelDraft {
+    pub google: Option<crate::google_auth::Config>,
     pub original_model: Option<String>,
     pub provider: String,
     pub base_url: String,
@@ -700,6 +728,7 @@ pub struct ProviderEditorState {
 
 #[derive(Debug, Clone)]
 pub struct StreamingState {
+    pub provider_text: StreamingProviderText,
     pub content: String,
     pub tool_calls: Vec<PartialToolCall>,
     pub thinking: Option<String>,
@@ -709,6 +738,15 @@ pub struct StreamingState {
     pub reasoning_started_at: Option<std::time::Instant>,
     pub reasoning_duration: Option<std::time::Duration>,
     pub generation_started_at: Option<std::time::Instant>,
+}
+
+/// Raw provider text is ephemeral; visible fields are restored from this copy
+/// rather than repeatedly rewriting already restored conversation text.
+#[derive(Debug, Clone, Default)]
+pub struct StreamingProviderText {
+    pub content: Option<String>,
+    pub thinking: Option<String>,
+    pub tool_arguments: std::collections::BTreeMap<usize, String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -841,6 +879,7 @@ pub struct ApprovalQueue {
     in_flight: bool,
     total: usize,
     resolved: usize,
+    command_editor: Option<crate::approval_amend::CommandEditor>,
 }
 
 impl ApprovalQueue {
@@ -851,12 +890,14 @@ impl ApprovalQueue {
             in_flight: false,
             total: 0,
             resolved: 0,
+            command_editor: None,
         }
     }
 
     /// Atomically populate the queue with a new batch.
     /// Clears any previous state and advances to the first item.
     pub fn begin_batch(&mut self, approvals: Vec<PendingApproval>) {
+        self.command_editor = None;
         self.remaining.clear();
         self.current = None;
         self.in_flight = false;
@@ -894,6 +935,7 @@ impl ApprovalQueue {
             return false;
         }
         self.in_flight = true;
+        self.command_editor = None;
         true
     }
 
@@ -904,14 +946,56 @@ impl ApprovalQueue {
 
     /// Replace the tool_args of the current approval item.
     pub fn update_current_args(&mut self, new_args: &str) {
+        self.command_editor = None;
         if let Some(ref mut current) = self.current {
             current.tool_args = new_args.to_string();
+        }
+    }
+
+    pub fn command_editor(&self) -> Option<&crate::approval_amend::CommandEditor> {
+        self.command_editor.as_ref().filter(|editor| {
+            !self.in_flight
+                && self
+                    .current
+                    .as_ref()
+                    .is_some_and(|item| editor.matches(item))
+        })
+    }
+
+    pub fn command_editor_mut(&mut self) -> Option<&mut crate::approval_amend::CommandEditor> {
+        if self.command_editor().is_none() {
+            self.command_editor = None;
+        }
+        self.command_editor.as_mut()
+    }
+
+    pub fn begin_command_edit(&mut self) -> bool {
+        if self.in_flight {
+            return false;
+        }
+        self.command_editor = self
+            .current
+            .as_ref()
+            .and_then(crate::approval_amend::CommandEditor::new);
+        self.command_editor.is_some()
+    }
+
+    pub fn cancel_command_edit(&mut self) {
+        self.command_editor = None;
+    }
+
+    /// Commit a freshly prepared invocation without resolving its approval.
+    pub fn update_current_prepared_args(&mut self, new_args: &str, network_requested: bool) {
+        self.update_current_args(new_args);
+        if let Some(current) = self.current.as_mut() {
+            current.network_requested = network_requested;
         }
     }
 
     /// Pop the front of `remaining` into `current`.
     /// Returns true if a new current was set.
     pub fn advance(&mut self) -> bool {
+        self.command_editor = None;
         self.current = self.remaining.pop_front();
         self.current.is_some()
     }
@@ -1008,6 +1092,7 @@ impl ApprovalQueue {
 
     /// Clear all queue state (for reset/reuse).
     pub fn clear(&mut self) {
+        self.command_editor = None;
         self.remaining.clear();
         self.current = None;
         self.in_flight = false;
@@ -1035,6 +1120,7 @@ pub struct SessionDeleteConfirmation {
     pub storage_key: String,
     pub session_id: uuid::Uuid,
     pub title: String,
+    pub archived: bool,
     pub delete_selected: bool,
     pub busy: bool,
     pub error: Option<String>,
@@ -1774,6 +1860,7 @@ pub enum AcceptanceUiRequest {
 
 #[derive(Debug)]
 pub struct AppState {
+    pub(crate) memory_observer: crate::memory_observer::Observer,
     pub pane_id: crate::panes::PaneId,
     pub pane_deck: Option<Box<crate::panes::PaneDeck>>,
     pub pane_request: Option<crate::panes::PaneRequest>,
@@ -1801,6 +1888,7 @@ pub struct AppState {
     pub input: String,
     /// Process-local visual and atomic-element state for `input`.
     pub composer_ui: crate::tui::composer::ComposerUiState,
+    pub composer_history: crate::tui::composer::ComposerHistory,
     pub input_history: Vec<String>,
     pub history_idx: Option<usize>,
     pub messages: Vec<Message>,
@@ -1810,6 +1898,9 @@ pub struct AppState {
     pub transcript_agent_summaries: Vec<TranscriptAgentSummary>,
     pub active_agent_turn_id: Option<uuid::Uuid>,
     pub live_agent_activity: Vec<crate::agent::subagent::AgentActivitySnapshot>,
+    pub agent_activity_now: chrono::DateTime<chrono::Utc>,
+    pub(crate) automatic_review: crate::automatic_review::ReviewTracker,
+    pub(crate) host_evidence: crate::host_evidence::HostEvidence,
     pub pending_agent_completions: VecDeque<TranscriptAgentSummary>,
     pub pending_job_completions: VecDeque<crate::jobs::JobInfo>,
     pub agent_activity_focus: Option<AgentActivityFocusState>,
@@ -1868,6 +1959,9 @@ pub struct AppState {
     pub permission_manager_generation: u64,
     pub memory_manager: Option<MemoryManagerState>,
     pub memory_manager_generation: u64,
+    pub(crate) personality_editor: Option<crate::tui::personality::Editor>,
+    pub(crate) personality_editor_generation: u64,
+    pub(crate) personality_operation: Option<crate::personality_questionnaire::Operation>,
     pub user_memory_store: Option<crate::memory::MemoryStore>,
     pub workspace_memory_store: Option<crate::memory::MemoryStore>,
     pub maintenance_request: Option<crate::learning::MaintenanceRequest>,
@@ -1909,6 +2003,7 @@ pub struct AppState {
     pub toast: Option<UiToast>,
     pub should_quit: bool,
     pub transcript_scroll: crate::tui::transcript::TranscriptScrollState,
+    pub(crate) shown_adapter_warnings: std::collections::VecDeque<u64>,
     pub(crate) transcript_cache: crate::tui::render::TranscriptCache,
     pub viewport_width: u16,
     pub viewport_height: u16,
@@ -1966,6 +2061,11 @@ pub struct AppState {
     pub plan_reader: Option<crate::work::PlanReview>,
     pub plan_reader_max_scroll: std::cell::Cell<u16>,
     pub plan_execute_requested: Option<crate::work::PlanReview>,
+    pub plan_execute_route: Option<crate::agent::subagent::AgentRoute>,
+    pub plan_workflow_request: Option<crate::plan_workflow::PlanWorkflowArgs>,
+    pub plan_workflow_projection_pending: bool,
+    pub plan_workflow_graph: Option<PlanWorkflowGraphState>,
+    pub plan_workflow_picker_action: Option<PlanWorkflowPickerAction>,
     pub plan_turn_start_revision: Option<u64>,
     pub work_state: std::sync::Arc<std::sync::Mutex<crate::work::WorkState>>,
     pub task_graph_manager: Option<TaskGraphManagerState>,
@@ -2052,6 +2152,8 @@ pub struct AppState {
     pub input_height: u16,
     pub approval_queue: ApprovalQueue,
     pub expanded_blocks: Vec<TranscriptBlockKey>,
+    /// First visible layout row for each sent user-prompt card (message index).
+    pub user_prompt_scroll: std::collections::HashMap<usize, usize>,
     pub session_picker_open: bool,
     pub dashboard: crate::tui::dashboard::DashboardState,
     pub automation_ui: crate::automation_ui::AutomationUiState,
@@ -2104,6 +2206,7 @@ pub struct AppState {
     pub pending_context_checkpoint: Option<crate::context::ContextCheckpoint>,
     pub context_breakdown: Option<crate::context::ContextBreakdown>,
     pub current_context_tokens: u64,
+    pub current_context_window_tokens: Option<u64>,
     pub checkpoint_in_flight: bool,
     pub(crate) checkpoint_abort: Option<tokio::task::AbortHandle>,
     pub(crate) checkpoint_writer: Option<crate::session_access::SessionWriterLease>,
@@ -2118,6 +2221,7 @@ pub struct AppState {
     pub change_walkthrough_generation: u64,
     pub jobs_view_open: bool,
     pub job_list: Vec<crate::jobs::JobInfo>,
+    pub job_progress_refreshed_at: Option<std::time::Instant>,
     pub watch_list: Vec<ca_watch::WatchSnapshotV1>,
     pub delegation_list: Vec<crate::mechanistic_delegation::DelegationActivitySnapshot>,
     pub mechanistic_request: Option<MechanisticUiRequest>,
@@ -2238,6 +2342,12 @@ pub struct AppState {
     pub worktree_setup_confirmation: Option<crate::worktree_setup::SetupConfirmation>,
     /// Tracks user session outcomes for harness improvement telemetry.
     pub outcome_tracker: crate::session_outcome::OutcomeTracker,
+    /// Full-width classification-style banner while the provider filter is active.
+    pub filter_banner: std::sync::atomic::AtomicBool,
+    /// Second banner row. The tick copies it from the installed filter.
+    pub filter_summary: std::sync::Mutex<String>,
+    /// Side pane holding the latest request body after the filter rewrites it.
+    pub provider_pane: crate::tui::provider_pane::ProviderPane,
 }
 
 impl AppState {
@@ -2282,6 +2392,7 @@ impl AppState {
     /// Registered large-paste markers are expanded by range before the draft's
     /// process-only UI state is cleared.
     pub fn take_composer_text(&mut self) -> String {
+        self.reset_composer_history();
         let expanded = self.composer_ui.expanded_text(&self.input);
         self.input.clear();
         self.input_cursor = 0;
@@ -2291,6 +2402,78 @@ impl AppState {
 
     pub fn expanded_composer_text(&self) -> String {
         self.composer_ui.expanded_text(&self.input)
+    }
+
+    pub fn capture_composer_draft(&self) -> crate::tui::composer::HistoryDraft {
+        crate::tui::composer::HistoryDraft {
+            text: self.input.clone(),
+            cursor: self.input_cursor,
+            atomic_elements: self.composer_ui.atomic_elements.clone(),
+            attachments: self.composer_attachments.clone(),
+            images: self.pasted_images.clone(),
+        }
+    }
+
+    pub fn reset_composer_history(&mut self) {
+        self.composer_history.reset();
+    }
+
+    pub fn record_composer_edit(&mut self, before: crate::tui::composer::HistoryDraft) {
+        let after = self.capture_composer_draft();
+        self.composer_history
+            .record(before, &after, crate::tui::composer::EditKind::Discrete);
+    }
+
+    pub fn replace_composer_text(&mut self, text: String) {
+        let before = self.capture_composer_draft();
+        self.image_attachment_generation = self.image_attachment_generation.wrapping_add(1);
+        self.image_attachment_busy = false;
+        self.input = text;
+        self.input_cursor = self.input.len();
+        self.composer_ui.clear_for_new_draft();
+        self.composer_attachments.clear();
+        self.history_idx = None;
+        self.record_composer_edit(before);
+    }
+
+    fn restore_composer_draft(&mut self, draft: crate::tui::composer::HistoryDraft) {
+        self.image_attachment_generation = self.image_attachment_generation.wrapping_add(1);
+        self.image_attachment_busy = false;
+        let generation = self.composer_ui.path_completion.generation.wrapping_add(1);
+        self.input = draft.text;
+        self.input_cursor = crate::tui::composer::normalize_boundary(&self.input, draft.cursor);
+        self.composer_ui.clear_for_new_draft();
+        self.composer_ui.path_completion.generation = generation;
+        self.composer_ui.atomic_elements = draft.atomic_elements;
+        self.composer_attachments = draft.attachments;
+        self.pasted_images = draft.images;
+        self.history_idx = None;
+        self.file_picker_open = false;
+        self.file_picker_generation = self.file_picker_generation.wrapping_add(1);
+        self.slash_palette_open = false;
+        self.ghost_text = None;
+        self.kill_ring_idx = None;
+        self.reset_cursor_blink();
+    }
+
+    pub fn undo_composer(&mut self) {
+        let current = self.capture_composer_draft();
+        if let Some(previous) = self.composer_history.undo(current) {
+            self.restore_composer_draft(previous);
+            self.status_message = Some("Undid draft edit".into());
+        } else {
+            self.status_message = Some("Nothing to undo in this draft".into());
+        }
+    }
+
+    pub fn redo_composer(&mut self) {
+        let current = self.capture_composer_draft();
+        if let Some(next) = self.composer_history.redo(current) {
+            self.restore_composer_draft(next);
+            self.status_message = Some("Redid draft edit".into());
+        } else {
+            self.status_message = Some("Nothing to redo in this draft".into());
+        }
     }
 
     /// Return all blinking cursors to their visible phase after user input.
@@ -2346,6 +2529,7 @@ impl AppState {
         pane.skill_curator = self.skill_curator.clone();
         pane.cwd = self.cwd.clone();
         pane.workspace = self.workspace.clone();
+        pane.workspace.clear_session_writes();
         pane.workspace_catalog = self.workspace_catalog.clone();
         pane.skills = self.skills.clone();
         pane.mcp = self.mcp.clone();
@@ -2420,6 +2604,7 @@ impl AppState {
             )),
             input: String::new(),
             composer_ui: crate::tui::composer::ComposerUiState::default(),
+            composer_history: crate::tui::composer::ComposerHistory::default(),
             input_history: Vec::new(),
             history_idx: None,
             messages: Vec::new(),
@@ -2429,6 +2614,9 @@ impl AppState {
             transcript_agent_summaries: Vec::new(),
             active_agent_turn_id: None,
             live_agent_activity: Vec::new(),
+            agent_activity_now: chrono::Utc::now(),
+            automatic_review: crate::automatic_review::ReviewTracker::default(),
+            host_evidence: crate::host_evidence::HostEvidence::default(),
             pending_agent_completions: VecDeque::new(),
             pending_job_completions: VecDeque::new(),
             agent_activity_focus: None,
@@ -2508,6 +2696,7 @@ impl AppState {
             toast: None,
             should_quit: false,
             transcript_scroll: crate::tui::transcript::TranscriptScrollState::default(),
+            shown_adapter_warnings: Default::default(),
             transcript_cache: crate::tui::render::TranscriptCache::default(),
             viewport_width: 80,
             viewport_height: 0,
@@ -2564,6 +2753,11 @@ impl AppState {
             plan_reader: None,
             plan_reader_max_scroll: std::cell::Cell::new(0),
             plan_execute_requested: None,
+            plan_execute_route: None,
+            plan_workflow_request: None,
+            plan_workflow_projection_pending: false,
+            plan_workflow_graph: None,
+            plan_workflow_picker_action: None,
             plan_turn_start_revision: None,
             work_state: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::work::WorkState::default(),
@@ -2652,6 +2846,7 @@ impl AppState {
             input_height: 3,
             approval_queue: ApprovalQueue::new(),
             expanded_blocks: Vec::new(),
+            user_prompt_scroll: std::collections::HashMap::new(),
             session_picker_open: false,
             dashboard: crate::tui::dashboard::DashboardState::default(),
             automation_ui: crate::automation_ui::AutomationUiState::default(),
@@ -2699,10 +2894,12 @@ impl AppState {
             )),
             official_pricing: None,
             request_store: crate::request::RequestStore::default(),
+            memory_observer: crate::memory_observer::Observer::default(),
             context_checkpoint: None,
             pending_context_checkpoint: None,
             context_breakdown: None,
             current_context_tokens: 0,
+            current_context_window_tokens: None,
             checkpoint_in_flight: false,
             checkpoint_abort: None,
             checkpoint_writer: None,
@@ -2717,6 +2914,7 @@ impl AppState {
             change_walkthrough_generation: 0,
             jobs_view_open: false,
             job_list: Vec::new(),
+            job_progress_refreshed_at: None,
             watch_list: Vec::new(),
             delegation_list: Vec::new(),
             mechanistic_request: None,
@@ -2839,6 +3037,9 @@ impl AppState {
             permission_manager_generation: 0,
             memory_manager: None,
             memory_manager_generation: 0,
+            personality_editor: None,
+            personality_editor_generation: 0,
+            personality_operation: None,
             user_memory_store: None,
             workspace_memory_store: None,
             maintenance_request: None,
@@ -2853,6 +3054,9 @@ impl AppState {
             hook_blocked: false,
             hook_blocked_event: None,
             outcome_tracker: crate::session_outcome::OutcomeTracker::new(String::new(), ""),
+            filter_banner: std::sync::atomic::AtomicBool::new(false),
+            filter_summary: std::sync::Mutex::new(String::new()),
+            provider_pane: crate::tui::provider_pane::ProviderPane::default(),
         }
     }
 }
@@ -2869,6 +3073,7 @@ mod tui127_tests {
 
     fn streaming() -> StreamingState {
         StreamingState {
+            provider_text: Default::default(),
             content: String::new(),
             tool_calls: Vec::new(),
             thinking: None,

@@ -3256,6 +3256,23 @@ mod manual_commit_tests {
 
         let before = git_head(&paths).unwrap();
         fs::write(root.join("src.txt"), "approved filter bytes\n").unwrap();
+        // Make the index refresh independent of Git's racy timestamp window.
+        // A recent mtime can cause Git to hash the same file again while writing
+        // its index, so it does not provide a stable filter invocation count.
+        fs::File::open(root.join("src.txt"))
+            .unwrap()
+            .set_modified(UNIX_EPOCH)
+            .unwrap();
+        // Exercise the first approved conversion explicitly; staging is the
+        // second one. A pathspec commit would invoke the adversarial third
+        // conversion and replace the already-validated bytes.
+        let prevalidated = Command::new("git")
+            .args(["hash-object", "--path=src.txt", "src.txt"])
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        assert!(prevalidated.status.success());
+        assert_eq!(fs::read_to_string(&counter).unwrap().trim(), "1");
         let cfg = Config::default();
         let mut state = State::default();
         let files = vec!["src.txt".to_string()];
@@ -3292,6 +3309,20 @@ mod manual_commit_tests {
             .status()
             .unwrap()
             .success());
+        let adversarial = Command::new("git")
+            .args(["hash-object", "-w", "--path=src.txt", "src.txt"])
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        assert!(adversarial.status.success());
+        assert_eq!(fs::read_to_string(&counter).unwrap().trim(), "3");
+        let adversarial_blob =
+            parse_git_object_id("adversarial blob", &adversarial.stdout).unwrap();
+        assert_eq!(
+            git_blob_content_sha256(&paths, &adversarial_blob).unwrap(),
+            sha256_hex(b"unapproved post-validation filter output\n")
+        );
+        assert_eq!(git_head(&paths).as_deref(), Some(committed.as_str()));
         fs::remove_dir_all(root).unwrap();
     }
 

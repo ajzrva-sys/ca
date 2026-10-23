@@ -1143,6 +1143,8 @@ mod tests {
 
     fn provider(base_url: &str, key: &str) -> ProviderConfig {
         ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: base_url.into(),
             api_key: key.into(),
             protocol: ProviderProtocol::ChatCompletions,

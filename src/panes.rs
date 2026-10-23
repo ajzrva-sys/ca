@@ -371,6 +371,7 @@ fn sync_process_services(source: &AppState, target: &mut AppState) {
 }
 
 pub fn focus(state: &mut AppState, target: PaneId) -> Result<(), String> {
+    let switching = state.pane_id != target;
     {
         let deck = state
             .pane_deck
@@ -381,7 +382,14 @@ pub fn focus(state: &mut AppState, target: PaneId) -> Result<(), String> {
         }
         deck.focused = target;
     }
-    materialize(state, target)
+    if switching {
+        state.workspace.clear_session_writes();
+    }
+    materialize(state, target)?;
+    if switching {
+        state.workspace.clear_session_writes();
+    }
+    Ok(())
 }
 
 pub fn close_focused(state: &mut AppState) -> Result<(PaneId, AppState), String> {

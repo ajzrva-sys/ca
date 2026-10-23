@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&no_match, 100, 30),\nrender_to_text(&no_match, 60, 24))"
 ---
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
 
       ┌ Hooks ───────────────────────────────────────────────────────────────────────────────┐
@@ -28,12 +28,12 @@ expression: "wide_narrow(render_to_text(&no_match, 100, 30),\nrender_to_text(&no
       │                                                                                      │
       │                                                                                      │
       │                                                                                      │
-      └──────────────────────────────────────────────────────────────────────────────────────┘
- → ▌Ask anything…
-
+╭─────└──────────────────────────────────────────────────────────────────────────────────────┘─────╮
+│› ▌Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
 / commands
 -- narrow --
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
  ┌ Hooks ─────────────────────────────────────────────────┐
  │> missing                                               │
  │3 hooks · network denied by OS sandbox                  │
@@ -53,7 +53,7 @@ expression: "wide_narrow(render_to_text(&no_match, 100, 30),\nrender_to_text(&no
  │                                                        │
  │                                                        │
  │                                                        │
- │                                                        │
- │                                                        │
- └────────────────────────────────────────────────────────┘
+╭│                                                        │╮
+││                                                        ││
+╰└────────────────────────────────────────────────────────┘╯
 / commands

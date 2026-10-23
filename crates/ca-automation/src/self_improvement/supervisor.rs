@@ -194,6 +194,8 @@ pub struct KnownGoodPairV1 {
 #[serde(deny_unknown_fields)]
 pub struct UsageTotalsV1 {
     pub provider_calls: u64,
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub provider_calls_unavailable: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub estimated_microusd: u64,
@@ -212,6 +214,8 @@ pub struct SelfImprovementStateV1 {
     pub schema: String,
     pub enrolled: bool,
     pub enrollment_digest: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub previous_enrollment_digests: Vec<String>,
     pub continuous: bool,
     pub pause: Option<PauseStateV1>,
     pub repositories: Vec<RepositoryEnrollmentV1>,
@@ -275,6 +279,14 @@ pub struct SelfImprovementStatusV1 {
     pub deployment_count: usize,
     pub usage: UsageTotalsV1,
     pub privacy_warnings: Vec<String>,
+    #[serde(default)]
+    pub pending_learning_reviews: Vec<super::LearningWorkflowSummaryV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daily_learning_budget: Option<super::DailyLearningBudgetStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_worker_status: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_health_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -338,6 +350,7 @@ impl SelfImprovementStateV1 {
             schema: STATE_SCHEMA.to_string(),
             enrolled: false,
             enrollment_digest: String::new(),
+            previous_enrollment_digests: Vec::new(),
             continuous: true,
             pause: None,
             repositories: Vec::new(),
@@ -354,6 +367,7 @@ impl SelfImprovementStateV1 {
             known_good_pair: None,
             usage: UsageTotalsV1 {
                 provider_calls: 0,
+                provider_calls_unavailable: 0,
                 input_tokens: 0,
                 output_tokens: 0,
                 estimated_microusd: 0,
@@ -521,11 +535,11 @@ pub fn knowledge_enrollment_contract(
         providers,
         trace_sharing: "sanitized".to_string(),
         trace_retention: "indefinite".to_string(),
-        promotion: "replay_approved_memory_and_inert_skills_only".to_string(),
+        promotion: "exact_review_every_adoption".to_string(),
         source_changes: "forbidden".to_string(),
         source_branch: "none".to_string(),
         deployment: "disabled".to_string(),
-        budget: "unbounded_metered".to_string(),
+        budget: "shared_2usd_daily_america_new_york".to_string(),
         install_login_service: inputs.install_login_service,
         repositories: Vec::new(),
         evidence_roots,
@@ -780,7 +794,7 @@ pub fn enroll_knowledge(
         action: "enroll_knowledge".to_string(),
         changed: true,
         revision: state.revision,
-        detail: "enrolled one continuous knowledge-only service; only replay-approved memory and inert skills may publish"
+        detail: "enrolled one continuous knowledge-only service; every evaluated memory or inert skill adoption requires exact review"
             .to_string(),
     })
 }
@@ -854,6 +868,10 @@ pub fn status(vault: &LearningVault) -> Result<SelfImprovementStatusV1> {
     active_recipe_revisions.dedup();
     Ok(SelfImprovementStatusV1 {
         schema: "codex-team.self_improvement_status.v1".to_string(),
+        pending_learning_reviews: super::pending_learning_reviews(vault)?,
+        daily_learning_budget: std::env::var_os("HOME").map(PathBuf::from).map(|home|super::daily_learning_budget_status(&super::daily_learning_budget_root(&home),Utc::now())).transpose()?,
+        native_worker_status: vault.read_mutable("supervisor/native-worker-status.json")?,
+        last_health_at: state.last_health_at,
         enrolled: state.enrolled,
         running_allowed: state.enrolled && state.pause.is_none() && health.healthy,
         paused: state.pause.is_some() || !health.healthy,
@@ -906,6 +924,10 @@ pub fn unenrolled_status() -> Result<SelfImprovementStatusV1> {
     state.refresh_revision()?;
     Ok(SelfImprovementStatusV1 {
         schema: "codex-team.self_improvement_status.v1".to_string(),
+        pending_learning_reviews: Vec::new(),
+        daily_learning_budget: None,
+        native_worker_status: None,
+        last_health_at: None,
         enrolled: false,
         running_allowed: false,
         paused: false,
@@ -1354,13 +1376,39 @@ pub fn supervisor_tick(vault: &LearningVault) -> Result<SelfImprovementDoctorV1>
 }
 
 pub fn run_supervisor(vault: LearningVault, once: bool) -> Result<()> {
+    let mut worker: Option<std::process::Child> = None;
     loop {
-        // ca owns evidence harvesting, occurrence admission and worker launch.
-        // The stable service retains health/watchdog/rollback responsibility.
-        // A competing authorized transaction may temporarily own the vault.
-        // Keep the stable watcher alive and try health again on the next tick.
         let _ = supervisor_tick(&vault);
+        if let Some(child) = &mut worker {
+            if child.try_wait()?.is_some() {
+                worker = None;
+            }
+        }
+        if worker.is_none() {
+            if let Some(state) = load_state(&vault)? {
+                if state.enrolled && state.continuous && state.pause.is_none() {
+                    let ca = active_component_binary(&vault, "ca")?;
+                    let profile = state
+                        .ca_evidence_profiles
+                        .first()
+                        .map(|p| p.name.as_str())
+                        .unwrap_or("default");
+                    worker = Some(
+                        std::process::Command::new(ca)
+                            .args(["learn", "--profile", profile, "__tick"])
+                            .stdin(std::process::Stdio::null())
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .spawn()
+                            .context("wake ca-owned learning admission")?,
+                    );
+                }
+            }
+        }
         if once {
+            if let Some(mut child) = worker {
+                child.wait()?;
+            }
             return Ok(());
         }
         std::thread::sleep(Duration::from_secs(30));
@@ -1673,11 +1721,8 @@ pub fn record_role_trace_if_enrolled(
             finished_at: finished_at.to_string(),
             elapsed_millis,
         },
-        usage: super::UsageV1 {
-            input_tokens,
-            output_tokens,
-            estimated_microusd: 0,
-        },
+        // Token observations lack a price/usage receipt here; no fictitious $0.
+        usage: None,
         outcome: outcome.to_string(),
         core_revision: state
             .shared_core_revision
@@ -1724,6 +1769,51 @@ pub(super) fn discover_one_trace_objective(vault: &LearningVault) -> Result<bool
     Ok(changed)
 }
 
+pub(super) fn trace_objective_pending(vault: &LearningVault) -> Result<bool> {
+    let traces = vault.list_immutable::<LearningTraceV1>("traces")?;
+    let existing = vault.list_immutable::<ImprovementObjectiveV1>("objectives")?;
+    let consumed = existing
+        .iter()
+        .flat_map(|objective| objective.evidence_ids.iter())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut failures: BTreeMap<String, Vec<&LearningTraceV1>> = BTreeMap::new();
+    for trace in traces.iter().filter(|trace| trace.outcome == "failed") {
+        failures
+            .entry(format!(
+                "{}\0{}\0{}\0{}",
+                trace.provider, trace.model, trace.role, trace.repository_fingerprint
+            ))
+            .or_default()
+            .push(trace);
+    }
+    Ok(failures.values().any(|evidence| {
+        evidence.len() >= 2
+            && evidence
+                .iter()
+                .any(|trace| !consumed.contains(&trace.trace_id))
+    }) || {
+        let mut failures: BTreeMap<String, Vec<&LearningTraceV1>> = BTreeMap::new();
+        for trace in traces.iter().filter(|trace| trace.outcome == "failed") {
+            failures
+                .entry(format!("{}\0{}", trace.role, trace.repository_fingerprint))
+                .or_default()
+                .push(trace);
+        }
+        failures.values().any(|evidence| {
+            evidence.len() >= 2
+                && evidence
+                    .iter()
+                    .map(|trace| trace.provider.as_str())
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len()
+                    >= 2
+                && evidence
+                    .iter()
+                    .any(|trace| !consumed.contains(&trace.trace_id))
+        })
+    })
+}
+
 fn discover_repeated_failure_objective(
     vault: &LearningVault,
     state: &mut SelfImprovementStateV1,
@@ -1751,7 +1841,12 @@ fn discover_repeated_failure_objective(
                 .iter()
                 .any(|trace| !existing_evidence.contains(&trace.trace_id))
     }) {
-        let digest = format!("{:x}", Sha256::digest(key.as_bytes()));
+        let evidence = bounded_failure_evidence(&evidence, &existing_evidence);
+        let evidence_ids = evidence
+            .iter()
+            .map(|trace| trace.trace_id.clone())
+            .collect::<Vec<_>>();
+        let digest = canonical_digest(&(key, &evidence_ids))?;
         let objective_id = format!("objective-role-{}", &digest[..24]);
         let first = evidence[0];
         let mut objective = ImprovementObjectiveV1 {
@@ -1762,11 +1857,7 @@ fn discover_repeated_failure_objective(
                 "Improve repeated {} role failures across configured providers without weakening deterministic acceptance",
                 first.role
             ),
-            evidence_ids: evidence
-                .iter()
-                .take(32)
-                .map(|trace| trace.trace_id.clone())
-                .collect(),
+            evidence_ids,
             improvement_class: "role_prompt".to_string(),
             frozen_evaluation_plan_id: String::new(),
             repository_fingerprint: Some(first.repository_fingerprint.clone()),
@@ -1797,7 +1888,12 @@ fn discover_repeated_failure_objective(
     }) else {
         return Ok(());
     };
-    let digest = format!("{:x}", Sha256::digest(key.as_bytes()));
+    let evidence = bounded_failure_evidence(&evidence, &existing_evidence);
+    let evidence_ids = evidence
+        .iter()
+        .map(|trace| trace.trace_id.clone())
+        .collect::<Vec<_>>();
+    let digest = canonical_digest(&(key, &evidence_ids))?;
     let objective_id = format!("objective-failure-{}", &digest[..24]);
     let first = evidence[0];
     let mut objective = ImprovementObjectiveV1 {
@@ -1808,11 +1904,7 @@ fn discover_repeated_failure_objective(
             "Improve repeated {} failures for {}/{} without weakening deterministic acceptance",
             first.role, first.provider, first.model
         ),
-        evidence_ids: evidence
-            .iter()
-            .take(32)
-            .map(|trace| trace.trace_id.clone())
-            .collect(),
+        evidence_ids,
         improvement_class: "provider_overlay".to_string(),
         // The evaluator freezes cases immediately before candidate generation;
         // objective discovery itself does not authorize a candidate.
@@ -1828,6 +1920,34 @@ fn discover_repeated_failure_objective(
         state.active_objective_id = Some(objective_id);
     }
     Ok(())
+}
+
+fn bounded_failure_evidence<'a>(
+    evidence: &[&'a LearningTraceV1],
+    consumed: &std::collections::BTreeSet<&String>,
+) -> Vec<&'a LearningTraceV1> {
+    let fresh = evidence
+        .iter()
+        .copied()
+        .filter(|trace| !consumed.contains(&trace.trace_id))
+        .collect::<Vec<_>>();
+    let mut representatives = BTreeMap::new();
+    for trace in evidence {
+        representatives
+            .entry(trace.provider.as_str())
+            .or_insert(*trace);
+    }
+    let mut selected = std::collections::BTreeSet::new();
+    fresh
+        .first()
+        .copied()
+        .into_iter()
+        .chain(representatives.into_values())
+        .chain(fresh)
+        .chain(evidence.iter().copied())
+        .filter(|trace| selected.insert(trace.trace_id.as_str()))
+        .take(32)
+        .collect()
 }
 
 fn mutate_state<F>(vault: &LearningVault, action: &str, mutation: F) -> Result<MutationReceiptV1>
@@ -1852,7 +1972,7 @@ where
     })
 }
 
-pub(super) fn load_state(vault: &LearningVault) -> Result<Option<SelfImprovementStateV1>> {
+pub fn load_state(vault: &LearningVault) -> Result<Option<SelfImprovementStateV1>> {
     let state = vault.read_mutable::<SelfImprovementStateV1>("supervisor/state.json")?;
     if let Some(state) = &state {
         if state.schema != STATE_SCHEMA {
@@ -2511,6 +2631,201 @@ fn xml_escape(value: &str) -> String {
         .replace('\'', "&apos;")
 }
 
+/// Operator-authorized refresh of enrollment and protected component slots.
+/// Histories, usage, pending candidates and previous active binaries are retained.
+pub fn refresh_knowledge_enrollment(
+    vault: &LearningVault,
+    inputs: &KnowledgeEnrollmentInputs,
+    previous: &str,
+    confirmation: &str,
+) -> Result<MutationReceiptV1> {
+    let _worker = vault.acquire_worker_lock()?;
+    let _lock = vault.acquire_lock()?;
+    let contract = knowledge_enrollment_contract(inputs)?;
+    let next = canonical_digest(&contract)?;
+    if confirmation != next {
+        bail!("exact refreshed enrollment confirmation required: {next}");
+    }
+    let mut state = load_state(vault)?.context("learning is not enrolled")?;
+    if state.enrollment_digest != previous && state.enrollment_digest != next {
+        bail!("learning enrollment changed after refresh preview");
+    }
+    if state.enrollment_digest == next {
+        // State is saved before either pointer, so an interrupted activation may
+        // still have old launcher pointers. Validate the entire refreshed pair
+        // from protected state before repairing either pointer.
+        for (component, expected_hash) in [
+            ("ca", &contract.ca_binary_sha256),
+            ("codex-team", &contract.codex_team_binary_sha256),
+        ] {
+            let slots = state
+                .components
+                .get(component)
+                .context("refreshed component slots are missing")?;
+            if !matches!(slots.active.as_str(), "a" | "b") {
+                bail!("refreshed component active slot is invalid");
+            }
+            let slot = slots
+                .slots
+                .get(&slots.active)
+                .and_then(Option::as_ref)
+                .context("refreshed component active slot is empty")?;
+            if slot.slot != slots.active || !slot.verified || slot.binary_sha256 != *expected_hash {
+                bail!("refreshed component slot does not match the exact enrollment");
+            }
+            let binary = vault.resolve_relative(&format!(
+                "supervisor/slots/{component}/{}/binary",
+                slots.active
+            ))?;
+            inspect_executable(&binary)?;
+            if file_sha256(&binary)? != *expected_hash {
+                bail!("refreshed component binary hash does not match enrollment");
+            }
+        }
+        for component in ["ca", "codex-team"] {
+            let pointer = vault.read_mutable::<ActivePointerV1>(&format!(
+                "supervisor/pointers/{component}.json"
+            ))?;
+            if !pointer
+                .as_ref()
+                .is_some_and(|pointer| active_pointer_matches(component, pointer, &state))
+            {
+                write_active_pointer(vault, component, &state)?;
+            }
+        }
+        for component in ["ca", "codex-team"] {
+            let _ = active_component_binary(vault, component)?;
+        }
+        if inputs.install_login_service {
+            install_login_service(
+                vault,
+                &vault.resolve_relative("supervisor/bin/codex-team-supervisor")?,
+            )?;
+        }
+        return Ok(MutationReceiptV1 {
+            schema: "codex-team.self_improvement_mutation.v1".into(),
+            action: "refresh_knowledge".into(),
+            changed: false,
+            revision: state.revision,
+            detail: "exact refreshed enrollment is already active".into(),
+        });
+    }
+    // A retry can use the protected original checkpoint after partial activation.
+    let recovery = format!("supervisor/refresh-history/{previous}");
+    vault.ensure_relative_directory(&recovery)?;
+    if vault
+        .read_mutable::<SelfImprovementStateV1>(&format!("{recovery}/state.json"))?
+        .is_none()
+    {
+        vault.write_mutable(&format!("{recovery}/state.json"), &state)?;
+    }
+    vault.write_mutable(&format!("{recovery}/next-contract.json"), &contract)?;
+    let installed = vault.resolve_relative("supervisor/bin/codex-team-supervisor")?;
+    if installed.exists() {
+        let saved = vault.resolve_relative(&format!(
+            "{recovery}/supervisor-{}.bin",
+            file_sha256(&installed)?
+        ))?;
+        if !saved.exists() {
+            copy_private_executable(&installed, &saved)?;
+        }
+    }
+    let mut manifest: SafetyKernelManifestV1 = vault
+        .read_mutable("supervisor/safety-kernel.json")?
+        .context("learning safety manifest missing")?;
+    if vault
+        .read_mutable::<SafetyKernelManifestV1>(&format!("{recovery}/safety-kernel.json"))?
+        .is_none()
+    {
+        vault.write_mutable(&format!("{recovery}/safety-kernel.json"), &manifest)?;
+    }
+    for (component, binary) in [
+        ("ca", &inputs.ca_binary),
+        ("codex-team", &inputs.codex_team_binary),
+    ] {
+        let slots = state
+            .components
+            .get_mut(component)
+            .context("enrolled component missing")?;
+        let old = slots.active.clone();
+        let new = if old == "a" { "b" } else { "a" }.to_string();
+        let destination =
+            vault.resolve_relative(&format!("supervisor/slots/{component}/{new}/binary"))?;
+        if destination.exists() {
+            let saved = vault.resolve_relative(&format!(
+                "{recovery}/{component}-{new}-{}.bin",
+                file_sha256(&destination)?
+            ))?;
+            if !saved.exists() {
+                copy_private_executable(&destination, &saved)?;
+            }
+        }
+        copy_replace_private_executable(binary, &destination)?;
+        slots.slots.insert(
+            new.clone(),
+            Some(BinarySlotV1 {
+                slot: new.clone(),
+                binary_sha256: file_sha256(&destination)?,
+                source_commit: format!("knowledge-refresh:{}", &next[..16]),
+                verified: true,
+                activated_at: Utc::now().to_rfc3339(),
+            }),
+        );
+        slots.previous = Some(old);
+        slots.active = new;
+    }
+    copy_replace_private_executable(&inputs.supervisor_binary, &installed)?;
+    manifest.supervisor_sha256 = contract.supervisor_sha256.clone();
+    manifest.digest = manifest_digest(&manifest)?;
+    vault.write_mutable("supervisor/safety-kernel.json", &manifest)?;
+    if !state
+        .previous_enrollment_digests
+        .contains(&previous.to_string())
+    {
+        state.previous_enrollment_digests.push(previous.into());
+    }
+    state.enrollment_digest = next;
+    state.evidence_roots = contract.evidence_roots;
+    state.ca_evidence_profiles = contract.ca_evidence_profiles;
+    state.ca_execution_profile = contract.ca_execution_profile;
+    state.enrolled = true;
+    state.continuous = true;
+    state.ca_bridge_healthy = true;
+    let ca = state.components["ca"].slots[&state.components["ca"].active]
+        .as_ref()
+        .unwrap();
+    let team = state.components["codex-team"].slots[&state.components["codex-team"].active]
+        .as_ref()
+        .unwrap();
+    state.known_good_pair = Some(KnownGoodPairV1 {
+        ca_slot: ca.slot.clone(),
+        ca_sha256: ca.binary_sha256.clone(),
+        codex_team_slot: team.slot.clone(),
+        codex_team_sha256: team.binary_sha256.clone(),
+        protocol_matrix_digest: canonical_digest(&(
+            ca.binary_sha256.clone(),
+            team.binary_sha256.clone(),
+            "operator-authorized-refresh",
+        ))?,
+        verified_at: Utc::now().to_rfc3339(),
+    });
+    state.state_sequence = state.state_sequence.saturating_add(1);
+    state.refresh_revision()?;
+    save_state(vault, &state)?;
+    write_active_pointer(vault, "ca", &state)?;
+    write_active_pointer(vault, "codex-team", &state)?;
+    if inputs.install_login_service {
+        install_login_service(vault, &installed)?;
+    }
+    Ok(MutationReceiptV1 {
+        schema: "codex-team.self_improvement_mutation.v1".into(),
+        action: "refresh_knowledge".into(),
+        changed: true,
+        revision: state.revision,
+        detail: format!("refreshed exact enrollment; recovery retained at {recovery}"),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2589,7 +2904,8 @@ mod tests {
         assert!(contract.repositories.is_empty());
         assert_eq!(contract.evidence_roots.len(), 5);
         assert_eq!(contract.source_changes, "forbidden");
-        assert_eq!(contract.budget, "unbounded_metered");
+        assert_eq!(contract.budget, "shared_2usd_daily_america_new_york");
+        assert_eq!(contract.promotion, "exact_review_every_adoption");
         assert_eq!(contract.ca_evidence_profiles[0].name, "default");
         assert_eq!(
             contract.providers,
@@ -2644,7 +2960,7 @@ mod tests {
         crate::verification::isolation::enable_test_isolation_backend();
         let root = temp_root(name);
         fs::create_dir_all(&root)?;
-        let vault = LearningVault::open_at(root.join("vault"))?;
+        let vault = super::super::vault::fixture_vault(root.join("vault"))?;
         let ca_repo = root.join("ca");
         let orch_repo = root.join("orch");
         git_repo(&ca_repo)?;
@@ -2673,6 +2989,89 @@ mod tests {
     }
 
     #[test]
+    fn repeated_failure_groups_create_new_evidence_bound_objectives_without_rewriting_history(
+    ) -> Result<()> {
+        for cross_provider in [false, true] {
+            let root = temp_root("failure-evidence-identity");
+            fs::create_dir_all(&root)?;
+            let vault = super::super::vault::fixture_vault(root.join("vault"))?;
+            let mut state = SelfImprovementStateV1::blank();
+            let record_trace = |index: usize| -> Result<()> {
+                let now = Utc::now().to_rfc3339();
+                let mut trace = LearningTraceV1 {
+                    schema: super::super::TRACE_SCHEMA.into(),
+                    trace_id: format!("trace-identity-{index:03}"),
+                    provider: if cross_provider && index % 2 == 1 {
+                        "mimo"
+                    } else {
+                        "deepseek"
+                    }
+                    .into(),
+                    model: "test-model".into(),
+                    role: "worker".into(),
+                    prompt: "Verify the same task contract.".into(),
+                    response: "failed".into(),
+                    tool_events: vec![],
+                    task_identity: format!("task-{index}"),
+                    repository_fingerprint: "a".repeat(64),
+                    acceptance_evidence_ids: vec![],
+                    timing: super::super::TimingV1 {
+                        started_at: now.clone(),
+                        finished_at: now.clone(),
+                        elapsed_millis: 1,
+                    },
+                    usage: None,
+                    outcome: "failed".into(),
+                    core_revision: "builtin".into(),
+                    overlay_revision: "none".into(),
+                    created_at: now,
+                    digest: String::new(),
+                };
+                vault.write_immutable(&mut trace)?;
+                Ok(())
+            };
+            for index in 0..32 {
+                record_trace(index)?;
+            }
+            discover_repeated_failure_objective(&vault, &mut state)?;
+            let first_id = state
+                .active_objective_id
+                .take()
+                .context("first objective missing")?;
+            let first = vault.read_immutable::<ImprovementObjectiveV1>("objectives", &first_id)?;
+            assert_eq!(first.evidence_ids.len(), 32);
+            assert!(!trace_objective_pending(&vault)?);
+            record_trace(32)?;
+            assert!(trace_objective_pending(&vault)?);
+            discover_repeated_failure_objective(&vault, &mut state)?;
+            let second_id = state
+                .active_objective_id
+                .take()
+                .context("second objective missing")?;
+            assert_ne!(first_id, second_id);
+            let second =
+                vault.read_immutable::<ImprovementObjectiveV1>("objectives", &second_id)?;
+            assert!(second.evidence_ids.contains(&"trace-identity-032".into()));
+            assert_eq!(second.evidence_ids.len(), 32);
+            assert_eq!(
+                vault.read_immutable::<ImprovementObjectiveV1>("objectives", &first_id)?,
+                first
+            );
+            assert!(!trace_objective_pending(&vault)?);
+            discover_repeated_failure_objective(&vault, &mut state)?;
+            assert!(state.active_objective_id.is_none());
+            assert_eq!(
+                vault
+                    .list_immutable::<ImprovementObjectiveV1>("objectives")?
+                    .len(),
+                2
+            );
+            fs::remove_dir_all(root)?;
+        }
+        Ok(())
+    }
+
+    #[test]
     fn exact_enrollment_is_digest_bound_and_idempotent() -> Result<()> {
         let (root, vault, inputs) = enrollment_fixture("enroll")?;
         assert!(enroll(&vault, &inputs, "wrong").is_err());
@@ -2690,6 +3089,81 @@ mod tests {
             .all(|repository| repository.path.is_none()));
         let encoded = serde_json::to_string(&state)?;
         assert!(!encoded.contains(&inputs.ca_repo.display().to_string()));
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn refreshed_enrollment_reconciles_interrupted_active_pointers_without_changing_state(
+    ) -> Result<()> {
+        let (root, vault, old_inputs) = enrollment_fixture("refresh-pointers")?;
+        let previous = canonical_digest(&enrollment_contract(&old_inputs)?)?;
+        enroll(&vault, &old_inputs, &previous)?;
+        let old_ca = vault
+            .read_mutable::<ActivePointerV1>("supervisor/pointers/ca.json")?
+            .unwrap();
+        let old_team = vault
+            .read_mutable::<ActivePointerV1>("supervisor/pointers/codex-team.json")?
+            .unwrap();
+        let ca = root.join("bin/refreshed-ca");
+        let script = format!("#!/bin/sh\nif [ \"$1\" = \"learning-bridge\" ]; then printf '%s\\n' '{{\"schema\":\"ca.learning_bridge_preflight.v1\",\"ready\":true,\"profile\":\"default\",\"state_digest\":\"{}\",\"enrolled\":false,\"enrollment_digest\":null,\"queued_intents\":0,\"issues\":[]}}'; else printf '%s\\n' '{{\"schema\":\"ca.role_run_preflight.v1\",\"ready\":true,\"profile\":\"codex-team\",\"sandbox_required\":true,\"routes\":[{{\"provider\":\"deepseek\",\"models\":[\"model\"]}},{{\"provider\":\"mimo\",\"models\":[\"model\"]}}],\"issues\":[]}}'; fi\n", "a".repeat(64));
+        fs::write(&ca, script)?;
+        fs::set_permissions(&ca, fs::Permissions::from_mode(0o700))?;
+        let inputs = KnowledgeEnrollmentInputs {
+            install_login_service: false,
+            supervisor_binary: old_inputs.supervisor_binary,
+            ca_binary: ca,
+            codex_team_binary: old_inputs.codex_team_binary,
+            ca_evidence_profiles: vec!["default".into()],
+            ca_execution_profile: "codex-team".into(),
+            evidence_roots: vec![],
+        };
+        let next = canonical_digest(&knowledge_enrollment_contract(&inputs)?)?;
+        refresh_knowledge_enrollment(&vault, &inputs, &previous, &next)?;
+        let state = load_state(&vault)?.unwrap();
+        let fresh_ca = vault
+            .read_mutable::<ActivePointerV1>("supervisor/pointers/ca.json")?
+            .unwrap();
+        let fresh_team = vault
+            .read_mutable::<ActivePointerV1>("supervisor/pointers/codex-team.json")?
+            .unwrap();
+        for between_pointers in [false, true] {
+            vault.write_mutable(
+                "supervisor/pointers/ca.json",
+                if between_pointers { &fresh_ca } else { &old_ca },
+            )?;
+            vault.write_mutable("supervisor/pointers/codex-team.json", &old_team)?;
+            assert!(active_component_binary(&vault, "codex-team").is_err());
+            let receipt = refresh_knowledge_enrollment(&vault, &inputs, &previous, &next)?;
+            assert!(!receipt.changed);
+            assert_eq!(load_state(&vault)?.unwrap().revision, state.revision);
+            assert_eq!(
+                vault
+                    .read_mutable::<ActivePointerV1>("supervisor/pointers/ca.json")?
+                    .unwrap(),
+                fresh_ca
+            );
+            assert_eq!(
+                vault
+                    .read_mutable::<ActivePointerV1>("supervisor/pointers/codex-team.json")?
+                    .unwrap(),
+                fresh_team
+            );
+            active_component_binary(&vault, "ca")?;
+            active_component_binary(&vault, "codex-team")?;
+        }
+        // Both binaries must validate before either pointer is repaired.
+        let team_binary = active_component_binary(&vault, "codex-team")?;
+        fs::write(team_binary, "tampered executable")?;
+        vault.write_mutable("supervisor/pointers/ca.json", &old_ca)?;
+        vault.write_mutable("supervisor/pointers/codex-team.json", &old_team)?;
+        assert!(refresh_knowledge_enrollment(&vault, &inputs, &previous, &next).is_err());
+        assert_eq!(
+            vault
+                .read_mutable::<ActivePointerV1>("supervisor/pointers/ca.json")?
+                .unwrap(),
+            old_ca
+        );
         fs::remove_dir_all(root)?;
         Ok(())
     }
@@ -2876,7 +3350,7 @@ mod tests {
                 acceptance_properties: ["safe".to_string()].into_iter().collect(),
                 output_equivalence_digest: format!("output-{index}"),
                 elapsed_millis: 90,
-                estimated_microusd: 90,
+                estimated_microusd: Some(90),
             })
             .collect::<Vec<_>>();
         let baseline_results = candidate_results
@@ -2884,7 +3358,7 @@ mod tests {
             .cloned()
             .map(|mut result| {
                 result.elapsed_millis = 100;
-                result.estimated_microusd = 100;
+                result.estimated_microusd = Some(100);
                 result
             })
             .collect::<Vec<_>>();

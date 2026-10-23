@@ -360,22 +360,24 @@ fn guest_account_and_source_protection() { main(); }
                 .unwrap()
                 .success());
         }
-        assert!(std::process::Command::new("/usr/bin/git")
-            .args([
-                "-c",
-                "core.hooksPath=/dev/null",
-                "-c",
-                "commit.gpgsign=false",
-                "commit",
-                "-am",
-                "VM-only fixture"
-            ])
-            .current_dir(&repository)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .status()
-            .unwrap()
-            .success());
+        assert!(
+            std::process::Command::new(ca_automation::git_metadata::EXECUTABLE)
+                .args([
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "commit",
+                    "-am",
+                    "VM-only fixture"
+                ])
+                .current_dir(&repository)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .status()
+                .unwrap()
+                .success()
+        );
         let mut receipts = BTreeMap::new();
         for gate in fixed_release_gates() {
             eprintln!("VM_GATE_STARTED={}", gate.id);

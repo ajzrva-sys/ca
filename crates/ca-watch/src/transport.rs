@@ -164,7 +164,7 @@ fn parse_remote_output(output: &[u8]) -> Result<ProbeObservation, ProbeError> {
     };
     let identity = String::from_utf8(fields[2].to_vec()).map_err(|_| ProbeError)?;
     let progress = String::from_utf8(fields[3].to_vec()).map_err(|_| ProbeError)?;
-    if alive != !identity.trim().is_empty() {
+    if alive == identity.trim().is_empty() {
         return Err(ProbeError);
     }
     Ok(ProbeObservation {

@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
 
 
@@ -27,13 +27,13 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
 
 
 
-────────────────────────────────────────────────────────────────────────────────────────────────────
- On hold · stop
- → ▌Ask anything…
- Alt+Up edit latest · /queue view all
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│On hold · stop                                                                                    │
+│› ▌Ask anything…                                                                                   │
+╰ Alt+Up edit latest · /queue view all ────────────────────────────────────────────── agent · auto ╯
 Stopped · queued messages on hold
 -- narrow --
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
 
 
 
@@ -52,8 +52,8 @@ Stopped · queued messages on hold
 
 
 
-────────────────────────────────────────────────────────────
- On hold · stop
- → ▌Ask anything…
- Alt+Up edit latest · /queue view all
+╭──────────────────────────────────────────────────────────╮
+│On hold · stop                                            │
+│› ▌Ask anything…                                           │
+╰ Alt+Up edit latest · /queue view all ────── agent · auto ╯
 Stopped · queued messages on hold

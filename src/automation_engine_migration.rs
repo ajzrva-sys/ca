@@ -349,7 +349,7 @@ pub(crate) fn install_workflow_records(
 }
 
 fn publish_workflow_record(temporary: &Path, destination: &Path) -> Result<()> {
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "freebsd"))]
     {
         use std::ffi::CString;
         use std::os::unix::ffi::OsStrExt;
@@ -369,13 +369,34 @@ fn publish_workflow_record(temporary: &Path, destination: &Path) -> Result<()> {
                 libc::RENAME_NOREPLACE,
             )
         };
+        #[cfg(target_os = "freebsd")]
+        let status = unsafe {
+            // FreeBSD 15 exposes renameat2 in libc; the pinned Rust libc
+            // predates its binding. Keep publication atomic and exclusive.
+            unsafe extern "C" {
+                fn renameat2(
+                    fromfd: libc::c_int,
+                    from: *const libc::c_char,
+                    tofd: libc::c_int,
+                    to: *const libc::c_char,
+                    flags: libc::c_uint,
+                ) -> libc::c_int;
+            }
+            renameat2(
+                libc::AT_FDCWD,
+                temporary.as_ptr(),
+                libc::AT_FDCWD,
+                destination.as_ptr(),
+                1, // AT_RENAME_NOREPLACE from FreeBSD's fcntl.h.
+            )
+        };
         if status != 0 {
             return Err(std::io::Error::last_os_error())
                 .context("publish workflow authority without replacement");
         }
         Ok(())
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "freebsd")))]
     {
         let _ = (temporary, destination);
         bail!("atomic workflow authority publication is unavailable on this platform")

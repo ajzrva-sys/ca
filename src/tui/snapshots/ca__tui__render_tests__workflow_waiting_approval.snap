@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca · agent · auto · workflow running · inspect
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 The verification needs a command.
 
   ⟳ run_command {"command":"cargo test workflow"}
@@ -28,12 +28,12 @@ exact path  [x] always deny  [a] yolo
 
 
 
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                                                                   │
+╰─────────────────────────────────────────────────────── agent · auto · workflow running · inspect ╯
 Tool needs approval [1/1] (y/n/a/g/s/x/p)
 -- narrow --
- ca · agent · auto · workflow running · inspect
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
 The verification needs a command.
 
   ⟳ run_command {"command":"cargo test workflow"}
@@ -53,7 +53,7 @@ always deny  [a] yolo
 
 
 
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                           │
+╰─────────────── agent · auto · workflow running · inspect ╯
 Tool needs approval [1/1] (y/n/a/g/s/x/p)

@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
 
 
@@ -28,10 +28,11 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
 
 
 
-────────────────────────────────────────────────────────────────────────────────────────────────────
- → Existing editable draft▌
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│› Existing editable draft▌                                                                        │
+╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
 -- narrow --
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
 
 
 
@@ -51,5 +52,6 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
  └────────────────────────────────────────────────────────┘
 
 
-────────────────────────────────────────────────────────────
- → Existing editable draft▌
+╭──────────────────────────────────────────────────────────╮
+│› Existing editable draft▌                                │
+╰──────────────────────────────────────────── agent · auto ╯

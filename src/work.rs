@@ -179,6 +179,10 @@ impl PlanArtifact {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WorkState {
     pub plan: Option<PlanArtifact>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_workflow: Option<crate::plan_workflow::PlanWorkflowState>,
+    #[serde(skip)]
+    pub pending_plan_workflow: Option<crate::plan_workflow::PendingPlanWorkflow>,
     #[serde(default)]
     pub plan_feedback: crate::plan_feedback::PlanFeedbackLedger,
     #[serde(default)]
@@ -726,7 +730,7 @@ impl WorkState {
         agent_id: crate::agent::subagent::AgentId,
         now: DateTime<Utc>,
     ) -> Result<u64, WorkError> {
-        self.mark_agent_task_spawned_with_snapshot(task_id, agent_id, None, now)
+        self.mark_agent_task_spawned_with_snapshot(task_id, agent_id, None, Vec::new(), now)
     }
 
     pub fn mark_agent_task_spawned_with_snapshot(
@@ -734,6 +738,7 @@ impl WorkState {
         task_id: TaskId,
         agent_id: crate::agent::subagent::AgentId,
         workspace_snapshot: Option<crate::agent_graph::AgentWorkspaceSnapshotV1>,
+        handoff_inputs: Vec<crate::agent_graph::VerifiedHandoffV1>,
         now: DateTime<Utc>,
     ) -> Result<u64, WorkError> {
         let plan = self.plan.as_mut().ok_or(WorkError::NoPlan)?;
@@ -773,6 +778,8 @@ impl WorkState {
                 verification_receipt: None,
                 workspace_snapshot,
                 host_verification: None,
+                handoff_outputs: Vec::new(),
+                handoff_inputs,
                 budget_usage: crate::agent_graph::AgentGraphBudgetUsageV1::default(),
             });
         task.agent_runtime.state = crate::agent_graph::AgentTaskState::Running;
@@ -827,6 +834,8 @@ impl WorkState {
                 verification_receipt: None,
                 workspace_snapshot: None,
                 host_verification: None,
+                handoff_outputs: Vec::new(),
+                handoff_inputs: Vec::new(),
                 budget_usage: crate::agent_graph::AgentGraphBudgetUsageV1::default(),
             });
         task.agent_runtime.state = crate::agent_graph::AgentTaskState::Failed;
@@ -838,6 +847,68 @@ impl WorkState {
         crate::agent_graph::synchronize(&mut plan.tasks, &mut self.agent_graph);
         bump(plan);
         Ok(plan.revision)
+    }
+
+    /// Record host-verified handoff output facts on an attempt after its
+    /// terminal observation. Inputs were recorded at spawn; this never
+    /// changes task state or releases dependents by itself.
+    pub fn record_agent_task_handoff_outputs(
+        &mut self,
+        task_id: TaskId,
+        agent_id: crate::agent::subagent::AgentId,
+        handoff_outputs: Vec<crate::agent_graph::VerifiedHandoffV1>,
+        now: DateTime<Utc>,
+    ) -> Result<bool, WorkError> {
+        let plan = self.plan.as_mut().ok_or(WorkError::NoPlan)?;
+        let task = plan
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == task_id)
+            .ok_or(WorkError::UnknownTask(task_id))?;
+        let Some(attempt) = task
+            .agent_runtime
+            .attempts
+            .iter_mut()
+            .rev()
+            .find(|attempt| attempt.agent_id == Some(agent_id.0))
+        else {
+            return Ok(false);
+        };
+        let changed = attempt.handoff_outputs != handoff_outputs;
+        attempt.handoff_outputs = handoff_outputs;
+        // Publish verified facts to the graph ledger, bound to the current
+        // verification contract. A reconfiguration invalidates reuse.
+        let ledger_contract = task
+            .agent
+            .as_ref()
+            .map(|definition| crate::agent_graph::verification_contract_sha256(task_id, definition))
+            .unwrap_or_default();
+        let mut ledger_changed = false;
+        for fact in attempt.handoff_outputs.iter().cloned() {
+            let entry = crate::agent_graph::HandoffLedgerEntryV1 {
+                task: task_id,
+                contract_sha256: ledger_contract.clone(),
+                fact,
+            };
+            let dedupe = |known: &crate::agent_graph::HandoffLedgerEntryV1| {
+                known.task == entry.task && known.fact.name == entry.fact.name
+            };
+            if self.agent_graph.handoff_ledger.iter().any(dedupe) {
+                continue;
+            }
+            self.agent_graph.handoff_ledger.push(entry);
+            if self.agent_graph.handoff_ledger.len()
+                > crate::agent_graph::MAX_HANDOFF_LEDGER_ENTRIES
+            {
+                self.agent_graph.handoff_ledger.remove(0);
+            }
+            ledger_changed = true;
+        }
+        if changed || ledger_changed {
+            task.updated_at = now;
+            bump(plan);
+        }
+        Ok(changed || ledger_changed)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1020,6 +1091,11 @@ impl WorkState {
     }
 
     pub fn pause_agent_graph_after_restore(&mut self, now: DateTime<Utc>) -> bool {
+        let workflow_paused = self
+            .plan_workflow
+            .as_mut()
+            .is_some_and(crate::plan_workflow::PlanWorkflowState::pause_after_restore);
+        self.pending_plan_workflow = None;
         let verification_binding = self.agent_graph.verification_binding();
         let budget_requires_pause = !self
             .agent_graph
@@ -1027,7 +1103,7 @@ impl WorkState {
             .as_ref()
             .is_some_and(crate::agent_graph::AgentGraphBudgetLimitsV1::valid);
         let Some(plan) = self.plan.as_mut() else {
-            return false;
+            return workflow_paused;
         };
         let mut interrupted = false;
         let mut invalid_verification = false;
@@ -1124,7 +1200,7 @@ impl WorkState {
             bump(plan);
             true
         } else {
-            false
+            workflow_paused
         }
     }
 
@@ -1132,6 +1208,11 @@ impl WorkState {
         let mut clone = self.clone();
         clone.historical_notice = None;
         clone.pending_automation_proposal = None;
+        clone.pending_plan_workflow = None;
+        clone.plan_workflow = self
+            .plan_workflow
+            .as_ref()
+            .map(crate::plan_workflow::PlanWorkflowState::fork_full);
         clone.plan_feedback.make_historical();
         if let Some(plan) = clone.plan.as_mut() {
             plan.source_plan_id = Some(plan.id);
@@ -1159,6 +1240,8 @@ impl WorkState {
     pub fn historical_omission() -> Self {
         Self {
             pending_automation_proposal: None,
+            plan_workflow: None,
+            pending_plan_workflow: None,
             plan: None,
             plan_feedback: crate::plan_feedback::PlanFeedbackLedger::default(),
             events: Vec::new(),
@@ -1486,6 +1569,10 @@ mod tests {
             network: false,
             worktree_id: None,
             accept_cross_lane_handoff: false,
+            produces: Vec::new(),
+            consumes: Vec::new(),
+            task_kind: crate::agent_graph::AgentTaskKind::Agent,
+            merge_policy: crate::agent_graph::AgentMergePolicy::RejectConflict,
             max_attempts: 2,
             evidence: evidence.clone(),
         };
@@ -1646,6 +1733,7 @@ mod tests {
             first,
             agent,
             Some(host.started.clone()),
+            Vec::new(),
             Utc::now(),
         )
         .unwrap();
@@ -1701,6 +1789,7 @@ mod tests {
             first,
             agent,
             Some(host.started.clone()),
+            Vec::new(),
             Utc::now(),
         )
         .unwrap();
@@ -1836,6 +1925,64 @@ mod tests {
     }
 
     #[test]
+    fn handoff_facts_record_on_the_attempt_and_survive_session_round_trip() {
+        let mut work = WorkState::default();
+        work.apply_model_mutation(WorkMutation::Propose {
+            body: None,
+            expected_revision: 0,
+            title: "Handoff graph".into(),
+            tasks: vec!["Producer".into(), "Consumer".into()],
+        })
+        .unwrap();
+        let (first, _) = configure_two_task_graph(&mut work);
+        work.user_decide(work.revision(), true).unwrap();
+        work.user_start_agent_graph().unwrap();
+        let agent = crate::agent::subagent::AgentId(Uuid::from_u128(93));
+        work.mark_agent_task_spawned(first, agent, Utc::now())
+            .unwrap();
+        let fact = crate::agent_graph::VerifiedHandoffV1 {
+            name: "report".into(),
+            path: "out/report.txt".into(),
+            kind: crate::agent_graph::AgentArtifactKind::RegularFile,
+            sha256: Some("a".repeat(64)),
+            bytes: 12,
+            producer: None,
+        };
+        assert!(work
+            .record_agent_task_handoff_outputs(first, agent, vec![fact.clone()], Utc::now())
+            .unwrap());
+        // The verified fact is published to the graph ledger bound to the
+        // producer's current contract.
+        assert_eq!(work.agent_graph.handoff_ledger.len(), 1);
+        let entry = &work.agent_graph.handoff_ledger[0];
+        assert_eq!(entry.task, first);
+        assert_eq!(entry.fact, fact);
+        let definition = work.plan.as_ref().unwrap().tasks[0].agent.as_ref().unwrap();
+        assert_eq!(
+            entry.contract_sha256,
+            crate::agent_graph::verification_contract_sha256(first, definition)
+        );
+        // Recording identical facts is a no-op that never bumps state or
+        // duplicates ledger entries.
+        let revision = work.revision();
+        assert!(!work
+            .record_agent_task_handoff_outputs(first, agent, vec![fact.clone()], Utc::now())
+            .unwrap());
+        assert_eq!(work.revision(), revision);
+        assert_eq!(work.agent_graph.handoff_ledger.len(), 1);
+
+        let restored: WorkState =
+            serde_json::from_value(serde_json::to_value(&work).unwrap()).unwrap();
+        let attempt = restored.plan.as_ref().unwrap().tasks[0]
+            .agent_runtime
+            .attempts[0]
+            .clone();
+        assert_eq!(attempt.handoff_outputs, vec![fact]);
+        assert!(attempt.handoff_inputs.is_empty());
+        assert_eq!(restored.agent_graph.handoff_ledger.len(), 1);
+    }
+
+    #[test]
     fn graph_fork_remaps_edges_and_restore_interrupts_attempts() {
         let mut work = WorkState::default();
         work.apply_model_mutation(WorkMutation::Propose {
@@ -1884,6 +2031,10 @@ mod tests {
                 network: false,
                 worktree_id: None,
                 accept_cross_lane_handoff: false,
+                produces: Vec::new(),
+                consumes: Vec::new(),
+                task_kind: crate::agent_graph::AgentTaskKind::Agent,
+                merge_policy: crate::agent_graph::AgentMergePolicy::RejectConflict,
                 max_attempts: 1,
                 evidence: vec![crate::agent_graph::AgentEvidenceInput::ToolSuccess {
                     tool: "read_file".into(),
@@ -1899,6 +2050,7 @@ mod tests {
             task_id,
             agent,
             Some(host.started.clone()),
+            Vec::new(),
             Utc::now(),
         )
         .unwrap();
@@ -1971,6 +2123,10 @@ mod tests {
                 network: false,
                 worktree_id: None,
                 accept_cross_lane_handoff: false,
+                produces: Vec::new(),
+                consumes: Vec::new(),
+                task_kind: crate::agent_graph::AgentTaskKind::Agent,
+                merge_policy: crate::agent_graph::AgentMergePolicy::RejectConflict,
                 max_attempts: 1,
                 evidence: vec![crate::agent_graph::AgentEvidenceInput::ToolSuccess {
                     tool: "read_file".into(),
@@ -2019,6 +2175,7 @@ mod tests {
             first,
             agent,
             Some(host.started.clone()),
+            Vec::new(),
             Utc::now(),
         )
         .unwrap();
@@ -2132,6 +2289,10 @@ mod tests {
                 network: false,
                 worktree_id: None,
                 accept_cross_lane_handoff: false,
+                produces: Vec::new(),
+                consumes: Vec::new(),
+                task_kind: crate::agent_graph::AgentTaskKind::Agent,
+                merge_policy: crate::agent_graph::AgentMergePolicy::RejectConflict,
                 max_attempts: 1,
                 evidence: vec![crate::agent_graph::AgentEvidenceInput::ToolSuccess {
                     tool: "read_file".into(),
@@ -2147,6 +2308,7 @@ mod tests {
             task_id,
             agent,
             Some(host.started.clone()),
+            Vec::new(),
             Utc::now(),
         )
         .unwrap();
@@ -2201,6 +2363,10 @@ mod tests {
                 network: false,
                 worktree_id: None,
                 accept_cross_lane_handoff: false,
+                produces: Vec::new(),
+                consumes: Vec::new(),
+                task_kind: crate::agent_graph::AgentTaskKind::Agent,
+                merge_policy: crate::agent_graph::AgentMergePolicy::RejectConflict,
                 max_attempts: 1,
                 evidence: vec![crate::agent_graph::AgentEvidenceInput::ToolSuccess {
                     tool: "read_file".into(),
@@ -2240,6 +2406,10 @@ mod tests {
                 network: false,
                 worktree_id: None,
                 accept_cross_lane_handoff: false,
+                produces: Vec::new(),
+                consumes: Vec::new(),
+                task_kind: crate::agent_graph::AgentTaskKind::Agent,
+                merge_policy: crate::agent_graph::AgentMergePolicy::RejectConflict,
                 max_attempts: 1,
                 evidence: vec![crate::agent_graph::AgentEvidenceInput::ToolSuccess {
                     tool: "read_file".into(),

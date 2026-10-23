@@ -1094,6 +1094,8 @@ fn provider_context_limits(
 #[test]
 fn hrs253_context_reservation_uses_provider_ceiling_and_preserves_smaller_payload_cap() {
     let mut route = crate::config::ProviderConfig {
+        google: None,
+        tool_schema_policy: Default::default(),
         base_url: "https://api.deepseek.com/v1".into(),
         api_key: String::new(),
         protocol: crate::agent::provider::ProviderProtocol::ChatCompletions,

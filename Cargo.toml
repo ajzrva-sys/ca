@@ -22,7 +22,7 @@ license = "MIT OR Apache-2.0"
 
 [package]
 name = "ca"
-version = "0.1.0"
+version = "0.1.41"
 edition = "2021"
 license.workspace = true
 default-run = "ca"
@@ -103,6 +103,7 @@ oauth2 = { version = "5", default-features = false }
 url = "2"
 percent-encoding = "2"
 rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
+google-cloud-auth = "=1.17.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3.7"
@@ -115,3 +116,11 @@ tokio-util = { version = "0.7", features = ["compat"] }
 
 [build-dependencies]
 sha2 = "0.10"
+
+# Broker identity hashes must finish within the normal startup deadline even
+# when SHA-256 uses its software implementation in development builds.
+[profile.dev.package."sha2:0.10.9"]
+opt-level = 3
+
+[profile.test.package."sha2:0.10.9"]
+opt-level = 3

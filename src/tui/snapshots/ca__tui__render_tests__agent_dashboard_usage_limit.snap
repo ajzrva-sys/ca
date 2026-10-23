@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&usage, 100, 30), render_to_text(&usage, 60, 24))"
 ---
-main /workspace/ca  [Choose Ctrl+l]                                                     :: 1 working
+ca v0.0.0 │ main /workspace/ca  [Choose Ctrl+l]                                         :: 1 working
  + New Agent   Open Previous /resume                                                Worktree Ctrl+w
  ▾ Working 1 ───────────────────────────────────────── ┌Preview────────────────────────────────────┐
  :: bsd2 MiMo Flash official Q2_K setup · ca         0s│Select a session or agent to preview its   │
@@ -33,7 +33,7 @@ main /workspace/ca  [Choose Ctrl+l]                                             
 └─────────────────────────────────────────────────────────────────────────────────Coder · allowlist┘
 Enter:collapse  |  Esc:New Agent  |  Ctrl+.:shortcuts
 -- narrow --
-main /workspace/ca  [Choose Ctrl+l]             :: 1 working
+ca v0.0.0 │ main /workspace/ca  [Choose Ctrl+l] :: 1 working
  + New Agent   Open Previous /resume        Worktree Ctrl+w
  ▾ ┌────────────────────────────────────────────────────┐──
  ::│Context usage  Usage limit  Session info         [x]│ 0s

@@ -28,34 +28,17 @@ struct DashboardColors {
 }
 
 fn colors(state: &AppState) -> DashboardColors {
-    if matches!(
-        state.terminal_appearance,
-        Some(crate::terminal_awareness::TerminalAppearance::Light)
-    ) && state.theme_manager.is_none()
-        && state.terminal_theme_auto
-    {
-        return DashboardColors {
-            accent: Color::Blue,
-            accent_foreground: Color::White,
-            text: Color::Black,
-            muted: Color::DarkGray,
-            surface: Color::White,
-            border: Color::DarkGray,
-            heading: Color::Blue,
-            working: Color::Blue,
-            idle: Color::DarkGray,
-        };
-    }
+    let theme = super::render::palette(state);
     DashboardColors {
-        accent: Color::Cyan,
-        accent_foreground: Color::Black,
-        text: Color::White,
-        muted: Color::DarkGray,
-        surface: Color::Reset,
-        border: Color::DarkGray,
-        heading: Color::Cyan,
-        working: Color::Cyan,
-        idle: Color::DarkGray,
+        accent: theme.accent,
+        accent_foreground: theme.accent_foreground,
+        text: theme.text,
+        muted: theme.muted,
+        surface: theme.surface,
+        border: theme.border,
+        heading: theme.heading,
+        working: theme.state_working,
+        idle: theme.state_idle,
     }
 }
 
@@ -615,7 +598,12 @@ fn location_label(state: &AppState) -> String {
     }
 }
 
-pub fn render(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
+pub(super) fn render_with_version_label(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    state: &AppState,
+    version_label: &str,
+) {
     let theme = colors(state);
     frame.render_widget(
         Block::default().style(Style::default().bg(theme.surface).fg(theme.text)),
@@ -632,7 +620,7 @@ pub fn render(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
         ])
         .split(area);
 
-    render_header(frame, chunks[0], state);
+    render_header(frame, chunks[0], state, version_label);
     render_actions(frame, chunks[1], state);
     render_roster(frame, chunks[2], state);
     render_dispatch(frame, chunks[3], state);
@@ -642,7 +630,7 @@ pub fn render(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
     }
 }
 
-fn render_header(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
+fn render_header(frame: &mut ratatui::Frame, area: Rect, state: &AppState, version_label: &str) {
     if area.height == 0 {
         return;
     }
@@ -652,7 +640,10 @@ fn render_header(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
         .iter()
         .filter(|row| row.group == DashboardGroup::Working)
         .count();
-    let left = format!("{}  [Choose Ctrl+l]", location_label(state));
+    let left = format!(
+        "{version_label} │ {}  [Choose Ctrl+l]",
+        location_label(state)
+    );
     let right = if working == 0 {
         String::new()
     } else {

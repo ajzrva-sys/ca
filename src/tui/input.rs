@@ -2,9 +2,225 @@ use crate::app::{AgentMode, ModelInfo};
 use crate::tui::event::{Event, MouseSelectionEvent, MouseSelectionPhase};
 use crossterm::event::{KeyCode, KeyModifiers};
 
+#[cfg(test)]
+mod composer_undo_regressions {
+    use super::*;
+
+    #[test]
+    fn composer_vim_undo_restores_draft_instead_of_submitted_history() {
+        let mut state = crate::app::AppState::new(crate::context::ShellHistory::in_memory());
+        state.input = "keep draft".into();
+        state.input_cursor = state.input.len();
+        state.input_history.push("previously submitted".into());
+        handle_event(&mut state, &Event::Paste(" added".into()), "/workspace/ca");
+        state.vim_mode = true;
+        state.vim_state = crate::app::VimMode::Normal;
+        handle_event(
+            &mut state,
+            &Event::Key(KeyCode::Char('u'), KeyModifiers::NONE),
+            "/workspace/ca",
+        );
+        assert_eq!(state.input, "keep draft");
+        assert_eq!(state.input_cursor, "keep draft".len());
+        assert_eq!(state.input_history, ["previously submitted"]);
+    }
+
+    fn key(state: &mut crate::app::AppState, code: KeyCode, modifiers: KeyModifiers) {
+        handle_event(state, &Event::Key(code, modifiers), "/workspace/ca");
+    }
+
+    #[test]
+    fn composer_undo_redo_shortcuts_preserve_yank_and_diff_bindings() {
+        let mut state = crate::app::AppState::new(crate::context::ShellHistory::in_memory());
+        handle_event(
+            &mut state,
+            &Event::Paste("draft 🙂".into()),
+            "/workspace/ca",
+        );
+        key(&mut state, KeyCode::Char('x'), KeyModifiers::CONTROL);
+        key(&mut state, KeyCode::Char('u'), KeyModifiers::NONE);
+        assert!(state.input.is_empty());
+        key(&mut state, KeyCode::Char('x'), KeyModifiers::CONTROL);
+        key(&mut state, KeyCode::Char('y'), KeyModifiers::NONE);
+        assert_eq!(state.input, "draft 🙂");
+        state.kill_ring = vec![" kept".into()];
+        key(&mut state, KeyCode::Char('y'), KeyModifiers::CONTROL);
+        assert_eq!(state.input, "draft 🙂 kept");
+        key(&mut state, KeyCode::Char('r'), KeyModifiers::CONTROL);
+        assert!(state.pending_input_action.is_some());
+        assert_eq!(state.input, "draft 🙂 kept");
+    }
+
+    #[test]
+    fn composer_undo_restores_atomic_ranges_attachment_metadata_and_shared_images() {
+        let mut state = crate::app::AppState::new(crate::context::ShellHistory::in_memory());
+        state.input = "@kept ".into();
+        state.input_cursor = state.input.len();
+        state
+            .composer_attachments
+            .push(crate::attachments::ComposerAttachment {
+                reference: "kept".into(),
+                kind: crate::attachments::ComposerAttachmentKind::Mcp {
+                    server: "local".into(),
+                    uri: "fixture://kept".into(),
+                    name: "kept".into(),
+                },
+            });
+        state
+            .composer_ui
+            .register_atomic(crate::tui::composer::AtomicElement {
+                range: 0..5,
+                kind: crate::tui::composer::AtomicKind::Reference,
+            });
+        let image = crate::image_content::normalize_rgba(1, 1, vec![1, 2, 3, 255]).unwrap();
+        state.pasted_images.push(image.clone());
+        let payload = "large private paste\n".repeat(100);
+        handle_event(&mut state, &Event::Paste(payload.clone()), "/workspace/ca");
+        let expected = state.capture_composer_draft();
+        let expected_payload = match &expected.atomic_elements[1].kind {
+            crate::tui::composer::AtomicKind::LargePaste { payload } => payload.clone(),
+            _ => panic!("large paste must be registered"),
+        };
+        key(&mut state, KeyCode::Char('u'), KeyModifiers::CONTROL);
+        state.undo_composer();
+        assert_eq!(state.capture_composer_draft(), expected);
+        assert_eq!(
+            state.pasted_images[0].png_bytes().as_ptr(),
+            image.png_bytes().as_ptr()
+        );
+        let restored = match &state.composer_ui.atomic_elements[1].kind {
+            crate::tui::composer::AtomicKind::LargePaste { payload } => payload,
+            _ => panic!("large paste must be restored"),
+        };
+        assert!(std::sync::Arc::ptr_eq(restored, &expected_payload));
+        assert_eq!(state.expanded_composer_text(), format!("@kept {payload}"));
+        key(&mut state, KeyCode::Char('x'), KeyModifiers::CONTROL);
+        key(&mut state, KeyCode::Char('a'), KeyModifiers::NONE);
+        assert!(state.pasted_images.is_empty());
+        state.undo_composer();
+        assert_eq!(
+            state.pasted_images[0].png_bytes().as_ptr(),
+            image.png_bytes().as_ptr()
+        );
+    }
+
+    #[test]
+    fn composer_undo_external_replacement_redo_and_new_edit_are_separate_actions() {
+        let mut state = crate::app::AppState::new(crate::context::ShellHistory::in_memory());
+        key(&mut state, KeyCode::Char('a'), KeyModifiers::NONE);
+        key(&mut state, KeyCode::Char('b'), KeyModifiers::NONE);
+        key(&mut state, KeyCode::Left, KeyModifiers::NONE);
+        key(&mut state, KeyCode::Char('🙂'), KeyModifiers::NONE);
+        state.undo_composer();
+        assert_eq!((state.input.as_str(), state.input_cursor), ("ab", 1));
+        state.redo_composer();
+        assert_eq!((state.input.as_str(), state.input_cursor), ("a🙂b", 5));
+        state.image_attachment_generation = 7;
+        state.image_attachment_busy = true;
+        state.replace_composer_text("external replacement".into());
+        assert_eq!(state.image_attachment_generation, 8);
+        assert!(!state.image_attachment_busy);
+        state.undo_composer();
+        assert_eq!(state.image_attachment_generation, 9);
+        assert_eq!((state.input.as_str(), state.input_cursor), ("a🙂b", 5));
+        key(&mut state, KeyCode::Char('!'), KeyModifiers::NONE);
+        let edited = state.input.clone();
+        state.redo_composer();
+        assert_eq!(state.input, edited);
+    }
+
+    #[test]
+    fn composer_undo_does_not_cross_submission_queue_or_untracked_replacement() {
+        let mut state = crate::app::AppState::new(crate::context::ShellHistory::in_memory());
+        handle_event(
+            &mut state,
+            &Event::Paste("sent draft".into()),
+            "/workspace/ca",
+        );
+        assert_eq!(state.take_composer_text(), "sent draft");
+        state.undo_composer();
+        assert!(state.input.is_empty());
+        handle_event(
+            &mut state,
+            &Event::Paste("old draft".into()),
+            "/workspace/ca",
+        );
+        key(&mut state, KeyCode::Char('u'), KeyModifiers::CONTROL);
+        state.input_queue.enqueue("queued draft");
+        key(&mut state, KeyCode::Up, KeyModifiers::ALT);
+        state.undo_composer();
+        assert_eq!(state.input, "queued draft");
+        state.replace_composer_text("tracked replacement".into());
+        state.input = "untracked replacement".into();
+        state.input_cursor = state.input.len();
+        state.undo_composer();
+        assert_eq!(state.input, "untracked replacement");
+    }
+}
+
 pub fn handle_event(state: &mut crate::app::AppState, event: &Event, cwd: &str) -> bool {
+    if !matches!(event, Event::Key(_, _) | Event::Paste(_)) {
+        if matches!(event, Event::MouseSelection(_) | Event::MouseScroll(_)) {
+            state.composer_history.separate_actions();
+        }
+        return handle_event_inner(state, event, cwd);
+    }
+    let before = state.capture_composer_draft();
+    state.composer_history.observe(&before);
+    let revision = state.composer_history.revision();
+    let context = (state.input_queue.editing_id, state.history_idx);
+    let kind = match event {
+        Event::Key(KeyCode::Char(_), modifiers)
+            if (*modifiers == KeyModifiers::NONE || *modifiers == KeyModifiers::SHIFT)
+                && !(state.vim_mode && state.vim_state == crate::app::VimMode::Normal) =>
+        {
+            crate::tui::composer::EditKind::Typing
+        }
+        Event::Key(KeyCode::Backspace, KeyModifiers::NONE) => {
+            crate::tui::composer::EditKind::Backspace
+        }
+        Event::Key(KeyCode::Delete, KeyModifiers::NONE) => crate::tui::composer::EditKind::Delete,
+        _ => crate::tui::composer::EditKind::Discrete,
+    };
+    let handled = handle_event_inner(state, event, cwd);
+    if state.composer_history.revision() == revision {
+        if context != (state.input_queue.editing_id, state.history_idx) {
+            state.reset_composer_history();
+        } else {
+            let after = state.capture_composer_draft();
+            state.composer_history.record(before, &after, kind);
+        }
+    }
+    handled
+}
+
+fn handle_event_inner(state: &mut crate::app::AppState, event: &Event, cwd: &str) -> bool {
     // Reset status fade timer on any keypress — new status messages will restart the clock
     state.status_set_at = None;
+    if let Some(editor) = state.personality_editor.as_mut() {
+        let action = editor.handle(event);
+        match action {
+            crate::tui::personality::Action::None => {}
+            crate::tui::personality::Action::Close => {
+                state.personality_editor = None;
+                state.personality_operation = None;
+                state.personality_editor_generation =
+                    state.personality_editor_generation.wrapping_add(1);
+                state.status_message = Some("Questionnaire closed".into());
+            }
+            crate::tui::personality::Action::Save {
+                revision,
+                preferences,
+            } => {
+                state.pending_input_action =
+                    Some(crate::tui::commands::InputAction::SavePersonality {
+                        revision,
+                        preferences,
+                    });
+            }
+        }
+        return !matches!(event, Event::Tick | Event::Redraw);
+    }
     if let Event::MouseSelection(selection) = event {
         return handle_mouse_selection(state, *selection, copy_text_to_clipboard);
     }
@@ -25,7 +241,18 @@ pub fn handle_event(state: &mut crate::app::AppState, event: &Event, cwd: &str) 
             state.transcript_scroll.clear_selection();
             state.pager_selection.clear_selection();
         }
-        return handle_mouse_scroll(state, scroll.direction, cwd, if dragging { 1 } else { 3 });
+        let point = if dragging {
+            None
+        } else {
+            Some((scroll.column, scroll.row))
+        };
+        return handle_mouse_scroll(
+            state,
+            scroll.direction,
+            point,
+            cwd,
+            if dragging { 1 } else { 3 },
+        );
     }
     if matches!(event, Event::Tick) {
         let edge = if state.pager_open {
@@ -40,7 +267,7 @@ pub fn handle_event(state: &mut crate::app::AppState, event: &Event, cwd: &str) 
                     crate::tui::event::ScrollDirection::Down
                 }
             };
-            return handle_mouse_scroll(state, direction, cwd, 1);
+            return handle_mouse_scroll(state, direction, None, cwd, 1);
         }
     }
     if !matches!(event, Event::Tick) {
@@ -54,6 +281,9 @@ pub fn handle_event(state: &mut crate::app::AppState, event: &Event, cwd: &str) 
         }
     }
     if let Event::Paste(pasted) = event {
+        if state.plan_workflow_graph.is_some() && !state.model_picker_open && !state.pager_open {
+            return true;
+        }
         if let Some(focus) = state.agent_activity_focus.as_mut() {
             if let Some(draft) = focus.message_draft.as_mut() {
                 let pasted = crate::terminal_text::sanitize_terminal_text(pasted);
@@ -256,6 +486,9 @@ pub fn handle_event(state: &mut crate::app::AppState, event: &Event, cwd: &str) 
             if state.pager_open {
                 return handle_pager(state, *code);
             }
+            if state.plan_workflow_graph.is_some() {
+                return handle_plan_workflow_graph(state, *code);
+            }
             if state.file_picker_open {
                 return handle_file_picker(state, *code, *mods, cwd);
             }
@@ -314,6 +547,12 @@ pub fn handle_event(state: &mut crate::app::AppState, event: &Event, cwd: &str) 
                 return handle_agent_activity_focus(state, *code, *mods);
             }
             if let Some(pending) = state.pending_key_chord.take() {
+                // Modifier-only events (Control going down or up) are not the
+                // second stroke. Keep waiting so the chord can still complete.
+                if matches!(*code, KeyCode::Modifier(_)) {
+                    state.pending_key_chord = Some(pending);
+                    return true;
+                }
                 let second = crate::keymap::KeyStroke::from_event(*code, *mods);
                 return match state.keymap.resolve(pending.first, Some(second)) {
                     crate::keymap::KeyResolution::Action(action) => {
@@ -730,6 +969,14 @@ pub fn handle_event(state: &mut crate::app::AppState, event: &Event, cwd: &str) 
                     state.transcript_scroll.page_down(page);
                     true
                 }
+                (KeyModifiers::SHIFT, KeyCode::PageUp) => {
+                    state.provider_pane.scroll_page(-1);
+                    true
+                }
+                (KeyModifiers::SHIFT, KeyCode::PageDown) => {
+                    state.provider_pane.scroll_page(1);
+                    true
+                }
                 _ => false,
             }
         }
@@ -1047,6 +1294,7 @@ fn shortcut_help(state: &crate::app::AppState) -> String {
         "Home / End            current hard-line bounds".into(),
         "Ctrl+A / Ctrl+E       whole draft bounds".into(),
         "PageUp / PageDown     transcript page".into(),
+        "Shift+PageUp / Down   provider copy".into(),
         "Ctrl+Home / Ctrl+End  oldest / latest transcript".into(),
         "/ · @ · path          inline completion".into(),
         "Esc                   stop current turn / dismiss active popup".into(),
@@ -1063,7 +1311,7 @@ fn shortcut_help(state: &crate::app::AppState) -> String {
     }));
     lines.push(String::new());
     lines.push(
-        "Mouse: wheel/trackpad scrolls; left-drag selects visible transcript text and copies it on release."
+        "Mouse: wheel/trackpad scrolls the transcript; over the input box, paste preview, or a long user message it scrolls that box. Click the input box to place the caret; left-drag selects visible transcript text and copies it on release."
             .into(),
     );
     lines.join("\n")
@@ -1074,6 +1322,40 @@ pub(crate) fn copy_text_to_clipboard(text: &str) -> Result<(), ()> {
     clipboard.set_text(text.to_owned()).map_err(|_| ())
 }
 
+fn composer_click_blocked(state: &crate::app::AppState) -> bool {
+    state.pager_open
+        || state.slash_palette_open
+        || state.file_picker_open
+        || state.composer_ui.path_completion.open
+        || state.model_picker_open
+        || state.reasoning_picker.is_some()
+        || state.session_picker_open
+        || state.provider_manager.is_some()
+        || state.permission_manager.is_some()
+        || state.plan_workflow_graph.is_some()
+        || !crate::tui::render::composer_has_focus(state)
+}
+
+/// Place the composer caret at the clicked text cell. Returns true when the
+/// gesture belongs to the composer and must not start a transcript selection.
+fn place_composer_cursor(state: &mut crate::app::AppState, column: u16, row: u16) -> bool {
+    if composer_click_blocked(state) {
+        return false;
+    }
+    let Some(byte) = state
+        .composer_ui
+        .hit_map
+        .borrow()
+        .cursor_for_click(&state.input, column, row)
+    else {
+        return false;
+    };
+    let byte = state.composer_ui.snap_click_cursor(byte);
+    state.input_cursor = byte.min(state.input.len());
+    state.composer_ui.preferred_column = None;
+    true
+}
+
 fn handle_mouse_selection<F>(
     state: &mut crate::app::AppState,
     event: MouseSelectionEvent,
@@ -1082,6 +1364,27 @@ fn handle_mouse_selection<F>(
 where
     F: FnOnce(&str) -> Result<(), ()>,
 {
+    if state.composer_ui.mouse_capture_active {
+        match event.phase {
+            MouseSelectionPhase::Start => {}
+            MouseSelectionPhase::Drag => {
+                place_composer_cursor(state, event.column, event.row);
+            }
+            MouseSelectionPhase::End => {
+                place_composer_cursor(state, event.column, event.row);
+                state.composer_ui.mouse_capture_active = false;
+            }
+        }
+        return true;
+    }
+    if event.phase == MouseSelectionPhase::Start
+        && place_composer_cursor(state, event.column, event.row)
+    {
+        state.composer_ui.mouse_capture_active = true;
+        state.transcript_scroll.clear_selection();
+        state.pager_selection.clear_selection();
+        return true;
+    }
     let selection = if state.pager_open {
         &mut state.pager_selection
     } else {
@@ -1141,9 +1444,21 @@ fn toggle_expanded_block(
 fn handle_mouse_scroll(
     state: &mut crate::app::AppState,
     direction: crate::tui::event::ScrollDirection,
+    point: Option<(u16, u16)>,
     cwd: &str,
     rows: u16,
 ) -> bool {
+    if let Some((column, row)) = point {
+        if state.provider_pane.contains(column, row) {
+            let step = i32::from(rows.max(1));
+            let delta = match direction {
+                crate::tui::event::ScrollDirection::Up => -step,
+                crate::tui::event::ScrollDirection::Down => step,
+            };
+            state.provider_pane.scroll_by(delta);
+            return true;
+        }
+    }
     let key = match direction {
         crate::tui::event::ScrollDirection::Up => KeyCode::Up,
         crate::tui::event::ScrollDirection::Down => KeyCode::Down,
@@ -1174,6 +1489,61 @@ fn handle_mouse_scroll(
     }
     if state.pager_open {
         return handle_pager(state, key);
+    }
+    if state.plan_workflow_graph.is_some() {
+        return handle_plan_workflow_graph(state, key);
+    }
+    if let Some((column, row)) = point {
+        // 3. Composer draft viewport
+        let hits_composer = state
+            .composer_ui
+            .hit_map
+            .borrow()
+            .text_area
+            .map(|(x, y, w, h)| {
+                column >= x && row >= y && column < x.saturating_add(w) && row < y.saturating_add(h)
+            })
+            .unwrap_or(false);
+        if hits_composer && !state.input.is_empty() {
+            let interior = state.viewport_width.saturating_sub(2) as usize;
+            state.composer_ui.scroll_composer_viewport(
+                &state.input,
+                interior,
+                direction,
+                rows as usize,
+            );
+            return true;
+        }
+        // 4. Large-paste preview strip
+        if state
+            .composer_ui
+            .paste_preview_hit
+            .borrow()
+            .contains(column, row)
+        {
+            state
+                .composer_ui
+                .scroll_paste_preview(state.input_cursor, direction, rows as usize);
+            return true;
+        }
+        // 5. Sent user-prompt card
+        if let Some(target) = state.transcript_scroll.user_prompt_target_at(column, row) {
+            let current = state
+                .user_prompt_scroll
+                .get(&target.message_index)
+                .copied()
+                .unwrap_or(0);
+            let next = match direction {
+                crate::tui::event::ScrollDirection::Up => {
+                    current.saturating_sub(rows.max(1) as usize)
+                }
+                crate::tui::event::ScrollDirection::Down => {
+                    (current + rows.max(1) as usize).min(100_000)
+                }
+            };
+            state.user_prompt_scroll.insert(target.message_index, next);
+            return true;
+        }
     }
     match direction {
         crate::tui::event::ScrollDirection::Up => state.transcript_scroll.page_up(rows),
@@ -1375,6 +1745,250 @@ mod lazy_session_history_input_tests {
         assert!(state.transcript_scroll.has_selection());
     }
 
+    fn install_empty_composer_hit(state: &mut crate::app::AppState) {
+        *state.composer_ui.hit_map.borrow_mut() = crate::tui::composer::ComposerHitMap {
+            text_area: Some((2, 10, 20, 3)),
+            rows: Vec::new(),
+            empty_placeholder: true,
+        };
+    }
+
+    fn install_text_composer_hit(
+        state: &mut crate::app::AppState,
+        rows: Vec<crate::tui::composer::ComposerRowHit>,
+    ) {
+        *state.composer_ui.hit_map.borrow_mut() = crate::tui::composer::ComposerHitMap {
+            text_area: Some((2, 10, 20, 3)),
+            rows,
+            empty_placeholder: false,
+        };
+    }
+
+    #[test]
+    fn click_empty_composer_places_caret_without_transcript_selection() {
+        let mut buffer = Buffer::empty(Rect::new(0, 1, 12, 1));
+        buffer.set_string(0, 1, "transcript", Style::default());
+        let mut state = crate::app::AppState::new(crate::context::ShellHistory::in_memory());
+        state
+            .transcript_scroll
+            .capture_selectable_frame(&buffer, Rect::new(0, 1, 12, 1));
+        install_empty_composer_hit(&mut state);
+        state.input_cursor = 0;
+
+        assert!(handle_mouse_selection(
+            &mut state,
+            selection_event(MouseSelectionPhase::Start, 5, 11),
+            |_| Ok(()),
+        ));
+        assert!(state.composer_ui.mouse_capture_active);
+        assert_eq!(state.input_cursor, 0);
+        assert!(!state.transcript_scroll.has_selection());
+        assert!(!state.transcript_scroll.is_dragging());
+
+        assert!(handle_mouse_selection(
+            &mut state,
+            selection_event(MouseSelectionPhase::End, 5, 11),
+            |_| Ok(()),
+        ));
+        assert!(!state.composer_ui.mouse_capture_active);
+        assert!(!state.transcript_scroll.has_selection());
+    }
+
+    #[test]
+    fn click_places_caret_at_nearest_grapheme_on_matching_row() {
+        let mut state = crate::app::AppState::new(crate::context::ShellHistory::in_memory());
+        state.input = "hello\nworld".into();
+        state.input_cursor = state.input.len();
+        // Row 0: "hello" at y=10 with prompt width 2 → cells x=2..7 for h,e,l,l,o
+        // boundaries: (0,0) (1,1) (2,2) (3,3) (4,4) (5,5) then newline row starts at 6
+        // Actually "hello\nworld" is two hard lines. Row 0 is "hello", row 1 is "world".
+        install_text_composer_hit(
+            &mut state,
+            vec![
+                crate::tui::composer::ComposerRowHit {
+                    y: 10,
+                    prefix_width: 2,
+                    boundaries: vec![(0, 0), (1, 1), (2, 2), (3, 3), (4, 4), (5, 5)],
+                },
+                crate::tui::composer::ComposerRowHit {
+                    y: 11,
+                    prefix_width: 2,
+                    boundaries: vec![(6, 0), (7, 1), (8, 2), (9, 3), (10, 4), (11, 5)],
+                },
+            ],
+        );
+
+        // Click just after "he" on the first row: content_x = 2+2 = 4, x=4 → column 0
+        // Wait: area_x=2, prefix=2, content starts at x=4. x=5 → column 1 → byte 1? No:
+        // "hello" boundaries: byte0 col0, byte1 col1, ... Click at x=6 → desired=6-4=2 → byte 2 ("l" of hello).
+        assert!(place_composer_cursor(&mut state, 6, 10));
+        assert_eq!(state.input_cursor, 2);
+
+        // Second row: content starts at x=4, click x=7 → desired 3 → byte 9 ("l" of world)
+        assert!(place_composer_cursor(&mut state, 7, 11));
+        assert_eq!(state.input_cursor, 9);
+    }
+
+    #[test]
+    fn click_snaps_into_atomic_element_edges() {
+        let mut state = crate::app::AppState::new(crate::context::ShellHistory::in_memory());
+        state.input = "ab[large]cd".into();
+        state.input_cursor = 0;
+        let input_len = state.input.len();
+        install_text_composer_hit(
+            &mut state,
+            vec![crate::tui::composer::ComposerRowHit {
+                y: 10,
+                prefix_width: 2,
+                boundaries: (0..=input_len).map(|byte| (byte, byte)).collect(),
+            }],
+        );
+        state
+            .composer_ui
+            .register_atomic(crate::tui::composer::AtomicElement {
+                range: 2..9,
+                kind: crate::tui::composer::AtomicKind::LargePaste {
+                    payload: "payload".into(),
+                },
+            });
+
+        // Click mid-atomic (byte 5) snaps to nearer start (2)
+        assert!(place_composer_cursor(&mut state, 4 + 5, 10));
+        assert_eq!(state.input_cursor, 2);
+        // Click nearer the end (byte 8) snaps to end (9)
+        assert!(place_composer_cursor(&mut state, 4 + 8, 10));
+        assert_eq!(state.input_cursor, 9);
+    }
+
+    #[test]
+    fn wheel_over_composer_scrolls_draft_not_caret_or_transcript() {
+        let mut state = crate::app::AppState::new(crate::context::ShellHistory::in_memory());
+        state.input = (0..20)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        state.input_cursor = state.input.len();
+        state.viewport_width = 40;
+        install_text_composer_hit(
+            &mut state,
+            vec![crate::tui::composer::ComposerRowHit {
+                y: 10,
+                prefix_width: 2,
+                boundaries: vec![(0, 0), (1, 1)],
+            }],
+        );
+        let cursor_before = state.input_cursor;
+        assert!(handle_mouse_scroll(
+            &mut state,
+            crate::tui::event::ScrollDirection::Down,
+            Some((5, 10)),
+            "/tmp",
+            3,
+        ));
+        assert_eq!(state.input_cursor, cursor_before);
+        assert!(state.composer_ui.viewport_top > 0);
+        assert!(handle_mouse_scroll(
+            &mut state,
+            crate::tui::event::ScrollDirection::Up,
+            Some((5, 10)),
+            "/tmp",
+            3,
+        ));
+    }
+
+    #[test]
+    fn wheel_over_paste_preview_scrolls_payload_window() {
+        let mut state = crate::app::AppState::new(crate::context::ShellHistory::in_memory());
+        let payload = (0..20)
+            .map(|i| format!("payload {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let marker = crate::tui::composer::large_paste_placeholder(payload.chars().count());
+        state.input = format!("look {marker}");
+        state.input_cursor = 5;
+        state
+            .composer_ui
+            .register_large_paste(5..5 + marker.len(), payload);
+        *state.composer_ui.paste_preview_hit.borrow_mut() = crate::tui::composer::PastePreviewHit {
+            x: 2,
+            y: 8,
+            width: 20,
+            height: 5,
+        };
+        assert!(handle_mouse_scroll(
+            &mut state,
+            crate::tui::event::ScrollDirection::Down,
+            Some((4, 9)),
+            "/tmp",
+            3,
+        ));
+        let index = state
+            .composer_ui
+            .active_large_paste_index(state.input_cursor)
+            .unwrap();
+        assert_eq!(
+            state.composer_ui.paste_preview_scroll.get(&index).copied(),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn wheel_over_user_prompt_card_scrolls_only_that_card() {
+        let mut state = crate::app::AppState::new(crate::context::ShellHistory::in_memory());
+        state.transcript_scroll.set_user_prompt_hit_targets(vec![
+            crate::tui::transcript::UserPromptHitTarget {
+                message_index: 2,
+                x: 0,
+                y: 4,
+                width: 40,
+                height: 6,
+            },
+        ]);
+        let transcript_before = state.transcript_scroll.bottom_offset();
+        assert!(handle_mouse_scroll(
+            &mut state,
+            crate::tui::event::ScrollDirection::Down,
+            Some((10, 5)),
+            "/tmp",
+            3,
+        ));
+        assert_eq!(state.user_prompt_scroll.get(&2).copied(), Some(3));
+        assert_eq!(state.transcript_scroll.bottom_offset(), transcript_before);
+    }
+
+    #[test]
+    fn click_outside_composer_text_keeps_selection_path() {
+        let mut buffer = Buffer::empty(Rect::new(0, 1, 12, 1));
+        buffer.set_string(0, 1, "select me", Style::default());
+        let mut state = crate::app::AppState::new(crate::context::ShellHistory::in_memory());
+        state
+            .transcript_scroll
+            .capture_selectable_frame(&buffer, Rect::new(0, 1, 12, 1));
+        install_empty_composer_hit(&mut state);
+        state.input_cursor = 0;
+
+        assert!(handle_mouse_selection(
+            &mut state,
+            selection_event(MouseSelectionPhase::Start, 0, 1),
+            |_| Ok(()),
+        ));
+        assert!(!state.composer_ui.mouse_capture_active);
+        assert!(handle_mouse_selection(
+            &mut state,
+            selection_event(MouseSelectionPhase::Drag, 5, 1),
+            |_| Ok(()),
+        ));
+        assert!(handle_mouse_selection(
+            &mut state,
+            selection_event(MouseSelectionPhase::End, 5, 1),
+            |_| Ok(()),
+        ));
+        assert_eq!(
+            state.status_message.as_deref(),
+            Some("Copied selection · 6 chars")
+        );
+    }
+
     #[test]
     fn pager_drag_targets_visible_pager_not_hidden_conversation() {
         let mut conversation = Buffer::empty(Rect::new(0, 1, 16, 2));
@@ -1492,6 +2106,45 @@ mod lazy_session_history_input_tests {
         assert!(handle_pager(&mut state, KeyCode::Esc));
         assert!(!state.pager_open);
         assert!(!state.learning_review_pager_open);
+    }
+
+    #[test]
+    fn learning_proposal_pager_answers_with_y_and_n() {
+        let mut state = crate::app::AppState::new(crate::context::ShellHistory::in_memory());
+        state.pager_open = true;
+        state.learning_review_pager_open = true;
+        state.learning_review_view = Some(crate::codex_learning::TuiLearningView {
+            kind: crate::codex_learning::TuiLearningViewKind::Proposal,
+            content: "proposal".into(),
+            evidence: None,
+            proposal: Some(crate::codex_learning::TuiProposalBinding {
+                digest: "c".repeat(64),
+                memory_items: 2,
+                skill_items: 0,
+            }),
+        });
+
+        assert!(handle_pager(&mut state, KeyCode::Char('y')));
+        assert_eq!(
+            state.pending_input_action,
+            Some(crate::tui::commands::InputAction::ConfirmLearningProposal)
+        );
+        state.pending_input_action = None;
+        assert!(handle_pager(&mut state, KeyCode::Char('N')));
+        assert_eq!(
+            state.pending_input_action,
+            Some(crate::tui::commands::InputAction::DeclineLearningProposal)
+        );
+
+        state.pending_input_action = None;
+        state.learning_review_view = Some(crate::codex_learning::TuiLearningView {
+            kind: crate::codex_learning::TuiLearningViewKind::Evidence,
+            content: "evidence".into(),
+            evidence: None,
+            proposal: None,
+        });
+        assert!(!handle_pager(&mut state, KeyCode::Char('y')));
+        assert!(state.pending_input_action.is_none());
     }
 
     #[test]
@@ -1810,6 +2463,158 @@ fn handle_setup_import_confirmation(state: &mut crate::app::AppState, code: KeyC
             state.setup_import_confirmation = None;
             state.status_message =
                 Some("Claude setup import cancelled; no files were written".into());
+        }
+        _ => {}
+    }
+    true
+}
+
+fn handle_plan_workflow_graph(state: &mut crate::app::AppState, code: KeyCode) -> bool {
+    let (count, paused, participant, document) = {
+        let work = state
+            .work_state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let graph = state.plan_workflow_graph.as_ref().expect("graph open");
+        let workflow = work.plan_workflow.as_ref();
+        let count = workflow.map_or(0, |workflow| {
+            if graph.participants {
+                workflow.participants.len()
+            } else {
+                workflow.steps.len()
+            }
+        });
+        let selected = graph.selected_idx.min(count.saturating_sub(1));
+        let participant = workflow
+            .and_then(|workflow| workflow.participants.get(selected))
+            .map(|participant| participant.id.clone());
+        let document = workflow.and_then(|workflow| {
+            workflow.steps.get(selected).map(|stage| {
+                let mut text = format!(
+                    "# {:?} · {}\n\nRoute: {}/{}\nStatus: {:?}\n",
+                    stage.role,
+                    stage.participant,
+                    stage.route.provider,
+                    stage.route.model,
+                    stage.status
+                );
+                if let Some(snapshot) = stage
+                    .result_snapshot
+                    .and_then(|index| workflow.snapshots.get(index))
+                    .or_else(|| {
+                        stage.source_plan.as_ref().and_then(|binding| {
+                            workflow
+                                .snapshots
+                                .iter()
+                                .find(|snapshot| snapshot.sha256 == binding.sha256)
+                        })
+                    })
+                {
+                    text.push_str(&format!("\n{}\n", snapshot.markdown));
+                }
+                if let Some(feedback) = &stage.feedback {
+                    text.push_str(&format!("\n## Feedback\n\n{feedback}\n"));
+                }
+                if let Some(summary) = &stage.result_summary {
+                    text.push_str(&format!("\n## Result\n\n{summary}\n"));
+                }
+                text
+            })
+        });
+        (
+            count,
+            workflow.is_some_and(|workflow| {
+                workflow.status == crate::plan_workflow::WorkflowStatus::Paused
+            }),
+            participant,
+            document,
+        )
+    };
+    match code {
+        KeyCode::Esc | KeyCode::Char('q') => state.plan_workflow_graph = None,
+        KeyCode::Tab | KeyCode::BackTab => {
+            if let Some(graph) = state.plan_workflow_graph.as_mut() {
+                graph.participants = !graph.participants;
+                graph.selected_idx = 0;
+            }
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if let Some(graph) = state.plan_workflow_graph.as_mut() {
+                graph.selected_idx = graph.selected_idx.saturating_sub(1);
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if let Some(graph) = state.plan_workflow_graph.as_mut() {
+                graph.selected_idx = graph
+                    .selected_idx
+                    .saturating_add(1)
+                    .min(count.saturating_sub(1));
+            }
+        }
+        KeyCode::Home => {
+            if let Some(graph) = state.plan_workflow_graph.as_mut() {
+                graph.selected_idx = 0;
+            }
+        }
+        KeyCode::End => {
+            if let Some(graph) = state.plan_workflow_graph.as_mut() {
+                graph.selected_idx = count.saturating_sub(1);
+            }
+        }
+        KeyCode::PageUp | KeyCode::PageDown => {
+            if let Some(graph) = state.plan_workflow_graph.as_mut() {
+                graph.selected_idx = if code == KeyCode::PageUp {
+                    graph.selected_idx.saturating_sub(4)
+                } else {
+                    graph
+                        .selected_idx
+                        .saturating_add(4)
+                        .min(count.saturating_sub(1))
+                };
+            }
+        }
+        KeyCode::Enter
+            if state
+                .plan_workflow_graph
+                .as_ref()
+                .is_some_and(|graph| graph.participants) =>
+        {
+            if let Some(participant) = participant {
+                state.plan_workflow_graph = None;
+                state.input = format!("/plan send revise {participant} ");
+                state.input_cursor = state.input.len();
+                state.slash_palette_open = false;
+                state.status_message = Some(
+                    "Add instructions or change revise/review, then press Enter to send.".into(),
+                );
+            }
+        }
+        KeyCode::Enter => {
+            if let Some(document) = document {
+                state.plan_reader = None;
+                state.pager_content = document;
+                state.pager_scroll = 0;
+                state.pager_selection.clear_selection();
+                state.learning_review_pager_open = false;
+                state.pager_open = true;
+            }
+        }
+        KeyCode::Char('s' | 'S' | 'e' | 'E' | 'p' | 'P' | 'c' | 'C') => {
+            let command = match code {
+                KeyCode::Char('s' | 'S') => "send",
+                KeyCode::Char('e' | 'E') => "execute choose",
+                KeyCode::Char('p' | 'P') => {
+                    if paused {
+                        "resume"
+                    } else {
+                        "pause"
+                    }
+                }
+                _ => "cancel",
+            };
+            if let Err(error) = crate::plan::manage_command(state, command) {
+                state.status_message = Some(error);
+            }
         }
         _ => {}
     }
@@ -2413,6 +3218,8 @@ fn request_interrupt_submission(state: &mut crate::app::AppState) {
 fn dispatch_key_action(state: &mut crate::app::AppState, action: crate::keymap::KeyAction) {
     use crate::keymap::KeyAction;
     match action {
+        KeyAction::ComposerUndo => state.undo_composer(),
+        KeyAction::ComposerRedo => state.redo_composer(),
         KeyAction::ModelPicker => open_model_picker(state),
         KeyAction::OpenEditor => {
             state.pending_input_action = Some(crate::tui::commands::InputAction::OpenEditor)
@@ -2637,7 +3444,13 @@ fn focus_latest_agent_activity(state: &mut crate::app::AppState) {
     let live = state
         .live_agent_activity
         .iter()
-        .filter(|agent| agent.origin == crate::agent::subagent::AgentRunOrigin::Conversation)
+        .filter(|agent| {
+            matches!(
+                agent.origin,
+                crate::agent::subagent::AgentRunOrigin::Conversation
+                    | crate::agent::subagent::AgentRunOrigin::AutomaticReview
+            )
+        })
         .max_by_key(|agent| agent.updated_at);
     let persisted = state
         .transcript_agent_summaries
@@ -2669,7 +3482,7 @@ struct FocusAgentRow {
     id: crate::agent::subagent::AgentId,
     status: crate::agent::subagent::AgentStatus,
     live: bool,
-    updated_at: chrono::DateTime<chrono::Utc>,
+    order_at: chrono::DateTime<chrono::Utc>,
 }
 
 fn focused_agent_rows(state: &crate::app::AppState, turn_id: uuid::Uuid) -> Vec<FocusAgentRow> {
@@ -2677,14 +3490,17 @@ fn focused_agent_rows(state: &crate::app::AppState, turn_id: uuid::Uuid) -> Vec<
         .live_agent_activity
         .iter()
         .filter(|agent| {
-            agent.origin == crate::agent::subagent::AgentRunOrigin::Conversation
-                && agent.parent_turn == turn_id
+            matches!(
+                agent.origin,
+                crate::agent::subagent::AgentRunOrigin::Conversation
+                    | crate::agent::subagent::AgentRunOrigin::AutomaticReview
+            ) && agent.parent_turn == turn_id
         })
         .map(|agent| FocusAgentRow {
             id: agent.id,
             status: agent.status.clone(),
             live: true,
-            updated_at: agent.updated_at,
+            order_at: agent.created_at,
         })
         .collect::<Vec<_>>();
     let live_ids = rows
@@ -2700,10 +3516,10 @@ fn focused_agent_rows(state: &crate::app::AppState, turn_id: uuid::Uuid) -> Vec<
                 id: summary.agent_id,
                 status: summary.status.clone(),
                 live: false,
-                updated_at: summary.updated_at,
+                order_at: summary.created_at.unwrap_or(summary.updated_at),
             }),
     );
-    rows.sort_by_key(|row| row.updated_at);
+    rows.sort_by_key(|row| (row.order_at, row.id.0));
     rows
 }
 
@@ -3847,9 +4663,20 @@ fn handle_model_picker(
     code: KeyCode,
     modifiers: KeyModifiers,
 ) -> bool {
+    if state.model_picker_target == crate::app::ModelPickerTarget::PlanWorkflow
+        && modifiers.contains(KeyModifiers::SHIFT)
+        && matches!(code, KeyCode::Char('A' | 'a' | 'P' | 'p' | 'E' | 'e'))
+    {
+        state.status_message = Some("Use /provider to add or edit plan agent routes.".into());
+        return true;
+    }
+    state.selected_model_idx = state
+        .selected_model_idx
+        .min(visible_model_count(state).saturating_sub(1));
     match code {
         KeyCode::Esc => {
             state.model_picker_open = false;
+            state.plan_workflow_picker_action = None;
             state.model_picker_target = crate::app::ModelPickerTarget::Current;
         }
         KeyCode::Enter => {
@@ -3888,6 +4715,12 @@ fn handle_model_picker(
                     }
                     crate::app::ModelPickerTarget::MultiRun(candidate) => {
                         crate::tui::commands::InputAction::SelectMultiRunRoute { candidate, model }
+                    }
+                    crate::app::ModelPickerTarget::PlanWorkflow => {
+                        crate::plan::select_workflow_model(state, model);
+                        state.model_picker_open = false;
+                        state.model_picker_target = crate::app::ModelPickerTarget::Current;
+                        return true;
                     }
                 });
                 state.model_picker_open = false;
@@ -4021,7 +4854,10 @@ fn handle_model_picker(
                     ));
             }
         }
-        KeyCode::Char('R') | KeyCode::Char('r') if modifiers.contains(KeyModifiers::SHIFT) => {
+        KeyCode::Char('R') | KeyCode::Char('r')
+            if !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                && (code == KeyCode::Char('R') || modifiers.contains(KeyModifiers::SHIFT)) =>
+        {
             if !state.model_catalog_refreshing {
                 state.model_catalog_refresh_provider = None;
                 state.model_catalog_refresh_requested = true;
@@ -4199,6 +5035,10 @@ fn handle_multi_run_manager(
                             && model.id == candidate.definition.route.model
                     })
                     .unwrap_or(0);
+                if !state.model_catalog_loaded {
+                    state.model_catalog_refresh_provider = None;
+                    state.model_catalog_refresh_requested = true;
+                }
             }
         }
         KeyCode::Char('S' | 's')
@@ -4297,7 +5137,7 @@ pub fn open_model_picker(state: &mut crate::app::AppState) {
                 .position(|row| &row.model == current)
         })
         .unwrap_or(0);
-    if !state.model_catalog_loaded && !state.model_catalog_refreshing {
+    if !state.model_catalog_loaded {
         state.model_catalog_refresh_provider = None;
         state.model_catalog_refresh_requested = true;
     }
@@ -4314,7 +5154,7 @@ pub fn open_review_model_picker(state: &mut crate::app::AppState, selected: Opti
                 .position(|row| &row.model == selected)
         })
         .unwrap_or(0);
-    if !state.model_catalog_loaded && !state.model_catalog_refreshing {
+    if !state.model_catalog_loaded {
         state.model_catalog_refresh_provider = None;
         state.model_catalog_refresh_requested = true;
     }
@@ -4339,7 +5179,7 @@ pub fn open_delegation_model_picker(
             })
         })
         .map_or(0, |index| index + 1);
-    if !state.model_catalog_loaded && !state.model_catalog_refreshing {
+    if !state.model_catalog_loaded {
         state.model_catalog_refresh_provider = None;
         state.model_catalog_refresh_requested = true;
     }
@@ -4377,6 +5217,7 @@ fn visible_model_count(state: &crate::app::AppState) -> usize {
 pub(crate) fn selected_picker_model(state: &crate::app::AppState) -> Option<ModelInfo> {
     let index = state
         .selected_model_idx
+        .min(visible_model_count(state).saturating_sub(1))
         .checked_sub(usize::from(delegation_inherit_visible(state)))?;
     visible_model_rows(state)
         .get(index)
@@ -4786,7 +5627,9 @@ fn handle_provider_setup_provider(
                 ));
         }
         KeyCode::Char('R') | KeyCode::Char('r')
-            if modifiers.contains(KeyModifiers::SHIFT) && !state.model_catalog_refreshing =>
+            if !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                && (code == KeyCode::Char('R') || modifiers.contains(KeyModifiers::SHIFT))
+                && !state.model_catalog_refreshing =>
         {
             state.model_catalog_refresh_provider = Some(provider.to_string());
             state.model_catalog_refresh_requested = true;
@@ -4881,7 +5724,9 @@ fn handle_provider_list(
                 };
                 manager.model_filter.clear();
                 manager.selected_model_idx = selected_model_idx;
-                if !state.model_catalog_loaded && !state.model_catalog_refreshing {
+                if entry.configured && !state.model_catalog_provider_status.contains_key(&entry.id)
+                {
+                    state.model_catalog_refresh_provider = Some(entry.id);
                     state.model_catalog_refresh_requested = true;
                 }
             } else {
@@ -4956,6 +5801,19 @@ fn handle_provider_list(
             {
                 begin_provider_auth(state, provider);
                 return true;
+            }
+        }
+        KeyCode::Char('R') | KeyCode::Char('r')
+            if !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                && (code == KeyCode::Char('R') || modifiers.contains(KeyModifiers::SHIFT)) =>
+        {
+            if !state.model_catalog_refreshing {
+                if let Some(entry) = selected.filter(|entry| entry.configured) {
+                    state.model_catalog_refresh_provider = Some(entry.id);
+                    state.model_catalog_refresh_requested = true;
+                } else {
+                    manager.error = Some("Connect a provider before refreshing its models".into());
+                }
             }
         }
         KeyCode::Char(character)
@@ -5464,8 +6322,13 @@ fn handle_provider_models(
     code: KeyCode,
     modifiers: KeyModifiers,
 ) -> bool {
-    let selected = selected_provider_model(state, provider).cloned();
     let visible_model_count = visible_provider_model_count(state, provider);
+    if let Some(manager) = state.provider_manager.as_mut() {
+        manager.selected_model_idx = manager
+            .selected_model_idx
+            .min(visible_model_count.saturating_sub(1));
+    }
+    let selected = selected_provider_model(state, provider).cloned();
     let fallback_context = provider_models(state, provider).first().copied().cloned();
     let Some(manager) = state.provider_manager.as_mut() else {
         return false;
@@ -5537,7 +6400,10 @@ fn handle_provider_models(
                 manager.error = Some("No matching models".into());
             }
         }
-        KeyCode::Char('R') | KeyCode::Char('r') if modifiers.contains(KeyModifiers::SHIFT) => {
+        KeyCode::Char('R') | KeyCode::Char('r')
+            if !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                && (code == KeyCode::Char('R') || modifiers.contains(KeyModifiers::SHIFT)) =>
+        {
             if !state.model_catalog_refreshing {
                 state.model_catalog_refresh_provider = Some(provider.to_string());
                 state.model_catalog_refresh_requested = true;
@@ -5698,52 +6564,88 @@ fn handle_provider_editor(
             let backwards = code == KeyCode::BackTab || modifiers.contains(KeyModifiers::SHIFT);
             let editing_existing = editor.mode != crate::app::ProviderEditorMode::AddProvider;
             let editing_provider = editor.mode == crate::app::ProviderEditorMode::EditProvider;
-            editor.field = match (editing_existing, backwards, editor.field) {
-                (_, false, ProviderEditorField::BaseUrl) if editing_provider => {
-                    ProviderEditorField::ApiKey
+            let vertex = editor
+                .draft
+                .google
+                .as_ref()
+                .is_some_and(|settings| settings.mode == crate::google_auth::Mode::Vertex);
+            editor.field = if vertex {
+                let fields: &[ProviderEditorField] = if editing_provider {
+                    &[
+                        ProviderEditorField::BaseUrl,
+                        ProviderEditorField::GoogleProject,
+                        ProviderEditorField::GoogleLocation,
+                        ProviderEditorField::GoogleQuotaProject,
+                    ]
+                } else {
+                    &[
+                        ProviderEditorField::BaseUrl,
+                        ProviderEditorField::GoogleProject,
+                        ProviderEditorField::GoogleLocation,
+                        ProviderEditorField::GoogleQuotaProject,
+                        ProviderEditorField::Model,
+                    ]
+                };
+                let index = fields
+                    .iter()
+                    .position(|field| *field == editor.field)
+                    .unwrap_or(0);
+                fields[(index + if backwards { fields.len() - 1 } else { 1 }) % fields.len()]
+            } else {
+                match (editing_existing, backwards, editor.field) {
+                    (
+                        _,
+                        _,
+                        ProviderEditorField::GoogleProject
+                        | ProviderEditorField::GoogleLocation
+                        | ProviderEditorField::GoogleQuotaProject,
+                    ) => ProviderEditorField::BaseUrl,
+                    (_, false, ProviderEditorField::BaseUrl) if editing_provider => {
+                        ProviderEditorField::ApiKey
+                    }
+                    (_, false, ProviderEditorField::ApiKey) if editing_provider => {
+                        ProviderEditorField::ApiKeyEnv
+                    }
+                    (_, false, ProviderEditorField::ApiKeyEnv) if editing_provider => {
+                        ProviderEditorField::BaseUrl
+                    }
+                    (_, false, ProviderEditorField::PromptCache) if editing_provider => {
+                        ProviderEditorField::BaseUrl
+                    }
+                    (_, true, ProviderEditorField::BaseUrl) if editing_provider => {
+                        ProviderEditorField::ApiKeyEnv
+                    }
+                    (_, true, ProviderEditorField::PromptCache) if editing_provider => {
+                        ProviderEditorField::ApiKeyEnv
+                    }
+                    (_, true, ProviderEditorField::ApiKey) if editing_provider => {
+                        ProviderEditorField::BaseUrl
+                    }
+                    (_, true, ProviderEditorField::ApiKeyEnv) if editing_provider => {
+                        ProviderEditorField::ApiKey
+                    }
+                    (true, false, ProviderEditorField::BaseUrl) => ProviderEditorField::ApiKey,
+                    (true, false, ProviderEditorField::ApiKey) => ProviderEditorField::ApiKeyEnv,
+                    (true, false, ProviderEditorField::ApiKeyEnv) => ProviderEditorField::Model,
+                    (true, false, ProviderEditorField::Model) => ProviderEditorField::BaseUrl,
+                    (true, true, ProviderEditorField::BaseUrl) => ProviderEditorField::Model,
+                    (true, true, ProviderEditorField::ApiKey) => ProviderEditorField::BaseUrl,
+                    (true, true, ProviderEditorField::ApiKeyEnv) => ProviderEditorField::ApiKey,
+                    (true, true, ProviderEditorField::Model) => ProviderEditorField::ApiKeyEnv,
+                    (true, _, ProviderEditorField::PromptCache) => ProviderEditorField::BaseUrl,
+                    (false, false, ProviderEditorField::Provider) => ProviderEditorField::BaseUrl,
+                    (false, false, ProviderEditorField::BaseUrl) => ProviderEditorField::ApiKey,
+                    (false, false, ProviderEditorField::ApiKey) => ProviderEditorField::ApiKeyEnv,
+                    (false, false, ProviderEditorField::ApiKeyEnv) => ProviderEditorField::Model,
+                    (false, false, ProviderEditorField::Model) => ProviderEditorField::Provider,
+                    (false, true, ProviderEditorField::Provider) => ProviderEditorField::Model,
+                    (false, true, ProviderEditorField::BaseUrl) => ProviderEditorField::Provider,
+                    (false, true, ProviderEditorField::ApiKey) => ProviderEditorField::BaseUrl,
+                    (false, true, ProviderEditorField::ApiKeyEnv) => ProviderEditorField::ApiKey,
+                    (false, true, ProviderEditorField::Model) => ProviderEditorField::ApiKeyEnv,
+                    (false, _, ProviderEditorField::PromptCache) => ProviderEditorField::Provider,
+                    (true, _, ProviderEditorField::Provider) => ProviderEditorField::BaseUrl,
                 }
-                (_, false, ProviderEditorField::ApiKey) if editing_provider => {
-                    ProviderEditorField::ApiKeyEnv
-                }
-                (_, false, ProviderEditorField::ApiKeyEnv) if editing_provider => {
-                    ProviderEditorField::BaseUrl
-                }
-                (_, false, ProviderEditorField::PromptCache) if editing_provider => {
-                    ProviderEditorField::BaseUrl
-                }
-                (_, true, ProviderEditorField::BaseUrl) if editing_provider => {
-                    ProviderEditorField::ApiKeyEnv
-                }
-                (_, true, ProviderEditorField::PromptCache) if editing_provider => {
-                    ProviderEditorField::ApiKeyEnv
-                }
-                (_, true, ProviderEditorField::ApiKey) if editing_provider => {
-                    ProviderEditorField::BaseUrl
-                }
-                (_, true, ProviderEditorField::ApiKeyEnv) if editing_provider => {
-                    ProviderEditorField::ApiKey
-                }
-                (true, false, ProviderEditorField::BaseUrl) => ProviderEditorField::ApiKey,
-                (true, false, ProviderEditorField::ApiKey) => ProviderEditorField::ApiKeyEnv,
-                (true, false, ProviderEditorField::ApiKeyEnv) => ProviderEditorField::Model,
-                (true, false, ProviderEditorField::Model) => ProviderEditorField::BaseUrl,
-                (true, true, ProviderEditorField::BaseUrl) => ProviderEditorField::Model,
-                (true, true, ProviderEditorField::ApiKey) => ProviderEditorField::BaseUrl,
-                (true, true, ProviderEditorField::ApiKeyEnv) => ProviderEditorField::ApiKey,
-                (true, true, ProviderEditorField::Model) => ProviderEditorField::ApiKeyEnv,
-                (true, _, ProviderEditorField::PromptCache) => ProviderEditorField::BaseUrl,
-                (false, false, ProviderEditorField::Provider) => ProviderEditorField::BaseUrl,
-                (false, false, ProviderEditorField::BaseUrl) => ProviderEditorField::ApiKey,
-                (false, false, ProviderEditorField::ApiKey) => ProviderEditorField::ApiKeyEnv,
-                (false, false, ProviderEditorField::ApiKeyEnv) => ProviderEditorField::Model,
-                (false, false, ProviderEditorField::Model) => ProviderEditorField::Provider,
-                (false, true, ProviderEditorField::Provider) => ProviderEditorField::Model,
-                (false, true, ProviderEditorField::BaseUrl) => ProviderEditorField::Provider,
-                (false, true, ProviderEditorField::ApiKey) => ProviderEditorField::BaseUrl,
-                (false, true, ProviderEditorField::ApiKeyEnv) => ProviderEditorField::ApiKey,
-                (false, true, ProviderEditorField::Model) => ProviderEditorField::ApiKeyEnv,
-                (false, _, ProviderEditorField::PromptCache) => ProviderEditorField::Provider,
-                (true, _, ProviderEditorField::Provider) => ProviderEditorField::BaseUrl,
             };
             editor.cursor = provider_editor_value_len(editor);
         }
@@ -5798,6 +6700,30 @@ fn provider_editor_string_value(
         crate::app::ProviderEditorField::BaseUrl => Some(&mut editor.draft.base_url),
         crate::app::ProviderEditorField::ApiKey => None,
         crate::app::ProviderEditorField::ApiKeyEnv => Some(&mut editor.draft.api_key_env),
+        crate::app::ProviderEditorField::GoogleProject => Some(
+            editor
+                .draft
+                .google
+                .as_mut()?
+                .project_id
+                .get_or_insert_with(String::new),
+        ),
+        crate::app::ProviderEditorField::GoogleLocation => Some(
+            editor
+                .draft
+                .google
+                .as_mut()?
+                .location
+                .get_or_insert_with(String::new),
+        ),
+        crate::app::ProviderEditorField::GoogleQuotaProject => Some(
+            editor
+                .draft
+                .google
+                .as_mut()?
+                .quota_project_id
+                .get_or_insert_with(String::new),
+        ),
         crate::app::ProviderEditorField::PromptCache => None,
         crate::app::ProviderEditorField::Model => Some(&mut editor.draft.model),
     }
@@ -8513,6 +9439,9 @@ fn cycle_model_prompt_cache_value(
                         Some(PromptCacheUsageFormat::OpenAiDetails),
                     ]
                 }
+                crate::agent::ProviderProtocol::GoogleGenerateContent => {
+                    vec![None, Some(PromptCacheUsageFormat::Auto)]
+                }
                 crate::agent::ProviderProtocol::AnthropicMessages => {
                     vec![
                         None,
@@ -8771,9 +9700,6 @@ fn handle_session_picker(
             }
         }
         KeyCode::Char('D') | KeyCode::Char('d') if modifiers.contains(KeyModifiers::SHIFT) => {
-            if state.session_picker_view == crate::app::SessionPickerView::Archive {
-                return true;
-            }
             if let Some(summary) = selected_session_summary(state) {
                 if state.current_session.as_ref().map(|session| session.id) == Some(summary.id) {
                     state.session_picker_error =
@@ -8785,6 +9711,8 @@ fn handle_session_picker(
                             storage_key: summary.storage_key.clone(),
                             session_id: summary.id,
                             title: summary.title.clone(),
+                            archived: state.session_picker_view
+                                == crate::app::SessionPickerView::Archive,
                             delete_selected: false,
                             busy: false,
                             error: None,
@@ -9014,6 +9942,7 @@ fn handle_session_delete_confirmation(state: &mut crate::app::AppState, code: Ke
             state.pending_input_action = Some(crate::tui::commands::InputAction::DeleteSession {
                 storage_key: confirmation.storage_key.clone(),
                 expected_id: confirmation.session_id,
+                archived: confirmation.archived,
             });
         }
         KeyCode::Enter => state.session_delete_confirmation = None,
@@ -9061,6 +9990,11 @@ fn handle_pager(state: &mut crate::app::AppState, code: KeyCode) -> bool {
                 ));
             }
             KeyCode::Char('r' | 'R') => crate::plan::revise(state),
+            KeyCode::Char('s' | 'S') => {
+                if let Err(error) = crate::plan::manage_command(state, "send") {
+                    state.status_message = Some(error);
+                }
+            }
             KeyCode::Char('n' | 'N') => {
                 if let Err(error) = crate::plan::comment_selection(state) {
                     state.status_message = Some(error);
@@ -9088,7 +10022,22 @@ fn handle_pager(state: &mut crate::app::AppState, code: KeyCode) -> bool {
         }
         return true;
     }
+    if state.plan_workflow_graph.is_some() && code == KeyCode::Enter {
+        // Historical stage documents are inspection-only; do not let Enter
+        // fall through to the composer or execute an earlier plan revision.
+        return true;
+    }
     match code {
+        KeyCode::Char('y' | 'Y') if learning_proposal_pager(state) => {
+            state.pending_input_action =
+                Some(crate::tui::commands::InputAction::ConfirmLearningProposal);
+            true
+        }
+        KeyCode::Char('n' | 'N') if learning_proposal_pager(state) => {
+            state.pending_input_action =
+                Some(crate::tui::commands::InputAction::DeclineLearningProposal);
+            true
+        }
         KeyCode::Enter if state.learning_review_pager_open => {
             state.pending_input_action =
                 Some(crate::tui::commands::InputAction::OpenLearningReviewActions);
@@ -9135,6 +10084,15 @@ fn handle_pager(state: &mut crate::app::AppState, code: KeyCode) -> bool {
         }
         _ => false,
     }
+}
+
+fn learning_proposal_pager(state: &crate::app::AppState) -> bool {
+    state.learning_review_pager_open
+        && !state.learning_review_busy
+        && state.learning_review_view.as_ref().is_some_and(|view| {
+            view.kind == crate::codex_learning::TuiLearningViewKind::Proposal
+                && view.proposal.is_some()
+        })
 }
 
 fn copy_pager_content<F>(state: &mut crate::app::AppState, copy: F)
@@ -9381,15 +10339,7 @@ fn handle_vim_normal(state: &mut crate::app::AppState, code: KeyCode) -> bool {
             true
         }
         KeyCode::Char('u') => {
-            // Simple undo: revert last insert_char if we tracked it
-            // For now, restore from history if available
-            if let Some(prev) = state.input_history.last() {
-                state.input = prev.clone();
-                state.input_cursor = state.input.len();
-                state.composer_ui.clear_for_new_draft();
-                state.composer_attachments.clear();
-                state.pasted_images.clear();
-            }
+            state.undo_composer();
             true
         }
         KeyCode::Char('y') => {
@@ -9737,6 +10687,7 @@ mod session_picker_tests {
             Some(crate::tui::commands::InputAction::DeleteSession {
                 storage_key: "saved".into(),
                 expected_id: id,
+                archived: false,
             })
         );
         handle_event(
@@ -9804,6 +10755,16 @@ mod session_picker_tests {
             state.session_picker_error.as_deref(),
             Some("Restore this session before resuming")
         );
+
+        handle_event(
+            &mut state,
+            &Event::Key(KeyCode::Char('D'), KeyModifiers::SHIFT),
+            "/workspace/ca",
+        );
+        let confirmation = state.session_delete_confirmation.as_ref().unwrap();
+        assert!(confirmation.archived);
+        assert_eq!(confirmation.session_id, archived);
+        assert!(!confirmation.delete_selected);
     }
 
     #[test]
@@ -12508,6 +13469,22 @@ mod multi_run_input_tests {
             manager.context_snapshot.clone(),
         ));
         state
+    }
+
+    #[test]
+    fn candidate_picker_queues_initial_full_catalog_while_provider_refreshes() {
+        let mut state = preview_state();
+        state.model_catalog_refreshing = true;
+        state.model_catalog_refresh_provider = Some("alpha".into());
+        handle_event(
+            &mut state,
+            &Event::Key(KeyCode::Enter, KeyModifiers::NONE),
+            "/workspace/ca",
+        );
+        assert!(state.model_picker_open);
+        assert!(state.model_catalog_refresh_requested);
+        assert!(state.model_catalog_refresh_provider.is_none());
+        assert!(state.model_catalog_refreshing);
     }
 
     #[test]

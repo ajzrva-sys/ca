@@ -55,6 +55,27 @@ pub struct ActivityHitTarget {
     pub right: u16,
 }
 
+/// Screen-space rect of a sent user-prompt card for local wheel scrolling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UserPromptHitTarget {
+    pub message_index: usize,
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+}
+
+impl UserPromptHitTarget {
+    pub fn contains(self, column: u16, row: u16) -> bool {
+        self.width > 0
+            && self.height > 0
+            && column >= self.x
+            && row >= self.y
+            && column < self.x.saturating_add(self.width)
+            && row < self.y.saturating_add(self.height)
+    }
+}
+
 impl SelectableFrame {
     fn contains_screen(&self, x: u16, y: u16) -> bool {
         self.area.contains(Position::new(x, y))
@@ -115,6 +136,7 @@ pub struct TranscriptScrollState {
     selectable_frame: RefCell<SelectableFrame>,
     selection: RefCell<Option<VisibleSelection>>,
     activity_hit_targets: RefCell<Vec<ActivityHitTarget>>,
+    user_prompt_hit_targets: RefCell<Vec<UserPromptHitTarget>>,
 }
 
 impl TranscriptScrollState {
@@ -253,6 +275,22 @@ impl TranscriptScrollState {
 
     pub fn clear_activity_hit_targets(&self) {
         self.activity_hit_targets.borrow_mut().clear();
+    }
+
+    pub fn set_user_prompt_hit_targets(&self, targets: Vec<UserPromptHitTarget>) {
+        *self.user_prompt_hit_targets.borrow_mut() = targets;
+    }
+
+    pub fn clear_user_prompt_hit_targets(&self) {
+        self.user_prompt_hit_targets.borrow_mut().clear();
+    }
+
+    pub fn user_prompt_target_at(&self, x: u16, y: u16) -> Option<UserPromptHitTarget> {
+        self.user_prompt_hit_targets
+            .borrow()
+            .iter()
+            .copied()
+            .find(|target| target.contains(x, y))
     }
 
     pub fn activity_key_for_click_release(

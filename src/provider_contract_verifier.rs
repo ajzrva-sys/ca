@@ -394,6 +394,9 @@ async fn stream_turn(
                 crate::agent::stream::ProviderResponseItem::ResponsesOutput { item, .. } => {
                     serde_json::to_vec(item).map_or(MAX_STREAM_BYTES + 1, |value| value.len())
                 }
+                crate::agent::stream::ProviderResponseItem::NativeContent { content, .. } => {
+                    serde_json::to_vec(content).map_or(0, |bytes| bytes.len())
+                }
                 crate::agent::stream::ProviderResponseItem::ChatReasoning { content, .. } => {
                     content.len()
                 }
@@ -516,7 +519,10 @@ mod tests {
         ) -> Result<crate::agent::stream::AssembledAssistantTurn, ProviderError> {
             let call = self.calls.fetch_add(1, Ordering::AcqRel) + 1;
             if self.fail_on == Some(call) {
-                return Err(ProviderError::Http { status: 500 });
+                return Err(ProviderError::Http {
+                    status: 500,
+                    body_excerpt: None,
+                });
             }
             let usage = Some(crate::agent::stream::UsageInfo {
                 prompt_tokens: 4,
@@ -578,6 +584,8 @@ mod tests {
         config.providers.insert(
             "openai".into(),
             ProviderConfig {
+                google: None,
+                tool_schema_policy: Default::default(),
                 base_url: "https://api.openai.com/v1".into(),
                 api_key: "not-used".into(),
                 protocol: crate::agent::ProviderProtocol::OpenAiResponses,
@@ -639,6 +647,8 @@ mod tests {
         config.providers.insert(
             "mimo".into(),
             ProviderConfig {
+                google: None,
+                tool_schema_policy: Default::default(),
                 base_url: "https://proxy.example/v1".into(),
                 api_key: "secret".into(),
                 protocol: crate::agent::ProviderProtocol::OpenAiResponses,

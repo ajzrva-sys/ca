@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&discovery, 100, 30),\nrender_to_text(&discovery, 60, 24))"
 ---
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
 
 
@@ -16,11 +16,11 @@ expression: "wide_narrow(render_to_text(&discovery, 100, 30),\nrender_to_text(&d
 
 
 
-  ┌ Commands 1/114 ──────────────────────────────────────────────────────────────────────────────┐
+  ┌ Commands 1/116 ──────────────────────────────────────────────────────────────────────────────┐
   │▸ /model [model-id] [--once]     Switch model                                                 │
   │  /sessions [session-id]         Browse and continue previous sessions                        │
   │  /dashboard                     Open the agent dashboard                                     │
-  │  /permissions [filter]          Inspect and remove permission rules                          │
+  │  /permissions [filter|why]      Inspect permission rules and recent decisions                │
   │  /diff                          Review working-tree changes                                  │
   │  /review [working|base <branch>|commit <sha>|custom <instructions>|converge [--ack-unpriced] │
   │[SCOPE]]                                                                                      │
@@ -28,12 +28,12 @@ expression: "wide_narrow(render_to_text(&discovery, 100, 30),\nrender_to_text(&d
   │  /context                       Show context usage and checkpoint coverage                   │
   │  /usage                        Show context, account, and session usage in a tabbed dashboard│
   └ ↑↓ select · Tab complete · Enter choose · Esc dismiss ───────────────────────────────────────┘
-────────────────────────────────────────────────────────────────────────────────────────────────────
- → /▌
-
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│› /▌                                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
 ↑↓ select · Tab complete · Enter choose · Esc dismiss
 -- narrow --
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
 
 
 
@@ -41,19 +41,19 @@ expression: "wide_narrow(render_to_text(&discovery, 100, 30),\nrender_to_text(&d
 
 
 
-  ┌ Commands 1/114 ──────────────────────────────────────┐
+  ┌ Commands 1/116 ──────────────────────────────────────┐
   │▸ /model [model-id] [--once]                          │
   │    Switch model                                      │
   │  /sessions [session-id]                              │
   │    Browse and continue previous sessions             │
   │  /dashboard                                          │
   │    Open the agent dashboard                          │
-  │  /permissions [filter]                               │
-  │    Inspect and remove permission rules               │
+  │  /permissions [filter|why]                           │
+  │    Inspect permission rules and recent decisions     │
   │  /diff                                               │
   │    Review working-tree changes                       │
   └ ↑↓ select · Tab complete · Enter choose · Esc dismiss┘
-────────────────────────────────────────────────────────────
- → /▌
-
+╭──────────────────────────────────────────────────────────╮
+│› /▌                                                      │
+╰──────────────────────────────────────────── agent · auto ╯
 ↑↓ select · Tab complete · Enter choose · Esc dismiss

@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&chips, 100, 30), render_to_text(&chips, 60, 24))"
 ---
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
 
 
@@ -22,16 +22,17 @@ expression: "wide_narrow(render_to_text(&chips, 100, 30), render_to_text(&chips,
 
 
 
-
-
-
-
-
-────────────────────────────────────────────────────────────────────────────────────────────────────
- [1 image attachment]
- → Review @src/main.rs and [Pasted Content 12438 chars]▌
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│[1 image attachment]                                                                              │
+│[Pasted Content 12438 chars]                                                                      │
+│xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…│
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│› Review @src/main.rs and [Pasted Content 12438 chars]▌                                           │
+╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
 -- narrow --
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
 
 
 
@@ -45,11 +46,12 @@ expression: "wide_narrow(render_to_text(&chips, 100, 30), render_to_text(&chips,
 
 
 
-
-
-
-
-
-────────────────────────────────────────────────────────────
- [1 image attachment]
- → Review @src/main.rs and [Pasted Content 12438 chars]▌
+╭──────────────────────────────────────────────────────────╮
+│[1 image attachment]                                      │
+│[Pasted Content 12438 chars]                              │
+│xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…│
+│                                                          │
+│                                                          │
+│                                                          │
+│› Review @src/main.rs and [Pasted Content 12438 chars]▌   │
+╰──────────────────────────────────────────── agent · auto ╯

@@ -37,6 +37,32 @@ const EVENT_HASH_DOMAIN: &[u8] = b"ca-rnd-ledger-event-v1\0";
 const RESERVATION_ID_DOMAIN: &[u8] = b"ca-rnd-reservation-v1\0";
 const BINDING_HASH_DOMAIN: &[u8] = b"ca-rnd-ledger-binding-v1\0";
 const PRICE_CARD_HASH_DOMAIN: &[u8] = b"ca-rnd-price-card-v1\0";
+const OFFICIAL_PRICE_RECEIPT_SCHEMA: &str = "ca.rnd097.official_price_card.v1";
+const OFFICIAL_PRICE_RECEIPT_BYTES: u64 = 128 * 1024;
+const OFFICIAL_PRICE_URLS: [&str; 3] = [
+    "https://developers.openai.com/api/docs/models/compare",
+    "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+    "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
+];
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OfficialPriceSourceV1 {
+    url: String,
+    sha256: String,
+    bytes: u32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OfficialPriceCardReceiptV1 {
+    schema_version: String,
+    preregistration_sha256: String,
+    frozen_at: String,
+    sources: Vec<OfficialPriceSourceV1>,
+    price_card: FrozenPriceCardV1,
+    price_card_sha256: String,
+}
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AttoUsd(u128);
@@ -51,6 +77,12 @@ impl AttoUsd {
 
     pub const fn as_atto(self) -> u128 {
         self.0
+    }
+
+    /// Shared daily accounting rounds every physical charge upward so the
+    /// finer-grained experiment ledger can never understate machine spend.
+    pub fn ceil_microusd(self) -> Result<u64, LedgerError> {
+        u64::try_from(self.0.div_ceil(1_000_000_000_000)).map_err(|_| LedgerError::MoneyOverflow)
     }
 
     pub fn parse_usd(value: &str) -> Result<Self, LedgerError> {
@@ -708,6 +740,98 @@ impl ExperimentLedger {
 
     pub fn price_card(&self) -> &FrozenPriceCardV1 {
         &self.header.price_card
+    }
+
+    /// Recheck the pilot's existing frozen official price contract at the
+    /// physical dispatch boundary, including calls made directly to stdio.
+    pub fn require_fresh_official_price_evidence(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<(), LedgerError> {
+        #[cfg(not(unix))]
+        {
+            let _ = now;
+            Err(LedgerError::UnsupportedPlatform)
+        }
+        #[cfg(unix)]
+        {
+            self.verify_directory_identities()?;
+            let experiment = self
+                .root
+                .parent()
+                .ok_or_else(|| LedgerError::State("experiment directory is unavailable".into()))?;
+            let directory = open_directory_nofollow(experiment)?;
+            validate_private_directory(&directory)?;
+            let preregistration = read_regular_at(
+                &directory,
+                "preregistration.v1.json",
+                OFFICIAL_PRICE_RECEIPT_BYTES,
+            )?;
+            let preregistration_sha256 = format!("{:x}", Sha256::digest(&preregistration));
+            let bytes = read_regular_at(
+                &directory,
+                "official-price-card.v1.json",
+                OFFICIAL_PRICE_RECEIPT_BYTES,
+            )?;
+            let receipt: OfficialPriceCardReceiptV1 =
+                serde_json::from_slice(&bytes).map_err(json_error)?;
+            let frozen = DateTime::parse_from_rfc3339(&receipt.frozen_at)
+                .map_err(|_| LedgerError::State("official price freeze is invalid".into()))?
+                .with_timezone(&Utc);
+            let age = now.signed_duration_since(frozen);
+            if receipt.schema_version != OFFICIAL_PRICE_RECEIPT_SCHEMA
+                || receipt.preregistration_sha256 != preregistration_sha256
+                || receipt.preregistration_sha256 != self.header.preregistration_sha256
+                || receipt.price_card != self.header.price_card
+                || receipt.price_card_sha256 != self.header.price_card_sha256
+                || receipt.price_card_sha256 != receipt.price_card.sha256()?
+                || receipt.price_card.effective_at_rfc3339 != receipt.frozen_at
+                || receipt.price_card.price_card_id
+                    != format!("openai-gpt56-default-{}", &receipt.frozen_at[..10])
+                || age < chrono::Duration::zero()
+                || age > chrono::Duration::hours(24)
+                || receipt.sources.len() != OFFICIAL_PRICE_URLS.len()
+            {
+                return Err(LedgerError::State(
+                    "official price evidence is stale or does not match the frozen ledger".into(),
+                ));
+            }
+            for (source, url) in receipt.sources.iter().zip(OFFICIAL_PRICE_URLS) {
+                validate_sha256("official_price_source", &source.sha256)?;
+                if source.url != url || source.bytes == 0 || source.bytes > 2 * 1024 * 1024 {
+                    return Err(LedgerError::State(
+                        "official price source evidence is invalid".into(),
+                    ));
+                }
+            }
+            // These are the existing pilot's exact frozen rates, not inferred
+            // or newly enrolled routes. Direct broker entry cannot substitute
+            // a self-authored cheaper ledger and matching receipt.
+            for (actual, expected) in [
+                (&receipt.price_card.sol, ["5", "0.5", "6.25", "30", "30"]),
+                (
+                    &receipt.price_card.luna,
+                    ["0.2", "0.02", "0.25", "1.2", "1.2"],
+                ),
+            ] {
+                let actual = [
+                    actual.regular_input_per_million_atto_usd,
+                    actual.cached_input_per_million_atto_usd,
+                    actual.cache_write_per_million_atto_usd,
+                    actual.regular_output_per_million_atto_usd,
+                    actual.reasoning_output_per_million_atto_usd,
+                ];
+                for (actual, expected) in actual.into_iter().zip(expected) {
+                    if actual != AttoUsd::parse_usd(expected)? {
+                        return Err(LedgerError::State(
+                            "official price rates differ from the frozen pilot contract".into(),
+                        ));
+                    }
+                }
+            }
+            self.verify_directory_identities()?;
+            Ok(())
+        }
     }
 
     pub fn snapshot(&self) -> Result<LedgerSnapshotV1, LedgerError> {
@@ -1615,6 +1739,29 @@ fn unlink_at(directory: &File, name: &str) -> Result<(), LedgerError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn daily_money_rounds_up_and_rejects_overflow() {
+        assert_eq!(AttoUsd::ZERO.ceil_microusd().unwrap(), 0);
+        assert_eq!(AttoUsd::from_atto(1).ceil_microusd().unwrap(), 1);
+        assert_eq!(
+            AttoUsd::from_atto(1_000_000_000_000)
+                .ceil_microusd()
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            AttoUsd::from_atto(1_000_000_000_001)
+                .ceil_microusd()
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            AttoUsd::parse_usd("2").unwrap().ceil_microusd().unwrap(),
+            2_000_000
+        );
+        assert!(AttoUsd::from_atto(u128::MAX).ceil_microusd().is_err());
+    }
     use std::fs::OpenOptions;
     use std::os::unix::fs::OpenOptionsExt;
     use std::sync::Arc;

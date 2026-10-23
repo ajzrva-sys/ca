@@ -26,6 +26,10 @@ use crate::reasoning_experiment_protocol::{
 use crate::runtime::{ActiveProfile, RuntimePaths};
 use crate::sandbox::{SandboxBackend, SandboxMode, SandboxPolicy};
 use crate::usage::usage_details_valid;
+use chrono::{DateTime, Utc};
+use codex_team::self_improvement::{
+    daily_learning_budget_root, reserve_daily_learning, settle_daily_learning, DailyLearningTicket,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -49,6 +53,10 @@ pub enum BrokerError {
     Frame,
     #[error("experiment ledger is unavailable")]
     Ledger,
+    #[error("fresh official experiment pricing is unavailable")]
+    PriceEvidence,
+    #[error("shared daily learning allowance is unavailable or exhausted")]
+    DailyBudget,
     #[error("canonical OpenAI Responses route is unavailable")]
     Route,
     #[error("broker call could not be completed")]
@@ -79,10 +87,18 @@ pub async fn run_provider_broker_stdio() -> i32 {
         Ok(client) => client,
         Err(_) => return 3,
     };
-    let receipt = match execute_provider_call_with_client(&call, &ledger, &client).await {
-        Ok(receipt) => receipt,
-        Err(_) => return 4,
+    let paths = match RuntimePaths::discover() {
+        Ok(paths) => paths,
+        Err(_) => return 3,
     };
+    let daily_root = daily_learning_budget_root(&paths.home);
+    let receipt =
+        match execute_provider_call_with_client(&call, &ledger, &client, &daily_root, Utc::now)
+            .await
+        {
+            Ok(receipt) => receipt,
+            Err(_) => return 4,
+        };
     let mut stdout = std::io::stdout().lock();
     match write_ipc_frame(&mut stdout, &receipt, MAX_PROVIDER_CALL_RECEIPT_FRAME_BYTES) {
         Ok(()) => 0,
@@ -133,7 +149,7 @@ fn preflight_canonical_openai_routes() -> Result<(), BrokerError> {
 }
 
 /// Runs the feature-only tool worker. It receives one exact-argv tool call,
-/// never loads configuration, and always requires the macOS sandbox.
+/// never loads configuration, and always requires the configured platform sandbox.
 pub async fn run_tool_worker_stdio() -> i32 {
     let mut stdin = std::io::stdin().lock();
     let call = match read_ipc_frame::<_, ToolCallSpecV1>(&mut stdin, MAX_TOOL_CALL_SPEC_FRAME_BYTES)
@@ -579,11 +595,51 @@ pub(crate) async fn execute_provider_call_with_client(
     call: &ProviderCallSpecV1,
     ledger: &ExperimentLedger,
     client: &AgentClient,
+    daily_root: &Path,
+    clock: impl Fn() -> DateTime<Utc>,
 ) -> Result<ProviderCallReceiptV1, BrokerError> {
     call.validate().map_err(|_| BrokerError::Frame)?;
+    ledger
+        .require_fresh_official_price_evidence(clock())
+        .map_err(|_| BrokerError::PriceEvidence)?;
     let grant = ledger
         .reserve_provider_call(call)
         .map_err(|_| BrokerError::Ledger)?;
+    let daily_id = format!(
+        "harness:artifact:{}:{}",
+        grant.reservation_id, grant.ledger_event_sha256
+    );
+    let maximum = grant
+        .reserved_atto_usd
+        .ceil_microusd()
+        .map_err(|_| BrokerError::DailyBudget)?;
+    let ticket = match reserve_daily_learning(daily_root, &daily_id, maximum, clock()) {
+        Ok(ticket) => ticket,
+        Err(_) => {
+            // This new grant has not crossed the send boundary. Never release
+            // a previous attempt's reservation, even when retry admission fails.
+            ledger
+                .release_provider_call_pre_send(&grant, call, "shared_daily_admission_denied")
+                .map_err(|_| BrokerError::Ledger)?;
+            return Err(BrokerError::DailyBudget);
+        }
+    };
+    // Admission may wait for a ledger lock. Recheck freshness immediately
+    // before the physical call rather than rely on the earlier controller gate.
+    if ledger
+        .require_fresh_official_price_evidence(clock())
+        .is_err()
+    {
+        ledger
+            .release_provider_call_pre_send(
+                &grant,
+                call,
+                "official_price_evidence_expired_pre_send",
+            )
+            .map_err(|_| BrokerError::Ledger)?;
+        settle_daily_learning(&ticket, None, true).map_err(|_| BrokerError::DailyBudget)?;
+        return Err(BrokerError::PriceEvidence);
+    }
     let started = std::time::Instant::now();
     let stream = match client
         .stream_frozen_openai_responses_body(call.request_json.as_bytes().to_vec())
@@ -597,13 +653,14 @@ pub(crate) async fn execute_provider_call_with_client(
         Ok(turn) => turn,
         Err(_) => return unknown_receipt(call, ledger, &grant, "stream_incomplete", started),
     };
-    completed_receipt(call, ledger, &grant, turn, started)
+    completed_receipt(call, ledger, &grant, &ticket, turn, started)
 }
 
 fn completed_receipt(
     call: &ProviderCallSpecV1,
     ledger: &ExperimentLedger,
     grant: &crate::reasoning_experiment_ledger::ReservationGrantV1,
+    ticket: &DailyLearningTicket,
     turn: AssembledAssistantTurn,
     started: std::time::Instant,
 ) -> Result<ProviderCallReceiptV1, BrokerError> {
@@ -648,9 +705,15 @@ fn completed_receipt(
         .validate_against(call)
         .map_err(|_| BrokerError::Execution)?;
     let receipt_sha256 = receipt_sha256(&receipt)?;
+    let actual = ledger
+        .price_card()
+        .exact_cost_for_usage(&call.route, usage)
+        .and_then(|cost| cost.ceil_microusd())
+        .map_err(|_| BrokerError::Ledger)?;
     ledger
         .settle_provider_call(grant, call, usage, &receipt_sha256)
         .map_err(|_| BrokerError::Ledger)?;
+    settle_daily_learning(ticket, Some(actual), false).map_err(|_| BrokerError::DailyBudget)?;
     Ok(receipt)
 }
 
@@ -964,7 +1027,8 @@ impl From<AssembledAssistantTurn> for ControllerTurnV1 {
                         item,
                         ..
                     } => Some(ControllerResponseItemV1 { output_index, item }),
-                    crate::agent::stream::ProviderResponseItem::ChatReasoning { .. } => None,
+                    crate::agent::stream::ProviderResponseItem::NativeContent { .. }
+                    | crate::agent::stream::ProviderResponseItem::ChatReasoning { .. } => None,
                 })
                 .collect(),
             tool_calls: turn
@@ -1008,6 +1072,7 @@ mod tests {
         ExperimentModelRouteV1, ExperimentPhase, CHEAP_MODEL, MAX_INPUT_TOKENS_PER_REQUEST,
         MAX_OUTPUT_TOKENS_PER_REQUEST, PROVIDER_CALL_SPEC_SCHEMA_V1,
     };
+    use codex_team::self_improvement::daily_learning_budget_status;
     use tokio::io::AsyncWriteExt;
 
     fn digest(byte: char) -> String {
@@ -1021,8 +1086,8 @@ mod tests {
     fn price_card() -> FrozenPriceCardV1 {
         FrozenPriceCardV1 {
             schema_version: FROZEN_PRICE_CARD_SCHEMA_V1.into(),
-            price_card_id: "openai-2026-08-12-default".into(),
-            effective_at_rfc3339: "2026-08-12T00:00:00Z".into(),
+            price_card_id: "openai-gpt56-default-2026-10-10".into(),
+            effective_at_rfc3339: "2026-10-10T03:59:00Z".into(),
             service_tier: "default".into(),
             sol: FrozenModelPriceV1 {
                 regular_input_per_million_atto_usd: price("5"),
@@ -1054,7 +1119,7 @@ mod tests {
             controller_sha256: digest('b'),
             worker_sha256: digest('c'),
             experiment_id: "pilot-1".into(),
-            preregistration_sha256: digest('d'),
+            preregistration_sha256: sha256_hex(b"fixture preregistration"),
             trial_id: "trial-1".into(),
             slot_index: 0,
             phase: ExperimentPhase::Executor,
@@ -1070,11 +1135,39 @@ mod tests {
         }
     }
 
+    fn fixture_now() -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339("2026-10-10T03:59:00Z")
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
     fn ledger(root: &Path) -> ExperimentLedger {
+        use std::os::unix::fs::PermissionsExt;
+        let experiment = root.parent().unwrap();
+        fs::set_permissions(experiment, fs::Permissions::from_mode(0o700)).unwrap();
+        let preregistration = experiment.join("preregistration.v1.json");
+        fs::write(&preregistration, b"fixture preregistration").unwrap();
+        fs::set_permissions(&preregistration, fs::Permissions::from_mode(0o600)).unwrap();
+        let card = price_card();
+        let price_receipt = serde_json::json!({
+            "schema_version": "ca.rnd097.official_price_card.v1",
+            "preregistration_sha256": sha256_hex(b"fixture preregistration"),
+            "frozen_at": card.effective_at_rfc3339,
+            "sources": [
+                {"url":"https://developers.openai.com/api/docs/models/compare", "sha256":digest('a'), "bytes":100},
+                {"url":"https://developers.openai.com/api/docs/models/gpt-5.6-sol", "sha256":digest('b'), "bytes":100},
+                {"url":"https://developers.openai.com/api/docs/models/gpt-5.6-luna", "sha256":digest('c'), "bytes":100}
+            ],
+            "price_card_sha256": card.sha256().unwrap(),
+            "price_card": card,
+        });
+        let receipt_path = experiment.join("official-price-card.v1.json");
+        fs::write(&receipt_path, serde_json::to_vec(&price_receipt).unwrap()).unwrap();
+        fs::set_permissions(&receipt_path, fs::Permissions::from_mode(0o600)).unwrap();
         ExperimentLedger::create(
             root,
             "pilot-1",
-            &digest('d'),
+            &sha256_hex(b"fixture preregistration"),
             AttoUsd::DEFAULT_CAP,
             price_card(),
         )
@@ -1085,6 +1178,8 @@ mod tests {
         AgentClient::with_call_policy(
             "openai",
             &ProviderConfig {
+                google: None,
+                tool_schema_policy: Default::default(),
                 base_url: url,
                 api_key: "fake-test-key".into(),
                 protocol: ProviderProtocol::OpenAiResponses,
@@ -1149,6 +1244,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn shared_learning_and_harness_spend_denies_a_fifty_dollar_pilot_before_send() {
+        use codex_team::self_improvement::{reserve_daily_learning, settle_daily_learning};
+        let root = tempfile::tempdir().unwrap();
+        let daily_root = root.path().join("daily");
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-10T03:59:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let knowledge =
+            reserve_daily_learning(&daily_root, "knowledge:prior", 1_900_000, now).unwrap();
+        settle_daily_learning(&knowledge, Some(1_900_000), false).unwrap();
+        reserve_daily_learning(&daily_root, "harness:uncertain", 80_000, now).unwrap();
+        let ledger = ledger(&root.path().join("ledger"));
+        assert_eq!(ledger.header().cap_atto_usd, AttoUsd::DEFAULT_CAP);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/v1", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let accepted =
+                tokio::time::timeout(std::time::Duration::from_millis(300), listener.accept())
+                    .await;
+            if let Ok(Ok((mut stream, _))) = accepted {
+                read_http_request(&mut stream).await;
+                stream
+                    .write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n")
+                    .await
+                    .unwrap();
+                1
+            } else {
+                0
+            }
+        });
+        let result =
+            execute_provider_call_with_client(&call(), &ledger, &client(url), &daily_root, || now)
+                .await;
+        let posts = server.await.unwrap();
+        assert!(
+            matches!(result, Err(BrokerError::DailyBudget)),
+            "the shared $2 allowance must override the pilot's $50 grant"
+        );
+        assert_eq!(
+            posts, 0,
+            "a denied physical call must never reach the provider"
+        );
+        assert_eq!(
+            ledger.snapshot().unwrap().outstanding_reserved_atto_usd,
+            AttoUsd::ZERO
+        );
+        let remaining = daily_learning_budget_status(&daily_root, now).unwrap();
+        assert_eq!(remaining.spent_microusd, 1_900_000);
+        assert_eq!(remaining.reserved_microusd, 80_000);
+        assert_eq!(remaining.remaining_microusd, 20_000);
+    }
+
+    #[tokio::test]
     async fn one_provider_call_reserves_once_posts_once_and_settles_exact_usage() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/v1", listener.local_addr().unwrap());
@@ -1176,9 +1324,15 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let ledger = ledger(&root.path().join("ledger"));
         let call = call();
-        let receipt = execute_provider_call_with_client(&call, &ledger, &client(url))
-            .await
-            .unwrap();
+        let receipt = execute_provider_call_with_client(
+            &call,
+            &ledger,
+            &client(url),
+            &root.path().join("daily"),
+            fixture_now,
+        )
+        .await
+        .unwrap();
         receipt.validate_against(&call).unwrap();
         assert!(matches!(
             receipt.outcome,
@@ -1202,6 +1356,11 @@ mod tests {
         let snapshot = ledger.snapshot().unwrap();
         assert!(snapshot.settled_actual_atto_usd > AttoUsd::ZERO);
         assert_eq!(snapshot.outstanding_reserved_atto_usd, AttoUsd::ZERO);
+        assert_eq!(snapshot.settled_actual_atto_usd, price("0.00000406"));
+        let daily =
+            daily_learning_budget_status(&root.path().join("daily"), fixture_now()).unwrap();
+        assert_eq!(daily.spent_microusd, 5);
+        assert_eq!(daily.reserved_microusd, 0);
         let persisted = std::fs::read_dir(root.path().join("ledger/events"))
             .unwrap()
             .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
@@ -1217,24 +1376,39 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/v1", listener.local_addr().unwrap());
         let server = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let _ = read_http_request(&mut stream).await;
-            stream
-                .write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n")
-                .await
-                .unwrap();
+            let mut requests = 0;
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let _ = read_http_request(&mut stream).await;
+                stream
+                    .write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n")
+                    .await
+                    .unwrap();
+                requests += 1;
+            }
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_millis(100), listener.accept())
+                    .await
+                    .is_err()
+            );
+            requests
         });
         let root = tempfile::tempdir().unwrap();
         let ledger = ledger(&root.path().join("ledger"));
         let call = call();
-        let receipt = execute_provider_call_with_client(&call, &ledger, &client(url))
-            .await
-            .unwrap();
+        let receipt = execute_provider_call_with_client(
+            &call,
+            &ledger,
+            &client(url.clone()),
+            &root.path().join("daily"),
+            fixture_now,
+        )
+        .await
+        .unwrap();
         assert!(matches!(
             receipt.outcome,
             ProviderCallOutcomeV1::AmbiguousDelivery { .. }
         ));
-        server.await.unwrap();
         let snapshot = ledger.snapshot().unwrap();
         assert_eq!(
             snapshot.unknown_reserved_atto_usd,
@@ -1242,6 +1416,261 @@ mod tests {
                 .price_card()
                 .worst_case_for_route(&call.route)
                 .unwrap()
+        );
+        let daily_root = root.path().join("daily");
+        assert_eq!(
+            daily_learning_budget_status(&daily_root, fixture_now())
+                .unwrap()
+                .reserved_microusd,
+            25_831
+        );
+        let reopened = ExperimentLedger::open(&root.path().join("ledger")).unwrap();
+        assert_eq!(
+            reopened.snapshot().unwrap().unknown_reserved_atto_usd,
+            snapshot.unknown_reserved_atto_usd
+        );
+        let mut retry = call.clone();
+        retry.physical_attempt = 2;
+        retry.call_id = "provider-call-2".into();
+        retry.nonce = "nonce-2".into();
+        let receipt = execute_provider_call_with_client(
+            &retry,
+            &reopened,
+            &client(url),
+            &daily_root,
+            fixture_now,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            receipt.outcome,
+            ProviderCallOutcomeV1::AmbiguousDelivery { .. }
+        ));
+        assert_eq!(server.await.unwrap(), 2);
+        assert_eq!(
+            daily_learning_budget_status(&daily_root, fixture_now())
+                .unwrap()
+                .reserved_microusd,
+            51_662
+        );
+        let new_day = fixture_now() + chrono::Duration::minutes(2);
+        let fresh = daily_learning_budget_status(&daily_root, new_day).unwrap();
+        assert_eq!(fresh.date, "2026-10-10");
+        assert_eq!(fresh.remaining_microusd, 2_000_000);
+        assert_eq!(
+            daily_learning_budget_status(&daily_root, fixture_now())
+                .unwrap()
+                .reserved_microusd,
+            51_662
+        );
+        assert_eq!(
+            ExperimentLedger::open(&root.path().join("ledger"))
+                .unwrap()
+                .snapshot()
+                .unwrap()
+                .unknown_reserved_atto_usd,
+            snapshot
+                .unknown_reserved_atto_usd
+                .checked_add(snapshot.unknown_reserved_atto_usd)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn physical_pricing_gate_rejects_stale_future_drift_and_underpriced_evidence() {
+        let root = tempfile::tempdir().unwrap();
+        let ledger = ledger(&root.path().join("ledger"));
+        ledger
+            .require_fresh_official_price_evidence(fixture_now())
+            .unwrap();
+        assert!(ledger
+            .require_fresh_official_price_evidence(fixture_now() - chrono::Duration::seconds(1))
+            .is_err());
+        assert!(ledger
+            .require_fresh_official_price_evidence(
+                fixture_now() + chrono::Duration::hours(24) + chrono::Duration::seconds(1)
+            )
+            .is_err());
+        let receipt_path = root.path().join("official-price-card.v1.json");
+        let original = fs::read(&receipt_path).unwrap();
+        for (field, value) in [
+            ("preregistration_sha256", serde_json::json!(digest('e'))),
+            ("frozen_at", serde_json::json!("2026-10-10T03:58:00Z")),
+            ("price_card_sha256", serde_json::json!(digest('f'))),
+        ] {
+            let mut receipt: Value = serde_json::from_slice(&original).unwrap();
+            receipt[field] = value;
+            fs::write(&receipt_path, serde_json::to_vec(&receipt).unwrap()).unwrap();
+            assert!(ledger
+                .require_fresh_official_price_evidence(fixture_now())
+                .is_err());
+        }
+        let mut receipt: Value = serde_json::from_slice(&original).unwrap();
+        receipt["sources"][0]["url"] = serde_json::json!("https://example.invalid/prices");
+        fs::write(&receipt_path, serde_json::to_vec(&receipt).unwrap()).unwrap();
+        assert!(ledger
+            .require_fresh_official_price_evidence(fixture_now())
+            .is_err());
+        fs::write(&receipt_path, &original).unwrap();
+        let mut cheap_card = price_card();
+        cheap_card.luna.regular_output_per_million_atto_usd = price("0.000001");
+        let underpriced = ExperimentLedger::create(
+            &root.path().join("underpriced"),
+            "pilot-1",
+            &sha256_hex(b"fixture preregistration"),
+            AttoUsd::DEFAULT_CAP,
+            cheap_card.clone(),
+        )
+        .unwrap();
+        let mut receipt: Value = serde_json::from_slice(&original).unwrap();
+        receipt["price_card_sha256"] = serde_json::json!(cheap_card.sha256().unwrap());
+        receipt["price_card"] = serde_json::to_value(cheap_card).unwrap();
+        fs::write(&receipt_path, serde_json::to_vec(&receipt).unwrap()).unwrap();
+        assert!(
+            underpriced
+                .require_fresh_official_price_evidence(fixture_now())
+                .is_err(),
+            "a matching fabricated cheaper card cannot authorize physical traffic"
+        );
+    }
+
+    #[tokio::test]
+    async fn pricing_expiry_during_admission_denies_send_and_releases_only_absent_tickets() {
+        let root = tempfile::tempdir().unwrap();
+        let ledger = ledger(&root.path().join("ledger"));
+        let daily_root = root.path().join("daily");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/v1", listener.local_addr().unwrap());
+        let calls = std::cell::Cell::new(0);
+        let clock = || {
+            let call = calls.get();
+            calls.set(call + 1);
+            fixture_now() + chrono::Duration::hours(if call >= 2 { 25 } else { 0 })
+        };
+        let result =
+            execute_provider_call_with_client(&call(), &ledger, &client(url), &daily_root, clock)
+                .await;
+        assert!(matches!(result, Err(BrokerError::PriceEvidence)));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), listener.accept())
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            ledger.snapshot().unwrap().outstanding_reserved_atto_usd,
+            AttoUsd::ZERO
+        );
+        let daily = daily_learning_budget_status(&daily_root, fixture_now()).unwrap();
+        assert_eq!(daily.reserved_microusd, 0);
+        assert_eq!(daily.spent_microusd, 0);
+    }
+
+    #[tokio::test]
+    async fn missing_or_invalid_provider_usage_retains_the_shared_reservation() {
+        for usage in [
+            None,
+            Some(
+                serde_json::json!({"input_tokens":10,"output_tokens":2,"total_tokens":12,"input_tokens_details":{"cached_tokens":20}}),
+            ),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}/v1", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                read_http_request(&mut stream).await;
+                let mut response = serde_json::json!({"id":"resp-unknown","model":CHEAP_MODEL,"service_tier":"default","status":"completed"});
+                if let Some(usage) = usage {
+                    response["usage"] = usage;
+                }
+                let body = format!(
+                    "data: {}\n\n",
+                    serde_json::json!({"type":"response.completed","response":response})
+                );
+                stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nx-request-id: provider-request-id\r\nContent-Length: {}\r\n\r\n{}", body.len(), body).as_bytes()).await.unwrap();
+            });
+            let root = tempfile::tempdir().unwrap();
+            let ledger = ledger(&root.path().join("ledger"));
+            let daily_root = root.path().join("daily");
+            let receipt = execute_provider_call_with_client(
+                &call(),
+                &ledger,
+                &client(url),
+                &daily_root,
+                fixture_now,
+            )
+            .await
+            .unwrap();
+            server.await.unwrap();
+            assert!(matches!(
+                receipt.outcome,
+                ProviderCallOutcomeV1::AmbiguousDelivery { .. }
+            ));
+            let daily = daily_learning_budget_status(&daily_root, fixture_now()).unwrap();
+            assert_eq!(daily.reserved_microusd, 25_831);
+            assert_eq!(daily.spent_microusd, 0);
+            assert_eq!(
+                ExperimentLedger::open(&root.path().join("ledger"))
+                    .unwrap()
+                    .snapshot()
+                    .unwrap()
+                    .unknown_reserved_atto_usd
+                    .ceil_microusd()
+                    .unwrap(),
+                25_831
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_physical_call_retains_both_reservations_after_reopen() {
+        let root = tempfile::tempdir().unwrap();
+        let ledger = std::sync::Arc::new(ledger(&root.path().join("ledger")));
+        let daily_root = root.path().join("daily");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/v1", listener.local_addr().unwrap());
+        let (sent, received) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            read_http_request(&mut stream).await;
+            sent.send(()).unwrap();
+            released.await.unwrap();
+        });
+        let mut running = tokio::spawn({
+            let ledger = ledger.clone();
+            let daily_root = daily_root.clone();
+            async move {
+                execute_provider_call_with_client(
+                    &call(),
+                    &ledger,
+                    &client(url),
+                    &daily_root,
+                    fixture_now,
+                )
+                .await
+            }
+        });
+        tokio::select! {
+            delivered = received => delivered.unwrap(),
+            result = &mut running => panic!("provider call ended before the held response: {result:?}"),
+            _ = tokio::time::sleep(std::time::Duration::from_secs(3)) => panic!("provider request did not reach the loopback server"),
+        }
+        running.abort();
+        assert!(running.await.unwrap_err().is_cancelled());
+        release.send(()).unwrap();
+        server.await.unwrap();
+        let daily = daily_learning_budget_status(&daily_root, fixture_now()).unwrap();
+        assert_eq!(daily.reserved_microusd, 25_831);
+        assert_eq!(daily.spent_microusd, 0);
+        let reopened = ExperimentLedger::open(&root.path().join("ledger")).unwrap();
+        assert_eq!(
+            reopened
+                .snapshot()
+                .unwrap()
+                .outstanding_reserved_atto_usd
+                .ceil_microusd()
+                .unwrap(),
+            25_831
         );
     }
 
@@ -1310,13 +1739,20 @@ mod tests {
         }
     }
 
+    fn required_test_sandbox_is_configured() -> bool {
+        (cfg!(target_os = "macos") && Path::new("/usr/bin/sandbox-exec").is_file())
+            || (cfg!(target_os = "freebsd")
+                && Path::new("/usr/local/libexec/codex-freebsd-sandbox-client").is_file()
+                && Path::new("/var/run/codex-freebsd-sandbox/control.sock").exists())
+    }
+
     #[tokio::test]
     async fn tool_worker_preflight_exercises_the_required_platform_sandbox() {
         let experiment = tempfile::tempdir().unwrap();
         let canonical = experiment.path().canonicalize().unwrap();
         let result = preflight_required_tool_sandbox_in(&canonical).await;
-        if cfg!(target_os = "macos") && Path::new("/usr/bin/sandbox-exec").is_file() {
-            result.expect("macOS required sandbox preflight must execute successfully");
+        if required_test_sandbox_is_configured() {
+            result.expect("configured platform sandbox preflight must execute successfully");
         } else {
             assert!(result.is_err(), "unsupported platforms must fail closed");
         }
@@ -1336,7 +1772,7 @@ mod tests {
         let receipt = execute_tool_call(&call).await.unwrap();
         unsafe { std::env::remove_var("RND_TOOL_PARENT_SECRET") };
         receipt.validate_against(&call).unwrap();
-        if cfg!(target_os = "macos") && Path::new("/usr/bin/sandbox-exec").is_file() {
+        if required_test_sandbox_is_configured() {
             assert!(matches!(receipt.outcome, ToolCallOutcomeV1::Completed));
             let output = receipt.result_json.unwrap();
             assert!(output.contains("CARGO_NET_OFFLINE"));

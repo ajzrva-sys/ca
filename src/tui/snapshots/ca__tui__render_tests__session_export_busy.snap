@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&busy, 100, 30), render_to_text(&busy, 60, 24))"
 ---
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
 
 
@@ -28,12 +28,12 @@ expression: "wide_narrow(render_to_text(&busy, 100, 30), render_to_text(&busy, 6
 
 
 
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
 / commands
 -- narrow --
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
 
 
 
@@ -53,7 +53,7 @@ expression: "wide_narrow(render_to_text(&busy, 100, 30), render_to_text(&busy, 6
 
 
 
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                           │
+╰──────────────────────────────────────────── agent · auto ╯
 / commands

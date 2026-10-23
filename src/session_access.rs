@@ -1,7 +1,9 @@
 //! One nonblocking writer identity for every local session participant.
 //!
-//! Lock files are stable: removing a participating file would allow two
-//! processes to lock different inodes for the same session.
+//! Lock files are stable while held: removing a participating file would allow
+//! two processes to lock different inodes for the same session. Cleanup is
+//! therefore limited to locks nobody holds, and every acquisition re-verifies
+//! that the path still names the inode it just locked.
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -111,16 +113,7 @@ impl SessionAccessCoordinator {
             std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
         }
         let path = dir.join(format!("{session_id}.lock"));
-        let mut options = OpenOptions::new();
-        options.read(true).write(true).create(true).truncate(false);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options
-                .mode(0o600)
-                .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
-        }
-        let file = options.open(&path)?;
+        let file = open_lock(&path)?;
         if !file.metadata()?.is_file() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -128,6 +121,10 @@ impl SessionAccessCoordinator {
             ));
         }
         lock_file(&file)?;
+        // The lock file may have been swept and replaced between open and flock,
+        // which would leave this capability guarding a different inode than the
+        // path names. Re-prove the binding before publishing ownership.
+        verify_locked_inode(&path, &file)?;
         let inner = Arc::new(LeaseInner {
             key: key.clone(),
             #[cfg(unix)]
@@ -149,6 +146,34 @@ impl SessionAccessCoordinator {
         }
         Ok(())
     }
+
+    /// Remove lock files nothing is holding. Held locks are skipped — they are
+    /// the flock target for a live writer and must keep their inode. Returns
+    /// how many lock files were removed.
+    pub fn sweep_unheld_locks(&self) -> io::Result<usize> {
+        let dir = self.scope.join(".session-access");
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
+            Err(error) => return Err(error),
+        };
+        let mut removed = 0;
+        for entry in entries {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("lock") {
+                continue;
+            }
+            if let Ok(file) = open_existing_lock(&path) {
+                // flock succeeds only when no live writer holds it.
+                if lock_file(&file).is_ok() {
+                    let _ = std::fs::remove_file(&path);
+                    removed += 1;
+                }
+            }
+        }
+        Ok(removed)
+    }
 }
 
 fn busy() -> io::Error {
@@ -156,6 +181,57 @@ fn busy() -> io::Error {
         io::ErrorKind::WouldBlock,
         "session is busy in another local writer",
     )
+}
+
+fn open_lock(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    }
+    options.open(path)
+}
+
+/// Open an already-present lock file without creating it, so a sweep never
+/// resurrects an entry that disappeared mid-iteration.
+fn open_existing_lock(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    }
+    options.open(path)
+}
+
+/// Confirm the locked descriptor is still the inode the path names.
+fn verify_locked_inode(path: &Path, file: &File) -> io::Result<()> {
+    let on_disk = std::fs::symlink_metadata(path)?;
+    let held = file.metadata()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if !on_disk.is_file()
+            || on_disk.dev() != held.dev()
+            || on_disk.ino() != held.ino()
+            || on_disk.nlink() != 1
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "session lock identity changed under the writer",
+            ));
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (&on_disk, &held);
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -310,5 +386,34 @@ mod tests {
             .status()
             .unwrap();
         assert!(status.success());
+    }
+
+    #[test]
+    fn sweep_unheld_locks_keeps_held_locks_and_drops_the_rest() {
+        let root = tempfile::tempdir().unwrap();
+        let access = SessionAccessCoordinator::new(root.path());
+        let held = Uuid::new_v4();
+        let gone = Uuid::new_v4();
+        let _live = access.try_writer(held).unwrap();
+        // A lock whose writer already released it, standing in for a deleted
+        // session that never cleaned up.
+        drop(access.try_writer(gone).unwrap());
+
+        let removed = access.sweep_unheld_locks().unwrap();
+        assert_eq!(removed, 1);
+
+        let dir = root.path().join(".session-access");
+        assert!(dir.join(format!("{held}.lock")).exists());
+        assert!(!dir.join(format!("{gone}.lock")).exists());
+
+        // The surviving lock still works and the swept one can be retaken.
+        assert!(access.try_writer(gone).is_ok());
+    }
+
+    #[test]
+    fn sweep_ignores_a_missing_lock_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let access = SessionAccessCoordinator::new(root.path());
+        assert_eq!(access.sweep_unheld_locks().unwrap(), 0);
     }
 }

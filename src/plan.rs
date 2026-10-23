@@ -2,6 +2,160 @@
 use crate::app::{AgentMode, AppState, Message, Role};
 use crate::work::{PlanReview, PlanStatus, WorkMutation};
 
+fn explicit_route(value: &str) -> Result<crate::agent::subagent::AgentRoute, String> {
+    let (provider, model) = value
+        .split_once('/')
+        .filter(|(provider, model)| !provider.is_empty() && !model.is_empty())
+        .ok_or("Use a provider/model route.")?;
+    Ok(crate::agent::subagent::AgentRoute {
+        provider: provider.into(),
+        model: model.into(),
+    })
+}
+
+pub fn open_workflow_picker(state: &mut AppState, action: crate::app::PlanWorkflowPickerAction) {
+    close_reader(state);
+    crate::tui::input::open_model_picker(state);
+    state.model_picker_target = crate::app::ModelPickerTarget::PlanWorkflow;
+    state.plan_workflow_picker_action = Some(action);
+}
+
+fn open_workflow_graph(state: &mut AppState) {
+    let selected_idx = {
+        let work = state
+            .work_state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        work.plan_workflow.as_ref().map_or(0, |workflow| {
+            workflow.cursor.min(workflow.steps.len().saturating_sub(1))
+        })
+    };
+    state.plan_workflow_graph = Some(crate::app::PlanWorkflowGraphState {
+        selected_idx,
+        participants: false,
+    });
+}
+
+pub fn select_workflow_model(state: &mut AppState, model: crate::app::ModelInfo) {
+    let Some(action) = state.plan_workflow_picker_action.take() else {
+        return;
+    };
+    let route = crate::agent::subagent::AgentRoute {
+        provider: model.provider,
+        model: model.id,
+    };
+    match action {
+        crate::app::PlanWorkflowPickerAction::Send { role, instructions } => {
+            state.plan_workflow_graph = None;
+            state.input = format!(
+                "/plan send {} {}/{} {}",
+                role.label().to_ascii_lowercase(),
+                route.provider,
+                route.model,
+                instructions
+            );
+            state.input_cursor = state.input.len();
+            state.slash_palette_open = false;
+            state.status_message =
+                Some("Add instructions or change review/revise, then press Enter to send.".into());
+        }
+        crate::app::PlanWorkflowPickerAction::Execute(review) => {
+            state.plan_execute_route = Some(route);
+            state.plan_execute_requested = Some(review);
+            state.plan_workflow_graph = None;
+            state.status_message = Some("Preparing plan execution…".into());
+        }
+    }
+}
+
+fn queue_handoff(
+    state: &mut AppState,
+    role: crate::plan_workflow::WorkflowRole,
+    participant: Option<String>,
+    route: Option<crate::agent::subagent::AgentRoute>,
+    instructions: String,
+) {
+    let participant = participant.unwrap_or_else(|| {
+        let work = state
+            .work_state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let mut index = 1;
+        while work.plan_workflow.as_ref().is_some_and(|workflow| {
+            workflow
+                .participants
+                .iter()
+                .any(|participant| participant.id == format!("agent-{index}"))
+        }) {
+            index += 1;
+        }
+        format!("agent-{index}")
+    });
+    state.plan_workflow_request = Some(crate::plan_workflow::PlanWorkflowArgs::Handoff {
+        step: crate::plan_workflow::WorkflowStep {
+            role,
+            participant,
+            route,
+            instructions,
+        },
+    });
+    close_reader(state);
+    open_workflow_graph(state);
+    state.status_message = Some("Sending plan…".into());
+}
+
+fn send_command(state: &mut AppState, value: &str) -> Result<(), String> {
+    selected_review(state)?;
+    if state.turn_lifecycle.is_active()
+        || state.streaming.is_some()
+        || state.plan_workflow_request.is_some()
+    {
+        return Err("Finish the active request before sending the plan.".into());
+    }
+    let mut remaining = value.trim();
+    let first = remaining.split_whitespace().next().unwrap_or_default();
+    let role = if first.eq_ignore_ascii_case("revise") {
+        remaining = remaining[first.len()..].trim();
+        crate::plan_workflow::WorkflowRole::Revise
+    } else {
+        if first.eq_ignore_ascii_case("review") {
+            remaining = remaining[first.len()..].trim();
+        }
+        crate::plan_workflow::WorkflowRole::Review
+    };
+    let target = remaining.split_whitespace().next().unwrap_or_default();
+    let participant = {
+        let work = state
+            .work_state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        work.plan_workflow.as_ref().and_then(|workflow| {
+            workflow
+                .participants
+                .iter()
+                .find(|participant| participant.id == target)
+                .map(|participant| participant.id.clone())
+        })
+    };
+    if participant.is_some() || target.contains('/') {
+        let route = participant
+            .is_none()
+            .then(|| explicit_route(target))
+            .transpose()?;
+        let instructions = remaining[target.len()..].trim().to_string();
+        queue_handoff(state, role, participant, route, instructions);
+    } else {
+        open_workflow_picker(
+            state,
+            crate::app::PlanWorkflowPickerAction::Send {
+                role,
+                instructions: remaining.into(),
+            },
+        );
+    }
+    Ok(())
+}
+
 pub fn selected_review(state: &AppState) -> Result<PlanReview, String> {
     let work = state
         .work_state
@@ -52,6 +206,7 @@ pub fn dismiss(state: &mut AppState) {
     close_reader(state);
     state.plan_proposal = None;
     state.plan_execute_requested = None;
+    state.plan_execute_route = None;
     state.status_message = Some("Plan dismissed. Use /plan show to reopen.".into());
 }
 
@@ -59,6 +214,7 @@ pub fn revise(state: &mut AppState) {
     close_reader(state);
     state.plan_proposal = None;
     state.plan_execute_requested = None;
+    state.plan_execute_route = None;
     state.mode = AgentMode::Plan;
     state.status_message = Some("Describe the changes you want, then press Enter.".into());
 }
@@ -145,6 +301,35 @@ pub fn manage_command(state: &mut AppState, arguments: &str) -> Result<bool, Str
         .split_once(char::is_whitespace)
         .map_or((arguments, ""), |(command, value)| (command, value.trim()));
     match command.to_ascii_lowercase().as_str() {
+        "run" => {
+            if value.is_empty() {
+                return Err("Use /plan run <goal and the agents or providers you want>.".into());
+            }
+            if state.turn_lifecycle.is_active() || state.streaming.is_some() {
+                return Err("Finish the active request before starting a plan workflow.".into());
+            }
+            close_reader(state);
+            state.plan_proposal = None;
+            state.mode = AgentMode::Plan;
+            state.input_queue.enqueue_front_with_id(uuid::Uuid::new_v4(), format!(
+                "Start a cross-provider plan workflow for this request using the plan_workflow tool. Use list_agent_routes to discover configured routes, create named participants and ordered author/review/revise stages, and include implementation only if requested. Preserve the requested provider choices. Request: {value}"
+            ));
+            state.plan_workflow_graph = Some(Default::default());
+            state.status_message = Some("Preparing plan workflow…".into());
+        }
+        "send" => send_command(state, value)?,
+        "graph" => {
+            close_reader(state);
+            open_workflow_graph(state);
+        }
+        "pause" | "resume" | "cancel" | "status" => {
+            state.plan_workflow_request = Some(match command.to_ascii_lowercase().as_str() {
+                "pause" => crate::plan_workflow::PlanWorkflowArgs::Pause,
+                "resume" => crate::plan_workflow::PlanWorkflowArgs::Resume,
+                "cancel" => crate::plan_workflow::PlanWorkflowArgs::Cancel,
+                _ => crate::plan_workflow::PlanWorkflowArgs::Status,
+            });
+        }
         "comments" => {
             let mut work = state
                 .work_state
@@ -281,6 +466,11 @@ pub fn manage_command(state: &mut AppState, arguments: &str) -> Result<bool, Str
                 return Err("A request is already active. Stop it before executing a plan.".into());
             }
             let review = selected_review(state)?;
+            if value.eq_ignore_ascii_case("choose") {
+                open_workflow_picker(state, crate::app::PlanWorkflowPickerAction::Execute(review));
+                return Ok(false);
+            }
+            state.plan_execute_route = if value.is_empty() { None } else { Some(explicit_route(value)?) };
             if let Some(history) = state.session_history.as_mut() {
                 // A fresh explicit action may retry an earlier history-load failure.
                 history.error = None;
@@ -335,7 +525,7 @@ pub fn manage_command(state: &mut AppState, arguments: &str) -> Result<bool, Str
         }
         _ => {
             return Err(
-                "Usage: /plan [show|execute|approve|revise|dismiss|reject|edit <title>]".into(),
+                "Usage: /plan [show|run <request>|send [review|revise] [participant|provider/model] [instructions]|graph|pause|resume|cancel|execute [provider/model|choose]|approve|revise|dismiss|reject|edit <title>]".into(),
             )
         }
     }
@@ -375,6 +565,15 @@ fn prepare_execution(
     if plan.status == PlanStatus::Rejected {
         return Err("This plan was rejected. Revise it before execution.".into());
     }
+    if before.plan_workflow.as_ref().is_some_and(|workflow| {
+        workflow.status == crate::plan_workflow::WorkflowStatus::Running
+            && !workflow.steps.get(workflow.cursor).is_some_and(|stage| {
+                stage.role == crate::plan_workflow::WorkflowRole::Implement
+                    && stage.status == crate::plan_workflow::WorkflowStageStatus::Running
+            })
+    }) {
+        return Err("Pause the plan workflow before executing its current plan.".into());
+    }
     if before.agent_graph.status == crate::agent_graph::AgentGraphStatus::Running
         || plan
             .tasks
@@ -385,7 +584,33 @@ fn prepare_execution(
             "The task graph is running. Pause it in /tasks before using the current agent.".into(),
         );
     }
-    let (provider, _, model) = crate::resolve_provider_route(state, config);
+    let (provider, model) = if let Some(route) = state.plan_execute_route.as_ref() {
+        let provider = config.providers.get(&route.provider).ok_or_else(|| {
+            format!(
+                "Provider {} is not configured. Choose another execution route.",
+                route.provider
+            )
+        })?;
+        if !provider.models.contains(&route.model)
+            && !state
+                .model_list
+                .iter()
+                .any(|model| model.provider == route.provider && model.id == route.model)
+            && !state
+                .discovered_models
+                .get(&route.provider)
+                .is_some_and(|models| models.contains(&route.model))
+        {
+            return Err(format!(
+                "Model {}/{} is not available in the configured catalog.",
+                route.provider, route.model
+            ));
+        }
+        (route.provider.clone(), route.model.clone())
+    } else {
+        let (provider, _, model) = crate::resolve_provider_route(state, config);
+        (provider, model)
+    };
     let supports_tools = config
         .effective_model_profile(&provider, &model)
         .is_none_or(|profile| profile.supports_tools != Some(false));
@@ -417,6 +642,11 @@ fn prepare_execution(
             .user_decide(review.revision, true)
             .map_err(|error| error.to_string())?;
     }
+    crate::plan_workflow_runtime::record_explicit_execution(
+        &mut approved,
+        &crate::agent::subagent::AgentRoute { provider, model },
+        state.messages.len(),
+    )?;
     *state
         .work_state
         .lock()
@@ -435,6 +665,18 @@ fn prepare_execution(
     finish_planning_epoch(state);
     state.plan_proposal = None;
     close_reader(state);
+    state.plan_workflow_graph = None;
+    if let Some(route) = state.plan_execute_route.take() {
+        crate::set_one_turn_route(
+            state,
+            crate::app::ModelInfo {
+                provider: route.provider,
+                id: route.model.clone(),
+                display_name: route.model,
+            },
+            None,
+        );
+    }
     state.mode = AgentMode::Agent;
     state.messages.push(Message {
         role: Role::User,
@@ -463,7 +705,10 @@ pub fn start_requested(
         .filter(|history| !history.is_complete())
     {
         if let Some(error) = &history.error {
-            state.status_message = Some(format!("Plan execution did not start: saved history could not load ({error}). Use /plan execute to retry."));
+            let error = format!("Plan execution did not start: saved history could not load ({error}). Use /plan execute to retry.");
+            state.plan_execute_route = None;
+            crate::plan_workflow_runtime::finish_implementation(state, false, &error);
+            state.status_message = Some(error);
         } else {
             if !history.busy {
                 history.request_full = true;
@@ -475,7 +720,11 @@ pub fn start_requested(
     }
     match prepare_execution(state, review, config, sessions) {
         Ok(()) => crate::start_llm_turn(state, config, tx, handle),
-        Err(error) => state.status_message = Some(error),
+        Err(error) => {
+            state.plan_execute_route = None;
+            crate::plan_workflow_runtime::finish_implementation(state, false, &error);
+            state.status_message = Some(error);
+        }
     }
 }
 
@@ -501,6 +750,7 @@ pub fn execution_context(state: &AppState) -> Option<String> {
             task.id, task.title, task.status
         ));
     }
+    context.push_str(&crate::plan_workflow_runtime::implementation_context(&work));
     Some(context)
 }
 
@@ -533,6 +783,162 @@ mod tests {
                 .review(),
         );
         state
+    }
+
+    #[test]
+    fn plan_workflow_send_routes_and_picker_preserve_review_boundary() {
+        let mut state = proposed_state();
+        let before = state.work_state.lock().unwrap().clone();
+        manage_command(&mut state, "send revise other/model Keep the original API").unwrap();
+        assert!(
+            matches!(state.plan_workflow_request.take(), Some(crate::plan_workflow::PlanWorkflowArgs::Handoff { step })
+            if step.role == crate::plan_workflow::WorkflowRole::Revise
+                && step.route.as_ref().is_some_and(|route| route.provider == "other" && route.model == "model")
+                && step.instructions == "Keep the original API")
+        );
+        assert_eq!(*state.work_state.lock().unwrap(), before);
+        manage_command(&mut state, "send review Check cancellation").unwrap();
+        assert_eq!(
+            state.model_picker_target,
+            crate::app::ModelPickerTarget::PlanWorkflow
+        );
+        assert!(state.model_picker_open);
+        select_workflow_model(
+            &mut state,
+            crate::app::ModelInfo {
+                provider: "second".into(),
+                id: "reviewer".into(),
+                display_name: "Reviewer".into(),
+            },
+        );
+        assert!(state.plan_workflow_request.is_none());
+        assert_eq!(
+            state.input,
+            "/plan send review second/reviewer Check cancellation"
+        );
+        manage_command(&mut state, "send review second/reviewer Check cancellation").unwrap();
+        assert!(
+            matches!(state.plan_workflow_request.take(), Some(crate::plan_workflow::PlanWorkflowArgs::Handoff { step })
+            if step.role == crate::plan_workflow::WorkflowRole::Review
+                && step.instructions == "Check cancellation"
+                && step.route.as_ref().is_some_and(|route| route.provider == "second"))
+        );
+        assert_eq!(*state.work_state.lock().unwrap(), before);
+        assert!(manage_command(&mut state, "send revise broken/").is_err());
+        assert!(state.plan_workflow_request.is_none());
+    }
+
+    #[test]
+    fn plan_workflow_controls_are_explicit_requests_and_graph_is_read_only() {
+        let mut state = proposed_state();
+        let before = state.work_state.lock().unwrap().clone();
+        manage_command(&mut state, "graph").unwrap();
+        assert!(state.plan_workflow_graph.is_some());
+        assert_eq!(*state.work_state.lock().unwrap(), before);
+        for command in ["pause", "resume", "cancel", "status"] {
+            manage_command(&mut state, command).unwrap();
+            let request =
+                serde_json::to_value(state.plan_workflow_request.take().unwrap()).unwrap();
+            assert_eq!(request["action"], command);
+        }
+        assert_eq!(*state.work_state.lock().unwrap(), before);
+        manage_command(
+            &mut state,
+            "run Author on provider A, review on B, revise on A",
+        )
+        .unwrap();
+        let request = state.input_queue.front().unwrap();
+        assert!(request.text.contains("plan_workflow tool"));
+        assert!(request
+            .text
+            .contains("Author on provider A, review on B, revise on A"));
+        assert_eq!(state.mode, AgentMode::Plan);
+        assert!(state.plan_workflow_request.is_none());
+    }
+
+    #[test]
+    fn plan_execution_route_is_validated_then_applied_for_one_turn() {
+        let temp = tempfile::tempdir().unwrap();
+        let sessions = crate::session::SessionStore::new(temp.path());
+        let config = crate::CaConfig::default_config();
+        let mut state = proposed_state();
+        let before = state.work_state.lock().unwrap().clone();
+        let review = state.plan_proposal.unwrap();
+        state.plan_execute_route = Some(crate::agent::subagent::AgentRoute {
+            provider: "missing".into(),
+            model: "missing".into(),
+        });
+        assert!(prepare_execution(&mut state, review, &config, &sessions)
+            .unwrap_err()
+            .contains("not configured"));
+        assert_eq!(*state.work_state.lock().unwrap(), before);
+        assert!(state.one_turn_route.is_none());
+        let (provider, definition) = config
+            .providers
+            .iter()
+            .find(|(_, provider)| !provider.models.is_empty())
+            .unwrap();
+        let model = &definition.models[0];
+        state.plan_execute_route = Some(crate::agent::subagent::AgentRoute {
+            provider: provider.clone(),
+            model: model.clone(),
+        });
+        prepare_execution(&mut state, review, &config, &sessions).unwrap();
+        assert_eq!(
+            state.current_model,
+            Some(crate::app::ModelInfo {
+                provider: provider.clone(),
+                id: model.clone(),
+                display_name: model.clone(),
+            })
+        );
+        assert!(state.one_turn_route.is_some());
+        assert!(state.plan_execute_route.is_none());
+        assert_eq!(
+            state.messages.last().unwrap().content,
+            "Execute the approved plan."
+        );
+    }
+
+    #[test]
+    fn plan_execution_waits_for_the_running_review_workflow_to_pause() {
+        let temp = tempfile::tempdir().unwrap();
+        let sessions = crate::session::SessionStore::new(temp.path());
+        let mut state = proposed_state();
+        let route = crate::agent::subagent::AgentRoute {
+            provider: "review-provider".into(),
+            model: "review-model".into(),
+        };
+        crate::plan_workflow::apply_action(
+            &mut state.work_state.lock().unwrap(),
+            crate::plan_workflow::PlanWorkflowArgs::Start {
+                goal: "Review the plan".into(),
+                participants: Vec::new(),
+                steps: vec![crate::plan_workflow::WorkflowStep {
+                    role: crate::plan_workflow::WorkflowRole::Review,
+                    participant: "reviewer".into(),
+                    route: None,
+                    instructions: String::new(),
+                }],
+                review_loop: None,
+                implementation: None,
+            },
+            &route,
+            None,
+        )
+        .unwrap();
+        let before = state.work_state.lock().unwrap().clone();
+        let review = state.plan_proposal.unwrap();
+        let error = prepare_execution(
+            &mut state,
+            review,
+            &crate::CaConfig::default_config(),
+            &sessions,
+        )
+        .unwrap_err();
+        assert!(error.contains("Pause the plan workflow"), "{error}");
+        assert_eq!(*state.work_state.lock().unwrap(), before);
+        assert!(state.messages.is_empty());
     }
 
     #[test]

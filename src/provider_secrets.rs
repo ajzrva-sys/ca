@@ -247,17 +247,20 @@ impl ProviderSecretStore for MemoryProviderSecretStore {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 struct MigratingProviderSecretStore {
     primary: Arc<dyn ProviderSecretStore>,
     legacy: Arc<dyn ProviderSecretStore>,
 }
 
+#[cfg(any(target_os = "macos", test))]
 impl MigratingProviderSecretStore {
     fn new(primary: Arc<dyn ProviderSecretStore>, legacy: Arc<dyn ProviderSecretStore>) -> Self {
         Self { primary, legacy }
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 impl std::fmt::Debug for MigratingProviderSecretStore {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -268,6 +271,7 @@ impl std::fmt::Debug for MigratingProviderSecretStore {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 impl ProviderSecretStore for MigratingProviderSecretStore {
     fn load(&self, account: &str) -> anyhow::Result<Option<Vec<u8>>> {
         if let Some(secret) = self.primary.load(account)? {

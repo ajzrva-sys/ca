@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca · agent · mimo-v2.5-pro · multi-run judged
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
  ┌ Multi-run · isolated candidates ───────────────────────────────────────────────────────────────┐
  │judged · 2 candidates · cost estimate shown per route when configured                           │
  │Candidate worktrees and branches remain user-owned; nothing is merged or attached.              │
@@ -28,12 +28,12 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
  │                                                                                                │
  │                                                                                                │
  │                                                                                                │
- │                                                                                                │
- │                                                                                                │
- └────────────────────────────────────────────────────────────────────────────────────────────────┘
+╭│                                                                                                │╮
+││                                                                                                ││
+╰└────────────────────────────────────────────────────────────────────────────────────────────────┘╯
 / commands
 -- narrow --
- ca · agent · mimo-v2.5-pro · multi-run judged
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
  ┌ Multi-run · isolated candidates ───────────────────────┐
  │judged · 2 candidates · cost estimate shown per route   │
  │when configured                                         │
@@ -53,7 +53,7 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
  │Multi-run judgment ready                                │
  │                                                        │
  │                                                        │
- │                                                        │
- │                                                        │
- └────────────────────────────────────────────────────────┘
+╭│                                                        │╮
+││                                                        ││
+╰└────────────────────────────────────────────────────────┘╯
 / commands

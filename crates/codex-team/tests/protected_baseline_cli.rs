@@ -4,9 +4,12 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 mod support;
+
+static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 struct Scratch {
     path: std::path::PathBuf,
@@ -62,13 +65,13 @@ fn fixture() -> Result<Scratch> {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let root = Scratch {
-        path: std::env::temp_dir().join(format!(
-            "codex-team-protected-cli-{}-{nonce}",
-            std::process::id()
-        )),
-    };
-    fs::create_dir(&root.path)?;
+    let sequence = FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!(
+        "codex-team-protected-cli-{}-{nonce}-{sequence}",
+        std::process::id()
+    ));
+    fs::create_dir(&path)?;
+    let root = Scratch { path };
     fs::create_dir_all(root.path().join("oracles"))?;
     fs::create_dir_all(root.path().join("reference"))?;
     fs::write(root.path().join("oracles/data.bin"), [0_u8, 1, 2, 255])?;

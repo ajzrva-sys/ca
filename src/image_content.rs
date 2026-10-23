@@ -120,28 +120,53 @@ pub enum ModelContentBlock {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ModelContent {
     blocks: Vec<ModelContentBlock>,
+    prunable_tool_result: bool,
+    tool_success: Option<bool>,
 }
 
 impl ModelContent {
     pub fn text(text: impl Into<String>) -> Self {
         Self {
             blocks: vec![ModelContentBlock::Text(text.into())],
+            prunable_tool_result: false,
+            tool_success: None,
         }
     }
 
     pub fn multimodal(text: impl Into<String>, images: &[ModelImage]) -> Self {
         let mut blocks = vec![ModelContentBlock::Text(text.into())];
         blocks.extend(images.iter().cloned().map(ModelContentBlock::Image));
-        Self { blocks }
+        Self {
+            blocks,
+            prunable_tool_result: false,
+            tool_success: None,
+        }
     }
 
     pub fn image_from_tool(call_id: &str, image: ModelImage) -> Self {
         Self {
+            prunable_tool_result: false,
+            tool_success: Some(true),
             blocks: vec![
                 ModelContentBlock::Text(format!("Image returned by view_image call {call_id}.")),
                 ModelContentBlock::Image(image),
             ],
         }
+    }
+
+    pub(crate) fn with_prunable_tool_result(mut self, eligible: bool) -> Self {
+        self.prunable_tool_result = eligible;
+        self
+    }
+    pub(crate) fn with_tool_result_status(mut self, success: bool) -> Self {
+        self.tool_success = Some(success);
+        self
+    }
+    pub(crate) fn tool_result_success(&self) -> Option<bool> {
+        self.tool_success
+    }
+    pub(crate) fn is_prunable_tool_result(&self) -> bool {
+        self.prunable_tool_result
     }
 
     pub fn as_str(&self) -> Option<&str> {

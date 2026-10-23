@@ -42,6 +42,9 @@ struct BoundedVerificationOutput {
 }
 
 fn progress(args: std::fmt::Arguments<'_>) {
+    if machine_json::progress_suppressed() {
+        return;
+    }
     if machine_json::enabled() {
         eprintln!("{args}");
     } else {

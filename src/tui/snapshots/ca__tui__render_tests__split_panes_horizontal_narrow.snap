@@ -3,7 +3,7 @@ source: src/tui/render_tests.rs
 expression: "render_to_text(&horizontal, 60, 32)"
 ---
 ┌ ○ pane 1 · idle ─────────────────────────────────────────┐
-│ ca · agent · auto                                        │
+│ ca v0.0.0 │ /workspace/ca                    [Dashboard] │
 │Transcript owned by top.                                  │
 │                                                          │
 │                                                          │
@@ -13,13 +13,13 @@ expression: "render_to_text(&horizontal, 60, 32)"
 │                                                          │
 │                                                          │
 │                                                          │
-│                                                          │
-│ → Ask anything…                                          │
-│                                                          │
+│╭────────────────────────────────────────────────────────╮│
+││› Ask anything…                                         ││
+│╰────────────────────────────────────────── agent · auto ╯│
 │1 messages · / commands                                   │
 └──────────────────────────────────────────────────────────┘
 ┌ ● pane 2 · idle ─────────────────────────────────────────┐
-│ ca · agent · auto                                        │
+│ ca v0.0.0 │ /workspace/ca                    [Dashboard] │
 │Transcript owned by bottom.                               │
 │                                                          │
 │                                                          │
@@ -29,8 +29,8 @@ expression: "render_to_text(&horizontal, 60, 32)"
 │                                                          │
 │                                                          │
 │                                                          │
-│                                                          │
-│ → Ask anything…                                          │
-│                                                          │
+│╭────────────────────────────────────────────────────────╮│
+││› Ask anything…                                         ││
+│╰────────────────────────────────────────── agent · auto ╯│
 │1 messages · / commands                                   │
 └──────────────────────────────────────────────────────────┘

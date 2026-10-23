@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "render_to_text(&activity_snapshot_state(ToolStatus::Done, false), 60, 24)"
 ---
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
   [ ✎ Edited 4 files, ran a command ▸ ]
 
 
@@ -22,7 +22,7 @@ expression: "render_to_text(&activity_snapshot_state(ToolStatus::Done, false), 6
 
 
 
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                           │
+╰──────────────────────────────────────────── agent · auto ╯
 1 messages · / commands

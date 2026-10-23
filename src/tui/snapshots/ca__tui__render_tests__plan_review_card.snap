@@ -1,9 +1,8 @@
 ---
 source: src/tui/render_tests.rs
-assertion_line: 110
 expression: "wide_narrow(wide, narrow)"
 ---
- ca · plan · auto
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
   ╭────────────────────────────────────────────────────────────────────────────────────────────────╮
   │ Plan · Ready for review                                                                        │
@@ -17,8 +16,8 @@ expression: "wide_narrow(wide, narrow)"
   │ 4. Run completion checks                                                                       │
   │ 5. Install the verified release                                                                │
   │                                                                                                │
-  │ Enter Execute · Ctrl+O View plan                                                               │
-  │ Type to Revise · Esc Dismiss                                                                   │
+  │ Enter Execute · Ctrl+O View plan · /plan graph                                                 │
+  │ Type to Revise · Esc Dismiss · /plan send                                                      │
   ╰────────────────────────────────────────────────────────────────────────────────────────────────╯
 
 
@@ -29,12 +28,12 @@ expression: "wide_narrow(wide, narrow)"
 
 
 
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                                                                   │
+╰───────────────────────────────────────────────────────────────────────────────────── plan · auto ╯
 / commands
 -- narrow --
- ca · plan · auto
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
   │ Plan · Ready for review                                │
   │ Make plan review readable and execution reliable       │
   │ Make completed work visible and keep the next action   │
@@ -50,11 +49,11 @@ expression: "wide_narrow(wide, narrow)"
   │ 4. Run completion checks                               │
   │ 5. Install the verified release                        │
   │                                                        │
-  │ Enter Execute · Ctrl+O View plan                       │
-  │ Type to Revise · Esc Dismiss                           │
+  │ Enter Execute · Ctrl+O View plan · /plan graph         │
+  │ Type to Revise · Esc Dismiss · /plan send              │
   ╰────────────────────────────────────────────────────────╯
 
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                           │
+╰───────────────────────────────────────────── plan · auto ╯
 / commands

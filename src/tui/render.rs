@@ -11,19 +11,19 @@ pub(crate) use transcript_cache::TranscriptCache;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[allow(dead_code)] // Fields used by compact mode, block styling, and scrollbar features
-struct ThemePalette {
-    accent: Color,
-    heading: Color,
+pub(super) struct ThemePalette {
+    pub(super) accent: Color,
+    pub(super) heading: Color,
     heading_text: Color,
     link: Color,
     plan: Color,
-    text: Color,
-    accent_foreground: Color,
+    pub(super) text: Color,
+    pub(super) accent_foreground: Color,
     title_hint_background: Color,
-    surface: Color,
+    pub(super) surface: Color,
     code_background: Color,
-    border: Color,
-    muted: Color,
+    pub(super) border: Color,
+    pub(super) muted: Color,
     strong: Color,
     warning: Color,
     error: Color,
@@ -50,8 +50,8 @@ struct ThemePalette {
     state_completed: Color,
     state_failed: Color,
     state_blocked: Color,
-    state_idle: Color,
-    state_working: Color,
+    pub(super) state_idle: Color,
+    pub(super) state_working: Color,
     // Scrollbar
     scrollbar_fg: Color,
     scrollbar_bg: Color,
@@ -68,7 +68,7 @@ fn active_theme(state: &AppState) -> crate::ui_settings::UiTheme {
         .unwrap_or(state.ui_theme)
 }
 
-fn palette(state: &AppState) -> ThemePalette {
+pub(super) fn palette(state: &AppState) -> ThemePalette {
     if state.theme_manager.is_none()
         && state.terminal_theme_auto
         && state.terminal_appearance == Some(crate::terminal_awareness::TerminalAppearance::Light)
@@ -118,46 +118,46 @@ fn palette(state: &AppState) -> ThemePalette {
     }
     match active_theme(state) {
         crate::ui_settings::UiTheme::Default => ThemePalette {
-            accent: Color::Cyan,
-            heading: Color::Cyan,
-            heading_text: Color::White,
-            link: Color::Blue,
-            plan: Color::LightGreen,
-            text: Color::White,
-            accent_foreground: Color::Black,
-            title_hint_background: Color::DarkGray,
-            surface: Color::Reset,
-            code_background: Color::DarkGray,
-            border: Color::DarkGray,
-            muted: Color::DarkGray,
-            strong: Color::White,
-            warning: Color::Yellow,
-            error: Color::Red,
-            success: Color::Green,
-            diff_insert_fg: Color::Green,
-            diff_insert_bg: Color::Rgb(20, 50, 20),
-            diff_delete_fg: Color::Red,
-            diff_delete_bg: Color::Rgb(60, 20, 20),
-            diff_hunk_fg: Color::Cyan,
-            diff_file_header_fg: Color::Cyan,
-            paste_fg: Color::White,
-            paste_bg: Color::Rgb(40, 50, 80),
-            md_h1: Color::Cyan,
-            md_h2: Color::Cyan,
-            md_h3: Color::LightCyan,
-            md_h4: Color::LightCyan,
-            md_h5: Color::Gray,
-            md_h6: Color::Gray,
-            state_needs_input: Color::Yellow,
-            state_completed: Color::Green,
-            state_failed: Color::Red,
-            state_blocked: Color::Rgb(255, 165, 0),
-            state_idle: Color::DarkGray,
-            state_working: Color::Cyan,
-            scrollbar_fg: Color::DarkGray,
-            scrollbar_bg: Color::Reset,
-            selection_border: Color::Cyan,
-            hover_border: Color::Rgb(100, 160, 200),
+            accent: Color::Rgb(189, 147, 249),
+            heading: Color::Rgb(214, 214, 214),
+            heading_text: Color::Rgb(214, 214, 214),
+            link: Color::Rgb(137, 183, 235),
+            plan: Color::Rgb(151, 190, 122),
+            text: Color::Rgb(214, 214, 214),
+            accent_foreground: Color::Rgb(17, 17, 17),
+            title_hint_background: Color::Rgb(38, 38, 38),
+            surface: Color::Rgb(17, 17, 17),
+            code_background: Color::Rgb(30, 30, 30),
+            border: Color::Rgb(83, 83, 89),
+            muted: Color::Rgb(139, 139, 139),
+            strong: Color::Rgb(235, 235, 235),
+            warning: Color::Rgb(229, 190, 111),
+            error: Color::Rgb(240, 126, 126),
+            success: Color::Rgb(134, 173, 100),
+            diff_insert_fg: Color::Rgb(151, 190, 122),
+            diff_insert_bg: Color::Rgb(24, 49, 24),
+            diff_delete_fg: Color::Rgb(240, 126, 126),
+            diff_delete_bg: Color::Rgb(61, 27, 27),
+            diff_hunk_fg: Color::Rgb(137, 183, 235),
+            diff_file_header_fg: Color::Rgb(214, 214, 214),
+            paste_fg: Color::Rgb(214, 214, 214),
+            paste_bg: Color::Rgb(42, 42, 57),
+            md_h1: Color::Rgb(235, 235, 235),
+            md_h2: Color::Rgb(214, 214, 214),
+            md_h3: Color::Rgb(189, 147, 249),
+            md_h4: Color::Rgb(189, 147, 249),
+            md_h5: Color::Rgb(139, 139, 139),
+            md_h6: Color::Rgb(139, 139, 139),
+            state_needs_input: Color::Rgb(229, 190, 111),
+            state_completed: Color::Rgb(134, 173, 100),
+            state_failed: Color::Rgb(240, 126, 126),
+            state_blocked: Color::Rgb(229, 190, 111),
+            state_idle: Color::Rgb(139, 139, 139),
+            state_working: Color::Rgb(139, 139, 139),
+            scrollbar_fg: Color::Rgb(83, 83, 89),
+            scrollbar_bg: Color::Rgb(17, 17, 17),
+            selection_border: Color::Rgb(189, 147, 249),
+            hover_border: Color::Rgb(139, 139, 139),
         },
         crate::ui_settings::UiTheme::Ocean => ThemePalette {
             accent: Color::Rgb(82, 165, 255),
@@ -404,17 +404,36 @@ pub fn theme_accent_rgb(state: &AppState) -> (u8, u8, u8) {
     }
 }
 
+pub(crate) const FILTER_BANNER_LABEL: &str = "FILTER ON";
+pub(crate) const PROVIDER_PANE_LABEL: &str = "TO PROVIDER";
+/// Cyan from the confidential classification bar, with black text.
+pub(crate) const FILTER_BANNER_BG: Color = Color::Rgb(92, 227, 254);
+pub(crate) const FILTER_BANNER_FG: Color = Color::Black;
+
 pub fn render(frame: &mut ratatui::Frame, state: &AppState) {
-    let Some(deck) = state.pane_deck.as_ref() else {
-        render_pane(frame, frame.area(), state, true);
-        return;
-    };
-    if deck.is_single() {
-        render_pane(frame, frame.area(), state, true);
+    render_with_version_label(frame, state, super::VERSION_LABEL);
+}
+
+pub(super) fn render_with_version_label(
+    frame: &mut ratatui::Frame,
+    state: &AppState,
+    version_label: &str,
+) {
+    let (banner, summary, below) = split_filter_banner(frame.area(), state);
+    if banner.is_some() && summary.is_none() {
+        paint_filter_status_line(frame, below, state);
+        paint_filter_banner(frame, banner);
         return;
     }
+    let (area, provider) = split_provider_pane(below, state);
+    let Some(deck) = state.pane_deck.as_ref().filter(|deck| !deck.is_single()) else {
+        render_pane(frame, area, state, true, version_label);
+        paint_provider_pane(frame, provider, state);
+        paint_filter_summary(frame, summary, state);
+        paint_filter_banner(frame, banner);
+        return;
+    };
 
-    let area = frame.area();
     for (id, region) in deck.layout().regions(area) {
         let Some(pane) = deck.pane(state, id) else {
             continue;
@@ -450,13 +469,235 @@ pub fn render(frame: &mut ratatui::Frame, state: &AppState) {
             horizontal: 1,
             vertical: 1,
         });
-        render_pane(frame, inner, pane, focused);
+        render_pane(frame, inner, pane, focused, version_label);
+    }
+    paint_provider_pane(frame, provider, state);
+    paint_filter_summary(frame, summary, state);
+    paint_filter_banner(frame, banner);
+}
+
+fn split_filter_banner(area: Rect, state: &AppState) -> (Option<Rect>, Option<Rect>, Rect) {
+    if !state
+        .filter_banner
+        .load(std::sync::atomic::Ordering::Relaxed)
+        || area.height == 0
+        || area.width == 0
+    {
+        return (None, None, area);
+    }
+    let rows = if area.height >= 3 { 2 } else { 1 };
+    let banner = Some(Rect {
+        x: area.x,
+        y: area.y,
+        width: area.width,
+        height: 1,
+    });
+    let summary = if rows == 2 {
+        Some(Rect {
+            x: area.x,
+            y: area.y.saturating_add(1),
+            width: area.width,
+            height: 1,
+        })
+    } else {
+        None
+    };
+    let rest = Rect {
+        x: area.x,
+        y: area.y.saturating_add(rows),
+        width: area.width,
+        height: area.height.saturating_sub(rows),
+    };
+    (banner, summary, rest)
+}
+
+fn paint_filter_banner(frame: &mut ratatui::Frame, banner: Option<Rect>) {
+    let Some(area) = banner else {
+        return;
+    };
+    paint_classified_row(frame, area, FILTER_BANNER_LABEL);
+}
+
+fn paint_filter_summary(frame: &mut ratatui::Frame, summary: Option<Rect>, state: &AppState) {
+    let Some(area) = summary else {
+        return;
+    };
+    paint_left_row(frame, area, &filter_summary_text(state), classified_style());
+}
+
+fn paint_filter_status_line(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
+    let style = Style::default().fg(palette(state).warning);
+    paint_left_row(frame, area, &filter_summary_text(state), style);
+}
+
+fn paint_left_row(frame: &mut ratatui::Frame, area: Rect, text: &str, style: Style) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let width = area.width as usize;
+    let mut line: String = text.chars().take(width).collect();
+    if line.len() < width {
+        line.push_str(&" ".repeat(width - line.len()));
+    }
+    frame.buffer_mut().set_string(area.x, area.y, line, style);
+}
+
+fn filter_summary_text(state: &AppState) -> String {
+    state
+        .filter_summary
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_default()
+}
+
+fn classified_style() -> Style {
+    Style::default()
+        .fg(FILTER_BANNER_FG)
+        .bg(FILTER_BANNER_BG)
+        .add_modifier(Modifier::BOLD)
+}
+
+fn paint_classified_row(frame: &mut ratatui::Frame, area: Rect, label: &str) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    frame.buffer_mut().set_string(
+        area.x,
+        area.y,
+        classified_banner_text(label, area.width as usize),
+        classified_style(),
+    );
+}
+
+/// One centered label on a solid bar. The label is the only text.
+fn classified_banner_text(label: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    let label: String = label.chars().take(width).collect();
+    let pad = width - label.len();
+    let left = pad / 2;
+    let mut line = " ".repeat(left);
+    line.push_str(&label);
+    line.push_str(&" ".repeat(pad - left));
+    line
+}
+
+fn split_provider_pane(area: Rect, state: &AppState) -> (Rect, Option<Rect>) {
+    let width = provider_pane_width(area, state);
+    if width == 0 {
+        return (area, None);
+    }
+    (
+        Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width.saturating_sub(width),
+            height: area.height,
+        },
+        Some(Rect {
+            x: area.x.saturating_add(area.width.saturating_sub(width)),
+            y: area.y,
+            width,
+            height: area.height,
+        }),
+    )
+}
+
+fn provider_pane_width(area: Rect, state: &AppState) -> u16 {
+    let summary_empty = filter_summary_text(state).is_empty();
+    if !state
+        .filter_banner
+        .load(std::sync::atomic::Ordering::Relaxed)
+        || (state.provider_pane.is_empty() && summary_empty)
+        || area.width < 80
+        || area.height < 8
+    {
+        return 0;
+    }
+    let pane = u16::try_from(u32::from(area.width) * 2 / 5).unwrap_or(area.width);
+    let pane = pane.clamp(28, area.width / 2);
+    if area.width.saturating_sub(pane) < 40 {
+        return 0;
+    }
+    pane
+}
+
+fn paint_provider_pane(frame: &mut ratatui::Frame, pane: Option<Rect>, state: &AppState) {
+    let Some(pane) = pane else {
+        state.provider_pane.clear_viewport();
+        return;
+    };
+    if pane.width < 12 || pane.height < 3 {
+        state.provider_pane.clear_viewport();
+        return;
+    }
+    let style = classified_style();
+    let top = Rect {
+        x: pane.x,
+        y: pane.y,
+        width: pane.width,
+        height: 1,
+    };
+    let bottom = Rect {
+        x: pane.x,
+        y: pane.y.saturating_add(pane.height.saturating_sub(1)),
+        width: pane.width,
+        height: 1,
+    };
+    paint_classified_row(frame, top, PROVIDER_PANE_LABEL);
+    paint_classified_row(frame, bottom, PROVIDER_PANE_LABEL);
+    let content = Rect {
+        x: pane.x.saturating_add(1),
+        y: pane.y.saturating_add(1),
+        width: pane.width.saturating_sub(1),
+        height: pane.height.saturating_sub(2),
+    };
+    for row in content.y..content.y.saturating_add(content.height) {
+        frame.buffer_mut().set_string(pane.x, row, " ", style);
+    }
+    let text = provider_copy_text(state);
+    let theme = palette(state);
+    let paragraph = Paragraph::new(text.as_str())
+        .style(Style::default().fg(theme.text).bg(theme.surface))
+        .wrap(Wrap { trim: false });
+    let line_count = paragraph.line_count(content.width);
+    state
+        .provider_pane
+        .set_viewport(pane, content.height, line_count);
+    frame.render_widget(paragraph.scroll((state.provider_pane.scroll(), 0)), content);
+}
+
+fn provider_copy_text(state: &AppState) -> String {
+    let summary = filter_summary_text(state);
+    let body = state.provider_pane.text();
+    if summary.is_empty() {
+        body.to_string()
+    } else if body.is_empty() {
+        summary
+    } else {
+        format!("{summary}\n{body}")
     }
 }
 
-fn render_pane(frame: &mut ratatui::Frame, area: Rect, state: &AppState, focused: bool) {
+fn render_pane(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    state: &AppState,
+    focused: bool,
+    version_label: &str,
+) {
+    if let Some(editor) = state.personality_editor.as_ref() {
+        crate::tui::personality::render_with_version_label(frame, area, editor, version_label);
+        return;
+    }
+    let theme = palette(state);
+    frame.render_widget(
+        Block::default().style(Style::default().fg(theme.text).bg(theme.surface)),
+        area,
+    );
     if state.dashboard.open {
-        crate::tui::dashboard::render(frame, area, state);
+        crate::tui::dashboard::render_with_version_label(frame, area, state, version_label);
         if state.session_picker_open {
             render_session_picker(frame, area, state);
         }
@@ -485,25 +726,36 @@ fn render_pane(frame: &mut ratatui::Frame, area: Rect, state: &AppState, focused
         ) as u16;
     let queue_rows = state.input_queue.len().min(3) as u16 + u16::from(state.input_queue.len() > 3);
     let attachment_rows = u16::from(!state.pasted_images.is_empty() || state.image_attachment_busy);
+    let paste_preview_rows = u16::from(
+        state
+            .composer_ui
+            .active_large_paste_index(state.input_cursor)
+            .is_some(),
+    ) * (crate::tui::composer::PASTE_PREVIEW_ROWS as u16 + 1);
     let input_height = state
         .input_height
-        .max(2 + composer_rows + queue_rows + attachment_rows);
+        .max(2 + composer_rows + queue_rows + attachment_rows + paste_preview_rows);
     let compact = state.ui_compact_mode;
-    let title_rows: u16 = if compact { 0 } else { 1 };
+    let title_rows: u16 = 1;
     let status_rows: u16 = if compact { 0 } else { 1 };
+    let activity_rows = background_activity_rows(
+        state,
+        area.height
+            .saturating_sub(title_rows + input_height + status_rows + 1),
+    );
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(title_rows),                          // title bar
-            Constraint::Min(1),                                      // conversation
-            Constraint::Length(has_active_background(state) as u16), // activity strip
-            Constraint::Length(input_height),                        // input box (dynamic)
-            Constraint::Length(status_rows),                         // status bar
+            Constraint::Length(title_rows),    // title bar
+            Constraint::Min(1),                // conversation
+            Constraint::Length(activity_rows), // activity strip
+            Constraint::Length(input_height),  // input box (dynamic)
+            Constraint::Length(status_rows),   // status bar
         ])
         .split(area);
 
-    render_title(frame, chunks[0], state);
+    render_title(frame, chunks[0], state, version_label);
     let transcript_top = render_conversation(frame, chunks[1], state, focused);
     render_background_activity(frame, chunks[2], state);
     render_input(frame, chunks[3], state, focused);
@@ -517,9 +769,13 @@ fn render_pane(frame: &mut ratatui::Frame, area: Rect, state: &AppState, focused
 
     if !focused {
         state.transcript_scroll.clear_activity_hit_targets();
+        state.transcript_scroll.clear_user_prompt_hit_targets();
         return;
     }
 
+    if state.plan_workflow_graph.is_some() {
+        render_plan_workflow_graph(frame, area, state);
+    }
     if state.model_picker_open {
         render_model_picker(frame, area, state);
     }
@@ -1323,6 +1579,197 @@ fn render_workflow_preview(frame: &mut ratatui::Frame, area: Rect, state: &AppSt
         Style::default().fg(Color::DarkGray),
     )));
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+fn render_plan_workflow_graph(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
+    let Some(graph) = state.plan_workflow_graph.as_ref() else {
+        return;
+    };
+    let theme = palette(state);
+    frame.render_widget(Clear, area);
+    let block = Block::default()
+        .title(" Plan workflow ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.plan));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(1),
+            Constraint::Length(4),
+        ])
+        .split(inner);
+    let work = state
+        .work_state
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let Some(workflow) = work.plan_workflow.as_ref() else {
+        frame.render_widget(
+            Paragraph::new(
+                "No plan workflow yet.\nUse /plan run <request>, or create a plan and /plan send.",
+            )
+            .wrap(Wrap { trim: false }),
+            chunks[0],
+        );
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from(crate::terminal_text::sanitize_terminal_text(
+                    state.status_message.as_deref().unwrap_or_default(),
+                )),
+                Line::from("S Send plan · E Execute plan"),
+                Line::from("Esc close"),
+            ])
+            .style(Style::default().fg(theme.plan)),
+            chunks[2],
+        );
+        return;
+    };
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled(
+                crate::terminal_text::sanitize_terminal_text(&workflow.goal),
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(format!(
+                "{:?} · {} stages · {} agents · {}",
+                workflow.status,
+                workflow.steps.len(),
+                workflow.participants.len(),
+                if graph.participants {
+                    "Agents"
+                } else {
+                    "Handoffs"
+                }
+            )),
+        ])
+        .wrap(Wrap { trim: false }),
+        chunks[0],
+    );
+    let mut lines = Vec::new();
+    let count = if graph.participants {
+        workflow.participants.len()
+    } else {
+        workflow.steps.len()
+    };
+    let selected = graph.selected_idx.min(count.saturating_sub(1));
+    let visible = usize::from(chunks[1].height / 4).max(1);
+    let start = selected
+        .saturating_sub(visible / 2)
+        .min(count.saturating_sub(visible));
+    let width = usize::from(chunks[1].width.saturating_sub(4));
+    if graph.participants {
+        for (index, participant) in workflow
+            .participants
+            .iter()
+            .enumerate()
+            .skip(start)
+            .take(visible)
+        {
+            let prefix = if index == selected { "▶" } else { " " };
+            let style = if index == selected {
+                Style::default().bg(theme.plan).fg(theme.accent_foreground)
+            } else {
+                Style::default().fg(theme.text)
+            };
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "{prefix} {}",
+                    crate::terminal_text::sanitize_terminal_text(&participant.id)
+                ),
+                style,
+            )));
+            lines.push(Line::from(format!(
+                "  {}",
+                crate::tui::selection::truncate_cells(
+                    &crate::terminal_text::sanitize_terminal_text(&format!(
+                        "{}/{}",
+                        participant.route.provider, participant.route.model
+                    )),
+                    width
+                )
+            )));
+            lines.push(Line::from("  Enter drafts a handoff to this agent"));
+            lines.push(Line::from(""));
+        }
+    } else {
+        for (index, stage) in workflow.steps.iter().enumerate().skip(start).take(visible) {
+            let prefix = if index == selected { "▶" } else { " " };
+            let style = if index == selected {
+                Style::default().bg(theme.plan).fg(theme.accent_foreground)
+            } else {
+                Style::default().fg(theme.text)
+            };
+            let label = format!(
+                "{prefix} {}. {:?} · {} · {:?}",
+                index + 1,
+                stage.role,
+                stage.participant,
+                stage.status
+            );
+            lines.push(Line::from(Span::styled(
+                crate::tui::selection::truncate_cells(
+                    &crate::terminal_text::sanitize_terminal_text(&label),
+                    usize::from(chunks[1].width),
+                ),
+                style,
+            )));
+            lines.push(Line::from(format!(
+                "  {}",
+                crate::tui::selection::truncate_cells(
+                    &crate::terminal_text::sanitize_terminal_text(&format!(
+                        "{}/{}",
+                        stage.route.provider, stage.route.model
+                    )),
+                    width
+                )
+            )));
+            let result = stage
+                .result_snapshot
+                .and_then(|snapshot| workflow.snapshots.get(snapshot))
+                .map(|snapshot| format!("Plan revision {}", snapshot.plan.revision))
+                .or_else(|| {
+                    stage.accepted.map(|accepted| {
+                        if accepted {
+                            "Accepted".into()
+                        } else {
+                            "Changes requested".into()
+                        }
+                    })
+                })
+                .unwrap_or_else(|| "Enter opens plan and feedback".into());
+            lines.push(Line::from(format!("  {result}")));
+            lines.push(Line::from(if index + 1 < count { "  ↓" } else { "" }));
+        }
+    }
+    frame.render_widget(Paragraph::new(lines), chunks[1]);
+    let notice = state
+        .status_message
+        .as_deref()
+        .or(workflow.notice.as_deref())
+        .unwrap_or_default();
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(crate::tui::selection::truncate_cells(
+                &crate::terminal_text::sanitize_terminal_text(notice),
+                usize::from(chunks[2].width),
+            )),
+            Line::from(if graph.participants {
+                "↑↓ select · Enter draft handoff · Tab handoffs"
+            } else {
+                "↑↓ select · Enter inspect · Tab agents/handoffs"
+            }),
+            Line::from("S Send · E Execute · P Pause/Resume · C Cancel"),
+            Line::from(format!(
+                "Esc close · {}/{}",
+                if count == 0 { 0 } else { selected + 1 },
+                count
+            )),
+        ])
+        .style(Style::default().fg(theme.plan)),
+        chunks[2],
+    );
 }
 
 fn render_task_graph_manager(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
@@ -3765,6 +4212,9 @@ fn provider_check_label(
         Some(ProviderCheckStatus::InvalidResponse) => {
             ("invalid or incomplete response".into(), Color::Red)
         }
+        Some(ProviderCheckStatus::FilterStopped) => {
+            ("provider filter stopped".into(), Color::Yellow)
+        }
         Some(ProviderCheckStatus::NeedsModel) => ("needs a model".into(), Color::Yellow),
         Some(ProviderCheckStatus::AuthenticationRequired) => {
             ("authentication required".into(), Color::Yellow)
@@ -3923,7 +4373,7 @@ fn render_provider_list(
         Style::default().fg(Color::DarkGray),
     )));
     items.push(ListItem::new(Span::styled(
-        "⇧A custom · ⇧E edit · ⇧D delete",
+        "⇧A custom · ⇧E edit · ⇧D delete · ⇧R refresh",
         Style::default().fg(Color::DarkGray),
     )));
     items.push(ListItem::new(Span::styled(
@@ -4287,6 +4737,9 @@ fn render_provider_delete_confirmation(
 
 fn provider_credential_label(source: &crate::config::ProviderApiKeySource) -> String {
     match source {
+        crate::config::ProviderApiKeySource::ApplicationDefaultCredentials => {
+            "Application Default Credentials".into()
+        }
         crate::config::ProviderApiKeySource::None => "no credential".into(),
         crate::config::ProviderApiKeySource::Environment(environment) => {
             format!("env {environment}")
@@ -4300,11 +4753,74 @@ fn model_count_label(count: usize) -> String {
     format!("{count} {}", if count == 1 { "model" } else { "models" })
 }
 
-fn render_title(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
-    if area.height == 0 {
+fn compact_token_count(tokens: u64) -> String {
+    if tokens >= 1_000 {
+        format!("{}K", tokens / 1_000)
+    } else {
+        tokens.to_string()
+    }
+}
+
+fn render_title(frame: &mut ratatui::Frame, area: Rect, state: &AppState, version_label: &str) {
+    if area.height == 0 || area.width == 0 {
         return;
     }
-    let palette = palette(state);
+    let theme = palette(state);
+    let context = if let Some(window) = state.current_context_window_tokens {
+        format!(
+            "{} / {}",
+            compact_token_count(state.current_context_tokens),
+            compact_token_count(window)
+        )
+    } else if state.current_context_tokens > 0 {
+        format!(
+            "{} context",
+            compact_token_count(state.current_context_tokens)
+        )
+    } else {
+        String::new()
+    };
+    let mut right = if context.is_empty() {
+        "[Dashboard]".to_string()
+    } else {
+        format!("{context} │ [Dashboard]")
+    };
+    let identity = format!(" {version_label}");
+    let identity_width = unicode_width::UnicodeWidthStr::width(identity.as_str());
+    let remaining_width = (area.width as usize).saturating_sub(identity_width + 2);
+    if unicode_width::UnicodeWidthStr::width(right.as_str()) > remaining_width {
+        right = if remaining_width >= "[Dashboard]".len() {
+            "[Dashboard]".to_string()
+        } else {
+            String::new()
+        };
+    }
+    let right_width = unicode_width::UnicodeWidthStr::width(right.as_str());
+    let workspace_width = (area.width as usize).saturating_sub(identity_width + right_width + 5);
+    let workspace = crate::terminal_text::sanitize_terminal_text(&state.cwd);
+    let workspace = crate::tui::selection::truncate_cells(&workspace, workspace_width);
+    let left = if workspace.is_empty() {
+        identity
+    } else {
+        format!("{identity} │ {workspace}")
+    };
+    frame.render_widget(
+        Paragraph::new(Span::styled(left, Style::default().fg(theme.text))),
+        area,
+    );
+    frame.render_widget(
+        Paragraph::new(Span::styled(right, Style::default().fg(theme.muted)))
+            .alignment(Alignment::Right),
+        Rect::new(
+            area.right().saturating_sub(right_width as u16 + 1),
+            area.y,
+            right_width as u16,
+            1,
+        ),
+    );
+}
+
+fn composer_metadata(state: &AppState) -> String {
     let mode_str = match state.mode {
         crate::app::AgentMode::Agent => "agent",
         crate::app::AgentMode::Plan => "plan",
@@ -4328,7 +4844,11 @@ fn render_title(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
         .statusline_fields
         .contains(&crate::ui_settings::StatusField::Model)
     {
-        details.push(model.to_string());
+        details.push(
+            state
+                .reasoning_effort
+                .map_or_else(|| model.to_string(), |effort| format!("{model} ({effort})")),
+        );
     }
     if !state
         .statusline_fields
@@ -4342,7 +4862,7 @@ fn render_title(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
     match state.approval {
         crate::app::ApprovalMode::Allowlist => {}
         crate::app::ApprovalMode::AutoReview => details.push("auto-review".into()),
-        crate::app::ApprovalMode::RunEverything => details.push("yolo".into()),
+        crate::app::ApprovalMode::RunEverything => details.push("always-approve".into()),
     }
     if !state.run_capabilities.session_persistence
         && !matches!(state.active_profile, crate::runtime::ActiveProfile::Bare)
@@ -4384,33 +4904,7 @@ fn render_title(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
         details.push(format!("multi-run {}", run.status.label()));
     }
 
-    let badge = " ca ";
-    let details = if details.is_empty() {
-        String::new()
-    } else {
-        format!("· {} ", details.join(" · "))
-    };
-    let available =
-        area.width
-            .saturating_sub(unicode_width::UnicodeWidthStr::width(badge) as u16) as usize;
-    let details = crate::tui::selection::truncate_cells(&details, available);
-    let spans = vec![
-        Span::styled(
-            badge,
-            Style::default()
-                .fg(palette.accent)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            details,
-            Style::default().fg(if matches!(state.mode, crate::app::AgentMode::Plan) {
-                palette.plan
-            } else {
-                palette.text
-            }),
-        ),
-    ];
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    crate::terminal_text::sanitize_terminal_text(&details.join(" · "))
 }
 
 #[derive(Clone, Copy)]
@@ -4886,21 +5380,21 @@ fn render_exploration_group(
                 ExplorationCallRef::Complete(call) => {
                     render_tool_call(lines, call, width, true, None, theme)
                 }
-                ExplorationCallRef::Partial(call) => render_partial_tool_call(lines, call),
+                ExplorationCallRef::Partial(call) => render_partial_tool_call(lines, call, theme),
             }
         }
     } else {
         for call in group.calls.iter().take(12) {
             lines.push(Line::from(Span::styled(
                 format!("    {}", exploration_action_summary(*call)),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.muted),
             )));
         }
         if group.calls.len() > 12 {
             lines.push(Line::from(Span::styled(
                 format!("    +{} more", group.calls.len() - 12),
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(theme.muted)
                     .add_modifier(Modifier::ITALIC),
             )));
         }
@@ -5258,16 +5752,20 @@ fn render_activity_group(
     }
 }
 
-fn render_partial_tool_call(lines: &mut Vec<Line<'static>>, call: &PartialToolCall) {
+fn render_partial_tool_call(
+    lines: &mut Vec<Line<'static>>,
+    call: &PartialToolCall,
+    theme: &ThemePalette,
+) {
     let Some(name) = call.name.as_deref() else {
         return;
     };
     lines.push(Line::from(vec![
         Span::raw("  "),
-        Span::styled("⟳ ", Style::default().fg(Color::Yellow)),
+        Span::styled("⟳ ", Style::default().fg(theme.state_working)),
         Span::styled(
             crate::terminal_text::sanitize_terminal_text(name),
-            Style::default().fg(Color::Cyan),
+            Style::default().fg(theme.muted),
         ),
         Span::styled(
             format!(
@@ -5277,7 +5775,7 @@ fn render_partial_tool_call(lines: &mut Vec<Line<'static>>, call: &PartialToolCa
                     60,
                 )
             ),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         ),
     ]));
 }
@@ -5317,7 +5815,9 @@ fn render_tool_call(
         Span::styled(format!("{icon} "), style),
         Span::styled(
             crate::terminal_text::sanitize_terminal_text(&call.name),
-            Style::default().fg(theme.accent),
+            Style::default()
+                .fg(theme.muted)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!(
@@ -5504,6 +6004,7 @@ fn push_tool_output_marker(lines: &mut Vec<Line<'static>>, marker: &str, content
 struct ConversationContent {
     lines: Vec<Line<'static>>,
     activity_headers: Vec<ActivityHeaderLine>,
+    user_prompt_cards: Vec<UserPromptCardSpan>,
     links: Vec<crate::markdown::MarkdownLink>,
 }
 
@@ -5515,6 +6016,7 @@ fn conversation_content(
 ) -> ConversationContent {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut activity_headers = Vec::new();
+    let mut user_prompt_cards = Vec::new();
     let mut links = Vec::new();
     let exploration_groups = exploration_groups(state);
     let activity_groups = if group_activity {
@@ -5621,31 +6123,17 @@ fn conversation_content(
         }
         match msg.role {
             Role::User => {
-                let safe_content = crate::terminal_text::sanitize_terminal_text(&msg.content);
-                for (i, line) in safe_content.lines().enumerate() {
-                    let prefix = if i == 0 {
-                        Span::styled(
-                            "> ",
-                            Style::default()
-                                .fg(Color::Blue)
-                                .add_modifier(Modifier::BOLD),
-                        )
-                    } else {
-                        Span::styled("  ", Style::default().fg(Color::Blue))
-                    };
-                    // Syntax highlight if it looks like code? No, user input is plain.
-                    lines.push(Line::from(vec![
-                        prefix,
-                        Span::styled(line.to_string(), Style::default().fg(Color::Blue)),
-                    ]));
+                let span = render_user_prompt_card(
+                    &mut lines,
+                    &msg.content,
+                    width,
+                    palette(state),
+                    msg_idx,
+                    state.user_prompt_scroll.get(&msg_idx).copied().unwrap_or(0),
+                );
+                if span.height > 0 {
+                    user_prompt_cards.push(span);
                 }
-                if msg.content.is_empty() {
-                    lines.push(Line::from(Span::styled(
-                        "> ",
-                        Style::default().fg(Color::Blue),
-                    )));
-                }
-                lines.push(Line::from(""));
             }
             Role::Assistant => {
                 let annotation = annotations.get(&msg.timestamp).copied();
@@ -5810,7 +6298,7 @@ fn conversation_content(
         } else if streaming.tool_calls.is_empty() {
             lines.push(Line::from(Span::styled(
                 "⟳ Thinking…",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette(state).muted),
             )));
         }
         for ptc in &streaming.tool_calls {
@@ -5832,10 +6320,10 @@ fn conversation_content(
                     let expanded = state.expanded_blocks.contains(&group.key);
                     render_exploration_group(&mut lines, group, width, expanded, &palette(state));
                 } else if !exploration_members.contains(id) {
-                    render_partial_tool_call(&mut lines, ptc);
+                    render_partial_tool_call(&mut lines, ptc, &palette(state));
                 }
             } else {
-                render_partial_tool_call(&mut lines, ptc);
+                render_partial_tool_call(&mut lines, ptc, &palette(state));
             }
         }
         if let Some(turn_id) = state.active_agent_turn_id {
@@ -5847,6 +6335,7 @@ fn conversation_content(
     ConversationContent {
         lines,
         activity_headers,
+        user_prompt_cards,
         links,
     }
 }
@@ -5952,6 +6441,8 @@ fn append_conversation_controls(
                 ),
                 Span::styled("[n/Esc] deny", Style::default().fg(Color::Red)),
             ]));
+        } else if let Some(editor) = state.approval_queue.command_editor() {
+            lines.extend(inline_command_editor_lines(editor, width, &palette(state)));
         } else {
             let (reason, current_run_scope) = approval_reason_and_scope(pa);
             lines.push(Line::from(vec![
@@ -6010,7 +6501,20 @@ fn render_conversation(
     state: &AppState,
     focused: bool,
 ) -> u16 {
-    state.transcript_cache.render(frame, area, state, focused)
+    let scroll = state.transcript_cache.render(frame, area, state, focused);
+    let theme = palette(state);
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            let cell = &mut frame.buffer_mut()[(x, y)];
+            if cell.bg == Color::Reset {
+                cell.bg = theme.surface;
+            }
+            if cell.fg == Color::Reset {
+                cell.fg = theme.text;
+            }
+        }
+    }
+    scroll
 }
 
 pub(super) fn apply_hyperlinks(
@@ -6095,6 +6599,105 @@ pub(super) fn apply_hyperlinks(
     }
 }
 
+fn inline_command_editor_lines(
+    editor: &crate::approval_amend::CommandEditor,
+    width: u16,
+    theme: &ThemePalette,
+) -> Vec<Line<'static>> {
+    use unicode_segmentation::UnicodeSegmentation;
+    use unicode_width::UnicodeWidthStr;
+
+    let content_width = usize::from(width.saturating_sub(4).max(1));
+    let mut rows = vec![Vec::<Span<'static>>::new()];
+    let mut column: usize = 0;
+    let mut cursor_row = 0;
+    for (offset, grapheme) in editor.text.grapheme_indices(true) {
+        let cursor = offset == editor.cursor;
+        if grapheme == "\n" {
+            if cursor {
+                rows.last_mut().unwrap().push(Span::styled(
+                    " ",
+                    Style::default().fg(theme.surface).bg(theme.text),
+                ));
+                cursor_row = rows.len() - 1;
+            }
+            rows.push(Vec::new());
+            column = 0;
+            continue;
+        }
+        let safe = crate::terminal_text::sanitize_terminal_text(grapheme);
+        let safe = if safe == "\t" {
+            "    ".to_string()
+        } else {
+            safe
+        };
+        let cells = safe.width().max(1);
+        if column > 0 && column.saturating_add(cells) > content_width {
+            rows.push(Vec::new());
+            column = 0;
+        }
+        let style = if cursor {
+            cursor_row = rows.len() - 1;
+            Style::default().fg(theme.surface).bg(theme.text)
+        } else {
+            Style::default().fg(theme.text)
+        };
+        rows.last_mut().unwrap().push(Span::styled(safe, style));
+        column = column.saturating_add(cells);
+    }
+    if editor.cursor == editor.text.len() {
+        if column >= content_width {
+            rows.push(Vec::new());
+        }
+        cursor_row = rows.len() - 1;
+        rows.last_mut().unwrap().push(Span::styled(
+            " ",
+            Style::default().fg(theme.surface).bg(theme.text),
+        ));
+    }
+    let first = cursor_row
+        .saturating_sub(6)
+        .min(rows.len().saturating_sub(8));
+    let end = first.saturating_add(8).min(rows.len());
+    let total_rows = rows.len();
+    let mut lines = vec![Line::from(Span::styled(
+        "    Editing command · approval required after save",
+        Style::default().fg(theme.warning),
+    ))];
+    if first > 0 {
+        lines.push(Line::from(Span::styled(
+            "    … earlier lines",
+            Style::default().fg(theme.muted),
+        )));
+    }
+    for row in rows.into_iter().skip(first).take(end - first) {
+        let mut spans = vec![Span::raw("    ")];
+        spans.extend(row);
+        lines.push(Line::from(spans));
+    }
+    if end < total_rows {
+        lines.push(Line::from("    … later lines"));
+    }
+    lines.push(Line::from(Span::styled(
+        if editor.saving {
+            "    Checking command… · Esc cancel"
+        } else {
+            "    Ctrl+S save · Enter newline · Esc cancel"
+        },
+        Style::default().fg(theme.muted),
+    )));
+    if let Some(error) = &editor.error {
+        lines.push(Line::from(Span::styled(
+            format!(
+                "    {}",
+                crate::terminal_text::sanitize_terminal_text(error)
+            ),
+            Style::default().fg(theme.error),
+        )));
+    }
+    lines
+}
+
 fn approval_reason_and_scope(pa: &crate::app::PendingApproval) -> (&'static str, &'static str) {
     if pa.tool_name == "run_command" {
         let compound = serde_json::from_str::<serde_json::Value>(&pa.tool_args)
@@ -6149,6 +6752,22 @@ fn approval_reason_and_scope(pa: &crate::app::PendingApproval) -> (&'static str,
 
 fn approval_argument_lines(pa: &crate::app::PendingApproval) -> Vec<Line<'static>> {
     let arguments = serde_json::from_str::<serde_json::Value>(&pa.tool_args).ok();
+    if let Some(preview) = arguments
+        .as_ref()
+        .and_then(|a| a.get("_ca_edit_preview"))
+        .and_then(serde_json::Value::as_str)
+    {
+        let path = arguments
+            .as_ref()
+            .and_then(|a| a["path"].as_str())
+            .unwrap_or("file");
+        return crate::terminal_text::sanitize_terminal_text(&format!(
+            "{path} — final edit contents:\n{preview}"
+        ))
+        .lines()
+        .map(|line| Line::from(format!("    {line}")))
+        .collect();
+    }
     if pa.tool_name == "run_command" {
         let command = arguments
             .as_ref()
@@ -6201,6 +6820,10 @@ struct ActivityDisplayRow {
     id: crate::agent::subagent::AgentId,
     status: crate::agent::subagent::AgentStatus,
     task: String,
+    role: Option<String>,
+    model: Option<String>,
+    phase: crate::agent::subagent::AgentExecutionPhase,
+    created_at: Option<chrono::DateTime<chrono::Utc>>,
     current_action: Option<String>,
     summary: Option<String>,
     updated_at: chrono::DateTime<chrono::Utc>,
@@ -6214,13 +6837,20 @@ fn agent_activity_rows(state: &AppState, turn_id: uuid::Uuid) -> Vec<ActivityDis
         .live_agent_activity
         .iter()
         .filter(|agent| {
-            agent.origin == crate::agent::subagent::AgentRunOrigin::Conversation
-                && agent.parent_turn == turn_id
+            matches!(
+                agent.origin,
+                crate::agent::subagent::AgentRunOrigin::Conversation
+                    | crate::agent::subagent::AgentRunOrigin::AutomaticReview
+            ) && agent.parent_turn == turn_id
         })
         .map(|agent| ActivityDisplayRow {
             id: agent.id,
             status: agent.status.clone(),
-            task: agent.task.clone(),
+            task: crate::proactive_delegation::visible_task(&agent.task).to_string(),
+            role: agent.role.clone(),
+            model: agent.model.clone(),
+            phase: agent.phase,
+            created_at: Some(agent.created_at),
             current_action: agent.current_action.clone(),
             summary: agent.result_summary.clone(),
             updated_at: agent.updated_at,
@@ -6241,7 +6871,11 @@ fn agent_activity_rows(state: &AppState, turn_id: uuid::Uuid) -> Vec<ActivityDis
             .map(|summary| ActivityDisplayRow {
                 id: summary.agent_id,
                 status: summary.status.clone(),
-                task: summary.task.clone(),
+                task: crate::proactive_delegation::visible_task(&summary.task).to_string(),
+                role: summary.role.clone(),
+                model: summary.model.clone(),
+                phase: crate::agent::subagent::AgentExecutionPhase::Finished,
+                created_at: summary.created_at,
                 current_action: None,
                 summary: Some(summary.summary.clone()),
                 updated_at: summary.updated_at,
@@ -6250,7 +6884,7 @@ fn agent_activity_rows(state: &AppState, turn_id: uuid::Uuid) -> Vec<ActivityDis
                 live: false,
             }),
     );
-    rows.sort_by_key(|row| row.updated_at);
+    rows.sort_by_key(|row| (row.created_at.unwrap_or(row.updated_at), row.id.0));
     rows
 }
 
@@ -6258,13 +6892,13 @@ fn agent_status_label(status: &crate::agent::subagent::AgentStatus) -> &'static 
     use crate::agent::subagent::AgentStatus;
     match status {
         AgentStatus::Queued => "Queued",
-        AgentStatus::Running => "Background Agent",
+        AgentStatus::Running => "Running",
         AgentStatus::WaitingApproval => "Waiting for approval",
-        AgentStatus::Completed => "Completed Agent",
-        AgentStatus::Failed => "Failed Agent",
-        AgentStatus::Cancelled => "Cancelled Agent",
-        AgentStatus::TimedOut => "Timed-out Agent",
-        AgentStatus::Interrupted => "Interrupted Agent",
+        AgentStatus::Completed => "Completed",
+        AgentStatus::Failed => "Failed",
+        AgentStatus::Cancelled => "Cancelled",
+        AgentStatus::TimedOut => "Timed out",
+        AgentStatus::Interrupted => "Interrupted",
     }
 }
 
@@ -6317,6 +6951,16 @@ fn agent_worker_icon(id: crate::agent::subagent::AgentId) -> AgentWorkerIcon {
     AGENT_WORKER_ICONS[slot]
 }
 
+fn format_agent_elapsed(seconds: u64) -> String {
+    if seconds >= 3_600 {
+        format!("{}h{:02}m", seconds / 3_600, seconds % 3_600 / 60)
+    } else if seconds >= 60 {
+        format!("{}m{:02}s", seconds / 60, seconds % 60)
+    } else {
+        format!("{seconds}s")
+    }
+}
+
 fn render_agent_activity_group<'a>(
     lines: &mut Vec<Line<'a>>,
     state: &AppState,
@@ -6331,59 +6975,116 @@ fn render_agent_activity_group<'a>(
         .agent_activity_focus
         .as_ref()
         .filter(|focus| focus.turn_id == turn_id);
+    let theme = palette(state);
     lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled(
+            "  ▾ Subagents ",
+            Style::default()
+                .fg(theme.muted)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(rows.len().to_string(), Style::default().fg(theme.muted)),
+    ]));
     for row in &rows {
         let selected = focus.and_then(|focus| focus.selected_agent) == Some(row.id);
-        let marker = if selected { "›" } else { " " };
         let icon = agent_worker_icon(row.id);
-        let status_style = Style::default()
-            .fg(agent_status_color(&row.status, &palette(state)))
-            .add_modifier(if selected {
-                Modifier::BOLD
-            } else {
-                Modifier::empty()
-            });
-        let theme = palette(state);
-        lines.push(Line::from(vec![
-            Span::styled(format!(" {marker}"), status_style),
-            Span::styled(
-                icon.glyph,
-                Style::default().fg(icon.color).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!(" {} — ", agent_status_label(&row.status)),
-                status_style,
-            ),
-            Span::styled(
-                truncate(
-                    &crate::terminal_text::sanitize_terminal_text(&row.task),
-                    width.saturating_sub(28) as usize,
-                ),
-                Style::default().fg(theme.muted),
-            ),
-        ]));
-        if let Some(action) = row.current_action.as_deref() {
-            lines.push(Line::from(Span::styled(
-                format!(
-                    "      ↳ {}",
-                    truncate(
-                        &crate::terminal_text::sanitize_terminal_text(action),
-                        width.saturating_sub(10) as usize,
+        let marker = if selected { "›" } else { " " };
+        let role = crate::tui::selection::truncate_cells(
+            &crate::terminal_text::sanitize_terminal_text(row.role.as_deref().unwrap_or("Agent")),
+            16,
+        );
+        let phase = if row.status.terminal() {
+            agent_status_label(&row.status).to_string()
+        } else if row.phase == crate::agent::subagent::AgentExecutionPhase::Tool {
+            row.current_action.as_deref().map_or_else(
+                || "Running tool".to_string(),
+                |action| {
+                    format!(
+                        "Running {}",
+                        crate::terminal_text::sanitize_terminal_text(action)
                     )
-                ),
-                Style::default().fg(theme.muted),
-            )));
-        } else if row.status.terminal() {
+                },
+            )
+        } else {
+            row.phase.label().to_string()
+        };
+        let elapsed = row
+            .created_at
+            .map(|started| {
+                let end = if row.status.terminal() {
+                    row.updated_at
+                } else {
+                    state.agent_activity_now
+                };
+                let seconds = end.signed_duration_since(started).num_seconds().max(0) as u64;
+                format_agent_elapsed(seconds)
+            })
+            .unwrap_or_default();
+        let model = row
+            .model
+            .as_deref()
+            .map(crate::terminal_text::sanitize_terminal_text)
+            .unwrap_or_default();
+        let model_budget = (width as usize / 3)
+            .saturating_sub(elapsed.len() + 1)
+            .min(if width < 80 { 10 } else { usize::MAX });
+        let model = crate::tui::selection::truncate_cells(&model, model_budget);
+        let right = [model, elapsed]
+            .into_iter()
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let left_width = 4 + unicode_width::UnicodeWidthStr::width(role.as_str()) + 1;
+        let right_width = unicode_width::UnicodeWidthStr::width(right.as_str());
+        let middle_width = (width as usize).saturating_sub(left_width + right_width + 2);
+        let phase_budget = middle_width
+            .saturating_sub(3)
+            .saturating_sub(if row.task.is_empty() { 0 } else { 8 });
+        let phase = crate::tui::selection::truncate_cells(&phase, phase_budget);
+        let phase_width = unicode_width::UnicodeWidthStr::width(phase.as_str());
+        let task = crate::tui::selection::truncate_cells(
+            &crate::terminal_text::sanitize_terminal_text(&row.task),
+            middle_width.saturating_sub(phase_width + 3),
+        );
+        let task = if task.is_empty() {
+            String::new()
+        } else {
+            format!("{task} · ")
+        };
+        let middle_used = unicode_width::UnicodeWidthStr::width(task.as_str()) + phase_width;
+        let padding =
+            " ".repeat((width as usize).saturating_sub(left_width + middle_used + right_width + 1));
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {marker}"), Style::default().fg(theme.accent)),
+            Span::styled(icon.glyph, Style::default().fg(icon.color)),
+            Span::styled(
+                format!(" {role} "),
+                Style::default().fg(theme.accent).add_modifier(if selected {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
+            ),
+            Span::styled(task, Style::default().fg(theme.text)),
+            Span::styled(
+                phase,
+                Style::default().fg(agent_status_color(&row.status, &theme)),
+            ),
+            Span::raw(padding),
+            Span::styled(right, Style::default().fg(theme.muted)),
+        ]));
+        if row.status.terminal() {
             if let Some(summary) = row.summary.as_deref() {
                 lines.push(Line::from(Span::styled(
                     format!(
                         "      ↳ {}",
-                        truncate(
+                        crate::tui::selection::truncate_cells(
                             &crate::terminal_text::sanitize_terminal_text(summary),
-                            width.saturating_sub(10) as usize,
+                            width.saturating_sub(8) as usize
                         )
                     ),
-                    Style::default().fg(palette(state).muted),
+                    Style::default().fg(theme.muted),
                 )));
             }
         }
@@ -6394,7 +7095,7 @@ fn render_agent_activity_group<'a>(
                 .selected_agent
                 .and_then(|id| rows.iter().find(|row| row.id == id))
             {
-                render_agent_activity_detail(lines, row, focus, width);
+                render_agent_activity_detail(lines, row, focus, width, theme);
             }
         }
         lines.push(Line::from(Span::styled(
@@ -6403,7 +7104,7 @@ fn render_agent_activity_group<'a>(
             } else {
                 "  ↑/↓ select · Enter details · m message · y/n approval · c cancel · Esc close"
             },
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
     } else {
         lines.push(Line::from(Span::styled(
@@ -6411,9 +7112,9 @@ fn render_agent_activity_group<'a>(
                 "  {} view agents",
                 state
                     .keymap
-                    .display_binding(crate::keymap::KeyAction::FocusAgentActivity)
+                    .primary_binding(crate::keymap::KeyAction::FocusAgentActivity)
             ),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
     }
 }
@@ -6423,6 +7124,7 @@ fn render_agent_activity_detail<'a>(
     row: &ActivityDisplayRow,
     focus: &crate::app::AgentActivityFocusState,
     width: u16,
+    theme: ThemePalette,
 ) {
     let body_width = width.saturating_sub(10) as usize;
     let id = row.id.to_string();
@@ -6432,7 +7134,7 @@ fn render_agent_activity_detail<'a>(
             agent_status_label(&row.status),
             &id[..8]
         ),
-        Style::default().fg(Color::Gray),
+        Style::default().fg(theme.text),
     )));
     let mut detail = row
         .events
@@ -6455,18 +7157,18 @@ fn render_agent_activity_detail<'a>(
                     body_width
                 )
             ),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
     }
     if let Some(draft) = focus.message_draft.as_deref() {
         lines.push(Line::from(vec![
-            Span::styled("      message> ", Style::default().fg(Color::Cyan)),
+            Span::styled("      message> ", Style::default().fg(theme.accent)),
             Span::styled(
                 truncate(
                     &crate::terminal_text::sanitize_terminal_text(draft),
                     body_width,
                 ),
-                Style::default().fg(Color::White),
+                Style::default().fg(theme.text),
             ),
         ]));
     }
@@ -6478,7 +7180,7 @@ fn render_agent_activity_detail<'a>(
                 } else {
                     "      > Cancel  "
                 },
-                Style::default().fg(Color::Gray),
+                Style::default().fg(theme.text),
             ),
             Span::styled(
                 if focus.cancel_confirm_selected {
@@ -6486,14 +7188,14 @@ fn render_agent_activity_detail<'a>(
                 } else {
                     "[Confirm cancellation]"
                 },
-                Style::default().fg(Color::Red),
+                Style::default().fg(theme.error),
             ),
         ]));
     }
     if !row.live {
         lines.push(Line::from(Span::styled(
             "      saved terminal summary · controls unavailable",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
     }
 }
@@ -6547,6 +7249,88 @@ fn has_active_background(state: &AppState) -> bool {
             .any(|delegation| !delegation.status.is_terminal())
 }
 
+pub(crate) fn awaited_managed_job(state: &AppState) -> Option<&crate::jobs::JobInfo> {
+    let calls = state.messages.last()?.tool_calls.as_ref()?;
+    let awaited = |job: &&crate::jobs::JobInfo| {
+        !job.status.is_terminal()
+            && calls.iter().any(|call| {
+                call.name == "await_job"
+                    && call.status == crate::app::ToolStatus::Running
+                    && call.output.is_none()
+                    && serde_json::from_str::<serde_json::Value>(&call.arguments)
+                        .ok()
+                        .and_then(|args| {
+                            args.get("job_id")
+                                .and_then(|value| value.as_str())
+                                .map(str::to_owned)
+                        })
+                        .is_some_and(|id| id == job.id.to_string())
+            })
+    };
+    if let Some(crate::app::BackgroundActivityRef::Job(id)) = state.latest_background_activity {
+        if let Some(job) = state
+            .job_list
+            .iter()
+            .filter(awaited)
+            .find(|job| job.id == id)
+        {
+            return Some(job);
+        }
+    }
+    calls
+        .iter()
+        .filter(|call| {
+            call.name == "await_job"
+                && call.status == crate::app::ToolStatus::Running
+                && call.output.is_none()
+        })
+        .find_map(|call| {
+            let args: serde_json::Value = serde_json::from_str(&call.arguments).ok()?;
+            let id = args.get("job_id")?.as_str()?;
+            state
+                .job_list
+                .iter()
+                .find(|job| !job.status.is_terminal() && job.id.to_string() == id)
+        })
+}
+
+fn awaited_job_preview(job: &crate::jobs::JobInfo) -> Vec<String> {
+    let mut lines = vec![format!(
+        " ◉ {} · {} · {:.0}s · /jobs",
+        job.command,
+        job.status.label(),
+        job.elapsed.as_secs_f64()
+    )];
+    for (label, output) in [("stdout", &job.stdout), ("stderr", &job.stderr)] {
+        let tail = output
+            .split(['\n', '\r'])
+            .filter(|line| !line.trim().is_empty())
+            .rev()
+            .take(2)
+            .collect::<Vec<_>>();
+        for line in tail.into_iter().rev() {
+            lines.push(format!(
+                "   {label}: {}",
+                crate::changes::sanitize_terminal_text(line)
+            ));
+        }
+    }
+    if lines.len() == 1 {
+        lines.push("   No output yet".into());
+    }
+    lines
+}
+
+fn background_activity_rows(state: &AppState, available: u16) -> u16 {
+    if let Some(job) = awaited_managed_job(state) {
+        (awaited_job_preview(job).len() as u16)
+            .min(5)
+            .min(available)
+    } else {
+        u16::from(has_active_background(state)).min(available)
+    }
+}
+
 fn active_background_count(state: &AppState) -> usize {
     state
         .job_list
@@ -6567,6 +7351,23 @@ fn active_background_count(state: &AppState) -> usize {
 
 fn render_background_activity(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
     if area.height == 0 || area.width == 0 {
+        return;
+    }
+    if let Some(job) = awaited_managed_job(state) {
+        let lines = awaited_job_preview(job)
+            .into_iter()
+            .take(area.height as usize)
+            .map(|line| {
+                Line::from(crate::tui::selection::truncate_cells(
+                    &crate::changes::sanitize_terminal_text(&line),
+                    area.width as usize,
+                ))
+            })
+            .collect::<Vec<_>>();
+        frame.render_widget(
+            Paragraph::new(lines).style(Style::default().fg(palette(state).muted)),
+            area,
+        );
         return;
     }
     let count = active_background_count(state);
@@ -6643,7 +7444,7 @@ fn render_background_activity(frame: &mut ratatui::Frame, area: Rect, state: &Ap
     let line = format!("{prefix}{suffix}");
     frame.render_widget(
         Paragraph::new(crate::changes::sanitize_terminal_text(&line))
-            .style(Style::default().fg(Color::Cyan)),
+            .style(Style::default().fg(palette(state).muted)),
         area,
     );
 }
@@ -6667,18 +7468,11 @@ fn watcher_activity_label(watcher: &ca_watch::WatchSnapshotV1) -> String {
 
 fn render_input(frame: &mut ratatui::Frame, area: Rect, state: &AppState, focused: bool) {
     let palette = palette(state);
-    let quiet = !state.turn_lifecycle.is_active()
-        && state.input.is_empty()
-        && state.input_queue.is_empty()
-        && state.pasted_images.is_empty()
-        && !state.image_attachment_busy;
-    let block = if quiet {
-        Block::default()
-    } else {
-        Block::default()
-            .borders(Borders::TOP)
-            .border_style(Style::default().fg(Color::DarkGray))
-    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(ratatui::widgets::BorderType::Rounded)
+        .border_style(Style::default().fg(palette.border));
+    frame.render_widget(block, area);
 
     let mut inner = Rect {
         x: area.x + 1,
@@ -6716,10 +7510,45 @@ fn render_input(frame: &mut ratatui::Frame, area: Rect, state: &AppState, focuse
     } else {
         None
     };
-    if let Some(controls) = controls.filter(|_| area.height >= 3) {
+    let controls_width = controls
+        .as_deref()
+        .map_or(0, unicode_width::UnicodeWidthStr::width);
+    let metadata_budget = (area.width as usize).saturating_sub(controls_width + 6);
+    let metadata =
+        crate::tui::selection::truncate_cells(&composer_metadata(state), metadata_budget);
+    let metadata_width = unicode_width::UnicodeWidthStr::width(metadata.as_str());
+    let show_metadata = area.height >= 3 && metadata_width > 0 && metadata_budget >= 12;
+    if let Some(controls) = controls.as_deref().filter(|_| area.height >= 3) {
         frame.render_widget(
-            Paragraph::new(Span::styled(controls, Style::default().fg(palette.accent))),
-            Rect::new(inner.x, area.bottom() - 1, inner.width, 1),
+            Paragraph::new(Span::styled(
+                format!(" {controls} "),
+                Style::default().fg(palette.muted).bg(palette.surface),
+            )),
+            Rect::new(
+                inner.x,
+                area.bottom() - 1,
+                if show_metadata {
+                    inner.width.saturating_sub(metadata_width as u16 + 3)
+                } else {
+                    inner.width
+                },
+                1,
+            ),
+        );
+    }
+    if show_metadata {
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                format!(" {metadata} "),
+                Style::default().fg(palette.muted).bg(palette.surface),
+            ))
+            .alignment(Alignment::Right),
+            Rect::new(
+                inner.right().saturating_sub(metadata_width as u16 + 2),
+                area.bottom() - 1,
+                metadata_width as u16 + 2,
+                1,
+            ),
         );
     }
 
@@ -6740,7 +7569,7 @@ fn render_input(frame: &mut ratatui::Frame, area: Rect, state: &AppState, focuse
                         &pending.text.replace('\n', " "),
                         inner.width.saturating_sub(marker.len() as u16 + 3) as usize,
                     ),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(palette.muted),
                 ),
             ])),
             Rect {
@@ -6803,6 +7632,90 @@ fn render_input(frame: &mut ratatui::Frame, area: Rect, state: &AppState, focuse
         inner.height = inner.height.saturating_sub(1);
     }
 
+    let paste_index = state
+        .composer_ui
+        .active_large_paste_index(state.input_cursor);
+    if let Some(index) = paste_index {
+        if let Some(payload) = state.composer_ui.large_paste_payload(index) {
+            let body_rows = crate::tui::composer::PASTE_PREVIEW_ROWS.min(4) as u16;
+            let strip_height = body_rows + 1;
+            if inner.height > strip_height {
+                let offset = state
+                    .composer_ui
+                    .paste_preview_scroll
+                    .get(&index)
+                    .copied()
+                    .unwrap_or(0);
+                let payload_lines: Vec<&str> = payload.lines().collect();
+                let line_count = payload_lines.len().max(1);
+                let max_top = line_count.saturating_sub(body_rows as usize);
+                let top = offset.min(max_top);
+                let end = (top + body_rows as usize).min(line_count);
+                let hidden_above = top;
+                let hidden_below = line_count.saturating_sub(end);
+                let chars = payload.chars().count();
+                let mut header = format!("[Pasted Content {chars} chars]");
+                if hidden_above > 0 {
+                    header.push_str(&format!(" · ↑{hidden_above}"));
+                }
+                if hidden_below > 0 {
+                    header.push_str(&format!(" · ↓{hidden_below} more"));
+                }
+                frame.render_widget(
+                    Paragraph::new(Span::styled(
+                        header,
+                        Style::default()
+                            .fg(palette.accent_foreground)
+                            .bg(palette.accent),
+                    )),
+                    Rect {
+                        x: inner.x,
+                        y: inner.y,
+                        width: inner.width,
+                        height: 1,
+                    },
+                );
+                let mut body_lines = Vec::with_capacity(body_rows as usize);
+                for line in payload_lines.iter().skip(top).take(end.saturating_sub(top)) {
+                    body_lines.push(Line::from(crate::tui::selection::truncate_cells(
+                        line,
+                        inner.width as usize,
+                    )));
+                }
+                while body_lines.len() < body_rows as usize {
+                    body_lines.push(Line::from(""));
+                }
+                frame.render_widget(
+                    Paragraph::new(body_lines).style(Style::default().fg(palette.muted)),
+                    Rect {
+                        x: inner.x,
+                        y: inner.y + 1,
+                        width: inner.width,
+                        height: body_rows,
+                    },
+                );
+                *state.composer_ui.paste_preview_hit.borrow_mut() =
+                    crate::tui::composer::PastePreviewHit {
+                        x: inner.x,
+                        y: inner.y,
+                        width: inner.width,
+                        height: strip_height,
+                    };
+                inner.y += strip_height;
+                inner.height = inner.height.saturating_sub(strip_height);
+            } else {
+                *state.composer_ui.paste_preview_hit.borrow_mut() =
+                    crate::tui::composer::PastePreviewHit::default();
+            }
+        } else {
+            *state.composer_ui.paste_preview_hit.borrow_mut() =
+                crate::tui::composer::PastePreviewHit::default();
+        }
+    } else {
+        *state.composer_ui.paste_preview_hit.borrow_mut() =
+            crate::tui::composer::PastePreviewHit::default();
+    }
+
     if state.input.is_empty() {
         let placeholder = if state.turn_lifecycle.is_active() {
             "Add a follow-up…"
@@ -6812,10 +7725,15 @@ fn render_input(frame: &mut ratatui::Frame, area: Rect, state: &AppState, focuse
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 composer_prompt(&palette),
-                Span::styled(placeholder, Style::default().fg(Color::DarkGray)),
+                Span::styled(placeholder, Style::default().fg(palette.muted)),
             ])),
             inner,
         );
+        *state.composer_ui.hit_map.borrow_mut() = crate::tui::composer::ComposerHitMap {
+            text_area: Some((inner.x, inner.y, inner.width, inner.height)),
+            rows: Vec::new(),
+            empty_placeholder: true,
+        };
     } else {
         let layout = crate::tui::composer::ComposerLayout::new(
             &state.input,
@@ -6825,19 +7743,22 @@ fn render_input(frame: &mut ratatui::Frame, area: Rect, state: &AppState, focuse
         );
         let viewport = layout.visible_window(state.composer_ui.viewport_top);
         let mut lines = Vec::with_capacity(viewport.end.saturating_sub(viewport.top));
+        let mut hit_rows = Vec::with_capacity(viewport.end.saturating_sub(viewport.top));
         for (visible_index, row_index) in (viewport.top..viewport.end).enumerate() {
             let row = &layout.rows[row_index];
             let mut spans = Vec::new();
-            if visible_index == 0 && viewport.hidden_above > 0 {
-                spans.push(Span::styled(
-                    format!("↑{} ", viewport.hidden_above),
-                    Style::default().fg(palette.muted),
-                ));
+            let prefix_width = if visible_index == 0 && viewport.hidden_above > 0 {
+                let marker = format!("↑{} ", viewport.hidden_above);
+                let width = unicode_width::UnicodeWidthStr::width(marker.as_str()) as u16;
+                spans.push(Span::styled(marker, Style::default().fg(palette.muted)));
+                width
             } else if row_index == 0 {
                 spans.push(composer_prompt(&palette));
+                2
             } else {
                 spans.push(Span::raw("  "));
-            }
+                2
+            };
             spans.extend(composer_row_spans(state, row.range.clone(), &palette));
             if row_index == layout.rows.len().saturating_sub(1)
                 && state.input_cursor == state.input.len()
@@ -6857,12 +7778,21 @@ fn render_input(frame: &mut ratatui::Frame, area: Rect, state: &AppState, focuse
                     Style::default().fg(palette.muted),
                 ));
             }
+            hit_rows.push(crate::tui::composer::ComposerRowHit {
+                y: inner.y.saturating_add(visible_index as u16),
+                prefix_width,
+                boundaries: row.boundaries.clone(),
+            });
             lines.push(Line::from(spans));
         }
         frame.render_widget(Paragraph::new(lines), inner);
+        *state.composer_ui.hit_map.borrow_mut() = crate::tui::composer::ComposerHitMap {
+            text_area: Some((inner.x, inner.y, inner.width, inner.height)),
+            rows: hit_rows,
+            empty_placeholder: false,
+        };
     }
 
-    frame.render_widget(block, area);
     if focused && composer_has_focus(state) && state.cursor_blink_visible {
         if let Some(position) = composer_cursor_position(inner, state) {
             render_white_composer_cursor(frame, position);
@@ -6877,9 +7807,9 @@ fn render_white_composer_cursor(frame: &mut ratatui::Frame, position: ratatui::l
 
 fn composer_prompt(palette: &ThemePalette) -> Span<'static> {
     Span::styled(
-        "→ ",
+        "› ",
         Style::default()
-            .fg(palette.accent)
+            .fg(palette.text)
             .add_modifier(Modifier::BOLD),
     )
 }
@@ -6930,7 +7860,7 @@ fn composer_row_spans<'a>(
     spans
 }
 
-fn composer_has_focus(state: &AppState) -> bool {
+pub(crate) fn composer_has_focus(state: &AppState) -> bool {
     !suggestion_overlay_open(state)
         && state.provider_auth.is_none()
         && state.theme_manager.is_none()
@@ -7015,12 +7945,16 @@ fn render_status(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
         )
     } else if state.turn_lifecycle.is_active() {
         (
-            format!(
-                "Ctrl+C also stops · {} edits the latest queued message",
-                state
-                    .keymap
-                    .display_binding(crate::keymap::KeyAction::EditLastQueued)
-            ),
+            if area.width < 80 {
+                format!("{} · Ctrl+C stops", composer_metadata(state))
+            } else {
+                format!(
+                    "Ctrl+C also stops · {} edits the latest queued message",
+                    state
+                        .keymap
+                        .display_binding(crate::keymap::KeyAction::EditLastQueued)
+                )
+            },
             Style::default().fg(palette.muted),
         )
     } else if state.input.is_empty() {
@@ -7152,8 +8086,10 @@ fn suggestion_overlay_open(state: &AppState) -> bool {
         || state.hook_manager.is_some()
         || state.permission_manager.is_some()
         || state.memory_manager.is_some()
+        || state.personality_editor.is_some()
         || state.multi_run_manager.is_some()
         || state.task_graph_manager.is_some()
+        || state.plan_workflow_graph.is_some()
         || state.keymap_hub.is_some()
         || state.workflow_preview.is_some()
         || state.workflow_clear_confirmation.is_some()
@@ -7179,6 +8115,81 @@ fn transcript_activity_clicks_blocked(state: &AppState) -> bool {
         || state.loop_guard_interaction.is_some()
 }
 
+fn render_user_prompt_card<'a>(
+    lines: &mut Vec<Line<'a>>,
+    content: &str,
+    width: u16,
+    theme: ThemePalette,
+    message_index: usize,
+    scroll_offset: usize,
+) -> UserPromptCardSpan {
+    if width == 0 {
+        return UserPromptCardSpan::default();
+    }
+    let style = Style::default()
+        .fg(theme.text)
+        .bg(theme.title_hint_background);
+    let safe = crate::terminal_text::sanitize_terminal_text(content).replace('\t', "    ");
+    let layout = crate::tui::composer::ComposerLayout::new(
+        &safe,
+        safe.len(),
+        width.saturating_sub(4) as usize,
+        0,
+    );
+    let total_rows = layout.rows.len();
+    let window = crate::tui::composer::USER_PROMPT_CARD_ROWS.max(1);
+    let max_top = total_rows.saturating_sub(window);
+    let top = scroll_offset.min(max_top);
+    let end = (top + window).min(total_rows);
+    let hidden_above = top;
+    let hidden_below = total_rows.saturating_sub(end);
+    let first_line = lines.len();
+    lines.push(Line::from("").style(style));
+    for (visible_index, row_index) in (top..end).enumerate() {
+        let row = &layout.rows[row_index];
+        let row_text = &safe[row.range.clone()];
+        let mut prefix = if row_index == 0 { " › " } else { "   " }.to_string();
+        if visible_index == 0 && hidden_above > 0 {
+            prefix = format!(" ↑{hidden_above} ");
+        }
+        let body_width = usize::from(width.saturating_sub(4)).saturating_sub(
+            unicode_width::UnicodeWidthStr::width(prefix.as_str()).saturating_sub(3),
+        );
+        let mut text = crate::tui::selection::truncate_cells(row_text, body_width.max(1));
+        if visible_index + 1 == end.saturating_sub(top) && hidden_below > 0 {
+            let marker = format!(" ↓{hidden_below} more ");
+            let marker_width = unicode_width::UnicodeWidthStr::width(marker.as_str());
+            if marker_width < body_width {
+                let keep = body_width - marker_width;
+                text = crate::tui::selection::truncate_cells(row_text, keep.max(1));
+                text.push_str(&marker);
+            } else {
+                text = marker;
+            }
+        }
+        lines.push(
+            Line::from(vec![
+                Span::styled(prefix, style.add_modifier(Modifier::BOLD)),
+                Span::styled(text, style),
+            ])
+            .style(style),
+        );
+    }
+    lines.push(Line::from("").style(style));
+    UserPromptCardSpan {
+        message_index,
+        first_line,
+        height: lines.len().saturating_sub(first_line),
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct UserPromptCardSpan {
+    pub(crate) message_index: usize,
+    pub(crate) first_line: usize,
+    pub(crate) height: usize,
+}
+
 fn render_reasoning_block<'a>(
     lines: &mut Vec<Line<'a>>,
     thinking: &str,
@@ -7188,11 +8199,13 @@ fn render_reasoning_block<'a>(
     theme: ThemePalette,
 ) {
     let safe = crate::terminal_text::sanitize_terminal_text(thinking);
-    let duration = duration_ms.map_or_else(String::new, |millis| format!(": {millis}ms"));
+    let duration = duration_ms.map_or_else(String::new, |millis| {
+        format!(" for {:.1}s", millis as f64 / 1_000.0)
+    });
     lines.push(Line::from(Span::styled(
-        format!("{} Thought{duration}", if expanded { "−" } else { "+" }),
+        format!("{} Thought{duration}", if expanded { "▾" } else { "◆" }),
         Style::default()
-            .fg(Color::Yellow)
+            .fg(theme.muted)
             .add_modifier(Modifier::BOLD),
     )));
     if expanded {
@@ -7969,6 +8982,7 @@ fn render_model_picker(frame: &mut ratatui::Frame, area: Rect, state: &AppState)
             crate::app::ModelPickerTarget::Review => " Select review model",
             crate::app::ModelPickerTarget::Delegation => " Select delegated agent",
             crate::app::ModelPickerTarget::MultiRun(_) => " Select candidate route",
+            crate::app::ModelPickerTarget::PlanWorkflow => " Select plan agent provider/model",
         },
         Style::default()
             .fg(Color::White)
@@ -8198,7 +9212,7 @@ fn render_model_picker(frame: &mut ratatui::Frame, area: Rect, state: &AppState)
     )));
     if matches!(
         state.model_picker_target,
-        crate::app::ModelPickerTarget::MultiRun(_)
+        crate::app::ModelPickerTarget::MultiRun(_) | crate::app::ModelPickerTarget::PlanWorkflow
     ) {
         items.push(ListItem::new(Span::styled(
             "Home/End jump · ⇧R refresh · selection only",
@@ -8393,6 +9407,30 @@ fn render_provider_editor(frame: &mut ratatui::Frame, area: Rect, state: &AppSta
             "Alternative: environment variable"
         }),
     ];
+    if let Some(google) = editor
+        .draft
+        .google
+        .as_ref()
+        .filter(|settings| settings.mode == crate::google_auth::Mode::Vertex)
+    {
+        lines.truncate(5);
+        lines.push(field(
+            "Project ID",
+            google.project_id.as_deref().unwrap_or(""),
+            editor.field == ProviderEditorField::GoogleProject,
+        ));
+        lines.push(field(
+            "Location",
+            google.location.as_deref().unwrap_or(""),
+            editor.field == ProviderEditorField::GoogleLocation,
+        ));
+        lines.push(field(
+            "Quota project",
+            google.quota_project_id.as_deref().unwrap_or(""),
+            editor.field == ProviderEditorField::GoogleQuotaProject,
+        ));
+        lines.push(hint("Uses Application Default Credentials"));
+    }
     if prompt_cache {
         let cache_label = match editor.prompt_cache_mode {
             crate::config::PromptCacheMode::Implicit => "Automatic",
@@ -8419,6 +9457,7 @@ fn render_provider_editor(frame: &mut ratatui::Frame, area: Rect, state: &AppSta
             crate::agent::ProviderProtocol::ChatCompletions => "Chat Completions",
             crate::agent::ProviderProtocol::OpenAiResponses => "OpenAI Responses",
             crate::agent::ProviderProtocol::AnthropicMessages => "Anthropic Messages",
+            crate::agent::ProviderProtocol::GoogleGenerateContent => "Google GenerateContent",
         };
         lines.push(field("Protocol", label, false));
     }
@@ -8669,9 +9708,18 @@ fn composer_popup_rect(area: Rect, state: &AppState, desired_height: u16, max_wi
     let viewport = composer_layout.visible_window(state.composer_ui.viewport_top);
     let queue_rows = state.input_queue.len().min(3) as u16 + u16::from(state.input_queue.len() > 3);
     let attachment_rows = u16::from(!state.pasted_images.is_empty() || state.image_attachment_busy);
-    let input_height = state
-        .input_height
-        .max(2 + viewport.end.saturating_sub(viewport.top) as u16 + queue_rows + attachment_rows);
+    let paste_preview_rows = u16::from(
+        state
+            .composer_ui
+            .active_large_paste_index(state.input_cursor)
+            .is_some(),
+    ) * (crate::tui::composer::PASTE_PREVIEW_ROWS as u16 + 1);
+    let input_height = state.input_height.max(
+        2 + viewport.end.saturating_sub(viewport.top) as u16
+            + queue_rows
+            + attachment_rows
+            + paste_preview_rows,
+    );
     let composer_y = area
         .y
         .saturating_add(area.height)
@@ -8881,10 +9929,10 @@ fn render_session_picker(frame: &mut ratatui::Frame, area: Rect, state: &AppStat
             };
             let secondary = match state.session_picker_view {
                 crate::app::SessionPickerView::Active => {
-                    "Shift+P pin  ·  Shift+A archive  ·  Shift+D delete  ·  Tab archived"
+                    "Shift+P pin  ·  Shift+A archive  ·  Shift+D purge  ·  Tab archived"
                 }
                 crate::app::SessionPickerView::Archive => {
-                    "Tab recent  ·  Up/Down move  ·  Esc close"
+                    "Shift+D purge  ·  Tab recent  ·  Up/Down move  ·  Esc close"
                 }
             };
             items.push(ListItem::new(Span::styled(primary, footer_style)));
@@ -8904,7 +9952,7 @@ fn render_session_picker(frame: &mut ratatui::Frame, area: Rect, state: &AppStat
                 footer_style,
             )));
             items.push(ListItem::new(Span::styled(
-                "Up/Down move · Esc close",
+                "Shift+D purge · Esc close",
                 footer_style,
             )));
         }
@@ -9516,7 +10564,11 @@ fn render_session_delete_confirmation(
         });
     let mut lines = vec![
         Line::from(Span::styled(
-            "Delete saved session?",
+            if confirmation.archived {
+                "Purge archived session?"
+            } else {
+                "Purge saved session?"
+            },
             Style::default()
                 .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
@@ -9526,7 +10578,11 @@ fn render_session_delete_confirmation(
             "{safe_title} · {}",
             &confirmation.session_id.to_string()[..8]
         )),
-        Line::from("This permanently removes exactly this saved session."),
+        Line::from(if confirmation.archived {
+            "This permanently removes exactly this archived session."
+        } else {
+            "This permanently removes exactly this saved session."
+        }),
         Line::from("Branches and their history are not deleted."),
         Line::from(""),
     ];
@@ -9558,9 +10614,9 @@ fn render_session_delete_confirmation(
         Span::raw("   "),
         Span::styled(
             if confirmation.busy {
-                " Deleting… "
+                " Purging… "
             } else {
-                " Delete "
+                " Purge "
             },
             delete_style,
         ),
@@ -9825,7 +10881,11 @@ fn render_interaction(frame: &mut ratatui::Frame, area: Rect, state: &AppState) 
     }
 
     lines.push(Line::from(""));
-    let hint = if interaction.request.mode == crate::interaction::InteractionMode::MultiSelect
+    let hint = if interaction.request.mode == crate::interaction::InteractionMode::Confirmation
+        && !interaction.other_editing()
+    {
+        "y yes · n no · Enter submit · Esc cancel"
+    } else if interaction.request.mode == crate::interaction::InteractionMode::MultiSelect
         && !interaction.other_editing()
     {
         "↑/↓ move · Space toggle · Enter submit · Esc cancel"
@@ -9991,10 +11051,13 @@ fn render_plan_card(lines: &mut Vec<Line<'static>>, state: &AppState, width: u16
     row("", Style::default());
     if state.plan_proposal.is_some() {
         row(
-            "Enter Execute · Ctrl+O View plan",
+            "Enter Execute · Ctrl+O View plan · /plan graph",
             Style::default().fg(color),
         );
-        row("Type to Revise · Esc Dismiss", Style::default().fg(color));
+        row(
+            "Type to Revise · Esc Dismiss · /plan send",
+            Style::default().fg(color),
+        );
     } else {
         row("/plan show to review this plan", Style::default().fg(color));
     }
@@ -10040,7 +11103,7 @@ fn render_plan_reader(frame: &mut ratatui::Frame, area: Rect, state: &AppState) 
     let actions = if crate::plan::selected_review(state).is_err() {
         "Plan changed. Close and use /plan show to refresh."
     } else {
-        "Enter Execute · R Revise · N comment selection · Esc close · C copy all"
+        "Enter Execute · R Revise · S Send · N comment selection · Esc close · C copy all"
     };
     frame.render_widget(
         Paragraph::new(vec![
@@ -10113,6 +11176,11 @@ fn render_pager(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
     let actions = if state.learning_review_pager_open {
         if state.learning_review_busy {
             Some("working · C copy all")
+        } else if state.learning_review_view.as_ref().is_some_and(|view| {
+            view.kind == crate::codex_learning::TuiLearningViewKind::Proposal
+                && view.proposal.is_some()
+        }) {
+            Some("y apply · n leave pending · C copy all")
         } else {
             Some("Enter actions · R refresh · C copy all")
         }
@@ -12154,4 +13222,59 @@ fn render_statusline_manager(frame: &mut ratatui::Frame, area: Rect, state: &App
         })),
         chunks[2],
     );
+}
+
+#[cfg(test)]
+mod orc290_render_tests {
+    use super::*;
+    #[test]
+    fn orc290_approval_shows_final_contents_without_internal_ticket() {
+        let approval = crate::app::PendingApproval { tool_name: "write_file".into(), tool_id: "call".into(), tool_args: serde_json::json!({"path":"sample.rs","content":"raw","_ca_edit_token":"private-ticket","_ca_edit_preview":"FORMATTED\n"}).to_string(), network_requested: false, email_preview: None, email_draft_ref: None };
+        let lines = approval_argument_lines(&approval)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(lines.contains("final edit contents"));
+        assert!(lines.contains("FORMATTED"));
+        assert!(!lines.contains("private-ticket"));
+        assert!(!lines.contains("_ca_edit"));
+    }
+}
+
+#[cfg(test)]
+mod agy295_inline_render_tests {
+    use super::*;
+
+    #[test]
+    fn agy295_inline_editor_wraps_unicode_and_keeps_cursor_visible() {
+        for width in [60, 100] {
+            let state = crate::tui::test_support::test_state();
+            let approval = crate::app::PendingApproval {
+                tool_name: "run_command".into(),
+                tool_args: serde_json::json!({"command": format!("printf '{}\\n'\n{}\nprintf tail", "界".repeat(80), "echo row\n".repeat(16))}).to_string(),
+                tool_id: "render-amend".into(),
+                network_requested: false,
+                email_preview: None,
+                email_draft_ref: None,
+            };
+            let mut editor = crate::approval_amend::CommandEditor::new(&approval).unwrap();
+            let theme = palette(&state);
+            for cursor in [0, editor.text.len()] {
+                editor.cursor = cursor;
+                let lines = inline_command_editor_lines(&editor, width, &theme);
+                assert!(lines.iter().all(|line| line.width() <= usize::from(width)));
+                assert!(lines.iter().any(|line| line
+                    .spans
+                    .iter()
+                    .any(|span| span.style.bg == Some(theme.text))));
+                assert!(lines.len() <= 12);
+                if cursor == editor.text.len() {
+                    assert!(lines
+                        .iter()
+                        .any(|line| line.to_string().contains("printf tail")));
+                }
+            }
+        }
+    }
 }

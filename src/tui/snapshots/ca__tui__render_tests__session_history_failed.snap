@@ -2,16 +2,18 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&failed, 100, 30), render_to_text(&failed, 60, 24))"
 ---
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 * Recent history · 4 of 68 messages loaded · PageUp loads older
 * Older history unavailable: saved history changed; resume the session again
 
-> saved history message 64
+
+ › saved history message 64
 
 saved history message 65
 
 
-> saved history message 66
+
+ › saved history message 66
 
 saved history message 67
 
@@ -26,34 +28,32 @@ saved history message 67
 
 
 
-
-
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
 4 messages · / commands
 -- narrow --
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
 * Recent history · 4 of 68 messages loaded · PageUp loads
 older
 * Older history unavailable: saved history changed; resume
 the session again
 
-> saved history message 64
+
+ › saved history message 64
 
 saved history message 65
 
 
-> saved history message 66
+
+ › saved history message 66
 
 saved history message 67
 
 
 
 
-
-
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                           │
+╰──────────────────────────────────────────── agent · auto ╯
 4 messages · / commands

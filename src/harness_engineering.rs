@@ -402,7 +402,7 @@ pub(crate) async fn run_gate(
         .map(PathBuf::from)
         .find(|path| path.is_file())
         .context("Cargo unavailable")?,
-        "git" => PathBuf::from("/usr/bin/git"),
+        "git" => PathBuf::from(ca_automation::git_metadata::EXECUTABLE),
         relative if relative.starts_with("target/release/") => workspace.join(relative),
         _ => bail!("unknown fixed engineering program"),
     };
@@ -884,7 +884,7 @@ pub(crate) mod tests {
             );
             std::fs::write(root.join(format!("src/bin/{name}.rs")), program).unwrap();
         }
-        let status = std::process::Command::new("/opt/homebrew/bin/cargo")
+        let status = std::process::Command::new(env!("CARGO"))
             .args(["generate-lockfile", "--offline"])
             .current_dir(root)
             .status()

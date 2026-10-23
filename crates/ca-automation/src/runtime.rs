@@ -281,6 +281,50 @@ pub fn machine_lease_root() -> Result<PathBuf> {
         Ok(home.join(".local/share/ca/automation-resources/v2"))
     }
 }
+
+/// Drop resource lock files nothing is holding. Every resource key ever leased
+/// leaves an empty flock target behind; without this the lease root grows one
+/// file per distinct key for the lifetime of the install. Held locks are kept
+/// because they are the flock target a live lease still validates against.
+/// Returns how many lock files were removed.
+pub fn sweep_unheld_resource_locks(root: &Path) -> Result<usize> {
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error.into()),
+    };
+    let mut removed = 0;
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("lock") {
+            continue;
+        }
+        if !lock_is_unheld(&path) {
+            continue;
+        }
+        let _ = fs::remove_file(&path);
+        removed += 1;
+    }
+    Ok(removed)
+}
+
+/// True when the lock file exists and nothing currently holds its flock.
+#[cfg(unix)]
+fn lock_is_unheld(path: &Path) -> bool {
+    use std::os::fd::AsRawFd;
+    let Ok(file) = owner_open(path, false) else {
+        return false;
+    };
+    let held = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    held == 0
+}
+
+#[cfg(not(unix))]
+fn lock_is_unheld(_path: &Path) -> bool {
+    // Without flock there is no way to distinguish a live claim from a leftover.
+    false
+}
 impl RunStore {
     pub fn context(&self) -> &ExecutionContext {
         &self.context
@@ -905,6 +949,28 @@ mod tests {
         let store = RunStore::open(&ctx)?;
         assert!(store.require_adopted_resource(&ctx.resources[0]).is_err());
         assert!(store.require_adopted_resource("unadmitted").is_err());
+        Ok(())
+    }
+    #[test]
+    fn sweep_drops_unheld_resource_locks_and_keeps_live_claims() -> Result<()> {
+        let t = tempfile::tempdir()?;
+        let root = t.path().canonicalize()?.join("sweep-locks");
+        let held = ResourceLease::acquire(&root, "repository/main")?;
+        // A released lease whose lock file is still on disk, standing in for
+        // every distinct key ever used across previous runs.
+        drop(ResourceLease::acquire(&root, "repository/other")?);
+
+        assert_eq!(sweep_unheld_resource_locks(&root)?, 1);
+
+        let held_key = format!("{:x}.lock", Sha256::digest(b"repository/main"));
+        let other_key = format!("{:x}.lock", Sha256::digest(b"repository/other"));
+        assert!(root.join(&held_key).exists());
+        assert!(!root.join(&other_key).exists());
+        held.validate_binding(&root, "repository/main")?;
+
+        // The swept key can be taken again, and a missing root is a no-op.
+        drop(ResourceLease::acquire(&root, "repository/other")?);
+        assert_eq!(sweep_unheld_resource_locks(&t.path().join("absent"))?, 0);
         Ok(())
     }
     #[cfg(unix)]

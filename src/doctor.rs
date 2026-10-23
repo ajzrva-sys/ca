@@ -373,6 +373,8 @@ fn doctor_provider(
     now: chrono::DateTime<chrono::Utc>,
 ) -> DoctorProvider {
     let provider = crate::config::ProviderConfig {
+        google: None,
+        tool_schema_policy: Default::default(),
         base_url: entry.base_url.clone(),
         api_key: String::new(),
         protocol: crate::agent::ProviderProtocol::default(),
@@ -446,6 +448,8 @@ fn default_check(snapshot: &ProviderManagementSnapshot) -> DoctorCheck {
         return fail("Default model", "default provider is not configured");
     };
     let provider_config = crate::config::ProviderConfig {
+        google: None,
+        tool_schema_policy: Default::default(),
         base_url: provider.base_url.clone(),
         api_key: String::new(),
         protocol: crate::agent::ProviderProtocol::default(),
@@ -563,6 +567,9 @@ fn valid_http_endpoint(value: &str) -> bool {
 
 fn credential_text(source: &ProviderApiKeySource) -> String {
     match source {
+        ProviderApiKeySource::ApplicationDefaultCredentials => {
+            "credential ADC (checked by provider probe)".into()
+        }
         ProviderApiKeySource::None => "credential none".into(),
         ProviderApiKeySource::Environment(variable) => {
             format!("credential environment {}", safe_text(variable))
@@ -592,6 +599,7 @@ fn status_text(status: &ProviderCheckStatus) -> String {
         }
         ProviderCheckStatus::ProviderError { status: None } => "provider error".into(),
         ProviderCheckStatus::InvalidResponse => "invalid or incomplete response".into(),
+        ProviderCheckStatus::FilterStopped => "provider filter stopped".into(),
         ProviderCheckStatus::NeedsModel => "needs a model".into(),
         ProviderCheckStatus::AuthenticationRequired => "authentication required".into(),
     }

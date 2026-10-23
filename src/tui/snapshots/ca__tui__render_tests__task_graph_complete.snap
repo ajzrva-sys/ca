@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&complete, 100, 30),\nrender_to_text(&complete, 60, 24))"
 ---
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
   ┌ Tasks and agent graph ───────────────────────────────────────────────────────────────────────┐
   │Release graph · plan Approved · graph Completed · revision 3                                  │
   │>                                                                                             │
@@ -28,12 +28,12 @@ expression: "wide_narrow(render_to_text(&complete, 100, 30),\nrender_to_text(&co
   │                                                                                              │
   │                                                                                              │
   │                                                                                              │
-  │                                                                                              │
- →│                                                                                              │
-  └──────────────────────────────────────────────────────────────────────────────────────────────┘
+╭─│                                                                                              │─╮
+│›│                                                                                              │ │
+╰─└──────────────────────────────────────────────────────────────────────────────────────────────┘ ╯
 / commands
 -- narrow --
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
  ┌ Tasks and agent graph ─────────────────────────────────┐
  │Release graph · plan Approved · graph Completed ·       │
  │revision 3                                              │
@@ -53,7 +53,7 @@ expression: "wide_narrow(render_to_text(&complete, 100, 30),\nrender_to_text(&co
  │Shift+S start/resume · Shift+P pause · Shift+R retry ·  │
  │Shift+C cancel · Esc close                              │
  │                                                        │
- │                                                        │
- │                                                        │
- └────────────────────────────────────────────────────────┘
+╭│                                                        │╮
+││                                                        ││
+╰└────────────────────────────────────────────────────────┘╯
 / commands

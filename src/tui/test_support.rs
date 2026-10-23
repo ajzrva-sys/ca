@@ -9,6 +9,7 @@ pub(crate) fn test_state() -> AppState {
     let mut state = AppState::new(crate::context::ShellHistory::in_memory());
     state.cwd = "/workspace/ca".to_string();
     state.session_time_offset_seconds = 0;
+    state.agent_activity_now = chrono::DateTime::from_timestamp(0, 0).unwrap();
     state
 }
 
@@ -31,9 +32,19 @@ fn composer_snapshot_cursor(state: &AppState, width: u16, height: u16) -> Option
 }
 
 pub(crate) fn try_render_to_text(state: &AppState, width: u16, height: u16) -> Result<String> {
+    try_render_to_text_with_version(state, width, height, crate::tui::VERSION_LABEL)
+}
+
+fn try_render_to_text_with_version(
+    state: &AppState,
+    width: u16,
+    height: u16,
+    version_label: &str,
+) -> Result<String> {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend)?;
-    terminal.draw(|frame| crate::tui::render(frame, state))?;
+    terminal
+        .draw(|frame| crate::tui::render::render_with_version_label(frame, state, version_label))?;
 
     let backend_cursor = terminal.backend_mut().get_cursor_position()?;
     let cursor = (backend_cursor != Position::ORIGIN)
@@ -51,7 +62,7 @@ pub(crate) fn try_render_to_text(state: &AppState, width: u16, height: u16) -> R
     let composer_is_visible = cursor_is_set
         && prompt_x.saturating_add(1) < width
         && cursor.y < height
-        && buffer[(prompt_x, cursor.y)].symbol() == "→"
+        && buffer[(prompt_x, cursor.y)].symbol() == "›"
         && buffer[(prompt_x + 1, cursor.y)].symbol() == " ";
     let empty_composer_prefix = if composer_is_visible && state.input.is_empty() {
         let placeholder = if state.turn_lifecycle.is_active() {
@@ -59,7 +70,7 @@ pub(crate) fn try_render_to_text(state: &AppState, width: u16, height: u16) -> R
         } else {
             "Ask anything…"
         };
-        let expected: Vec<String> = ["→ ", placeholder]
+        let expected: Vec<String> = ["› ", placeholder]
             .concat()
             .chars()
             .map(|character| character.to_string())
@@ -131,6 +142,10 @@ pub(crate) fn try_render_to_text(state: &AppState, width: u16, height: u16) -> R
     Ok(lines.join("\n"))
 }
 
+/// Lay out snapshots using a fixed version label. Replacing the label after
+/// rendering changes the row width when a release gains another version digit.
+/// Checks of the real version continue to use `try_render_to_text`.
 pub(crate) fn render_to_text(state: &AppState, width: u16, height: u16) -> String {
-    try_render_to_text(state, width, height).expect("test terminal should render")
+    try_render_to_text_with_version(state, width, height, "ca v0.0.0")
+        .expect("test terminal should render")
 }

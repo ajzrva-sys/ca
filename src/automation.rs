@@ -522,7 +522,17 @@ pub(crate) fn prepare_proposed_definition(
     ) {
         (None, None) => {
             definition.reasoning_effort = None;
-            definition.pricing = PricingBindingV1::ModelFree;
+            if matches!(
+                definition.schedule.target,
+                ScheduleTargetV2::KnowledgeLearning { .. }
+            ) {
+                definition.pricing = PricingBindingV1::MeteredRoutes {
+                    price_card_sha256: crate::learning_automation::price_bindings(paths, profile)
+                        .map_err(|e| AutomationError::Invalid(e.to_string()))?,
+                };
+            } else {
+                definition.pricing = PricingBindingV1::ModelFree;
+            }
         }
         (Some(provider_id), Some(model_id)) => {
             let provider = config.providers.get(provider_id).ok_or_else(|| {
@@ -647,6 +657,15 @@ pub(crate) fn validate_configured_definition(
         definition.schedule.model.as_deref(),
         &definition.pricing,
     ) {
+        (None, None, PricingBindingV1::MeteredRoutes { price_card_sha256 })
+            if matches!(
+                definition.schedule.target,
+                ScheduleTargetV2::KnowledgeLearning { .. }
+            ) =>
+        {
+            crate::learning_automation::validate_prices(paths, profile, price_card_sha256)
+                .map_err(|e| AutomationError::State(e.to_string()))?;
+        }
         (None, None, PricingBindingV1::ModelFree) => {}
         (Some(provider_id), Some(model_id), pricing) => {
             let provider = config.providers.get(provider_id).ok_or_else(|| {
@@ -1461,6 +1480,9 @@ pub(crate) fn execution_usage(
                     .ok_or_else(|| AutomationError::State("automation cost overflow".into()))?;
             }
         }
+        PricingBindingV1::MeteredRoutes { .. } => {
+            authoritative = false;
+        }
         PricingBindingV1::LocalZero | PricingBindingV1::ModelFree => {}
     }
     Ok((counters, authoritative))
@@ -2018,11 +2040,17 @@ async fn record_failed_heartbeat(
     let state_sha256 = hex_digest(&Sha256::digest(
         format!("Failed\0{}", content.trim()).as_bytes(),
     ));
+    let publish = change_report_publish(
+        &claim.definition,
+        HeartbeatStatus::Failed,
+        &state_sha256,
+        previous.as_deref(),
+    );
     let notification = HeartbeatNotificationV1 {
         status: HeartbeatStatus::Failed,
         state_sha256,
+        publish,
         previous_state_sha256: previous,
-        publish: claim.definition.notification_policy != AutomationNotificationPolicy::Muted,
     };
     let native_alert = notifications::freeze(
         claim,
@@ -2181,6 +2209,7 @@ fn target_label(target: &ScheduleTargetV2) -> &'static str {
         ScheduleTargetV2::HarnessDiscovery { .. } => "harness_discovery",
         ScheduleTargetV2::HarnessEvaluation { .. } => "harness_evaluation",
         ScheduleTargetV2::HarnessCycle { .. } => "harness_cycle",
+        ScheduleTargetV2::KnowledgeLearning { .. } => "knowledge_learning",
         ScheduleTargetV2::Monitor { .. } => "monitor",
     }
 }
@@ -2232,7 +2261,12 @@ pub enum AutomationKindV1 {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PricingBindingV1 {
-    Metered { price_card_sha256: String },
+    Metered {
+        price_card_sha256: String,
+    },
+    MeteredRoutes {
+        price_card_sha256: std::collections::BTreeMap<String, String>,
+    },
     LocalZero,
     ModelFree,
 }
@@ -2287,20 +2321,12 @@ struct HeartbeatNotificationV1 {
 
 impl HeartbeatNotificationV1 {
     fn validate(&self, definition: &AutomationDefinitionV1) -> bool {
-        let attention = matches!(
+        let publish = change_report_publish(
+            definition,
             self.status,
-            HeartbeatStatus::Failed | HeartbeatStatus::NeedsAttention
+            &self.state_sha256,
+            self.previous_state_sha256.as_deref(),
         );
-        let publish = match definition.notification_policy {
-            AutomationNotificationPolicy::AllResults => true,
-            AutomationNotificationPolicy::FailuresOnly => attention,
-            AutomationNotificationPolicy::Muted => false,
-            AutomationNotificationPolicy::MeaningfulChanges => {
-                attention
-                    || (self.status != HeartbeatStatus::Unchanged
-                        && self.previous_state_sha256.as_deref() != Some(&self.state_sha256))
-            }
-        };
         uses_change_report(definition)
             && is_sha256(&self.state_sha256)
             && self
@@ -2308,6 +2334,33 @@ impl HeartbeatNotificationV1 {
                 .as_ref()
                 .is_none_or(|digest| is_sha256(digest))
             && self.publish == publish
+    }
+}
+
+fn change_report_publish(
+    definition: &AutomationDefinitionV1,
+    status: HeartbeatStatus,
+    digest: &str,
+    previous: Option<&str>,
+) -> bool {
+    let attention = matches!(
+        status,
+        HeartbeatStatus::Failed | HeartbeatStatus::NeedsAttention
+    );
+    match definition.notification_policy {
+        AutomationNotificationPolicy::AllResults => true,
+        AutomationNotificationPolicy::FailuresOnly => attention,
+        AutomationNotificationPolicy::Muted => false,
+        AutomationNotificationPolicy::MeaningfulChanges => {
+            if matches!(
+                definition.schedule.target,
+                ScheduleTargetV2::KnowledgeLearning { .. }
+            ) {
+                status != HeartbeatStatus::Unchanged && previous != Some(digest)
+            } else {
+                attention || (status != HeartbeatStatus::Unchanged && previous != Some(digest))
+            }
+        }
     }
 }
 
@@ -2320,6 +2373,7 @@ fn uses_change_report(definition: &AutomationDefinitionV1) -> bool {
         ScheduleTargetV2::Monitor { .. }
             | ScheduleTargetV2::HarnessEvaluation { .. }
             | ScheduleTargetV2::HarnessCycle { .. }
+            | ScheduleTargetV2::KnowledgeLearning { .. }
     )
 }
 
@@ -2362,19 +2416,7 @@ fn heartbeat_notification(
     let state_sha256 = hex_digest(&Sha256::digest(
         format!("{status:?}\0{}", canonical.trim()).as_bytes(),
     ));
-    let attention = matches!(
-        status,
-        HeartbeatStatus::Failed | HeartbeatStatus::NeedsAttention
-    );
-    let publish = match definition.notification_policy {
-        AutomationNotificationPolicy::AllResults => true,
-        AutomationNotificationPolicy::FailuresOnly => attention,
-        AutomationNotificationPolicy::Muted => false,
-        AutomationNotificationPolicy::MeaningfulChanges => {
-            attention
-                || (status != HeartbeatStatus::Unchanged && previous != Some(state_sha256.as_str()))
-        }
-    };
+    let publish = change_report_publish(definition, status, &state_sha256, previous);
     (
         content,
         Some(HeartbeatNotificationV1 {
@@ -2544,6 +2586,21 @@ impl AutomationDefinitionV1 {
 fn validate_pricing(definition: &AutomationDefinitionV1) -> Result<(), AutomationError> {
     let model_free = definition.schedule.provider.is_none() && definition.schedule.model.is_none();
     match (&definition.pricing, model_free) {
+        (PricingBindingV1::MeteredRoutes { price_card_sha256 }, true)
+            if matches!(
+                definition.schedule.target,
+                ScheduleTargetV2::KnowledgeLearning { .. }
+            ) =>
+        {
+            if price_card_sha256.is_empty()
+                || price_card_sha256.len() > 16
+                || price_card_sha256.values().any(|digest| !is_sha256(digest))
+            {
+                return Err(AutomationError::Invalid(
+                    "knowledge learning requires exact prices for eligible routes".into(),
+                ));
+            }
+        }
         (PricingBindingV1::ModelFree, true) => {
             if definition.reasoning_effort.is_some() {
                 return Err(AutomationError::Invalid(
@@ -3799,7 +3856,10 @@ impl AutomationBudgetLedger {
         }
         let mut reservation =
             AutomationUsageCountersV1::from_budget(&claim.definition.per_run_budget);
-        if !matches!(claim.definition.pricing, PricingBindingV1::Metered { .. }) {
+        if !matches!(
+            claim.definition.pricing,
+            PricingBindingV1::Metered { .. } | PricingBindingV1::MeteredRoutes { .. }
+        ) {
             reservation.cost_usd = DecimalUsd::ZERO;
         }
         let cutoff = now - chrono::Duration::days(30);
@@ -3940,6 +4000,145 @@ impl AutomationBudgetLedger {
         }
         atomic_owner_write(&self.root, &self.path, &bytes, true)
     }
+}
+
+/// Import only proven paid settlements from the pre-daily-cap native journals.
+/// Unknown usage retains the full grant and has no positive USD refund; the
+/// migration's separate conservative hold covers that historical ambiguity.
+pub(crate) fn legacy_learning_settled_microusd(
+    paths: &RuntimePaths,
+    now: DateTime<Utc>,
+) -> Result<u64, AutomationError> {
+    let eastern_date = codex_team::self_improvement::eastern_learning_date(now)
+        .map_err(|error| AutomationError::State(error.to_string()))?;
+    let mut profiles = vec![ActiveProfile::Default];
+    let profile_root = paths.data_dir.join("profiles");
+    if profile_root.exists() {
+        reject_symlink_components(&profile_root)?;
+        for entry in std::fs::read_dir(&profile_root)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let metadata = entry.metadata()?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt as _;
+                if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o022 != 0 {
+                    continue;
+                }
+            }
+            #[cfg(not(unix))]
+            let _ = metadata;
+            let name = entry.file_name();
+            if let Some(Ok(profile @ ActiveProfile::Named(_))) =
+                name.to_str().map(|name| ActiveProfile::parse(Some(name)))
+            {
+                profiles.push(profile);
+            }
+        }
+    }
+
+    let mut total = 0_u64;
+    for profile in profiles {
+        let ledger = AutomationBudgetLedger::for_paths(paths, &profile);
+        let mut pairs: BTreeMap<_, _> = budget_run_pairs(&ledger.load()?)?
+            .into_iter()
+            .map(|(reserve, refund)| (reserve.run_id, (reserve, refund)))
+            .collect();
+        let runs_root = ledger.root.join("runs");
+        if runs_root.exists() {
+            reject_symlink_components(&runs_root)?;
+            for entry in std::fs::read_dir(&runs_root)? {
+                let entry = entry?;
+                if !entry.file_type()?.is_dir() {
+                    continue;
+                }
+                let Some(run_id) = entry
+                    .file_name()
+                    .to_str()
+                    .and_then(|name| Uuid::parse_str(name).ok())
+                else {
+                    continue;
+                };
+                let receipt_path = ledger.receipt_path(run_id);
+                if !receipt_path.exists() {
+                    continue;
+                }
+                let receipt: BudgetRunReceiptV1 = serde_json::from_slice(&read_owner_file(
+                    &receipt_path,
+                    MAX_BUDGET_RECEIPT_BYTES,
+                )?)
+                .map_err(|error| AutomationError::State(error.to_string()))?;
+                receipt.validate(run_id, &receipt.reserve.automation_id)?;
+                if let Some((reserve, refund)) = pairs.get(&run_id) {
+                    if !same_budget_event(reserve, &receipt.reserve)
+                        || refund
+                            .as_ref()
+                            .is_some_and(|refund| !same_budget_event(refund, &receipt.refund))
+                    {
+                        return Err(AutomationError::State(
+                            "legacy learning settlement evidence changed".into(),
+                        ));
+                    }
+                }
+                pairs.insert(run_id, (receipt.reserve, Some(receipt.refund)));
+            }
+        }
+        for (reserve, refund) in pairs.into_values() {
+            let Some(refund) = refund else { continue };
+            if reserve.at > now
+                || refund.at > now
+                || refund.amount.cost_usd == DecimalUsd::ZERO
+                || codex_team::self_improvement::eastern_learning_date(reserve.at)
+                    .map_err(|error| AutomationError::State(error.to_string()))?
+                    != eastern_date
+            {
+                continue;
+            }
+            let intent: DeliveryIntentV1 = serde_json::from_slice(&read_owner_file(
+                &run_directory(paths, &profile, reserve.run_id).join("intent.json"),
+                MAX_STORE_BYTES,
+            )?)
+            .map_err(|error| AutomationError::State(error.to_string()))?;
+            intent.validate(&intent.claim)?;
+            if intent.claim.run_id != reserve.run_id
+                || intent.claim.automation_id != reserve.automation_id
+                || intent.claim.profile != profile.label()
+            {
+                return Err(AutomationError::State(
+                    "legacy learning settlement claim changed".into(),
+                ));
+            }
+            if !matches!(
+                intent.claim.definition.schedule.target,
+                ScheduleTargetV2::RepositoryTask { .. }
+                    | ScheduleTargetV2::HarnessDiscovery { .. }
+                    | ScheduleTargetV2::HarnessEvaluation { .. }
+                    | ScheduleTargetV2::HarnessCycle { .. }
+                    | ScheduleTargetV2::KnowledgeLearning { .. }
+            ) {
+                continue;
+            }
+            let actual = reserve.amount.checked_sub(&refund.amount).ok_or_else(|| {
+                AutomationError::State("legacy learning refund exceeded reservation".into())
+            })?;
+            let usd = actual.cost_usd;
+            let micros = if usd.scale() <= 6 {
+                usd.coefficient()
+                    .checked_mul(10_u128.pow(u32::from(6 - usd.scale())))
+            } else {
+                let denominator = 10_u128.pow(u32::from(usd.scale() - 6));
+                Some(usd.coefficient().div_ceil(denominator))
+            }
+            .and_then(|micros| u64::try_from(micros).ok())
+            .ok_or_else(|| AutomationError::State("legacy learning cost overflow".into()))?;
+            total = total
+                .checked_add(micros)
+                .ok_or_else(|| AutomationError::State("legacy learning total overflow".into()))?;
+        }
+    }
+    Ok(total)
 }
 
 fn same_budget_event(left: &BudgetEventV1, right: &BudgetEventV1) -> bool {
@@ -4311,6 +4510,35 @@ mod tests {
     }
 
     #[test]
+    fn knowledge_notifications_only_publish_new_review_completion_failure_or_action() {
+        let mut definition = definition(Path::new("/fixture"));
+        definition.schedule.target = ScheduleTargetV2::KnowledgeLearning {
+            vault_root: PathBuf::from("/fixture/vault"),
+            enrollment_digest: "a".repeat(64),
+        };
+        definition.notification_policy = AutomationNotificationPolicy::MeaningfulChanges;
+        let unchanged = r#"{"schema":"ca.heartbeat-report.v1","status":"unchanged","summary":"one replay finished","state":"candidate:1"}"#;
+        assert!(
+            !heartbeat_notification(&definition, unchanged, None)
+                .1
+                .unwrap()
+                .publish
+        );
+        for status in ["changed", "completed", "failed", "needs_attention"] {
+            let raw=serde_json::json!({"schema":"ca.heartbeat-report.v1","status":status,"summary":"evaluation event","state":"candidate:1"}).to_string();
+            let notification = heartbeat_notification(&definition, &raw, None).1.unwrap();
+            assert!(notification.publish);
+            assert!(notification.validate(&definition));
+            let duplicate =
+                heartbeat_notification(&definition, &raw, Some(&notification.state_sha256))
+                    .1
+                    .unwrap();
+            assert!(!duplicate.publish);
+            assert!(duplicate.validate(&definition));
+        }
+    }
+
+    #[test]
     fn schema_is_strict_and_defaults_are_balanced() {
         let temp = TempDir::new().unwrap();
         let raw = serde_json::to_value(definition(temp.path())).unwrap();
@@ -4550,6 +4778,147 @@ mod tests {
         };
         next.run_id = stable_run_id(&next.definition_sha256, &next.occurrence.id);
         next
+    }
+
+    #[test]
+    fn legacy_learning_settlements_cover_profiles_eastern_day_and_archive_duplicates() {
+        fn settlement(
+            paths: &RuntimePaths,
+            profile: &ActiveProfile,
+            target: ScheduleTargetV2,
+            at: DateTime<Utc>,
+            cost: &str,
+            authoritative: bool,
+        ) -> AutomationClaimV1 {
+            let mut definition = definition(&paths.data_dir);
+            definition.schedule.target = target;
+            definition.pricing = PricingBindingV1::Metered {
+                price_card_sha256: "a".repeat(64),
+            };
+            let definition_sha256 = definition_digest(&definition).unwrap();
+            let occurrence = Occurrence {
+                id: Uuid::new_v4().to_string(),
+                at,
+            };
+            let claim = AutomationClaimV1 {
+                schema: AUTOMATION_RUN_SCHEMA.into(),
+                run_id: stable_run_id(&definition_sha256, &occurrence.id),
+                profile: profile.label().into(),
+                automation_id: definition.id.clone(),
+                definition_sha256,
+                occurrence,
+                claim_revision: 1,
+                coalesced_occurrences: 0,
+                definition,
+                runtime_lease: None,
+            };
+            write_run_intent(paths, profile, &DeliveryIntentV1::new(&claim, None)).unwrap();
+            let ledger = AutomationBudgetLedger::for_paths(paths, profile);
+            let reserved = ledger.reserve(&claim, at).unwrap();
+            let actual = AutomationUsageCountersV1 {
+                cost_usd: DecimalUsd::from_str(cost).unwrap(),
+                ..Default::default()
+            };
+            ledger
+                .settle(&claim, &reserved, &actual, authoritative, at)
+                .unwrap();
+            claim
+        }
+
+        let temp = TempDir::new().unwrap();
+        let paths = RuntimePaths::from_home(temp.path().canonicalize().unwrap());
+        let now = "2026-10-10T03:30:00Z".parse::<DateTime<Utc>>().unwrap();
+        let default = ActiveProfile::Default;
+        let named = ActiveProfile::Named("work".into());
+        let harness = ScheduleTargetV2::HarnessCycle {
+            vault_root: paths.home.join("fixture-vault"),
+        };
+        let utc_previous_day = "2026-10-09T23:00:00Z".parse().unwrap();
+        let default_claim = settlement(
+            &paths,
+            &default,
+            harness.clone(),
+            utc_previous_day,
+            "0.1000001",
+            true,
+        );
+        settlement(
+            &paths,
+            &named,
+            ScheduleTargetV2::KnowledgeLearning {
+                vault_root: paths.home.join("fixture-vault"),
+                enrollment_digest: "b".repeat(64),
+            },
+            now,
+            "0.2",
+            true,
+        );
+        // Simulate the old ledger rotation: immutable receipts are sufficient.
+        let named_ledger = AutomationBudgetLedger::for_paths(&paths, &named);
+        named_ledger.save(&BudgetLedgerDataV1::default()).unwrap();
+        settlement(
+            &paths,
+            &default,
+            harness.clone(),
+            now - chrono::Duration::days(1),
+            "0.7",
+            true,
+        );
+        settlement(
+            &paths,
+            &default,
+            ScheduleTargetV2::Prompt {
+                prompt: "An unrelated scheduled task".into(),
+            },
+            now,
+            "0.9",
+            true,
+        );
+        settlement(&paths, &default, harness, now, "0", false);
+
+        let default_ledger = AutomationBudgetLedger::for_paths(&paths, &default);
+        let ledger_bytes = std::fs::read(&default_ledger.path).unwrap();
+        let receipt_bytes =
+            std::fs::read(default_ledger.receipt_path(default_claim.run_id)).unwrap();
+        assert_eq!(
+            legacy_learning_settled_microusd(&paths, now).unwrap(),
+            300_001
+        );
+        assert_eq!(std::fs::read(&default_ledger.path).unwrap(), ledger_bytes);
+        assert_eq!(
+            std::fs::read(default_ledger.receipt_path(default_claim.run_id)).unwrap(),
+            receipt_bytes
+        );
+
+        let mut tampered = default_ledger
+            .read_run_receipt(default_claim.run_id, &default_claim.automation_id)
+            .unwrap()
+            .unwrap();
+        tampered.refund.at -= chrono::Duration::seconds(1);
+        tampered.refund.event_sha256 = budget_event_digest(&tampered.refund).unwrap();
+        atomic_owner_write(
+            default_ledger
+                .receipt_path(default_claim.run_id)
+                .parent()
+                .unwrap(),
+            &default_ledger.receipt_path(default_claim.run_id),
+            &serde_json::to_vec(&tampered).unwrap(),
+            true,
+        )
+        .unwrap();
+        assert!(legacy_learning_settled_microusd(&paths, now).is_err());
+    }
+
+    #[test]
+    fn legacy_learning_settlement_inspection_creates_no_runtime_state() {
+        let temp = TempDir::new().unwrap();
+        let paths = RuntimePaths::from_home(temp.path().canonicalize().unwrap());
+        assert_eq!(
+            legacy_learning_settled_microusd(&paths, "2026-10-10T03:30:00Z".parse().unwrap())
+                .unwrap(),
+            0
+        );
+        assert!(!paths.data_dir.exists());
     }
 
     #[test]

@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "render_to_text(&completed, 80, 20)"
 ---
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                                          [Dashboard]
 
 
 
@@ -18,7 +18,7 @@ expression: "render_to_text(&completed, 80, 20)"
 
 
 
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                                               │
+╰──────────────────────────────────────────────────────────────── agent · auto ╯
 / commands

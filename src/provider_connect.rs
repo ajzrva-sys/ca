@@ -65,6 +65,8 @@ impl FirstClassProvider {
 
     pub fn candidate(self, api_key: String, base_url: Option<String>) -> ProviderConfig {
         ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: base_url.unwrap_or_else(|| self.default_base_url().to_string()),
             api_key,
             protocol: self.protocol(),

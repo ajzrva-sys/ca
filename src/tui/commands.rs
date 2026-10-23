@@ -21,6 +21,7 @@ pub enum CommandId {
     Hooks,
     Permissions,
     Memory,
+    Personality,
     Learn,
     Dream,
     Distill,
@@ -97,6 +98,7 @@ pub enum CommandId {
     Dashboard,
     Request,
     Trace,
+    Filter,
     Keymap,
     History,
     Stash,
@@ -218,6 +220,10 @@ pub enum InputAction {
         generation: bool,
     },
     ExportMemory(std::path::PathBuf),
+    SavePersonality {
+        revision: String,
+        preferences: crate::personality_preferences::Preferences,
+    },
     StartAgentGraph,
     PauseAgentGraph,
     CancelAgentGraph,
@@ -254,6 +260,7 @@ pub enum InputAction {
     DeleteSession {
         storage_key: String,
         expected_id: uuid::Uuid,
+        archived: bool,
     },
     DeleteTrace(uuid::Uuid),
     CreateProjectInstructions(crate::project_init::ProjectInitDraft),
@@ -352,6 +359,8 @@ pub enum InputAction {
     CancelProviderAuth,
     OpenLearningReviewActions,
     RefreshLearningReview,
+    ConfirmLearningProposal,
+    DeclineLearningProposal,
 }
 
 macro_rules! command {
@@ -563,8 +572,8 @@ pub static COMMANDS: &[CommandSpec] = &[
         Permissions,
         "permissions",
         ["permission"],
-        "Inspect and remove permission rules",
-        "[filter]",
+        "Inspect permission rules and recent decisions",
+        "[filter|why]",
         General,
         IdleOnly,
         State,
@@ -587,6 +596,17 @@ pub static COMMANDS: &[CommandSpec] = &[
         [],
         "Learn directly from recent work and publish validated reusable assets",
         "[focus text|status [run-id]|sync|undo <run-id>]",
+        General,
+        IdleOnly,
+        State,
+        true
+    ),
+    command!(
+        Personality,
+        "personality",
+        ["questionnaire"],
+        "Answer guided questions to customize how CA works and communicates",
+        "",
         General,
         IdleOnly,
         State,
@@ -695,8 +715,8 @@ pub static COMMANDS: &[CommandSpec] = &[
         Plan,
         "plan",
         ["p"],
-        "Enter plan mode or manage the persisted plan artifact",
-        "[show|execute|approve|revise|dismiss|reject|edit <title>|recipes [server] [recipe-id]]",
+        "Plan, hand off across providers, inspect the workflow, or execute",
+        "[show|run <request>|send [review|revise] [agent|provider/model]|graph|pause|resume|cancel|execute [provider/model|choose]|approve|revise|dismiss|reject|edit <title>|recipes]",
         Mode,
         IdleOnly,
         State,
@@ -1005,6 +1025,17 @@ pub static COMMANDS: &[CommandSpec] = &[
         [],
         "Inspect or control persistent provider exchange tracing",
         "[on|off|list|open <id>|delete <id>]",
+        General,
+        Always,
+        State,
+        true
+    ),
+    command!(
+        Filter,
+        "filter",
+        [],
+        "Show the provider filter, or turn it on for this process",
+        "[on]",
         General,
         Always,
         State,
@@ -2401,6 +2432,29 @@ mod tests {
     }
 
     #[test]
+    fn personality_questionnaire_is_discoverable_and_stays_local_while_idle() {
+        for name in ["personality", "questionnaire"] {
+            assert_eq!(
+                parse_command_line(&format!("/{name}")),
+                Some(CommandAction {
+                    id: CommandId::Personality,
+                    args: String::new(),
+                })
+            );
+        }
+        let personality = find_command("personality").unwrap();
+        assert!(personality.visible);
+        assert_eq!(personality.availability, CommandAvailability::IdleOnly);
+        assert_eq!(personality.mutation, MutationClass::State);
+        assert!(matching_commands("personality", false)
+            .iter()
+            .any(|command| command.id == CommandId::Personality));
+        assert!(!matching_commands("personality", true)
+            .iter()
+            .any(|command| command.id == CommandId::Personality));
+    }
+
+    #[test]
     fn sandbox_command_is_visible_stateful_and_idle_only() {
         assert_eq!(
             parse_command_line("/sandbox"),
@@ -2540,6 +2594,39 @@ mod tests {
         assert!(matching_commands("provider exchange", true)
             .iter()
             .any(|candidate| candidate.id == CommandId::Trace));
+    }
+
+    #[test]
+    fn filter_command_accepts_on_and_stays_available_while_busy() {
+        assert_eq!(
+            parse_command_line("/filter"),
+            Some(CommandAction {
+                id: CommandId::Filter,
+                args: String::new(),
+            })
+        );
+        assert_eq!(
+            parse_command_line("/filter on"),
+            Some(CommandAction {
+                id: CommandId::Filter,
+                args: "on".into(),
+            })
+        );
+        assert_eq!(
+            parse_command_line("/filter off"),
+            Some(CommandAction {
+                id: CommandId::Filter,
+                args: "off".into(),
+            })
+        );
+        let command = find_command("filter").unwrap();
+        assert!(command.visible);
+        assert_eq!(command.usage, "[on]");
+        assert_eq!(command.availability, CommandAvailability::Always);
+        assert_eq!(command.mutation, MutationClass::State);
+        assert!(matching_commands("provider filter", true)
+            .iter()
+            .any(|command| command.id == CommandId::Filter));
     }
 
     #[test]

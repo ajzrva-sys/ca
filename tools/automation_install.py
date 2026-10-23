@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Verify and recoverably install the paired ca/codex-team release.
+"""Verify and recoverably install CA and its matched automation executables.
 
 --check does not stage or replace files. Installation keeps private, same-device
 backups and a durable receipt. --recover RECEIPT restores both before-images,
 including after interruption; an unrelated destination change requires review.
-No config, vault, session, service or existing process is changed.
+Use --with-supervisor to include the learning supervisor. Recovery recognizes
+both the original pair and the matched trio. No config, vault, session, service
+or existing process is changed.
 """
 
 import argparse
@@ -27,6 +29,7 @@ import time
 
 SCHEMA = "ca.release_pair.v1"
 NAMES = ("ca", "codex-team")
+TRIO_NAMES = (*NAMES, "codex-team-supervisor")
 OUTPUT_LIMIT = 1024 * 1024
 FILE_LIMIT = 1024 * 1024 * 1024
 INSTALL_LEASE_FDS = ()
@@ -211,9 +214,12 @@ def inspect(path, name, new_release=False):
         if name == "ca":
             arguments = ["automation-engine", "--help"]
             required = (b"preview", b"start", b"status", b"cancel", b"reconcile")
-        else:
+        elif name == "codex-team":
             arguments = ["automation", "--help"]
             required = (b"workflow", b"workflow-roots", b"setup")
+        else:
+            arguments = ["run", "--help"]
+            required = (b"--vault", b"--once")
         typed_help = run_checked([path, *arguments], argv0=name)
         require(all(value in typed_help for value in required),
                 f"missing native/compatibility automation commands: {name}")
@@ -516,7 +522,7 @@ def install(entries):
 
 
 def recover(path):
-    global INSTALL_LEASE_FDS
+    global INSTALL_LEASE_FDS, NAMES
     path = Path(path).absolute()
     private_directory(path.parent)
     info = path.lstat()
@@ -524,6 +530,9 @@ def recover(path):
             and not info.st_mode & 0o077 and info.st_size <= OUTPUT_LIMIT,
             "recovery receipt is not a bounded private regular file")
     receipt = json.loads(path.read_bytes())
+    names = tuple(entry["name"] for entry in receipt["entries"])
+    require(names in (("ca", "codex-team"), TRIO_NAMES), "recovery executable set is invalid")
+    NAMES = names
     require(receipt.get("schema") == SCHEMA and receipt.get("uid") == os.getuid()
             and [entry["name"] for entry in receipt["entries"]] == list(NAMES),
             "recovery receipt identity is invalid")
@@ -550,15 +559,18 @@ def recover(path):
 
 
 def main():
+    global NAMES
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--check", action="store_true", help="verify the pair without staging or replacement")
     mode.add_argument("--recover", type=Path, metavar="RECEIPT", help="restore both verified before-images")
+    parser.add_argument("--with-supervisor", action="store_true", help="verify and install the matched learning supervisor too")
     repository = Path(__file__).resolve().parent.parent
-    for name in NAMES:
+    for name in TRIO_NAMES:
         parser.add_argument("--" + name + "-candidate", type=Path,
                             default=repository / "target" / "release" / name)
     arguments = parser.parse_args()
+    NAMES = TRIO_NAMES if arguments.with_supervisor else ("ca", "codex-team")
     if arguments.recover:
         result = recover(arguments.recover)
     else:
@@ -577,9 +589,9 @@ def main():
             entries.append({"name": name, "candidate": str(candidate), "destination": str(destination),
                             "destination_parent": parent_identity(destination),
                             "before": before, "after": after})
-        require(entries[0]["after"]["semver"] == entries[1]["after"]["semver"],
-                "candidate ca and codex-team versions differ")
-        require(len({entry["destination"] for entry in entries}) == 2,
+        require(len({entry["after"]["semver"] for entry in entries}) == 1,
+                "candidate executable versions differ")
+        require(len({entry["destination"] for entry in entries}) == len(NAMES),
                 "paired executables resolve to the same destination")
         for entry in entries:
             entry_path_binding(entry)

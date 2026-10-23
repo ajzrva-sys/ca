@@ -422,7 +422,7 @@ mod tests {
             include_str!("test_transfer.py"),
         )
         .unwrap();
-        let mut command = tokio::process::Command::new("/usr/bin/python3");
+        let mut command = tokio::process::Command::new(crate::harness_vm::HOST_PYTHON);
         command
             .args(["-I", "-B"])
             .arg(root.path().join("test_transfer.py"));

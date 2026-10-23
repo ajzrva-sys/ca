@@ -46,6 +46,8 @@ fn hrs253_seed_idle_pty_profile() {
     config.providers.insert(
         "openai".into(),
         crate::config::ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: url,
             api_key: "synthetic-local-test-token".into(),
             protocol: ProviderProtocol::ChatCompletions,
@@ -364,6 +366,8 @@ async fn full_cycle(hint_mode: bool, vm: Option<codex_team::self_improvement::Ha
     config.providers.insert(
         "fake".into(),
         crate::config::ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: url,
             api_key: "synthetic-test-token".into(),
             protocol: ProviderProtocol::ChatCompletions,

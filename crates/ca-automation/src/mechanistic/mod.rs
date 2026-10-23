@@ -7,6 +7,7 @@
 mod contracts;
 mod dependency_graph;
 mod executor;
+pub mod native;
 mod observation;
 mod query;
 mod rust_api;

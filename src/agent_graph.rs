@@ -26,6 +26,8 @@ pub const DEFAULT_GRAPH_TOOL_FAILURES: u32 = 8;
 pub const DEFAULT_GRAPH_CHILD_SPAWNS: u32 = 8;
 pub const DEFAULT_GRAPH_RETAINED_OUTPUT_BYTES: u64 = 256 * 1024;
 pub const MAX_VERIFICATION_ARTIFACTS: usize = 32;
+pub const MAX_HANDOFF_ARTIFACTS: usize = 8;
+pub const MAX_HANDOFF_INPUTS: usize = 16;
 pub const MAX_VERIFICATION_COMMAND_ARGS: usize = 32;
 pub const MAX_VERIFICATION_COMMAND_TIMEOUT_SECS: u64 = 300;
 pub const MAX_VERIFICATION_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
@@ -97,6 +99,109 @@ pub struct AgentClosedCommandPredicateV1 {
     pub timeout_secs: u64,
 }
 
+/// A declared output artifact one lane may hand to a dependent lane.
+/// The coordinator verifies the artifact at completion and passes only
+/// host-verified facts (name/path/kind/digest/size) to consumers.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HandoffArtifactV1 {
+    /// Stable lane-local name used to match `HandoffInputV1::name`.
+    pub name: String,
+    pub path: String,
+    pub kind: AgentArtifactKind,
+    #[serde(default)]
+    pub sha256: Option<String>,
+    #[serde(default)]
+    pub min_bytes: Option<u64>,
+    #[serde(default)]
+    pub max_bytes: Option<u64>,
+}
+
+/// A declared input a lane accepts from a specific prerequisite lane.
+/// Only these facts may appear in the consuming lane's brief; any other
+/// sibling state stays invisible.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct HandoffInputV1 {
+    /// The prerequisite task that declares this artifact.
+    pub producer: TaskId,
+    /// Artifact name declared in the producer's `produces`.
+    pub name: String,
+    /// Path as visible in the consumer's workspace.
+    pub path: String,
+}
+
+/// Host-verified handoff fact recorded on attempts and in the graph ledger.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct VerifiedHandoffV1 {
+    pub name: String,
+    pub path: String,
+    pub kind: AgentArtifactKind,
+    #[serde(default)]
+    pub sha256: Option<String>,
+    pub bytes: u64,
+    /// Set when the fact was verified on a consuming lane's workspace.
+    #[serde(default)]
+    pub producer: Option<TaskId>,
+}
+
+/// A lane's role in the silo'd graph. Ordinary lanes reason with narrow
+/// grants; facts lanes publish verified shared facts; merge lanes integrate
+/// only declared inputs under a declared conflict policy.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentTaskKind {
+    #[default]
+    Agent,
+    Facts,
+    Merge,
+}
+
+/// The deterministic conflict policy a merge lane applies to its declared
+/// inputs. Structural overlap never resolves silently: `RejectConflict` is
+/// the default.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentMergePolicy {
+    #[default]
+    RejectConflict,
+    LastWriteByTaskOrder,
+    ThreeWayText,
+}
+
+/// A verified fact published to the graph-level ledger. Entries are bound to
+/// the producer task and its current verification contract; a reconfiguration
+/// invalidates them for reuse.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct HandoffLedgerEntryV1 {
+    pub task: TaskId,
+    pub contract_sha256: String,
+    pub fact: VerifiedHandoffV1,
+}
+
+/// The ledger keeps at most this many verified facts.
+pub const MAX_HANDOFF_LEDGER_ENTRIES: usize = 64;
+
+/// Look up a verified fact in the graph ledger. Only entries bound to the
+/// producer's *current* contract may be reused; anything else fails closed.
+pub fn ledger_handoff_fact(
+    task: TaskId,
+    name: &str,
+    contract_sha256: &str,
+    ledger: &[HandoffLedgerEntryV1],
+) -> Option<VerifiedHandoffV1> {
+    ledger
+        .iter()
+        .find(|entry| {
+            entry.task == task
+                && entry.fact.name == name
+                && entry.contract_sha256 == contract_sha256
+        })
+        .map(|entry| entry.fact.clone())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentHostEvidenceObservationV1 {
     pub gate_sha256: String,
@@ -138,6 +243,12 @@ pub enum AgentHostVerificationError {
     ArtifactTooLarge,
     #[error("verification artifact could not be read")]
     ArtifactRead,
+    #[error("declared handoff output does not satisfy its contract")]
+    HandoffArtifactMismatch,
+    #[error("declared handoff input's producer fact is missing or unverified")]
+    HandoffProducerFactMissing,
+    #[error("declared handoff input does not match the verified producer fact")]
+    HandoffInputMismatch,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -628,6 +739,14 @@ pub struct AgentTaskDefinition {
     pub worktree_id: Option<Uuid>,
     #[serde(default)]
     pub accept_cross_lane_handoff: bool,
+    #[serde(default)]
+    pub produces: Vec<HandoffArtifactV1>,
+    #[serde(default)]
+    pub consumes: Vec<HandoffInputV1>,
+    #[serde(default)]
+    pub task_kind: AgentTaskKind,
+    #[serde(default)]
+    pub merge_policy: AgentMergePolicy,
     #[serde(default = "default_max_attempts")]
     pub max_attempts: u8,
     #[serde(default = "default_evidence")]
@@ -712,6 +831,10 @@ pub struct AgentTaskAttempt {
     #[serde(default)]
     pub host_verification: Option<AgentHostVerificationV1>,
     #[serde(default)]
+    pub handoff_outputs: Vec<VerifiedHandoffV1>,
+    #[serde(default)]
+    pub handoff_inputs: Vec<VerifiedHandoffV1>,
+    #[serde(default)]
     pub budget_usage: AgentGraphBudgetUsageV1,
 }
 
@@ -757,6 +880,8 @@ pub struct AgentGraphState {
     pub budget_limits: Option<AgentGraphBudgetLimitsV1>,
     #[serde(default)]
     pub budget_usage: AgentGraphBudgetUsageV1,
+    #[serde(default)]
+    pub handoff_ledger: Vec<HandoffLedgerEntryV1>,
 }
 
 impl AgentGraphState {
@@ -808,10 +933,44 @@ pub struct AgentTaskInput {
     pub worktree_id: Option<String>,
     #[serde(default)]
     pub accept_cross_lane_handoff: bool,
+    #[serde(default)]
+    pub produces: Vec<HandoffArtifactSpec>,
+    #[serde(default)]
+    pub consumes: Vec<HandoffInputSpec>,
+    #[serde(default)]
+    pub task_kind: AgentTaskKind,
+    #[serde(default)]
+    pub merge_policy: AgentMergePolicy,
     #[serde(default = "default_max_attempts")]
     pub max_attempts: u8,
     #[serde(default = "default_evidence_input")]
     pub evidence: Vec<AgentEvidenceInput>,
+}
+
+/// Configuration-side declaration of an artifact a lane produces and may
+/// hand to dependent lanes.
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct HandoffArtifactSpec {
+    pub name: String,
+    pub path: String,
+    pub kind: AgentArtifactKind,
+    #[serde(default)]
+    pub sha256: Option<String>,
+    #[serde(default)]
+    pub min_bytes: Option<u64>,
+    #[serde(default)]
+    pub max_bytes: Option<u64>,
+}
+
+/// Configuration-side declaration of an artifact a lane accepts from a
+/// prerequisite lane.
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct HandoffInputSpec {
+    pub producer: String,
+    pub name: String,
+    pub path: String,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -889,6 +1048,14 @@ pub enum AgentGraphError {
     UnserializedWorkspaceLane,
     #[error("cross-workspace dependency requires an explicit handoff task")]
     CrossLaneHandoffRequired,
+    #[error("handoff input on task {task} names producer {producer} which is not a prerequisite")]
+    HandoffProducerNotPrerequisite { task: TaskId, producer: TaskId },
+    #[error("handoff input on task {task} names artifact {name} which producer {producer} does not declare")]
+    HandoffArtifactUndeclared {
+        task: TaskId,
+        producer: TaskId,
+        name: String,
+    },
     #[error("agent graph autonomy budget is exhausted: {0:?}")]
     BudgetExhausted(AgentBudgetLimitKind),
 }
@@ -964,6 +1131,14 @@ pub fn parse_configuration(
         {
             return Err(AgentGraphError::InvalidPolicy);
         }
+        if input.task_kind != AgentTaskKind::Merge
+            && input.merge_policy != AgentMergePolicy::RejectConflict
+        {
+            return Err(AgentGraphError::InvalidPolicy);
+        }
+        if input.task_kind == AgentTaskKind::Merge && input.consumes.is_empty() {
+            return Err(AgentGraphError::InvalidPolicy);
+        }
         let mut evidence = Vec::new();
         for gate in input.evidence {
             let gate = match gate {
@@ -1023,6 +1198,55 @@ pub fn parse_configuration(
         }) {
             return Err(AgentGraphError::InvalidPolicy);
         }
+        let mut produces = Vec::new();
+        if input.produces.len() > MAX_HANDOFF_ARTIFACTS {
+            return Err(AgentGraphError::InvalidPolicy);
+        }
+        for spec in input.produces {
+            let artifact = normalize_handoff_artifact(spec)?;
+            if !handoff_path_covered(&artifact.path, &paths) {
+                return Err(AgentGraphError::InvalidPolicy);
+            }
+            if produces
+                .iter()
+                .any(|known: &HandoffArtifactV1| known.name == artifact.name)
+            {
+                return Err(AgentGraphError::InvalidPolicy);
+            }
+            produces.push(artifact);
+        }
+        let mut consumes = Vec::new();
+        if input.consumes.len() > MAX_HANDOFF_INPUTS {
+            return Err(AgentGraphError::InvalidPolicy);
+        }
+        for spec in input.consumes {
+            let producer = parse_task_id(&spec.producer)?;
+            if producer == task_id {
+                return Err(AgentGraphError::SelfDependency(task_id));
+            }
+            if !dependencies.contains(&producer) {
+                return Err(AgentGraphError::HandoffProducerNotPrerequisite {
+                    task: task_id,
+                    producer,
+                });
+            }
+            let name = normalize_name(&spec.name)?;
+            let path = normalize_relative_path(&spec.path)?;
+            if !handoff_path_covered(&path, &paths) {
+                return Err(AgentGraphError::InvalidPolicy);
+            }
+            if consumes
+                .iter()
+                .any(|known: &HandoffInputV1| known.name == name && known.producer == producer)
+            {
+                return Err(AgentGraphError::InvalidPolicy);
+            }
+            consumes.push(HandoffInputV1 {
+                producer,
+                name,
+                path,
+            });
+        }
         let verification_contract =
             EvidenceContractV1::current(plan_id, configuration_revision, evidence.clone());
         configured.insert(
@@ -1037,6 +1261,10 @@ pub fn parse_configuration(
                 },
                 worktree_id,
                 accept_cross_lane_handoff: input.accept_cross_lane_handoff,
+                produces,
+                consumes,
+                task_kind: input.task_kind,
+                merge_policy: input.merge_policy,
                 max_attempts: input.max_attempts,
                 evidence,
                 verification_contract: Some(verification_contract),
@@ -1045,6 +1273,28 @@ pub fn parse_configuration(
     }
     if configured.len() != known.len() {
         return Err(AgentGraphError::InvalidTaskSet);
+    }
+    for (task_id, definition) in &configured {
+        for input in &definition.consumes {
+            let producer =
+                configured
+                    .get(&input.producer)
+                    .ok_or(AgentGraphError::UnknownDependency {
+                        task: *task_id,
+                        dependency: input.producer,
+                    })?;
+            if !producer
+                .produces
+                .iter()
+                .any(|artifact| artifact.name == input.name)
+            {
+                return Err(AgentGraphError::HandoffArtifactUndeclared {
+                    task: *task_id,
+                    producer: input.producer,
+                    name: input.name.clone(),
+                });
+            }
+        }
     }
     ensure_acyclic(plan_task_ids, &configured)?;
     ensure_workspace_lanes(plan_task_ids, &configured, &mutating_tools)?;
@@ -1164,6 +1414,10 @@ struct VerificationContractBinding<'a> {
     grant: &'a AgentTaskGrant,
     worktree_id: Option<Uuid>,
     accept_cross_lane_handoff: bool,
+    produces: &'a [HandoffArtifactV1],
+    consumes: &'a [HandoffInputV1],
+    task_kind: AgentTaskKind,
+    merge_policy: AgentMergePolicy,
     max_attempts: u8,
     evidence: &'a [AgentEvidenceGate],
     verification_contract: &'a Option<EvidenceContractV1>,
@@ -1177,6 +1431,10 @@ pub fn verification_contract_sha256(task_id: TaskId, definition: &AgentTaskDefin
         grant: &definition.grant,
         worktree_id: definition.worktree_id,
         accept_cross_lane_handoff: definition.accept_cross_lane_handoff,
+        produces: &definition.produces,
+        consumes: &definition.consumes,
+        task_kind: definition.task_kind,
+        merge_policy: definition.merge_policy,
         max_attempts: definition.max_attempts,
         evidence: &definition.evidence,
         verification_contract: &definition.verification_contract,
@@ -1284,7 +1542,7 @@ pub fn capture_workspace_snapshot(
 }
 
 fn source_revision_for_root(root: &std::path::Path) -> Result<String, AgentHostVerificationError> {
-    let output = std::process::Command::new("/usr/bin/git")
+    let output = std::process::Command::new(ca_automation::git_metadata::EXECUTABLE)
         .args(["rev-parse", "--verify", "HEAD"])
         .current_dir(root)
         .env("GIT_OPTIONAL_LOCKS", "0")
@@ -1311,12 +1569,11 @@ fn source_revision_for_root(root: &std::path::Path) -> Result<String, AgentHostV
     }
 }
 
-fn observe_artifact(
+fn stat_artifact_path(
     workspace: &crate::workspace::WorkspaceContext,
-    gate: &AgentEvidenceGate,
-    predicate: &AgentArtifactPredicateV1,
-) -> Result<AgentHostEvidenceObservationV1, AgentHostVerificationError> {
-    let lexical = workspace.cwd().join(&predicate.path);
+    path: &str,
+) -> Result<(String, Option<u64>, Option<String>), AgentHostVerificationError> {
+    let lexical = workspace.cwd().join(path);
     let root = workspace
         .roots()
         .iter()
@@ -1338,18 +1595,20 @@ fn observe_artifact(
         }
     }
     let resolved = workspace
-        .resolve(&predicate.path, crate::workspace::PathOperation::Create)
+        .resolve(path, crate::workspace::PathOperation::Create)
         .map_err(|_| AgentHostVerificationError::ArtifactOutsideWorkspace)?;
     if workspace.root_relative(&resolved).is_none() {
         return Err(AgentHostVerificationError::ArtifactOutsideWorkspace);
     }
-    let (actual_kind, size, content_sha256) = match std::fs::symlink_metadata(&resolved) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => ("absent", None, None),
-        Err(_) => return Err(AgentHostVerificationError::ArtifactMetadata),
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            return Err(AgentHostVerificationError::ArtifactSymlink);
+    match std::fs::symlink_metadata(&resolved) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(("absent".into(), None, None))
         }
-        Ok(metadata) if metadata.is_dir() => ("directory", None, None),
+        Err(_) => Err(AgentHostVerificationError::ArtifactMetadata),
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            Err(AgentHostVerificationError::ArtifactSymlink)
+        }
+        Ok(metadata) if metadata.is_dir() => Ok(("directory".into(), None, None)),
         Ok(metadata) if metadata.is_file() => {
             if metadata.len() > MAX_VERIFICATION_ARTIFACT_BYTES {
                 return Err(AgentHostVerificationError::ArtifactTooLarge);
@@ -1372,14 +1631,22 @@ fn observe_artifact(
                 }
                 digest.update(&buffer[..read]);
             }
-            (
-                "regular_file",
+            Ok((
+                "regular_file".into(),
                 Some(bytes),
                 Some(format!("{:x}", digest.finalize())),
-            )
+            ))
         }
-        Ok(_) => ("other", None, None),
-    };
+        Ok(_) => Ok(("other".into(), None, None)),
+    }
+}
+
+fn observe_artifact(
+    workspace: &crate::workspace::WorkspaceContext,
+    gate: &AgentEvidenceGate,
+    predicate: &AgentArtifactPredicateV1,
+) -> Result<AgentHostEvidenceObservationV1, AgentHostVerificationError> {
+    let (actual_kind, size, content_sha256) = stat_artifact_path(workspace, &predicate.path)?;
     let satisfied = match predicate.kind {
         AgentArtifactKind::Absent => actual_kind == "absent",
         AgentArtifactKind::Directory => actual_kind == "directory",
@@ -1415,6 +1682,116 @@ fn observe_artifact(
         satisfied,
         observation_sha256: Some(observation_sha256),
     })
+}
+
+pub fn capture_handoff_outputs(
+    workspace: &crate::workspace::WorkspaceContext,
+    definition: &AgentTaskDefinition,
+) -> Result<Vec<VerifiedHandoffV1>, AgentHostVerificationError> {
+    let mut facts = Vec::new();
+    for artifact in &definition.produces {
+        let (actual_kind, size, content_sha256) = stat_artifact_path(workspace, &artifact.path)?;
+        let satisfied = match artifact.kind {
+            AgentArtifactKind::Absent => actual_kind == "absent",
+            AgentArtifactKind::Directory => actual_kind == "directory",
+            AgentArtifactKind::RegularFile => {
+                actual_kind == "regular_file"
+                    && artifact
+                        .sha256
+                        .as_ref()
+                        .is_none_or(|expected| content_sha256.as_ref() == Some(expected))
+                    && artifact
+                        .min_bytes
+                        .is_none_or(|minimum| size.is_some_and(|size| size >= minimum))
+                    && artifact
+                        .max_bytes
+                        .is_none_or(|maximum| size.is_some_and(|size| size <= maximum))
+            }
+        };
+        if !satisfied {
+            return Err(AgentHostVerificationError::HandoffArtifactMismatch);
+        }
+        facts.push(VerifiedHandoffV1 {
+            name: artifact.name.clone(),
+            path: artifact.path.clone(),
+            kind: artifact.kind,
+            sha256: content_sha256.clone(),
+            bytes: size.unwrap_or(0),
+            producer: None,
+        });
+    }
+    Ok(facts)
+}
+
+/// Verify the consuming lane's copies of every declared input against the
+/// producer lanes' host-verified facts. A lane only ever learns about the
+/// inputs it declares; everything else stays out of its brief.
+pub fn verify_handoff_inputs(
+    workspace: &crate::workspace::WorkspaceContext,
+    definition: &AgentTaskDefinition,
+    producer_facts: &HashMap<(TaskId, String), &VerifiedHandoffV1>,
+) -> Result<Vec<VerifiedHandoffV1>, AgentHostVerificationError> {
+    let mut inputs = Vec::new();
+    for input in &definition.consumes {
+        let Some(fact) = producer_facts.get(&(input.producer, input.name.clone())) else {
+            return Err(AgentHostVerificationError::HandoffProducerFactMissing);
+        };
+        let (actual_kind, size, content_sha256) = stat_artifact_path(workspace, &input.path)?;
+        let kind_matches = match fact.kind {
+            AgentArtifactKind::Absent => actual_kind == "absent",
+            AgentArtifactKind::Directory => actual_kind == "directory",
+            AgentArtifactKind::RegularFile => actual_kind == "regular_file",
+        };
+        if !kind_matches
+            || (matches!(fact.kind, AgentArtifactKind::RegularFile)
+                && (content_sha256 != fact.sha256 || size != Some(fact.bytes)))
+        {
+            return Err(AgentHostVerificationError::HandoffInputMismatch);
+        }
+        inputs.push(VerifiedHandoffV1 {
+            name: input.name.clone(),
+            path: input.path.clone(),
+            kind: fact.kind,
+            sha256: content_sha256.clone(),
+            bytes: size.unwrap_or(0),
+            producer: Some(input.producer),
+        });
+    }
+    Ok(inputs)
+}
+
+/// Render the declared-input facts into the consuming lane's brief. This is
+/// the only sibling information a lane receives; it never includes
+/// transcripts, raw output, or undeclared sibling state.
+pub fn format_handoff_inputs(inputs: &[VerifiedHandoffV1]) -> String {
+    if inputs.is_empty() {
+        return String::new();
+    }
+    let mut lines = vec![
+        "Declared handoff inputs (host-verified; do not read other lanes' undeclared files):"
+            .to_string(),
+    ];
+    for input in inputs {
+        match (input.producer, &input.sha256) {
+            (Some(producer), Some(sha256)) => lines.push(format!(
+                "- {} (produced by {}): {} sha256={} ({} bytes)",
+                input.name, producer.0, input.path, sha256, input.bytes
+            )),
+            (Some(producer), None) => lines.push(format!(
+                "- {} (produced by {}): {} ({} bytes)",
+                input.name, producer.0, input.path, input.bytes
+            )),
+            (None, Some(sha256)) => lines.push(format!(
+                "- {}: {} sha256={} ({} bytes)",
+                input.name, input.path, sha256, input.bytes
+            )),
+            (None, None) => lines.push(format!(
+                "- {}: {} ({} bytes)",
+                input.name, input.path, input.bytes
+            )),
+        }
+    }
+    lines.join("\n")
 }
 
 pub fn finish_workspace_verification(
@@ -1870,6 +2247,46 @@ fn normalize_artifact_predicate(
     Ok(predicate)
 }
 
+fn normalize_handoff_artifact(
+    spec: HandoffArtifactSpec,
+) -> Result<HandoffArtifactV1, AgentGraphError> {
+    let name = normalize_name(&spec.name)?;
+    let path = normalize_relative_path(&spec.path)?;
+    let artifact = HandoffArtifactV1 {
+        name,
+        path,
+        kind: spec.kind,
+        sha256: spec.sha256,
+        min_bytes: spec.min_bytes,
+        max_bytes: spec.max_bytes,
+    };
+    if artifact
+        .sha256
+        .as_ref()
+        .is_some_and(|sha256| !valid_sha256(sha256))
+        || artifact
+            .min_bytes
+            .zip(artifact.max_bytes)
+            .is_some_and(|(minimum, maximum)| minimum > maximum)
+        || (artifact.kind != AgentArtifactKind::RegularFile
+            && (artifact.sha256.is_some()
+                || artifact.min_bytes.is_some()
+                || artifact.max_bytes.is_some()))
+    {
+        return Err(AgentGraphError::InvalidPolicy);
+    }
+    Ok(artifact)
+}
+
+fn handoff_path_covered(path: &str, scopes: &[String]) -> bool {
+    scopes.iter().any(|scope| {
+        path == scope
+            || path
+                .strip_prefix(scope)
+                .is_some_and(|rest| rest.starts_with('/'))
+    })
+}
+
 fn normalize_closed_command(
     mut predicate: AgentClosedCommandPredicateV1,
 ) -> Result<AgentClosedCommandPredicateV1, AgentGraphError> {
@@ -1942,6 +2359,14 @@ fn ensure_workspace_lanes(
             definitions
                 .get(dependency)
                 .is_some_and(|dependency| task_lane(dependency) != lane)
+        }) && !definition.accept_cross_lane_handoff
+        {
+            return Err(AgentGraphError::CrossLaneHandoffRequired);
+        }
+        if definition.consumes.iter().any(|input| {
+            definitions
+                .get(&input.producer)
+                .is_some_and(|producer| task_lane(producer) != lane)
         }) && !definition.accept_cross_lane_handoff
         {
             return Err(AgentGraphError::CrossLaneHandoffRequired);
@@ -2085,6 +2510,10 @@ mod tests {
             network: false,
             worktree_id: None,
             accept_cross_lane_handoff: false,
+            produces: Vec::new(),
+            consumes: Vec::new(),
+            task_kind: AgentTaskKind::Agent,
+            merge_policy: AgentMergePolicy::RejectConflict,
             max_attempts: 2,
             evidence: vec![
                 AgentEvidenceInput::AssistantOutput,
@@ -2150,6 +2579,280 @@ mod tests {
         let mut accepted = dependent;
         accepted.accept_cross_lane_handoff = true;
         assert!(parse(&[one, two], vec![first, accepted]).is_ok());
+    }
+
+    fn produce_spec(name: &str, path: &str) -> HandoffArtifactSpec {
+        HandoffArtifactSpec {
+            name: name.into(),
+            path: path.into(),
+            kind: AgentArtifactKind::RegularFile,
+            sha256: None,
+            min_bytes: None,
+            max_bytes: None,
+        }
+    }
+
+    fn consume_spec(producer: TaskId, name: &str, path: &str) -> HandoffInputSpec {
+        HandoffInputSpec {
+            producer: producer.to_string(),
+            name: name.into(),
+            path: path.into(),
+        }
+    }
+
+    #[test]
+    fn handoff_declarations_validate_producers_paths_and_cross_lane_acceptance() {
+        let one = id(1);
+        let two = id(2);
+        let mut producer = input(one, &[]);
+        producer.paths = vec!["out".into()];
+        producer.produces = vec![produce_spec("report", "out/report.txt")];
+        let mut consumer = input(two, &[one]);
+        consumer.paths = vec!["src".into()];
+        consumer.consumes = vec![consume_spec(one, "report", "src/report.txt")];
+        let parsed = parse(&[one, two], vec![producer.clone(), consumer.clone()]).unwrap();
+        assert_eq!(parsed[&one].produces[0].name, "report");
+        assert_eq!(parsed[&two].consumes[0].producer, one);
+
+        // A consumer may only accept artifacts its prerequisite declares.
+        let mut undeclared = consumer.clone();
+        undeclared.consumes = vec![consume_spec(one, "missing", "src/missing.txt")];
+        assert!(matches!(
+            parse(&[one, two], vec![producer.clone(), undeclared]),
+            Err(AgentGraphError::HandoffArtifactUndeclared { .. })
+        ));
+
+        // A consumed artifact must come from a declared prerequisite.
+        let mut orphan = input(one, &[]);
+        orphan.paths = vec!["out".into(), "src".into()];
+        orphan.consumes = vec![consume_spec(two, "report", "src/report.txt")];
+        assert!(matches!(
+            parse(&[one, two], vec![orphan, input(two, &[])]),
+            Err(AgentGraphError::HandoffProducerNotPrerequisite { .. })
+        ));
+
+        // A lane cannot hand itself an artifact.
+        let mut self_handoff = producer.clone();
+        self_handoff.consumes = vec![consume_spec(one, "report", "out/report.txt")];
+        assert!(matches!(
+            parse(&[one, two], vec![self_handoff, consumer.clone()]),
+            Err(AgentGraphError::SelfDependency(_))
+        ));
+
+        // Declared outputs must live inside the producer's path grant.
+        let mut outside_output = producer.clone();
+        outside_output.produces = vec![produce_spec("report", "elsewhere/report.txt")];
+        assert!(matches!(
+            parse(&[one, two], vec![outside_output, consumer.clone()]),
+            Err(AgentGraphError::InvalidPolicy)
+        ));
+
+        // Declared inputs must live inside the consumer's path grant.
+        let mut outside_input = consumer.clone();
+        outside_input.consumes = vec![consume_spec(one, "report", "elsewhere/report.txt")];
+        assert!(matches!(
+            parse(&[one, two], vec![producer.clone(), outside_input]),
+            Err(AgentGraphError::InvalidPolicy)
+        ));
+
+        // Duplicate artifact names per task are ambiguous and rejected.
+        let mut duplicate = producer.clone();
+        duplicate.produces = vec![
+            produce_spec("report", "out/report.txt"),
+            produce_spec("report", "out/other.txt"),
+        ];
+        assert!(matches!(
+            parse(&[one, two], vec![duplicate, consumer.clone()]),
+            Err(AgentGraphError::InvalidPolicy)
+        ));
+
+        // Cross-lane consumption requires the explicit handoff flag.
+        let mut cross_lane_producer = producer.clone();
+        cross_lane_producer.worktree_id = Some(Uuid::from_u128(7).to_string());
+        assert!(matches!(
+            parse(
+                &[one, two],
+                vec![cross_lane_producer.clone(), consumer.clone()]
+            ),
+            Err(AgentGraphError::CrossLaneHandoffRequired)
+        ));
+        let mut accepted = consumer;
+        accepted.accept_cross_lane_handoff = true;
+        assert!(parse(&[one, two], vec![cross_lane_producer, accepted]).is_ok());
+    }
+
+    #[test]
+    fn handoff_declarations_bind_the_verification_contract() {
+        let one = id(1);
+        let two = id(2);
+        let mut producer = input(one, &[]);
+        producer.paths = vec!["out".into()];
+        producer.produces = vec![produce_spec("report", "out/report.txt")];
+        let mut consumer = input(two, &[one]);
+        consumer.paths = vec!["src".into()];
+        consumer.consumes = vec![consume_spec(one, "report", "src/report.txt")];
+
+        let bare = parse(&[one, two], vec![input(one, &[]), input(two, &[one])]).unwrap();
+        let declared = parse(&[one, two], vec![producer, consumer]).unwrap();
+        assert_ne!(
+            verification_contract_sha256(one, &bare[&one]),
+            verification_contract_sha256(one, &declared[&one])
+        );
+    }
+
+    #[test]
+    fn task_kinds_and_merge_policy_validate_and_bind_the_contract() {
+        let one = id(1);
+        let two = id(2);
+        let mut producer = input(one, &[]);
+        producer.paths = vec!["out".into()];
+        producer.produces = vec![produce_spec("report", "out/report.txt")];
+        producer.task_kind = AgentTaskKind::Facts;
+        let mut merge = input(two, &[one]);
+        merge.paths = vec!["merged".into()];
+        merge.consumes = vec![consume_spec(one, "report", "merged/report.txt")];
+        merge.task_kind = AgentTaskKind::Merge;
+        merge.merge_policy = AgentMergePolicy::RejectConflict;
+        let parsed = parse(&[one, two], vec![producer.clone(), merge.clone()]).unwrap();
+        assert_eq!(parsed[&one].task_kind, AgentTaskKind::Facts);
+        assert_eq!(parsed[&two].task_kind, AgentTaskKind::Merge);
+
+        // A merge lane without declared inputs cannot know what to merge.
+        let mut empty_merge = merge.clone();
+        empty_merge.consumes = Vec::new();
+        assert!(matches!(
+            parse(&[one, two], vec![producer.clone(), empty_merge]),
+            Err(AgentGraphError::InvalidPolicy)
+        ));
+
+        // A conflict policy on a non-merge lane is meaningless and rejected.
+        let mut mislabeled = producer.clone();
+        mislabeled.merge_policy = AgentMergePolicy::ThreeWayText;
+        assert!(matches!(
+            parse(&[one, two], vec![mislabeled, merge.clone()]),
+            Err(AgentGraphError::InvalidPolicy)
+        ));
+
+        // The kind and policy bind the verification contract.
+        let mut plain = merge;
+        plain.task_kind = AgentTaskKind::Agent;
+        let plain = parse(&[one, two], vec![producer, plain]).unwrap();
+        assert_ne!(
+            verification_contract_sha256(two, &parsed[&two]),
+            verification_contract_sha256(two, &plain[&two])
+        );
+    }
+
+    #[test]
+    fn ledger_handoff_fact_is_contract_and_name_bound() {
+        let task = id(1);
+        let fact = VerifiedHandoffV1 {
+            name: "report".into(),
+            path: "out/report.txt".into(),
+            kind: AgentArtifactKind::RegularFile,
+            sha256: Some("a".repeat(64)),
+            bytes: 4,
+            producer: None,
+        };
+        let ledger = vec![
+            HandoffLedgerEntryV1 {
+                task,
+                contract_sha256: "b".repeat(64),
+                fact: fact.clone(),
+            },
+            HandoffLedgerEntryV1 {
+                task: id(2),
+                contract_sha256: "b".repeat(64),
+                fact: fact.clone(),
+            },
+        ];
+        // Only the entry bound to the producer task and its current contract
+        // may be reused.
+        assert!(ledger_handoff_fact(task, "report", &"b".repeat(64), &ledger).is_some());
+        assert!(ledger_handoff_fact(task, "report", &"c".repeat(64), &ledger).is_none());
+        assert!(ledger_handoff_fact(task, "other", &"b".repeat(64), &ledger).is_none());
+        assert!(ledger_handoff_fact(id(3), "report", &"b".repeat(64), &ledger).is_none());
+    }
+
+    #[test]
+    fn handoff_outputs_capture_and_inputs_verify_byte_for_byte() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = crate::workspace::WorkspaceContext::discover(temp.path()).unwrap();
+        let one = id(1);
+        let two = id(2);
+        let mut producer = input(one, &[]);
+        producer.paths = vec!["out".into()];
+        producer.produces = vec![produce_spec("report", "out/report.txt")];
+        let mut consumer = input(two, &[one]);
+        consumer.paths = vec!["src".into()];
+        consumer.consumes = vec![consume_spec(one, "report", "src/report.txt")];
+        let parsed = parse(&[one, two], vec![producer, consumer]).unwrap();
+
+        std::fs::create_dir_all(temp.path().join("out")).unwrap();
+        std::fs::write(temp.path().join("out/report.txt"), b"silo handoff").unwrap();
+        let outputs = capture_handoff_outputs(&workspace, &parsed[&one]).unwrap();
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].bytes, 12);
+        let digest = outputs[0].sha256.clone().unwrap();
+
+        // Consumer copy must match the producer fact byte-for-byte.
+        std::fs::create_dir_all(temp.path().join("src")).unwrap();
+        let mut facts = std::collections::HashMap::new();
+        facts.insert((one, "report".to_string()), &outputs[0]);
+        let missing = verify_handoff_inputs(&workspace, &parsed[&two], &facts);
+        assert_eq!(
+            missing,
+            Err(AgentHostVerificationError::HandoffInputMismatch)
+        );
+
+        std::fs::write(temp.path().join("src/report.txt"), b"silo handoff").unwrap();
+        let inputs = verify_handoff_inputs(&workspace, &parsed[&two], &facts).unwrap();
+        assert_eq!(inputs[0].producer, Some(one));
+        assert_eq!(inputs[0].sha256.as_deref(), Some(digest.as_str()));
+
+        let brief = format_handoff_inputs(&inputs);
+        assert!(brief.contains("Declared handoff inputs"));
+        assert!(brief.contains(&digest));
+        assert!(brief.contains(&one.to_string()));
+
+        // A tampered consumer copy fails closed.
+        std::fs::write(temp.path().join("src/report.txt"), b"tampered").unwrap();
+        assert_eq!(
+            verify_handoff_inputs(&workspace, &parsed[&two], &facts),
+            Err(AgentHostVerificationError::HandoffInputMismatch)
+        );
+
+        // An unverified producer fact can never feed a consumer.
+        let empty = std::collections::HashMap::new();
+        assert_eq!(
+            verify_handoff_inputs(&workspace, &parsed[&two], &empty),
+            Err(AgentHostVerificationError::HandoffProducerFactMissing)
+        );
+    }
+
+    #[test]
+    fn handoff_outputs_fail_closed_when_the_declared_contract_is_not_satisfied() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = crate::workspace::WorkspaceContext::discover(temp.path()).unwrap();
+        let one = id(1);
+        let mut producer = input(one, &[]);
+        producer.paths = vec!["out".into()];
+        producer.produces = vec![HandoffArtifactSpec {
+            name: "report".into(),
+            path: "out/report.txt".into(),
+            kind: AgentArtifactKind::RegularFile,
+            sha256: Some(format!("{:x}", Sha256::digest(b"expected"))),
+            min_bytes: None,
+            max_bytes: None,
+        }];
+        let parsed = parse(&[one], vec![producer]).unwrap();
+
+        std::fs::create_dir_all(temp.path().join("out")).unwrap();
+        std::fs::write(temp.path().join("out/report.txt"), b"different").unwrap();
+        assert_eq!(
+            capture_handoff_outputs(&workspace, &parsed[&one]),
+            Err(AgentHostVerificationError::HandoffArtifactMismatch)
+        );
     }
 
     #[test]
@@ -2289,6 +2992,10 @@ mod tests {
             grant: AgentTaskGrant::default(),
             worktree_id: None,
             accept_cross_lane_handoff: false,
+            produces: Vec::new(),
+            consumes: Vec::new(),
+            task_kind: AgentTaskKind::Agent,
+            merge_policy: AgentMergePolicy::RejectConflict,
             max_attempts: 1,
             evidence: vec![gate.clone()],
             verification_contract: Some(EvidenceContractV1::current(plan_id(), 2, vec![gate])),
@@ -2350,6 +3057,10 @@ mod tests {
             grant: AgentTaskGrant::default(),
             worktree_id: None,
             accept_cross_lane_handoff: false,
+            produces: Vec::new(),
+            consumes: Vec::new(),
+            task_kind: AgentTaskKind::Agent,
+            merge_policy: AgentMergePolicy::RejectConflict,
             max_attempts: 1,
             evidence: vec![gate],
             verification_contract: None,
@@ -2516,6 +3227,8 @@ mod tests {
             verification_receipt: Some(receipt),
             workspace_snapshot: Some(host.started.clone()),
             host_verification: Some(host),
+            handoff_outputs: Vec::new(),
+            handoff_inputs: Vec::new(),
             budget_usage: AgentGraphBudgetUsageV1::default(),
         };
         assert!(verification_receipt_valid(
@@ -2638,6 +3351,8 @@ mod tests {
             verification_receipt: Some(legacy_receipt),
             workspace_snapshot: None,
             host_verification: None,
+            handoff_outputs: Vec::new(),
+            handoff_inputs: Vec::new(),
             budget_usage: AgentGraphBudgetUsageV1::default(),
         };
         assert!(!verification_receipt_valid(

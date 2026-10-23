@@ -103,8 +103,10 @@ pub fn decide_promotion(
         if before.output_equivalence_digest == after.output_equivalence_digest {
             let latency_improved =
                 at_least_ten_percent_better(before.elapsed_millis, after.elapsed_millis);
-            let cost_improved =
-                at_least_ten_percent_better(before.estimated_microusd, after.estimated_microusd);
+            let cost_improved = before
+                .estimated_microusd
+                .zip(after.estimated_microusd)
+                .is_some_and(|(before, after)| at_least_ten_percent_better(before, after));
             equivalent_secondary_improvement |= latency_improved || cost_improved;
         }
     }
@@ -226,7 +228,7 @@ mod tests {
                 acceptance_properties: ["safe".to_string()].into_iter().collect(),
                 output_equivalence_digest: format!("output-{index}"),
                 elapsed_millis: elapsed,
-                estimated_microusd: 100,
+                estimated_microusd: Some(100),
             })
             .collect()
     }
@@ -248,6 +250,21 @@ mod tests {
         let plan = plan();
         let decision = decide_promotion(&plan, &results(true, 100), &results(true, 90), &[], None)?;
         assert!(decision.promoted);
+        Ok(())
+    }
+
+    #[test]
+    fn unknown_cost_cannot_claim_a_zero_cost_improvement() -> Result<()> {
+        let mut baseline = results(true, 100);
+        let mut candidate = baseline.clone();
+        for result in &mut baseline {
+            result.estimated_microusd = None;
+        }
+        for result in &mut candidate {
+            result.estimated_microusd = Some(0);
+        }
+        let decision = decide_promotion(&plan(), &baseline, &candidate, &[], None)?;
+        assert!(!decision.promoted);
         Ok(())
     }
 

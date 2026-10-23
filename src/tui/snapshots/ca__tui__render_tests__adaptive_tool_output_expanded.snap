@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&adaptive_tool_output_state(true), 184, 38),\nrender_to_text(&adaptive_tool_output_state(true), 60, 52))"
 ---
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                                                                                                                                                  [Dashboard]
 I calculated the ratio-sorted selection.
 
   ✓ run_command {"command":"python3 ratio_report.py"}
@@ -36,12 +36,12 @@ The saved TSV remains unchanged.
 
 
 
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                                                                                                                                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
 2 messages · / commands
 -- narrow --
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
 I calculated the ratio-sorted selection.
 
   ✓ run_command {"command":"python3 ratio_report.py"}
@@ -89,7 +89,7 @@ The saved TSV remains unchanged.
 
 
 
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                           │
+╰──────────────────────────────────────────── agent · auto ╯
 2 messages · / commands

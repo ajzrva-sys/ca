@@ -1,0 +1,960 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== src/backoff_policy.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Defines traits for backoff policies and a common implementations.
+//!
+//! The client libraries automatically retry RPCs based on the [RetryPolicy]
+//! configured for the request or client. Even when the policy determines that
+//! an operation is safe to retry, the client library does not retry failed
+//! requests immediately, as the service may need time to recover.
+//! [Exponential backoff] is a well known algorithm to find an acceptable delay
+//! between retries, but some application may need slight variations on this
+//! algorithm. The client libraries use a [BackoffPolicy] to configure the
+//! delays between retry attempts.
+//!
+//! While exponential backoff improves the system behavior when there are small
+//! faults, something like a [RetryThrottler] may be needed to improve recovery
+//! times in larger failures.
+//!
+//! To configure the default retry backoff policy for a client, use
+//! [ClientBuilder::with_backoff_policy]. To configure the retry backoff policy
+//! used for a specific request, use
+//! [RequestOptionsBuilder::with_backoff_policy].
+//!
+//! [ClientBuilder::with_backoff_policy]: crate::client_builder::ClientBuilder::with_backoff_policy
+//! [RequestOptionsBuilder::with_backoff_policy]: crate::options::RequestOptionsBuilder::with_backoff_policy
+//! [RetryPolicy]: crate::retry_policy::RetryPolicy
+//!
+//! # Example
+//! ```
+//! # use google_cloud_gax::exponential_backoff::Error;
+//! # use google_cloud_gax::exponential_backoff::ExponentialBackoffBuilder;
+//! use std::time::Duration;
+//!
+//! let policy = ExponentialBackoffBuilder::new()
+//!     .with_initial_delay(Duration::from_millis(100))
+//!     .with_maximum_delay(Duration::from_secs(5))
+//!     .with_scaling(4.0)
+//!     .build()?;
+//! # Ok::<(), Error>(())
+//! ```
+//!
+//! [RetryThrottler]: crate::retry_throttler::RetryThrottler
+//! [Exponential backoff]: https://en.wikipedia.org/wiki/Exponential_backoff
+//! [idempotent]: https://en.wikipedia.org/wiki/Idempotence
+
+===== src/client_builder.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Provide types for client construction.
+//!
+//! Some applications need to construct clients with custom configuration, for
+//! example, they may need to override the endpoint or the authentication
+//! credentials. The Google Cloud client libraries for Rust use a generic
+//! builder type to provide such functionality. The types in this module
+//! implement the client builders.
+//!
+//! Applications should not create builders directly, instead each client type
+//! defines a `builder()` function to obtain the correct type of builder.
+//!
+//! ## Example: create a client with the default configuration.
+//!
+//! ```
+//! # use google_cloud_gax::client_builder::examples;
+//! # use google_cloud_gax::client_builder::Result;
+//! # async fn sample() -> anyhow::Result<()> {
+//! pub use examples::Client; // Placeholder for examples
+//! let client = Client::builder().build().await?;
+//! # Ok(()) }
+//! ```
+//!
+//! ## Example: create a client with a different endpoint
+//!
+//! ```
+//! # use google_cloud_gax::client_builder::examples;
+//! # use google_cloud_gax::client_builder::Result;
+//! # async fn sample() -> anyhow::Result<()> {
+//! pub use examples::Client; // Placeholder for examples
+//! let client = Client::builder()
+//!     .with_endpoint("https://private.googleapis.com")
+//!     .build().await?;
+//! # Ok(()) }
+//! ```
+
+===== src/error/binding.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+/// A failure to determine the request [URI].
+///
+/// Some RPCs correspond to multiple URIs. The contents of the request determine
+/// which URI is used. The client library considers all possible URIs, and only
+/// returns an error if no URIs work.
+///
+/// The client cannot match a URI when a required parameter is missing, or when
+/// it is set to an invalid format.
+///
+/// For more details on the specification, see: [AIP-127].
+///
+/// Also see the [Handling binding errors] section in the user guide to learn
+/// how to resolve these errors.
+///
+/// [Handling binding errors]: https://googleapis.github.io/google-cloud-rust/binding_errors.html
+/// [aip-127]: https://google.aip.dev/127
+/// [uri]: https://clouddocs.f5.com/api/irules/HTTP__uri.html
+
+===== src/error/core_error.rs =====
+// Copyright 2024 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+===== src/error/credentials.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+===== src/error/rpc.rs =====
+// Copyright 2024 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+===== src/error.rs =====
+// Copyright 2024 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+===== src/exponential_backoff.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Common implements for exponential backoff.
+//!
+//! This module provides an implementation of truncated [exponential backoff].
+//! It implements the [BackoffPolicy] and [PollingBackoffPolicy] traits.
+//!
+//! [BackoffPolicy]: crate::backoff_policy::BackoffPolicy
+//! [PollingBackoffPolicy]: crate::polling_backoff_policy::PollingBackoffPolicy
+
+===== src/lib.rs =====
+// Copyright 2024 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Google APIs eXtensions for Rust.
+//!
+//! This crate contains a number of types and functions used in the
+//! implementation of the Google Cloud Client Libraries for Rust.
+//!
+//! <div class="warning">
+//! All the types, traits, and functions defined in any module with `internal`
+//! in its name are <b>not</b> intended for general use. Such symbols will
+//! remain unstable for the foreseeable future, even if used in stable SDKs.
+//! We (the Google Cloud Client Libraries for Rust team) control both and will
+//! change both if needed.
+//! </div>
+
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
+/// An alias of [std::result::Result] where the error is always [Error][crate::error::Error].
+///
+/// This is the result type used by all functions wrapping RPCs.
+
+===== src/mock_rng.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Mock RNG for internal tests.
+
+===== src/options.rs =====
+// Copyright 2024 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Client configuration and per request options.
+//!
+//! While the client library  defaults are intended to work for most
+//! applications, it is sometimes necessary to change the configuration. Notably
+//! the default endpoint, and the default authentication credentials do not work
+//! for some applications.
+//!
+//! Likewise, applications may need to customize the behavior of some calls made
+//! via a client, even a customized one. Applications sometimes change the
+//! timeout for an specific call, or change the retry configuration. The
+//! `*Builder` returned by each client method implements the
+//! [RequestOptionsBuilder] trait where applications can override some defaults.
+
+===== src/paginator.rs =====
+// Copyright 2024 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Defines some types and traits to simplify working with list RPCs.
+//!
+//! When listing large collections of items Google Cloud services typically
+//! break the responses in "pages". Each one of these pages contains a limited
+//! number of items, and a token to request the next page. The caller must
+//! repeatedly call the list RPC (using the token from the previous page) to
+//! obtain additional items.
+//!
+//! Sequencing these calls can be tedious. The Google Cloud client libraries
+//! for Rust provide implementations of this trait to simplify the use of
+//! these paginated APIs.
+//!
+//! For more information on the RPCs with paginated responses see [AIP-4233].
+//!
+//! # Example: stream each item for a list operation
+//! ```no_run
+//! # use google_cloud_gax::{paginator, Result, error::Error};
+//! struct Page { items: Vec<String>, token: String }
+//! # impl paginator::internal::PageableResponse for Page {
+//! #     type PageItem = String;
+//! #     fn items(self) -> Vec<String> { self.items }
+//! #     fn next_page_token(&self) -> String { self.token.clone() }
+//! # }
+//! # async fn get_page(_: String) -> Result<Page> { panic!(); }
+//! use paginator::{Paginator, ItemPaginator};
+//! fn list() -> impl Paginator<Page, Error> {
+//!     // ... details omitted ...
+//!     # fn execute(_: String) -> Result<Page> { panic!(); }
+//!     # paginator::internal::new_paginator(String::new(), get_page)
+//! }
+//! # async fn sample() -> anyhow::Result<()> {
+//! let mut items = list().items();
+//! while let Some(item) = items.next().await {
+//!     let item = item?;
+//!     println!("  item = {item}");
+//! }
+//! # Ok(()) }
+//! ```
+//!
+//! # Example: manually iterate over all the pages for a list operation
+//! ```no_run
+//! # use google_cloud_gax::{paginator, Result, error::Error};
+//! struct Page { items: Vec<String>, token: String }
+//! # impl paginator::internal::PageableResponse for Page {
+//! #     type PageItem = String;
+//! #     fn items(self) -> Vec<String> { self.items }
+//! #     fn next_page_token(&self) -> String { self.token.clone() }
+//! # }
+//! # async fn get_page(_: String) -> Result<Page> { panic!(); }
+//! use paginator::Paginator;
+//! fn list() -> impl Paginator<Page, Error> {
+//!     // ... details omitted ...
+//!     # fn execute(_: String) -> Result<Page> { panic!(); }
+//!     # paginator::internal::new_paginator(String::new(), get_page)
+//! }
+//! # async fn sample() -> anyhow::Result<()> {
+//! let mut pages = list();
+//! while let Some(page) = pages.next().await {
+//!     let page = page?;
+//!     println!("a page with {} items", page.items.len());
+//!     page.items.into_iter().enumerate().for_each(|(n, i)| println!("  item[{n}]= {i}"));
+//! }
+//! # Ok(()) }
+//! ```
+//!
+//! [AIP-4233]: https://google.aip.dev/client-libraries/4233
+
+===== src/polling_backoff_policy.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Defines the trait for polling backoff policies and a common implementations.
+//!
+//! The client libraries can automatically poll long-running operations (LROs)
+//! until completion. When doing so they may backoff between polling to avoid
+//! overloading the service.
+//!
+//! These policies should not be confused with retry backoff policies. Their
+//! purpose is different, and their implementation is too. Notably, polling
+//! backoff policies should not use jitter, while retry policies should.
+//!
+//! The most common implementation is truncated [exponential backoff]
+//! **without** jitter. The backoff period grows exponentially until some limit
+//! is reached. This works well when the expected execution time is not known
+//! in advance.
+//!
+//! To configure the default polling backoff policy for a client, use
+//! [ClientBuilder::with_polling_backoff_policy]. To configure the polling
+//! backoff policy used for a specific request, use
+//! [RequestOptionsBuilder::with_polling_backoff_policy].
+//!
+//! [ClientBuilder::with_polling_backoff_policy]: crate::client_builder::ClientBuilder::with_polling_backoff_policy
+//! [RequestOptionsBuilder::with_polling_backoff_policy]: crate::options::RequestOptionsBuilder::with_polling_backoff_policy
+//!
+//! # Example
+//! ```
+//! # use google_cloud_gax::exponential_backoff::Error;
+//! # use google_cloud_gax::exponential_backoff::ExponentialBackoffBuilder;
+//! use std::time::Duration;
+//!
+//! let policy = ExponentialBackoffBuilder::new()
+//!     .with_initial_delay(Duration::from_millis(100))
+//!     .with_maximum_delay(Duration::from_secs(5))
+//!     .with_scaling(4.0)
+//!     .build()?;
+//! // `policy` implements the `PollingBackoffPolicy` trait.
+//! # Ok::<(), Error>(())
+//! ```
+//!
+//! [Exponential backoff]: https://en.wikipedia.org/wiki/Exponential_backoff
+
+===== src/polling_error_policy.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Defines the types for polling error policies.
+//!
+//! # Example
+//! ```
+//! # use google_cloud_gax::polling_error_policy::*;
+//! use std::time::Duration;
+//! // Poll for at most 15 minutes or at most 50 attempts: whichever limit is
+//! // reached first stops the polling loop.
+//! let policy = Aip194Strict
+//!     .with_time_limit(Duration::from_secs(15 * 60))
+//!     .with_attempt_limit(50);
+//! ```
+//!
+//! The client libraries automatically poll long-running operations (LROs) and
+//! need to (1) distinguish between transient and permanent errors, and (2)
+//! provide a mechanism to limit the polling loop duration.
+//!
+//! We provide a trait that applications may implement to customize the behavior
+//! of the polling loop, and some common implementations that should meet most
+//! needs.
+//!
+//! To configure the default polling error policy for a client, use
+//! [ClientBuilder::with_polling_error_policy]. To configure the polling error
+//! policy used for a specific request, use
+//! [RequestOptionsBuilder::with_polling_error_policy].
+//!
+//! [ClientBuilder::with_polling_error_policy]: crate::client_builder::ClientBuilder::with_polling_error_policy
+//! [RequestOptionsBuilder::with_polling_error_policy]: crate::options::RequestOptionsBuilder::with_polling_error_policy
+
+===== src/polling_state.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Defines types to query polling policies.
+
+===== src/response.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Response types.
+//!
+//! This module contains types related to Google Cloud service responses.
+//! Notably it contains the `Response` type itself. Typically you'll import
+//! this type.
+//!
+//! # Examples
+//!
+//! Inspecting the result of a request
+//!
+//! ```no_run
+//! # use google_cloud_gax::Result;
+//! # use google_cloud_gax::response::Response;
+//! // A type representing a Google Cloud service resource, for example, a
+//! // secret manager secret.
+//! struct Resource {
+//!   // ...
+//! }
+//!
+//! async fn make_google_service_rpc(project_id: &str) -> Result<Response<Resource>> {
+//!   // ...
+//! # panic!()
+//! }
+//!
+//! # async fn sample() -> anyhow::Result<()> {
+//! let response = make_google_service_rpc("my-project").await?;
+//! if let Some(date) = response.headers().get("Date") {
+//!     // do something with the date
+//! }
+//! let resource = response.body();
+//! // do something with
+//! # Ok(()) }
+//! ```
+//!
+//! Creating a response for mocks
+//!
+//! ```
+//! # use google_cloud_gax::Result;
+//! # use google_cloud_gax::response::Response;
+//! // A type representing a Google Cloud service resource, for example, a
+//! // secret manager secret.
+//! struct Resource {
+//!   // ...
+//! }
+//!
+//! fn make_mock_response(body: Resource) -> Result<Response<Resource>> {
+//!     Ok(Response::from(body))
+//! }
+//! ```
+
+/// Represents a Google Cloud service response.
+///
+/// A response from a Google Cloud service consists of a body (potentially the
+/// unit type), and some metadata, currently just headers.
+///
+/// Typically you get a response as the result of making a request via some
+/// client in the Google Cloud client libraries for Rust. You may also create
+/// responses directly when mocking clients for your own tests.
+///
+/// # Examples
+/// Inspecting the result of a request
+///
+/// ```no_run
+/// # use google_cloud_gax::Result;
+/// # use google_cloud_gax::response::Response;
+/// // A type representing a Google Cloud service resource, for example, a
+/// // secret manager secret.
+/// struct Resource {
+///   // ...
+/// }
+///
+/// async fn make_google_service_rpc(project_id: &str) -> Result<Response<Resource>> {
+///   // ...
+/// # panic!()
+/// }
+///
+/// # async fn sample() -> anyhow::Result<()> {
+/// let response = make_google_service_rpc("my-project").await?;
+/// if let Some(date) = response.headers().get("Date") {
+///     // do something with the date
+/// }
+/// let resource = response.body();
+/// // do something with
+/// # Ok(()) }
+/// ```
+///
+/// Creating a response for mocks
+///
+/// ```
+/// # use google_cloud_gax::Result;
+/// # use google_cloud_gax::response::Response;
+/// // A type representing a Google Cloud service resource, for example, a
+/// // secret manager secret.
+/// struct Resource {
+///   // ...
+/// }
+///
+/// fn make_mock_response(body: Resource) -> Result<Response<Resource>> {
+///     Ok(Response::from(body))
+/// }
+/// ```
+///
+
+===== src/retry_loop_internal.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+===== src/retry_policy/client_timeout.rs =====
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+===== src/retry_policy/too_many_requests.rs =====
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+===== src/retry_policy.rs =====
+// Copyright 2024 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Defines traits for retry policies and some common implementations.
+//!
+//! The client libraries automatically retry RPCs when (1) they fail due to
+//! transient errors **and** the RPC is [idempotent], (2) or failed before an
+//! RPC was started. That is, when it is safe to attempt the RPC more than once.
+//!
+//! Applications may override the default behavior, increasing the retry
+//! attempts, or changing what errors are considered safe to retry.
+//!
+//! This module defines the traits for retry policies and some common
+//! implementations.
+//!
+//! To configure the default throttler for a client, use
+//! [ClientBuilder::with_retry_policy]. To configure the retry policy used for
+//! a specific request, use [RequestOptionsBuilder::with_retry_policy].
+//!
+//! [ClientBuilder::with_retry_policy]: crate::client_builder::ClientBuilder::with_retry_policy
+//! [RequestOptionsBuilder::with_retry_policy]: crate::options::RequestOptionsBuilder::with_retry_policy
+//!
+//! # Examples
+//!
+//! Create a policy that only retries transient errors, and retries for at
+//! most 10 seconds or at most 5 attempts: whichever limit is reached first
+//! stops the retry loop.
+//! ```
+//! # use google_cloud_gax::retry_policy::*;
+//! use std::time::Duration;
+//! let policy = Aip194Strict.with_time_limit(Duration::from_secs(10)).with_attempt_limit(5);
+//! ```
+//!
+//! Create a policy that retries on any error (even when unsafe to do so),
+//! and stops retrying after 5 attempts or 10 seconds, whichever limit is
+//! reached first stops the retry loop.
+//! ```
+//! # use google_cloud_gax::retry_policy::*;
+//! use std::time::Duration;
+//! let policy = AlwaysRetry.with_time_limit(Duration::from_secs(10)).with_attempt_limit(5);
+//! ```
+//!
+//! [idempotent]: https://en.wikipedia.org/wiki/Idempotence
+
+===== src/retry_result.rs =====
+// Copyright 2024 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Polling and retry loop control types.
+//!
+//! This module contains types to control polling loops and retry loops.
+//! Applications only need to use these types when implementing their own retry
+//! and polling policies.
+
+===== src/retry_state.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Defines types to query retry policies.
+
+===== src/retry_throttler.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Defines traits for retry throttling and some common implementations.
+//!
+//! The client libraries can be configured to automatically retry RPCs. Most
+//! often retries are only enabled if (1) the request was never sent and the
+//! local error is recoverable, or (2) the failure is a transient errors
+//! **and** the RPC is [idempotent].
+//!
+//! Retry strategies that do not throttle themselves can slow down recovery when
+//! the service is overloaded, or when recovering from a large incident. This is
+//! also known as "retry storms": the retry attempts can grow to be more than
+//! the normal traffic and hinder recovery.
+//!
+//! Advanced applications may want to configure a retry throttler to
+//! [Address Cascading Failures] and when [Handling Overload] conditions.
+//! This module contains the traits and some implementations of retry throttling
+//! strategies.
+//!
+//! To configure the default throttler for a client, use
+//! [ClientBuilder::with_retry_throttler]. To configure the throttler used for
+//! a specific request, use [RequestOptionsBuilder::with_retry_throttler].
+//!
+//! Typically applications should create one retry throttler and share it
+//! across multiple clients.
+//!
+//! [ClientBuilder::with_retry_throttler]: crate::client_builder::ClientBuilder::with_retry_throttler
+//! [RequestOptionsBuilder::with_retry_throttler]: crate::options::RequestOptionsBuilder::with_retry_throttler
+//! [Handling Overload]: https://sre.google/sre-book/handling-overload/
+//! [Address Cascading Failures]: https://sre.google/sre-book/addressing-cascading-failures/
+//!
+//! # Example
+//!
+//! Stochastically reject calls based on observed failure rates:
+//! ```
+//! # use google_cloud_gax::retry_throttler::*;
+//! let throttler = AdaptiveThrottler::new(2.0)?;
+//! # Ok::<(), Error>(())
+//! ```
+//!
+//! Reject calls if the success rate is too low:
+//! ```
+//! # use google_cloud_gax::retry_throttler::*;
+//! let tokens = 1000;
+//! let min_tokens = 250;
+//! let error_cost = 10;
+//! let throttler = CircuitBreaker::new(tokens, min_tokens, error_cost)?;
+//! # Ok::<(), Error>(())
+//! ```
+//!
+//! [idempotent]: https://en.wikipedia.org/wiki/Idempotence
+
+===== src/streaming.rs =====
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Defines types and handles for streaming RPCs.
+//!
+//! In streaming RPCs, the client and server can stream messages to each other
+//! asynchronously. This module provides [`RequestSender`] to send outbound request
+//! messages and [`ResponseStream`] to receive inbound response messages.
+//!
+//! Client libraries use these types to manage streaming communication without
+//! exposing raw gRPC transport or Protobuf wire models in the public API.
+//!
+//! Connection establishment begins immediately when the streaming RPC is initiated.
+//! In bidirectional streaming, the server may require initial request messages sent via
+//! [`RequestSender`] before returning response headers; completing this handshake is awaited
+//! on the first call to [`ResponseStream::next()`].
+//!
+//! # Examples
+//!
+//! Sending requests and receiving responses in a bidirectional streaming RPC:
+//!
+//! ```
+//! # use google_cloud_gax::streaming::{RequestSender, ResponseStream};
+//! async fn interact_with_bidi_stream(
+//!     sender: RequestSender<String>,
+//!     mut stream: ResponseStream<String>,
+//! ) -> anyhow::Result<()> {
+//!     // Send request messages to the server:
+//!     sender.send("hello".to_string()).await?;
+//!
+//!     // Close the outbound request stream when done sending:
+//!     drop(sender);
+//!
+//!     // Receive response messages from the server:
+//!     while let Some(response) = stream.next().await {
+//!         let response = response?;
+//!         println!("Received response: {response:?}");
+//!     }
+//!     Ok(())
+//! }
+//! ```
+//!
+//! Receiving response messages in a server-streaming RPC:
+//!
+//! ```
+//! # use google_cloud_gax::streaming::ResponseStream;
+//! # use google_cloud_gax::Result;
+//! async fn interact_with_server_stream(mut stream: ResponseStream<String>) -> Result<()> {
+//!     // Receive response messages from the server:
+//!     while let Some(response) = stream.next().await {
+//!         let response = response?;
+//!         println!("Received response: {response:?}");
+//!     }
+//!     Ok(())
+//! }
+//! ```
+
+===== src/throttle_result.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Defines types related to throttling the retry loop.
+
+===== tests/backoff_policy.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Verify backoff policies are usable from outside the crate.
+
+===== tests/retry_policy.rs =====
+// Copyright 2024 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Verify retry policies are usable from outside the crate.
+
+===== tests/retry_throttler.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Verify retry throttlers are usable from outside the crate.

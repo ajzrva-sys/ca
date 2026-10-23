@@ -15,6 +15,9 @@ use uuid::Uuid;
 
 pub const TRACE_SCHEMA: &str = "ca.provider-trace.v1";
 pub const MAX_TRACE_BYTES: u64 = 16 * 1024 * 1024;
+/// Retain only the newest traces. Without a bound, every `--trace` run leaves a
+/// multi-megabyte frame dump behind until someone remembers `/trace delete`.
+pub const MAX_RETAINED_TRACES: usize = 4;
 const WRITER_CHANNEL_CAPACITY: usize = 256;
 const MAX_REQUEST_BODY_BYTES: usize = 512 * 1024;
 const MAX_FRAME_BYTES: usize = 64 * 1024;
@@ -279,6 +282,9 @@ impl ProviderTraceHub {
             health,
         });
         drop(state);
+        // Trim older frame dumps once the new trace is in place, so the newest
+        // (this one) is always within the retained window.
+        self.prune_saved_traces(Some(id));
         self.record(
             None,
             None,
@@ -286,11 +292,30 @@ impl ProviderTraceHub {
             serde_json::json!({
                 "version": 1,
                 "trace_id": trace_id,
-                "retention": "explicit_delete_only",
+                "retention": "newest_only",
                 "max_bytes": self.inner.max_trace_bytes,
+                "max_traces": MAX_RETAINED_TRACES,
             }),
         );
         Ok(TraceStart::Started(id))
+    }
+
+    /// Delete saved traces beyond the retention window, never touching `keep`.
+    /// Pruning is best-effort: a busy or unreadable leftover is skipped rather
+    /// than blocking a trace the user just asked for.
+    fn prune_saved_traces(&self, keep: Option<Uuid>) {
+        if !self.inner.persistence_allowed || !self.inner.directory.exists() {
+            return;
+        }
+        let Ok(traces) = self.list() else {
+            return;
+        };
+        for trace in traces.into_iter().skip(MAX_RETAINED_TRACES) {
+            if Some(trace.id) == keep {
+                continue;
+            }
+            let _ = self.delete(trace.id);
+        }
     }
 
     pub fn stop(&self) -> Option<Uuid> {
@@ -557,7 +582,9 @@ impl ProviderTraceHub {
             "Per-trace cap: {}",
             format_bytes(self.inner.max_trace_bytes)
         ));
-        lines.push("Retention: until explicit deletion".into());
+        lines.push(format!(
+            "Retention: newest {MAX_RETAINED_TRACES} (pruned on /trace on)"
+        ));
         lines.push(format!(
             "Directory: {}",
             crate::terminal_text::sanitize_terminal_text(
@@ -773,6 +800,12 @@ impl ProviderTraceRequest {
                 "provider_event": sanitize_provider_event(event, &secrets),
             }),
         );
+    }
+
+    pub(crate) fn diagnostics(&self, diagnostics: &[String]) {
+        if !diagnostics.is_empty() {
+            self.emit("adapter_diagnostics", serde_json::json!({"diagnostics": diagnostics.iter().take(32).map(|value| bounded_safe_text(value, &self.secret_refs(), 256)).collect::<Vec<_>>() }));
+        }
     }
 
     pub fn outcome(&self, attempt: usize, outcome: &str, error: Option<&str>) {
@@ -1138,6 +1171,10 @@ fn sanitize_value(value: &Value, secrets: &[&str], depth: usize, nodes: &mut usi
         }
         Value::Object(values) => {
             let mut safe = Map::new();
+            let opaque_block = values
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| matches!(kind, "redacted_thinking" | "thinking"));
             let media_object = values
                 .get("media_type")
                 .and_then(Value::as_str)
@@ -1147,7 +1184,8 @@ fn sanitize_value(value: &Value, secrets: &[&str], depth: usize, nodes: &mut usi
                     .and_then(Value::as_str)
                     .is_some_and(|value| matches!(value, "base64" | "image" | "input_audio"));
             for (key, value) in values.iter().take(MAX_JSON_ITEMS) {
-                let value = if sensitive_json_field(key)
+                let value = if (opaque_block && matches!(key.as_str(), "data" | "signature"))
+                    || sensitive_json_field(key)
                     || (media_object && matches!(key.as_str(), "data" | "payload" | "url"))
                 {
                     Value::String(redaction_marker(key).into())
@@ -1165,6 +1203,12 @@ fn sanitize_value(value: &Value, secrets: &[&str], depth: usize, nodes: &mut usi
             Value::Object(safe)
         }
     }
+}
+
+pub(crate) fn native_diagnostic_body(body: &[u8], secrets: &[&str]) -> Vec<u8> {
+    sanitize_json_bytes(body, secrets, MAX_REQUEST_BODY_BYTES)
+        .and_then(|value| serde_json::to_vec(&value).ok())
+        .unwrap_or_else(|| b"[native provider body omitted by diagnostic bounds]".to_vec())
 }
 
 fn sensitive_json_field(key: &str) -> bool {
@@ -1193,6 +1237,8 @@ fn sensitive_json_field(key: &str) -> bool {
         || normalized.contains("encrypted")
         || normalized == "reasoningdetails"
         || normalized == "signature"
+        || normalized == "thoughtsignature"
+        || normalized == "inlinedata"
         || normalized == "imageurl"
         || normalized == "inputaudio"
         || normalized == "audio"
@@ -1297,7 +1343,8 @@ fn sanitize_provider_event(event: &ProviderEvent, secrets: &[&str]) -> Value {
                 "output_index": output_index,
                 "item": "[encrypted/opaque provider continuation redacted]",
             }),
-            ProviderResponseItem::ChatReasoning { .. } => serde_json::json!({
+            ProviderResponseItem::NativeContent { .. }
+            | ProviderResponseItem::ChatReasoning { .. } => serde_json::json!({
                 "type": "reasoning_continuation",
                 "content": "[encrypted/opaque provider continuation redacted]",
             }),
@@ -1439,7 +1486,7 @@ mod tests {
     }
 
     #[test]
-    fn repeated_activations_keep_prior_traces_until_explicit_deletion() {
+    fn repeated_activations_keep_prior_traces_within_the_retention_window() {
         let temp = tempfile::tempdir().unwrap();
         let hub = ProviderTraceHub::new(temp.path().join("traces"), true);
         let TraceStart::Started(first) = hub.start().unwrap() else {
@@ -1458,6 +1505,41 @@ mod tests {
             .map(|trace| trace.id)
             .collect::<std::collections::HashSet<_>>();
         assert_eq!(ids, std::collections::HashSet::from([first, second]));
+    }
+
+    #[test]
+    fn starting_a_new_trace_prunes_beyond_the_retention_window() {
+        let temp = tempfile::tempdir().unwrap();
+        let hub = ProviderTraceHub::new(temp.path().join("traces"), true);
+        let mut ids = Vec::new();
+        for index in 0..(MAX_RETAINED_TRACES + 3) {
+            let TraceStart::Started(id) = hub.start().unwrap() else {
+                panic!("each activation must create a trace");
+            };
+            ids.push(id);
+            hub.stop_and_flush(Duration::from_secs(1));
+            // Pin mtimes so newest-first ordering is deterministic even on
+            // filesystems with coarse timestamp granularity.
+            let path = hub.directory().join(format!("{id}.jsonl"));
+            let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+            let when = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000 + index as u64);
+            file.set_modified(when).unwrap();
+        }
+        let kept = hub.list().unwrap();
+        assert_eq!(kept.len(), MAX_RETAINED_TRACES);
+        // The newest traces survive; the earliest ones are gone.
+        for id in &ids[..3] {
+            assert!(
+                !kept.iter().any(|trace| trace.id == *id),
+                "oldest trace {id} should have been pruned"
+            );
+        }
+        for id in &ids[3..] {
+            assert!(
+                kept.iter().any(|trace| trace.id == *id),
+                "recent trace {id} should be retained"
+            );
+        }
     }
 
     #[cfg(unix)]
@@ -1769,5 +1851,28 @@ mod tests {
                     "request_finished",
                 ]
         }));
+    }
+}
+
+#[cfg(test)]
+mod native_content_privacy_tests {
+    use super::*;
+    #[test]
+    fn native_signature_and_redacted_payload_never_enter_trace_frames() {
+        let frame = br#"{"type":"content_block_start","content_block":{"type":"redacted_thinking","data":"opaque-private-state","signature":"signed-private-state"}}"#;
+        let safe = sanitize_json_bytes(frame, &[], MAX_FRAME_BYTES)
+            .unwrap()
+            .to_string();
+        assert!(!safe.contains("opaque-private-state"));
+        assert!(!safe.contains("signed-private-state"));
+    }
+    #[test]
+    fn google_signature_and_inline_media_never_enter_trace_frames() {
+        let frame=br#"{"candidates":[{"content":{"parts":[{"text":"","thoughtSignature":"opaque-google-signature"},{"inlineData":{"mimeType":"image/png","data":"opaque-google-image"}}]}}]}"#;
+        let safe = sanitize_json_bytes(frame, &[], MAX_FRAME_BYTES)
+            .unwrap()
+            .to_string();
+        assert!(!safe.contains("opaque-google-signature"));
+        assert!(!safe.contains("opaque-google-image"));
     }
 }

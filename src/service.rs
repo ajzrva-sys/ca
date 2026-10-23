@@ -317,6 +317,18 @@ struct OpEnvelope {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ServeOp {
     StartSession(StartSessionOp),
+    StartPersistentSession(StartSessionOp),
+    LoadPersistentSession {
+        session_id: String,
+    },
+    SubmitInput {
+        input_id: String,
+        text: String,
+        #[serde(default)]
+        delivery: crate::service_inbox::Delivery,
+    },
+    InspectInbox,
+    ResumeInbox,
     UserInput {
         text: String,
     },
@@ -381,6 +393,15 @@ struct EventEnvelope {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServeEvent {
+    InputAdmitted {
+        session_id: Uuid,
+        receipt: crate::service_inbox::Receipt,
+    },
+    Inbox {
+        session_id: Uuid,
+        held: bool,
+        inputs: Vec<crate::service_inbox::Receipt>,
+    },
     Ready {
         transport: &'static str,
     },
@@ -591,6 +612,9 @@ impl ServiceIoError {
 
 #[async_trait]
 trait ServiceSessionFactory: Send + Sync {
+    fn session_store(&self) -> Result<crate::session::SessionStore, String> {
+        Err("Persistent service sessions are unavailable".into())
+    }
     async fn create(&self, request: &StartSessionOp) -> Result<ServiceSession, String>;
 }
 
@@ -620,6 +644,7 @@ impl std::fmt::Debug for ServiceSession {
 
 #[derive(Clone)]
 struct ServiceRunConfig {
+    inbox: Arc<tokio::sync::Mutex<crate::service_inbox::Runtime>>,
     workspace_activity_scope: Option<PathBuf>,
     outcome_sink: Option<crate::session_outcome::OutcomeSink>,
     provider: String,
@@ -885,6 +910,24 @@ where
                 }
             }
         }
+        let ready = if state.turn.is_none() {
+            if let Some(session) = &state.session {
+                let inbox = session.run.inbox.lock().await;
+                !inbox.inbox.held
+                    && inbox
+                        .inbox
+                        .inputs
+                        .iter()
+                        .any(|i| i.status == crate::service_inbox::InputStatus::Pending)
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if ready {
+            start_service_turn(state, events, &worker_tx, "service-inbox".into(), None).await?;
+        }
     }
 }
 
@@ -922,6 +965,131 @@ fn valid_wire_id(id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b':'))
 }
 
+async fn start_service_turn<W: AsyncWrite + Unpin>(
+    state: &mut DaemonState,
+    events: &mut EventWriter<W>,
+    worker_tx: &mpsc::Sender<WorkerEvent>,
+    parent: String,
+    text: Option<String>,
+) -> Result<bool, ServiceIoError> {
+    let Some(session) = state.session.as_mut() else {
+        return Ok(false);
+    };
+    let mut run = session.run.clone();
+    let admission = if let Some(text) = text {
+        let mut messages = session.messages.clone();
+        messages.push(ChatMessage {
+            role: "user".into(),
+            content: crate::image_content::ModelContent::text(text),
+            tool_calls: None,
+            tool_call_id: None,
+            response_items: Vec::new(),
+        });
+        match run.inbox.lock().await.checkpoint(messages.clone()).await {
+            Ok(()) => {
+                session.messages = messages;
+                Ok(true)
+            }
+            Err(error) => Err(error),
+        }
+    } else {
+        run.inbox
+            .lock()
+            .await
+            .promote(&mut session.messages, true)
+            .await
+    };
+    match admission {
+        Ok(true) => {}
+        Ok(false) => return Ok(false),
+        Err(message) => {
+            events
+                .error(Some(&parent), ServiceErrorKind::Internal, message)
+                .await?;
+            return Ok(false);
+        }
+    }
+    let text_for_skills = session
+        .messages
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .and_then(|m| m.content.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let mut loads = crate::skills::SkillLoadSet::default();
+    let task_skill_prompt = {
+        let registry = run
+            .skills
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let mut result = Ok(());
+        for selector in crate::skills::explicit_skill_selectors(&text_for_skills) {
+            if let Err(error) = registry.load_for_task(&selector, true, &mut loads) {
+                result = Err(format!(
+                    "skill invocation ${selector} failed before request: {error}"
+                ));
+                break;
+            }
+        }
+        result.and_then(|()| {
+            registry
+                .task_prompt(&loads)
+                .map_err(|error| format!("skill load changed before request: {error}"))
+        })
+    };
+    run.task_skill_prompt = match task_skill_prompt {
+        Ok(prompt) => prompt,
+        Err(error) => {
+            events
+                .error(Some(&parent), ServiceErrorKind::InvalidOperation, error)
+                .await?;
+            return Ok(false);
+        }
+    };
+    let turn_id = Uuid::new_v4();
+    let session_id = session.id;
+    let messages = session.messages.clone();
+    let backend = session.backend.clone();
+    let (control_tx, control_rx) = mpsc::channel(CONTROL_CHANNEL_CAPACITY);
+    let worker = worker_tx.clone();
+    let task = tokio::spawn(async move {
+        let panic_events = worker.clone();
+        let result = std::panic::AssertUnwindSafe(run_turn(
+            backend, messages, run, turn_id, worker, control_rx,
+        ))
+        .catch_unwind()
+        .await;
+        if result.is_err() {
+            fail_turn(
+                &panic_events,
+                turn_id,
+                HeadlessFailureKind::Internal,
+                "service turn failed internally".into(),
+                8,
+            )
+            .await;
+        }
+    });
+    state.turn = Some(ActiveTurn {
+        id: turn_id,
+        parent: parent.clone(),
+        control: control_tx,
+        task,
+        pending: None,
+    });
+    events
+        .emit(
+            Some(&parent),
+            ServeEvent::TurnStarted {
+                session_id,
+                turn_id,
+            },
+        )
+        .await?;
+    Ok(false)
+}
+
 async fn handle_operation<W, F>(
     envelope: OpEnvelope,
     state: &mut DaemonState,
@@ -933,9 +1101,10 @@ where
     W: AsyncWrite + Unpin,
     F: ServiceSessionFactory + 'static,
 {
+    let persistent_start = matches!(&envelope.op, ServeOp::StartPersistentSession(_));
     let parent = envelope.id;
     match envelope.op {
-        ServeOp::StartSession(request) => {
+        ServeOp::StartSession(request) | ServeOp::StartPersistentSession(request) => {
             if state.turn.is_some() {
                 events
                     .error(
@@ -961,6 +1130,36 @@ where
                     return Ok(false);
                 }
             };
+            if persistent_start {
+                let stored = crate::session::SessionV2::new(
+                    "Service session",
+                    replacement.cwd.clone(),
+                    replacement.provider.clone(),
+                    replacement.model.clone(),
+                    vec![],
+                );
+                let mut stored = stored;
+                stored.id = replacement.id;
+                let result = match factory.session_store() {
+                    Ok(store) => {
+                        replacement
+                            .run
+                            .inbox
+                            .lock()
+                            .await
+                            .attach(stored, store, replacement.messages.clone())
+                            .await
+                    }
+                    Err(error) => Err(error),
+                };
+                if let Err(message) = result {
+                    shutdown_session(replacement).await;
+                    events
+                        .error(Some(&parent), ServiceErrorKind::Setup, message)
+                        .await?;
+                    return Ok(false);
+                }
+            }
             if let Some(previous) = state.session.take() {
                 let id = previous.id;
                 shutdown_session(previous).await;
@@ -983,6 +1182,173 @@ where
             state.session = Some(replacement);
             events.emit(Some(&parent), started).await?;
         }
+        ServeOp::LoadPersistentSession { session_id } => {
+            if state.turn.is_some() {
+                events
+                    .error(
+                        Some(&parent),
+                        ServiceErrorKind::InvalidState,
+                        "cancel the active turn before loading a session",
+                    )
+                    .await?;
+                return Ok(false);
+            }
+            let loaded = async {
+                let id = Uuid::parse_str(&session_id)
+                    .map_err(|_| "Expected a saved session UUID".to_string())?;
+                let store = factory.session_store()?;
+                let source = store.clone();
+                let saved = tokio::task::spawn_blocking(move || source.load(&id.to_string()))
+                    .await
+                    .map_err(|_| "Session load worker stopped".to_string())?
+                    .map_err(|e| e.to_string())?;
+                let request = StartSessionOp {
+                    provider: Some(saved.provider.clone()),
+                    model: Some(saved.model.clone()),
+                    cwd: Some(saved.workspace.clone()),
+                    ..Default::default()
+                };
+                let mut replacement = factory.create(&request).await?;
+                replacement.id = saved.id;
+                replacement.run.session_identity = saved.id.to_string();
+                let assembly = crate::agent::AgentClient::build_segmented_messages(
+                    None,
+                    None,
+                    &saved.messages,
+                    None,
+                    &[],
+                )
+                .map_err(|e| e.to_string())?;
+                replacement.messages.extend(assembly.messages);
+                replacement
+                    .run
+                    .inbox
+                    .lock()
+                    .await
+                    .attach(saved, store, replacement.messages.clone())
+                    .await?;
+                Ok::<_, String>(replacement)
+            }
+            .await;
+            match loaded {
+                Ok(replacement) => {
+                    if let Some(previous) = state.session.take() {
+                        shutdown_session(previous).await;
+                    }
+                    events
+                        .emit(
+                            Some(&parent),
+                            ServeEvent::SessionStarted {
+                                session_id: replacement.id,
+                                provider: replacement.provider.clone(),
+                                model: replacement.model.clone(),
+                                cwd: replacement.cwd.clone(),
+                            },
+                        )
+                        .await?;
+                    state.session = Some(replacement);
+                }
+                Err(message) => {
+                    events
+                        .error(Some(&parent), ServiceErrorKind::Setup, message)
+                        .await?
+                }
+            }
+        }
+        ServeOp::SubmitInput {
+            input_id,
+            text,
+            delivery,
+        } => {
+            let Some(session) = state.session.as_ref() else {
+                events
+                    .error(
+                        Some(&parent),
+                        ServiceErrorKind::InvalidState,
+                        "start a session before submitting input",
+                    )
+                    .await?;
+                return Ok(false);
+            };
+            let session_id = session.id;
+            let receipt = session
+                .run
+                .inbox
+                .lock()
+                .await
+                .admit(&input_id, &text, delivery)
+                .await;
+            match receipt {
+                Ok(receipt) => {
+                    let pending = receipt.status == crate::service_inbox::InputStatus::Pending;
+                    events
+                        .emit(
+                            Some(&parent),
+                            ServeEvent::InputAdmitted {
+                                session_id,
+                                receipt,
+                            },
+                        )
+                        .await?;
+                    if pending && state.turn.is_none() {
+                        start_service_turn(state, events, worker_tx, parent, None).await?;
+                    }
+                }
+                Err(message) => {
+                    events
+                        .error(Some(&parent), ServiceErrorKind::InvalidOperation, message)
+                        .await?
+                }
+            }
+        }
+        ServeOp::InspectInbox => {
+            let Some(session) = state.session.as_ref() else {
+                events
+                    .error(
+                        Some(&parent),
+                        ServiceErrorKind::InvalidState,
+                        "no service session",
+                    )
+                    .await?;
+                return Ok(false);
+            };
+            let inbox = session.run.inbox.lock().await;
+            events
+                .emit(
+                    Some(&parent),
+                    ServeEvent::Inbox {
+                        session_id: session.id,
+                        held: inbox.inbox.held,
+                        inputs: inbox.inbox.receipts(inbox.durable()),
+                    },
+                )
+                .await?;
+        }
+        ServeOp::ResumeInbox => {
+            let Some(session) = state.session.as_ref() else {
+                events
+                    .error(
+                        Some(&parent),
+                        ServiceErrorKind::InvalidState,
+                        "no service session",
+                    )
+                    .await?;
+                return Ok(false);
+            };
+            let result = session.run.inbox.lock().await.resume().await;
+            match result {
+                Ok(()) => {
+                    if state.turn.is_none() {
+                        start_service_turn(state, events, worker_tx, parent, None).await?;
+                    }
+                }
+                Err(message) => {
+                    events
+                        .error(Some(&parent), ServiceErrorKind::Internal, message)
+                        .await?
+                }
+            }
+        }
         ServeOp::UserInput { text } => {
             if state.turn.is_some() {
                 events
@@ -994,7 +1360,7 @@ where
                     .await?;
                 return Ok(false);
             }
-            let Some(session) = state.session.as_mut() else {
+            let Some(_) = state.session.as_ref() else {
                 events
                     .error(
                         Some(&parent),
@@ -1014,84 +1380,7 @@ where
                     .await?;
                 return Ok(false);
             }
-            let mut run = session.run.clone();
-            let mut loads = crate::skills::SkillLoadSet::default();
-            let task_skill_prompt = {
-                let registry = run
-                    .skills
-                    .lock()
-                    .unwrap_or_else(|poison| poison.into_inner());
-                let mut result = Ok(());
-                for selector in crate::skills::explicit_skill_selectors(&text) {
-                    if let Err(error) = registry.load_for_task(&selector, true, &mut loads) {
-                        result = Err(format!(
-                            "skill invocation ${selector} failed before request: {error}"
-                        ));
-                        break;
-                    }
-                }
-                result.and_then(|()| {
-                    registry
-                        .task_prompt(&loads)
-                        .map_err(|error| format!("skill load changed before request: {error}"))
-                })
-            };
-            run.task_skill_prompt = match task_skill_prompt {
-                Ok(prompt) => prompt,
-                Err(error) => {
-                    events
-                        .error(Some(&parent), ServiceErrorKind::InvalidOperation, error)
-                        .await?;
-                    return Ok(false);
-                }
-            };
-            session.messages.push(ChatMessage {
-                role: "user".into(),
-                content: crate::image_content::ModelContent::text(text),
-                tool_calls: None,
-                tool_call_id: None,
-                response_items: Vec::new(),
-            });
-            let turn_id = Uuid::new_v4();
-            let session_id = session.id;
-            let messages = session.messages.clone();
-            let backend = session.backend.clone();
-            let (control_tx, control_rx) = mpsc::channel(CONTROL_CHANNEL_CAPACITY);
-            let worker = worker_tx.clone();
-            let task = tokio::spawn(async move {
-                let panic_events = worker.clone();
-                let result = std::panic::AssertUnwindSafe(run_turn(
-                    backend, messages, run, turn_id, worker, control_rx,
-                ))
-                .catch_unwind()
-                .await;
-                if result.is_err() {
-                    fail_turn(
-                        &panic_events,
-                        turn_id,
-                        HeadlessFailureKind::Internal,
-                        "service turn failed internally".into(),
-                        8,
-                    )
-                    .await;
-                }
-            });
-            state.turn = Some(ActiveTurn {
-                id: turn_id,
-                parent: parent.clone(),
-                control: control_tx,
-                task,
-                pending: None,
-            });
-            events
-                .emit(
-                    Some(&parent),
-                    ServeEvent::TurnStarted {
-                        session_id,
-                        turn_id,
-                    },
-                )
-                .await?;
+            start_service_turn(state, events, worker_tx, parent, Some(text)).await?;
         }
         ServeOp::ApprovalResponse {
             request_id,
@@ -1449,6 +1738,14 @@ async fn handle_worker_event<W: AsyncWrite + Unpin>(
                 sink.flush_async().await;
             }
             scrub_email_chat_messages(&mut session.messages);
+            session
+                .run
+                .inbox
+                .lock()
+                .await
+                .stop(false)
+                .await
+                .map_err(ServiceIoError::Other)?;
             events
                 .emit(
                     Some(&parent),
@@ -1461,6 +1758,14 @@ async fn handle_worker_event<W: AsyncWrite + Unpin>(
             state.turn.take();
         }
         WorkerEvent::Aborted { .. } => {
+            session
+                .run
+                .inbox
+                .lock()
+                .await
+                .stop(false)
+                .await
+                .map_err(ServiceIoError::Other)?;
             let _ = (&mut turn.task).await;
             if let Some(sink) = &session.run.outcome_sink {
                 sink.flush_async().await;
@@ -1486,6 +1791,16 @@ async fn cancel_active_turn<W: AsyncWrite + Unpin>(
     events: &mut EventWriter<W>,
     parent: Option<&str>,
 ) -> Result<bool, ServiceIoError> {
+    if let Some(session) = &state.session {
+        session
+            .run
+            .inbox
+            .lock()
+            .await
+            .stop(false)
+            .await
+            .map_err(ServiceIoError::Other)?;
+    }
     let Some(turn) = state.turn.take() else {
         return Ok(false);
     };
@@ -1533,6 +1848,7 @@ async fn finish_daemon<W: AsyncWrite + Unpin>(
 }
 
 async fn shutdown_session(session: ServiceSession) {
+    let _ = session.run.inbox.lock().await.stop(false).await;
     cleanup_owned_jobs(session.run.job_owner).await;
     if let Some(sink) = session.run.outcome_sink {
         sink.flush_async().await;
@@ -1647,7 +1963,20 @@ async fn run_turn(
         )
         .await;
 
-    for step in 1..=run.max_turns {
+    let mut step = 0;
+    loop {
+        if step >= run.max_turns {
+            break;
+        }
+        match run.inbox.lock().await.promote(&mut messages, false).await {
+            Ok(true) => step = 0,
+            Ok(false) => {}
+            Err(message) => {
+                fail_turn(&events, turn_id, HeadlessFailureKind::Internal, message, 8).await;
+                return;
+            }
+        }
+        step += 1;
         if send_runner(&events, turn_id, HeadlessEventV1::TurnStart { turn: step })
             .await
             .is_err()
@@ -1855,6 +2184,21 @@ async fn run_turn(
                 return;
             }
             outcome.record_assistant_turn();
+            match run.inbox.lock().await.promote(&mut messages, true).await {
+                Ok(true) => {
+                    step = 0;
+                    continue;
+                }
+                Ok(false) => {}
+                Err(message) => {
+                    fail_turn(&events, turn_id, HeadlessFailureKind::Internal, message, 8).await;
+                    return;
+                }
+            }
+            if let Err(message) = run.inbox.lock().await.stop(true).await {
+                fail_turn(&events, turn_id, HeadlessFailureKind::Internal, message, 8).await;
+                return;
+            }
             let _ = events
                 .send(WorkerEvent::Completed {
                     turn_id,
@@ -2112,6 +2456,10 @@ async fn run_turn(
         }
         crate::agent::client::append_transient_tool_images(&mut messages, &completed_images);
         discovery_batch.commit();
+        if let Err(message) = run.inbox.lock().await.checkpoint(messages.clone()).await {
+            fail_turn(&events, turn_id, HeadlessFailureKind::Internal, message, 8).await;
+            return;
+        }
         if events
             .send(WorkerEvent::MessagesUpdated {
                 turn_id,
@@ -2153,7 +2501,7 @@ async fn run_turn(
     .await;
 }
 
-fn scrub_email_chat_messages(messages: &mut [ChatMessage]) {
+pub(crate) fn scrub_email_chat_messages(messages: &mut [ChatMessage]) {
     let mut private_ids = HashSet::new();
     for message in messages.iter_mut() {
         if let Some(calls) = message.tool_calls.as_mut() {
@@ -2323,7 +2671,8 @@ async fn prepare_service_native_read(
         &run.permission_rules,
         &[],
         crate::approval::ApprovalOrigin::Main,
-    );
+    )
+    .with_caller(crate::approval::DecisionCaller::Service);
     let (prepared, decision) = broker.prepare(&call.name, &raw, ToolOrigin::BuiltIn).ok()?;
     (decision == crate::approval::BrokerDecision::AllowedByRule && !prepared.network_requested)
         .then_some(crate::agent::tools::PreparedNativeRead {
@@ -2401,7 +2750,8 @@ async fn execute_service_call(
             &run.permission_rules,
             &[],
             crate::approval::ApprovalOrigin::Main,
-        );
+        )
+        .with_caller(crate::approval::DecisionCaller::Service);
         if matches!(
             broker.prepare(&call.name, raw_arguments, ToolOrigin::BuiltIn),
             Ok((_, crate::approval::BrokerDecision::DeniedByRule))
@@ -2506,7 +2856,8 @@ async fn execute_service_call(
                 &run.permission_rules,
                 &[],
                 crate::approval::ApprovalOrigin::Mcp(server.clone()),
-            );
+            )
+            .with_caller(crate::approval::DecisionCaller::Service);
             let (_, decision) =
                 broker.prepare_dynamic(&call.name, raw_arguments, ToolOrigin::Mcp(server), false);
             if decision == crate::approval::BrokerDecision::DeniedByRule {
@@ -2550,8 +2901,17 @@ async fn execute_service_call(
         &run.permission_rules,
         &[],
         crate::approval::ApprovalOrigin::Main,
-    );
-    let (prepared, decision) = match broker.prepare(&call.name, raw_arguments, ToolOrigin::BuiltIn)
+    )
+    .with_caller(crate::approval::DecisionCaller::Service);
+    let (prepared, decision) = match broker
+        .prepare_formatted(
+            &call.name,
+            raw_arguments,
+            ToolOrigin::BuiltIn,
+            false,
+            run.sandbox_mode,
+        )
+        .await
     {
         Ok(prepared) => prepared,
         Err(error) => return ExecuteOutcome::Protocol(error),
@@ -2786,6 +3146,7 @@ fn wire_request_id(prefix: &str) -> String {
 
 fn provider_failure(error: &ProviderError) -> (i32, HeadlessFailureKind) {
     match error {
+        ProviderError::FilterStopped { .. } => (11, HeadlessFailureKind::ProviderFilter),
         ProviderError::Http { .. }
         | ProviderError::Transport(_)
         | ProviderError::MissingEnvironment(_) => (5, HeadlessFailureKind::ProviderTransport),
@@ -2909,6 +3270,12 @@ struct ProductionFactory {
 
 #[async_trait]
 impl ServiceSessionFactory for ProductionFactory {
+    fn session_store(&self) -> Result<crate::session::SessionStore, String> {
+        let paths = crate::runtime::RuntimePaths::discover()
+            .map_err(|e| e.to_string())?
+            .for_profile(&self.active_profile);
+        Ok(crate::session::SessionStore::new(paths.sessions_dir))
+    }
     async fn create(&self, request: &StartSessionOp) -> Result<ServiceSession, String> {
         self.create_scoped(request, &[], None).await
     }
@@ -3120,6 +3487,9 @@ impl ProductionFactory {
             }],
             backend,
             run: ServiceRunConfig {
+                inbox: Arc::new(tokio::sync::Mutex::new(
+                    crate::service_inbox::Runtime::default(),
+                )),
                 workspace_activity_scope: Some(paths.data_dir.clone()),
                 outcome_sink: capabilities
                     .learning
@@ -3152,6 +3522,7 @@ impl ProductionFactory {
                     skill_activation_ids: Some(skill_activation_ids),
                     skill_view_ids: Some(skill_view_ids),
                     mcp_enabled: capabilities.mcp,
+                    native_mechanistic_enabled: false,
                     mechanistic_delegation_enabled: false,
                     transparent_mechanistic_enabled: false,
                     remote_mechanistic_enabled: false,
@@ -3381,6 +3752,9 @@ impl LocalAgentSession {
                 }],
                 backend,
                 run: ServiceRunConfig {
+                    inbox: Arc::new(tokio::sync::Mutex::new(
+                        crate::service_inbox::Runtime::default(),
+                    )),
                     workspace_activity_scope: None,
                     outcome_sink: None,
                     provider: "fake".into(),
@@ -4259,6 +4633,11 @@ mod tests {
 
     #[async_trait]
     impl ServiceSessionFactory for FakeFactory {
+        fn session_store(&self) -> Result<crate::session::SessionStore, String> {
+            Ok(crate::session::SessionStore::new(
+                self.root.join("saved-service"),
+            ))
+        }
         async fn create(&self, request: &StartSessionOp) -> Result<ServiceSession, String> {
             let mut workspace = crate::workspace::WorkspaceContext::discover(&self.root)
                 .map_err(|error| error.to_string())?;
@@ -4297,6 +4676,9 @@ mod tests {
                 }],
                 backend: self.backend.clone(),
                 run: ServiceRunConfig {
+                    inbox: Arc::new(tokio::sync::Mutex::new(
+                        crate::service_inbox::Runtime::default(),
+                    )),
                     workspace_activity_scope: None,
                     outcome_sink: None,
                     provider: "fake".into(),
@@ -4327,6 +4709,7 @@ mod tests {
                         skill_activation_ids: Some(skill_activation_ids),
                         skill_view_ids: Some(skill_view_ids),
                         mcp_enabled: false,
+                        native_mechanistic_enabled: false,
                         mechanistic_delegation_enabled: false,
                         transparent_mechanistic_enabled: false,
                         remote_mechanistic_enabled: false,
@@ -4479,6 +4862,112 @@ mod tests {
             .send(op("op_start", serde_json::json!({"type":"start_session"})))
             .await;
         assert_eq!(event_type(&harness.next().await), "session_started");
+    }
+
+    #[tokio::test]
+    async fn orc290_inbox_steering_waits_for_safe_boundary_and_exact_retries_do_not_repeat() {
+        let root = tempfile::tempdir().unwrap();
+        let backend = FakeBackend::new(vec![FakeTurn::Pending, text_turn("steering applied")]);
+        let mut harness = Harness::start(factory(root.path(), backend.clone())).await;
+        start_session(&mut harness).await;
+        harness
+            .send(op(
+                "first",
+                serde_json::json!({"type":"user_input","text":"initial"}),
+            ))
+            .await;
+        harness.until("turn_started").await;
+        harness.send(op("submit", serde_json::json!({"type":"submit_input","input_id":"steer1","text":"steering","delivery":"steer"}))).await;
+        let admitted = harness.until("input_admitted").await;
+        let original_receipt = admitted.last().unwrap()["event"]["receipt"].clone();
+        assert_eq!(backend.requests().len(), 1);
+        let sender = backend.held.lock().unwrap().pop().unwrap();
+        sender
+            .send(Ok(ProviderEvent::Text("first complete".into())))
+            .unwrap();
+        sender
+            .send(Ok(ProviderEvent::Finish {
+                reason: FinishReason::Stop,
+                usage: None,
+            }))
+            .unwrap();
+        sender.send(Ok(ProviderEvent::Done)).unwrap();
+        drop(sender);
+        harness.until("turn_completed").await;
+        assert_eq!(backend.requests().len(), 2);
+        assert!(backend.requests()[1]
+            .messages
+            .iter()
+            .any(|m| m.content.as_str() == Some("steering")));
+        harness
+            .send(op(
+                "retry",
+                serde_json::json!({"type":"submit_input","input_id":"steer1","text":"steering"}),
+            ))
+            .await;
+        let receipt = harness.until("input_admitted").await;
+        assert_eq!(
+            receipt.last().unwrap()["event"]["receipt"],
+            original_receipt
+        );
+        harness
+            .send(op("inspect", serde_json::json!({"type":"inspect_inbox"})))
+            .await;
+        let inspected = harness.until("inbox").await;
+        assert_eq!(
+            inspected.last().unwrap()["event"]["inputs"][0]["status"],
+            "completed"
+        );
+        assert_eq!(backend.requests().len(), 2);
+        harness.shutdown("shutdown").await;
+    }
+
+    #[tokio::test]
+    async fn orc290_persistent_inbox_reopens_held_without_provider_traffic() {
+        let root = tempfile::tempdir().unwrap();
+        let backend = FakeBackend::new(vec![FakeTurn::Pending]);
+        let factory = factory(root.path(), backend.clone());
+        let mut harness = Harness::start(factory.clone()).await;
+        harness
+            .send(op(
+                "start",
+                serde_json::json!({"type":"start_persistent_session"}),
+            ))
+            .await;
+        let started = harness.until("session_started").await;
+        let id = started.last().unwrap()["event"]["session_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        harness
+            .send(op(
+                "work",
+                serde_json::json!({"type":"submit_input","input_id":"active","text":"first"}),
+            ))
+            .await;
+        harness.until("turn_started").await;
+        harness.send(op("queue", serde_json::json!({"type":"submit_input","input_id":"later","text":"second","delivery":"queue"}))).await;
+        harness.until("input_admitted").await;
+        harness.shutdown("shutdown").await;
+        let count = backend.requests().len();
+        let mut reopened = Harness::start(factory).await;
+        reopened
+            .send(op(
+                "load",
+                serde_json::json!({"type":"load_persistent_session","session_id":id}),
+            ))
+            .await;
+        reopened.until("session_started").await;
+        reopened
+            .send(op("inspect", serde_json::json!({"type":"inspect_inbox"})))
+            .await;
+        let values = reopened.until("inbox").await;
+        let inbox = &values.last().unwrap()["event"];
+        assert_eq!(inbox["held"], true);
+        assert_eq!(inbox["inputs"][0]["status"], "interrupted");
+        assert_eq!(inbox["inputs"][1]["status"], "pending");
+        assert_eq!(backend.requests().len(), count);
+        reopened.shutdown("done").await;
     }
 
     #[tokio::test]
@@ -4988,6 +5477,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let backend = FakeBackend::new(vec![FakeTurn::Events(vec![Err(ProviderError::Http {
             status: 401,
+            body_excerpt: None,
         })])]);
         let mut harness = Harness::start(factory(root.path(), backend)).await;
         start_session(&mut harness).await;
@@ -5118,6 +5608,9 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let workspace = crate::workspace::WorkspaceContext::discover(root.path()).unwrap();
         let run = ServiceRunConfig {
+            inbox: Arc::new(tokio::sync::Mutex::new(
+                crate::service_inbox::Runtime::default(),
+            )),
             workspace_activity_scope: None,
             outcome_sink: None,
             provider: "safe".into(),

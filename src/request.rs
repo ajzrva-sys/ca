@@ -311,6 +311,8 @@ impl std::fmt::Debug for EffectivePromptCachePlan {
 
 #[derive(Clone)]
 pub struct PreparedModelRequest {
+    pub(crate) tool_schema_policy: crate::tool_schema::Policy,
+    pub pruning: crate::context_pruning::PruningStats,
     pub(crate) guidance_prepared: bool,
     pub(crate) runtime_source: Option<crate::agent::stream::ProviderStateSourceV1>,
     pub kind: RequestKind,
@@ -345,17 +347,23 @@ impl PreparedModelRequest {
         kind: RequestKind,
         provider: impl Into<String>,
         model: impl Into<String>,
-        messages: Vec<ChatMessage>,
+        mut messages: Vec<ChatMessage>,
         tools: Vec<ToolDef>,
         options: ChatRequestOptions,
     ) -> Self {
+        let provider = provider.into();
+        let model = model.into();
+        let pruning =
+            crate::context_pruning::project_request(&mut messages, kind, &provider, &model);
         Self {
+            tool_schema_policy: Default::default(),
+            pruning,
             kind,
             guidance_prepared: false,
             runtime_source: None,
             harness_components: Default::default(),
-            provider: provider.into(),
-            model: model.into(),
+            provider,
+            model,
             messages,
             tools,
             options,
@@ -375,7 +383,8 @@ impl PreparedModelRequest {
         self
     }
 
-    pub fn with_context_breakdown(mut self, breakdown: ContextBreakdown) -> Self {
+    pub fn with_context_breakdown(mut self, mut breakdown: ContextBreakdown) -> Self {
+        self.pruning.apply(&mut breakdown);
         self.context_breakdown = Some(breakdown);
         self
     }
@@ -434,6 +443,7 @@ pub struct RequestPromptCacheSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestSnapshot {
+    pub adapter_diagnostics: Vec<String>,
     pub sequence: u64,
     pub kind: RequestKind,
     pub provider: String,
@@ -454,6 +464,51 @@ pub struct RequestSnapshot {
 }
 
 impl RequestSnapshot {
+    fn payload_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.provider.capacity()
+            + self.model.capacity()
+            + self
+                .instructions
+                .iter()
+                .map(String::capacity)
+                .sum::<usize>()
+            + self
+                .adapter_diagnostics
+                .iter()
+                .map(String::capacity)
+                .sum::<usize>()
+            + self
+                .messages
+                .iter()
+                .map(|message| {
+                    std::mem::size_of_val(message)
+                        + message.role.capacity()
+                        + message.content.capacity()
+                        + message.tool_call_id.as_ref().map_or(0, String::capacity)
+                        + message
+                            .tool_calls
+                            .iter()
+                            .map(|call| {
+                                std::mem::size_of_val(call)
+                                    + call.id.capacity()
+                                    + call.name.capacity()
+                                    + call.arguments.capacity()
+                            })
+                            .sum::<usize>()
+                })
+                .sum::<usize>()
+            + self
+                .schemas
+                .iter()
+                .map(|schema| {
+                    std::mem::size_of_val(schema)
+                        + schema.name.capacity()
+                        + schema.description.capacity()
+                        + schema.parameters.capacity()
+                })
+                .sum::<usize>()
+    }
     fn from_prepared(
         request: &PreparedModelRequest,
         protocol: &'static str,
@@ -558,6 +613,7 @@ impl RequestSnapshot {
             .collect::<Vec<_>>();
 
         Self {
+            adapter_diagnostics: Vec::new(),
             sequence: 0,
             kind: request.kind,
             provider: bounded_identifier(&request.provider, secrets),
@@ -609,6 +665,9 @@ impl RequestSnapshot {
             format!("  tool schemas: {}", self.estimates.schemas),
             format!("  total: {}", self.estimates.total),
         ];
+        for diagnostic in &self.adapter_diagnostics {
+            lines.push(format!("Provider: {diagnostic}"));
+        }
         if let Some(cache) = &self.prompt_cache {
             lines.extend([
                 String::new(),
@@ -736,6 +795,7 @@ pub struct RequestStore {
 
 #[derive(Default)]
 struct RequestStoreInner {
+    memory: Option<crate::cache_memory::Essential>,
     sequence: u64,
     latest: Option<RequestSnapshot>,
     harness: Option<crate::harness_registry::ComponentSnapshot>,
@@ -787,8 +847,33 @@ impl RequestStore {
             Some(source) => crate::harness_registry::capture_prepared_on_route(request, source),
             None => crate::harness_registry::capture_prepared(request),
         });
+        inner
+            .memory
+            .get_or_insert_with(|| crate::cache_memory::Essential::new("request snapshots"))
+            .set(snapshot.payload_bytes());
         inner.latest = Some(snapshot);
         inner.sequence
+    }
+
+    pub(crate) fn adapter_diagnostics(&self, sequence: u64, diagnostics: &[String]) {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(snapshot) = inner
+            .latest
+            .as_mut()
+            .filter(|snapshot| snapshot.sequence == sequence)
+        {
+            for diagnostic in diagnostics.iter().take(32) {
+                let safe: String = safe_text(diagnostic, &[]).chars().take(256).collect();
+                if snapshot.adapter_diagnostics.len() < 32
+                    && !snapshot.adapter_diagnostics.contains(&safe)
+                {
+                    snapshot.adapter_diagnostics.push(safe);
+                }
+            }
+        }
+        if let (Some(memory), Some(snapshot)) = (&inner.memory, &inner.latest) {
+            memory.set(snapshot.payload_bytes());
+        }
     }
 
     pub fn harness_snapshot(&self) -> Option<crate::harness_registry::ComponentSnapshot> {
@@ -797,6 +882,21 @@ impl RequestStore {
             .unwrap_or_else(|e| e.into_inner())
             .harness
             .clone()
+    }
+
+    pub(crate) fn latest_adapter_diagnostics(&self) -> Option<(String, String, Vec<String>)> {
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner
+            .latest
+            .as_ref()
+            .filter(|snapshot| !snapshot.adapter_diagnostics.is_empty())
+            .map(|snapshot| {
+                (
+                    snapshot.provider.clone(),
+                    snapshot.model.clone(),
+                    snapshot.adapter_diagnostics.clone(),
+                )
+            })
     }
 
     pub fn snapshot(&self) -> Option<RequestSnapshot> {

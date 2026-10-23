@@ -1278,6 +1278,8 @@ mod tests {
             request[header_end..header_end + length].to_vec()
         });
         let provider = crate::config::ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: format!("http://{address}/v1"),
             api_key: String::new(),
             protocol: crate::agent::ProviderProtocol::default(),

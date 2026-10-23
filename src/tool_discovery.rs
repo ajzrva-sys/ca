@@ -29,6 +29,19 @@ const CORE: &[&str] = &[
     "update_todos",
     "read_scratch",
     "session_search",
+    "spawn_agent",
+    "spawn_agent_batch",
+    "list_agent_routes",
+    "await_agent",
+    "await_agent_batch",
+    "git_status",
+    "git_diff",
+    "git_log",
+    "inspect_symbol",
+    "inspect_feature",
+    "find_relevant_tests",
+    "verify_changes",
+    "verify_recipe",
     SEARCH_TOOLS_NAME,
 ];
 
@@ -286,6 +299,60 @@ mod tests {
             .map(|tool| tool.function.name.as_str())
             .collect()
     }
+
+    #[test]
+    fn hrs293_eager_lazy_comparison_uses_identical_authorized_catalogs() {
+        use crate::agent::registry::{ToolProfile, ToolRegistry};
+        let mut receipts = Vec::new();
+        for selected in ["read_file", "list_agents", "read_lints"] {
+            let lazy_policy = policy();
+            let full = crate::tool_selection::resolve_tools(
+                ToolRegistry::builtins(),
+                ToolProfile::Main,
+                &lazy_policy,
+                &crate::tool_selection::ToolSelectionConstraints::default(),
+            )
+            .unwrap()
+            .into_definitions();
+            assert!(names(&full).contains(&selected));
+            let mut denied = full.clone();
+            denied.retain(|tool| tool.function.name != "delete_file");
+            let mut modes = Vec::new();
+            for mode in [ToolDiscoveryMode::Eager, ToolDiscoveryMode::Lazy] {
+                let policy = ToolSelectionPolicy::default().with_discovery_mode(mode);
+                let discovery = ToolDiscoverySession::default();
+                let initial = discovery.advertise(denied.clone(), &policy);
+                let initial_json = serde_json::to_string(&initial).unwrap();
+                let needs_search = !names(&initial).contains(&selected);
+                if needs_search {
+                    let batch = discovery.begin_batch();
+                    let result = discovery.search(&serde_json::json!({"query":selected,"limit":1}));
+                    assert!(matches!(result, ToolExecutionResult::Success(_)));
+                    assert!(!names(&initial).contains(&selected));
+                    batch.commit();
+                }
+                let after = discovery.advertise(denied.clone(), &policy);
+                assert!(names(&after).contains(&selected));
+                assert!(!names(&after).contains(&"delete_file"));
+                let batch = discovery.begin_batch();
+                discovery.search(&serde_json::json!({"query":"delete_file","limit":1}));
+                batch.commit();
+                assert!(
+                    !names(&discovery.advertise(denied.clone(), &policy)).contains(&"delete_file")
+                );
+                modes.push(serde_json::json!({"mode":format!("{mode:?}"),"schema_bytes":initial_json.len(),"estimated_schema_tokens":crate::context::estimate_text_tokens(&initial_json),"discovery_requests":usize::from(needs_search),"selected":selected,"denied_absent":true}));
+            }
+            receipts.push(modes);
+        }
+        eprintln!(
+            "HRS293_DISCOVERY_EVALUATION={}",
+            serde_json::to_string(&receipts).unwrap()
+        );
+        assert_eq!(
+            crate::config::AgentConfig::default().tool_discovery,
+            ToolDiscoveryMode::Eager
+        );
+    }
     #[test]
     fn representative_main_and_child_schema_bytes_drop_at_least_thirty_percent() {
         use crate::agent::registry::{ToolProfile, ToolRegistry};
@@ -328,6 +395,21 @@ mod tests {
             );
             assert!(names(&lazy).contains(&"report_structured_output"));
         }
+    }
+    #[test]
+    fn configured_agent_routes_are_discoverable_in_the_initial_authorized_catalog() {
+        let full = vec![
+            tool("spawn_agent"),
+            tool("list_agent_routes"),
+            tool(SEARCH_TOOLS_NAME),
+        ];
+        let advertised = ToolDiscoverySession::default().advertise(full, &policy());
+        assert!(names(&advertised).contains(&"list_agent_routes"));
+        let excluded = ToolDiscoverySession::default().advertise(
+            vec![tool("spawn_agent"), tool(SEARCH_TOOLS_NAME)],
+            &policy(),
+        );
+        assert!(!names(&excluded).contains(&"list_agent_routes"));
     }
     #[test]
     fn search_only_activates_after_complete_batch_and_current_snapshot_is_frozen() {

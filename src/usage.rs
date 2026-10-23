@@ -2184,6 +2184,8 @@ mod tests {
         };
         let catalog = crate::pricing::OfficialPriceCatalog::seeded();
         let provider = |base_url: &str| crate::config::ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: base_url.into(),
             api_key: "unused".into(),
             protocol: crate::agent::ProviderProtocol::OpenAiResponses,

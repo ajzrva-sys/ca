@@ -92,6 +92,110 @@ fn plan_reader_view_revision_dismissal_and_scrolling_are_independent_of_executio
 }
 
 #[test]
+fn plan_workflow_picker_cancellation_and_selection_do_not_switch_the_main_agent() {
+    let mut state = plan_review_state();
+    state.model_catalog_loaded = true;
+    state.model_list = vec![crate::app::ModelInfo {
+        provider: "other".into(),
+        id: "planner".into(),
+        display_name: "Planner".into(),
+    }];
+    let before = state.work_state.lock().unwrap().clone();
+    crate::plan::manage_command(&mut state, "send review Check the API").unwrap();
+    press(&mut state, KeyCode::Esc);
+    assert!(state.plan_workflow_request.is_none());
+    assert!(state.plan_workflow_picker_action.is_none());
+    assert!(state.current_model.is_none());
+    crate::plan::manage_command(&mut state, "send review Check the API").unwrap();
+    press(&mut state, KeyCode::Enter);
+    assert!(state.plan_workflow_request.is_none());
+    assert_eq!(state.input, "/plan send review other/planner Check the API");
+    crate::plan::manage_command(&mut state, "send revise other/planner Check the API").unwrap();
+    assert!(
+        matches!(state.plan_workflow_request.take(), Some(crate::plan_workflow::PlanWorkflowArgs::Handoff { step })
+        if step.route.as_ref().is_some_and(|route| route.provider == "other" && route.model == "planner") && step.instructions == "Check the API" && step.role == crate::plan_workflow::WorkflowRole::Revise)
+    );
+    assert!(state.current_model.is_none());
+    assert_eq!(*state.work_state.lock().unwrap(), before);
+    crate::plan::manage_command(&mut state, "execute choose").unwrap();
+    press(&mut state, KeyCode::Enter);
+    assert!(state.plan_execute_requested.is_some());
+    assert!(state
+        .plan_execute_route
+        .as_ref()
+        .is_some_and(|route| route.provider == "other"));
+    assert!(state.current_model.is_none());
+    assert_eq!(*state.work_state.lock().unwrap(), before);
+}
+
+#[test]
+fn plan_workflow_graph_inspection_and_return_to_existing_agent_are_distinct_actions() {
+    use crate::plan_workflow::{PlanWorkflowArgs, WorkflowRole, WorkflowStep};
+    let mut state = plan_review_state();
+    let route = crate::agent::subagent::AgentRoute {
+        provider: "first".into(),
+        model: "author-model".into(),
+    };
+    {
+        let mut work = state.work_state.lock().unwrap();
+        crate::plan_workflow::apply_action(
+            &mut work,
+            PlanWorkflowArgs::Start {
+                goal: "Review and return the same plan".into(),
+                participants: Vec::new(),
+                steps: vec![WorkflowStep {
+                    role: WorkflowRole::Review,
+                    participant: "original-author".into(),
+                    route: None,
+                    instructions: String::new(),
+                }],
+                review_loop: None,
+                implementation: None,
+            },
+            &route,
+            None,
+        )
+        .unwrap();
+        let workflow = work.plan_workflow.as_mut().unwrap();
+        workflow.status = crate::plan_workflow::WorkflowStatus::Completed;
+        workflow.steps[0].status = crate::plan_workflow::WorkflowStageStatus::Completed;
+        workflow.steps[0].result_snapshot = Some(0);
+        workflow.steps[0].feedback = Some("Check cancellation before implementation".into());
+    }
+    let before = state.work_state.lock().unwrap().clone();
+    crate::plan::manage_command(&mut state, "graph").unwrap();
+    press(&mut state, KeyCode::End);
+    assert_eq!(state.plan_workflow_graph.as_ref().unwrap().selected_idx, 0);
+    press(&mut state, KeyCode::Enter);
+    assert!(state.pager_open);
+    assert!(state.plan_reader.is_none());
+    assert!(state.pager_content.contains("Readable body"));
+    assert!(state.pager_content.contains("Check cancellation"));
+    press(&mut state, KeyCode::Enter);
+    assert!(state.plan_execute_requested.is_none());
+    press(&mut state, KeyCode::Esc);
+    assert!(!state.pager_open);
+    assert!(state.plan_workflow_graph.is_some());
+    assert_eq!(*state.work_state.lock().unwrap(), before);
+    press(&mut state, KeyCode::Tab);
+    assert!(state.plan_workflow_graph.as_ref().unwrap().participants);
+    press(&mut state, KeyCode::Enter);
+    assert!(state.plan_workflow_request.is_none());
+    assert!(state.plan_workflow_graph.is_none());
+    assert_eq!(state.input, "/plan send revise original-author ");
+    crate::plan::manage_command(
+        &mut state,
+        "send review original-author Verify the updated plan",
+    )
+    .unwrap();
+    assert!(
+        matches!(state.plan_workflow_request.take(), Some(PlanWorkflowArgs::Handoff { step })
+        if step.participant == "original-author" && step.route.is_none() && step.role == WorkflowRole::Review && step.instructions == "Verify the updated plan")
+    );
+    assert_eq!(*state.work_state.lock().unwrap(), before);
+}
+
+#[test]
 fn new_session_command_executes_exactly_and_closes_the_palette() {
     let mut state = state_with_input("/new", 4);
     state.slash_palette_open = true;
@@ -720,11 +824,88 @@ fn model_picker_requests_first_and_explicit_catalog_refreshes() {
 }
 
 #[test]
+fn first_model_picker_open_queues_full_refresh_while_provider_catalog_is_refreshing() {
+    for target in [
+        crate::app::ModelPickerTarget::Current,
+        crate::app::ModelPickerTarget::Review,
+        crate::app::ModelPickerTarget::Delegation,
+        crate::app::ModelPickerTarget::PlanWorkflow,
+    ] {
+        let mut state = state_with_input("", 0);
+        state.model_catalog_refreshing = true;
+        state.model_catalog_refresh_provider = Some("mimo".into());
+        match target {
+            crate::app::ModelPickerTarget::Current => {
+                crate::tui::input::open_model_picker(&mut state);
+            }
+            crate::app::ModelPickerTarget::Review => {
+                crate::tui::input::open_review_model_picker(&mut state, None);
+            }
+            crate::app::ModelPickerTarget::Delegation => {
+                crate::tui::input::open_delegation_model_picker(&mut state, None, &[]);
+            }
+            crate::app::ModelPickerTarget::PlanWorkflow => {
+                crate::plan::open_workflow_picker(
+                    &mut state,
+                    crate::app::PlanWorkflowPickerAction::Send {
+                        role: crate::plan_workflow::WorkflowRole::Review,
+                        instructions: String::new(),
+                    },
+                );
+            }
+            crate::app::ModelPickerTarget::MultiRun(_) => unreachable!(),
+        }
+        assert!(state.model_catalog_refresh_requested, "{target:?}");
+        assert!(state.model_catalog_refresh_provider.is_none(), "{target:?}");
+        assert!(state.model_catalog_refreshing);
+    }
+}
+
+#[test]
+fn model_picker_refresh_accepts_legacy_uppercase_and_preserves_filter() {
+    let mut state = state_with_input("", 0);
+    state.model_picker_open = true;
+    state.model_filter = "sol".into();
+    press(&mut state, KeyCode::Char('R'));
+    assert!(state.model_catalog_refresh_requested);
+    assert_eq!(state.model_filter, "sol");
+
+    state.model_catalog_refresh_requested = false;
+    press_ctrl(&mut state, 'r');
+    assert!(!state.model_catalog_refresh_requested);
+    state.model_catalog_refreshing = true;
+    press(&mut state, KeyCode::Char('R'));
+    assert!(!state.model_catalog_refresh_requested);
+}
+
+#[test]
+fn model_picker_enter_selects_the_displayed_clamped_row() {
+    let mut state = state_with_input("", 0);
+    state.model_picker_open = true;
+    state.model_list = vec![crate::app::ModelInfo {
+        id: "gpt-6.1-sol".into(),
+        provider: "openai-codex".into(),
+        display_name: "gpt-6.1-sol".into(),
+    }];
+    state.selected_model_idx = 50;
+    press(&mut state, KeyCode::Enter);
+    assert_eq!(
+        state.pending_input_action,
+        Some(crate::tui::commands::InputAction::SelectModel(
+            state.model_list[0].clone()
+        ))
+    );
+    assert!(!state.model_picker_open);
+}
+
+#[test]
 fn live_catalog_merges_with_configured_models_and_sorts_current_provider_first() {
     let providers = std::collections::HashMap::from([
         (
             "other".to_string(),
             crate::config::ProviderConfig {
+                google: None,
+                tool_schema_policy: Default::default(),
                 base_url: "https://other.invalid/v1".into(),
                 api_key: String::new(),
                 protocol: crate::agent::ProviderProtocol::default(),
@@ -736,6 +917,8 @@ fn live_catalog_merges_with_configured_models_and_sorts_current_provider_first()
         (
             "mimo".to_string(),
             crate::config::ProviderConfig {
+                google: None,
+                tool_schema_policy: Default::default(),
                 base_url: "https://mimo.invalid/v1".into(),
                 api_key: String::new(),
                 protocol: crate::agent::ProviderProtocol::default(),
@@ -972,6 +1155,129 @@ fn connected_first_class_provider_opens_models_and_shift_l_reconnects() {
 }
 
 #[test]
+fn provider_manager_first_visit_refreshes_the_selected_provider_after_other_catalog_loaded() {
+    let mut state = state_with_input("", 0);
+    state.model_catalog_loaded = true;
+    state
+        .model_catalog_provider_status
+        .insert("mimo".into(), "live · 1 model".into());
+    crate::tui::input::open_provider_manager(
+        &mut state,
+        vec![provider_entry("openai-codex", &["gpt-5.6-sol"])],
+        String::new(),
+    );
+
+    press(&mut state, KeyCode::Enter);
+    assert!(state.model_catalog_refresh_requested);
+    assert_eq!(
+        state.model_catalog_refresh_provider.as_deref(),
+        Some("openai-codex")
+    );
+
+    state.model_catalog_refresh_requested = false;
+    state
+        .model_catalog_provider_status
+        .insert("openai-codex".into(), "live · 1 model".into());
+    press(&mut state, KeyCode::Esc);
+    press(&mut state, KeyCode::Enter);
+    assert!(!state.model_catalog_refresh_requested);
+}
+
+#[test]
+fn provider_manager_first_visit_queues_refresh_while_another_provider_is_refreshing() {
+    let mut state = state_with_input("", 0);
+    state.model_catalog_refreshing = true;
+    state
+        .model_catalog_provider_status
+        .insert("mimo".into(), "refreshing".into());
+    crate::tui::input::open_provider_manager(
+        &mut state,
+        vec![provider_entry("openai-codex", &["gpt-5.6-sol"])],
+        String::new(),
+    );
+
+    press(&mut state, KeyCode::Enter);
+    assert!(state.model_catalog_refresh_requested);
+    assert_eq!(
+        state.model_catalog_refresh_provider.as_deref(),
+        Some("openai-codex")
+    );
+    assert!(state.model_catalog_refreshing);
+}
+
+#[test]
+fn provider_manager_enter_selects_the_displayed_clamped_row() {
+    let mut state = state_with_input("", 0);
+    state.model_list = vec![crate::app::ModelInfo {
+        id: "gpt-6.1-sol".into(),
+        provider: "openai-codex".into(),
+        display_name: "gpt-6.1-sol".into(),
+    }];
+    crate::tui::input::open_provider_manager(
+        &mut state,
+        vec![provider_entry("openai-codex", &["gpt-6.1-sol"])],
+        String::new(),
+    );
+    press(&mut state, KeyCode::Enter);
+    state.provider_manager.as_mut().unwrap().selected_model_idx = 50;
+    press(&mut state, KeyCode::Enter);
+    assert_eq!(
+        state.pending_input_action,
+        Some(crate::tui::commands::InputAction::SelectModel(
+            state.model_list[0].clone()
+        ))
+    );
+    assert!(state.provider_manager.is_none());
+}
+
+#[test]
+fn provider_manager_refresh_accepts_legacy_uppercase_and_preserves_filter() {
+    let mut state = state_with_input("", 0);
+    crate::tui::input::open_provider_manager(
+        &mut state,
+        vec![provider_entry("openai-codex", &["gpt-6.1-sol"])],
+        "codex".into(),
+    );
+    press(&mut state, KeyCode::Char('R'));
+    assert!(state.model_catalog_refresh_requested);
+    assert_eq!(
+        state.model_catalog_refresh_provider.as_deref(),
+        Some("openai-codex")
+    );
+    assert_eq!(
+        state.provider_manager.as_ref().unwrap().provider_filter,
+        "codex"
+    );
+
+    state.model_catalog_refresh_requested = false;
+    state
+        .model_catalog_provider_status
+        .insert("openai-codex".into(), "live · 1 model".into());
+    press(&mut state, KeyCode::Enter);
+    state.provider_manager.as_mut().unwrap().model_filter = "sol".into();
+    press(&mut state, KeyCode::Char('R'));
+    assert!(state.model_catalog_refresh_requested);
+    assert_eq!(state.provider_manager.as_ref().unwrap().model_filter, "sol");
+
+    state.model_catalog_refresh_requested = false;
+    state.model_catalog_refreshing = true;
+    press(&mut state, KeyCode::Char('R'));
+    assert!(!state.model_catalog_refresh_requested);
+
+    state.model_catalog_refreshing = false;
+    state.provider_manager.as_mut().unwrap().view =
+        crate::app::ProviderManagerView::SetupProvider {
+            provider: "openai-codex".into(),
+        };
+    press(&mut state, KeyCode::Char('R'));
+    assert!(state.model_catalog_refresh_requested);
+    assert_eq!(
+        state.model_catalog_refresh_provider.as_deref(),
+        Some("openai-codex")
+    );
+}
+
+#[test]
 fn provider_manager_orders_current_first_filters_and_browses_zero_model_provider() {
     let mut state = state_with_input("composer stays", "composer stays".len());
     state.current_model = Some(crate::app::ModelInfo {
@@ -1147,6 +1453,7 @@ fn provider_manager_paste_isolated_editor_returns_and_delete_confirmation_defaul
         origin: crate::app::ProviderEditorOrigin::ProviderManager,
         mode: crate::app::ProviderEditorMode::EditProvider,
         draft: crate::app::ProviderModelDraft {
+            google: None,
             original_model: None,
             provider: "mimo".into(),
             base_url: "https://mimo.invalid/v1".into(),
@@ -1538,6 +1845,7 @@ fn provider_editor_navigates_edits_saves_and_cancels_without_touching_composer()
         origin: crate::app::ProviderEditorOrigin::ModelPicker,
         mode: crate::app::ProviderEditorMode::AddProvider,
         draft: crate::app::ProviderModelDraft {
+            google: None,
             original_model: None,
             provider: String::new(),
             base_url: String::new(),
@@ -1596,6 +1904,7 @@ fn provider_editor_supports_cursor_insertion_deletion_and_unicode_boundaries() {
         origin: crate::app::ProviderEditorOrigin::ModelPicker,
         mode: crate::app::ProviderEditorMode::EditModel,
         draft: crate::app::ProviderModelDraft {
+            google: None,
             original_model: Some("模型".into()),
             provider: "local".into(),
             base_url: "https://example.invalid/v1".into(),
@@ -1654,6 +1963,7 @@ fn provider_editor_paste_targets_the_active_field_not_the_composer() {
         origin: crate::app::ProviderEditorOrigin::ModelPicker,
         mode: crate::app::ProviderEditorMode::AddModel,
         draft: crate::app::ProviderModelDraft {
+            google: None,
             original_model: None,
             provider: "mimo".into(),
             base_url: "https://mimo.invalid/v1".into(),
@@ -1691,6 +2001,7 @@ fn provider_editor_masks_direct_key_input_and_switches_away_from_environment_sou
         origin: crate::app::ProviderEditorOrigin::ModelPicker,
         mode: crate::app::ProviderEditorMode::AddModel,
         draft: crate::app::ProviderModelDraft {
+            google: None,
             original_model: None,
             provider: "mimo".into(),
             base_url: "https://mimo.invalid/v1".into(),
@@ -1748,6 +2059,7 @@ fn direct_openai_provider_editor_skips_and_preserves_legacy_prompt_cache_mode() 
         origin: crate::app::ProviderEditorOrigin::ProviderManager,
         mode: crate::app::ProviderEditorMode::EditProvider,
         draft: crate::app::ProviderModelDraft {
+            google: None,
             original_model: None,
             provider: "openai".into(),
             base_url: crate::pricing::OPENAI_API_BASE_URL.into(),
@@ -1903,6 +2215,7 @@ fn slash_palette_navigation_selects_the_visible_registry_entry() {
 fn idle_only_palette_commands_are_rejected_while_busy() {
     let mut state = state_with_input("", 0);
     state.streaming = Some(crate::app::StreamingState {
+        provider_text: Default::default(),
         usage_handle: crate::usage::UsageHandle::test_handle(),
         content: String::new(),
         tool_calls: Vec::new(),
@@ -3529,6 +3842,24 @@ fn history_search_is_newest_first_filterable_duplicate_preserving_and_draft_only
 }
 
 #[test]
+fn modifier_key_events_do_not_consume_a_pending_chord() {
+    let mut state = state_with_input("draft", 5);
+    press_ctrl(&mut state, 'x');
+    assert!(handle_event(
+        &mut state,
+        &Event::Key(
+            KeyCode::Modifier(crossterm::event::ModifierKeyCode::LeftControl),
+            KeyModifiers::CONTROL,
+        ),
+        "/tmp/keymap",
+    ));
+    assert!(state.pending_key_chord.is_some());
+    press(&mut state, KeyCode::Char('j'));
+    assert!(state.pending_key_chord.is_none());
+    assert_eq!(state.input, "draft");
+}
+
+#[test]
 fn two_stroke_prefix_times_out_and_unmatched_ctrl_r_still_opens_diff() {
     let mut state = state_with_input("draft", 5);
     let mut configured = crate::keymap::KeymapConfig::new();
@@ -3595,6 +3926,10 @@ fn live_agent(
         purpose: crate::agent::subagent::AgentRunPurpose::Subagent,
         status,
         task: "audit activity UI".into(),
+        role: Some("Explorer".into()),
+        model: Some("fixture-model".into()),
+        provider: Some("fixture".into()),
+        phase: crate::agent::subagent::AgentExecutionPhase::Tool,
         current_action: Some("read_file".into()),
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
@@ -3617,6 +3952,29 @@ fn agent_activity_chord_focuses_and_controls_are_cancel_first() {
 
     press_ctrl(&mut state, 'x');
     press(&mut state, KeyCode::Down);
+    assert_eq!(
+        state
+            .agent_activity_focus
+            .as_ref()
+            .and_then(|focus| focus.selected_agent),
+        Some(id)
+    );
+    assert_eq!(state.input, "keep draft");
+
+    state.agent_activity_focus = None;
+    press_ctrl(&mut state, 'x');
+    press_with_modifiers(&mut state, KeyCode::Down, KeyModifiers::CONTROL);
+    assert_eq!(
+        state
+            .agent_activity_focus
+            .as_ref()
+            .and_then(|focus| focus.selected_agent),
+        Some(id)
+    );
+
+    state.agent_activity_focus = None;
+    press_ctrl(&mut state, 'x');
+    press_ctrl(&mut state, 'j');
     assert_eq!(
         state
             .agent_activity_focus
@@ -3721,6 +4079,10 @@ fn focused_agent_navigation_scrolls_and_terminal_summaries_are_read_only() {
         turn_id: turn,
         purpose: crate::agent::subagent::AgentRunPurpose::Subagent,
         task: "completed audit".into(),
+        role: None,
+        model: None,
+        provider: None,
+        created_at: None,
         status: crate::agent::subagent::AgentStatus::Completed,
         summary: "audit complete".into(),
         updated_at: chrono::Utc::now(),
@@ -3736,6 +4098,44 @@ fn focused_agent_navigation_scrolls_and_terminal_summaries_are_read_only() {
     assert!(focus.message_draft.is_none());
     assert!(!focus.cancel_confirmation);
     assert_eq!(state.input, "composer");
+}
+
+#[test]
+fn focused_agent_navigation_keeps_roster_order_when_activity_updates() {
+    let mut state = state_with_input("composer", 8);
+    let turn = uuid::Uuid::new_v4();
+    let at = chrono::DateTime::<chrono::Utc>::from_timestamp(0, 0).unwrap();
+    let ids = [
+        crate::agent::subagent::AgentId::new(),
+        crate::agent::subagent::AgentId::new(),
+        crate::agent::subagent::AgentId::new(),
+    ];
+    state.live_agent_activity = ids
+        .iter()
+        .enumerate()
+        .map(|(index, id)| {
+            let mut agent = live_agent(*id, turn, crate::agent::subagent::AgentStatus::Running);
+            agent.created_at = at + chrono::Duration::seconds(index as i64);
+            agent.updated_at = at + chrono::Duration::seconds(10 - index as i64);
+            agent
+        })
+        .collect();
+    state.agent_activity_focus = Some(crate::app::AgentActivityFocusState {
+        turn_id: turn,
+        selected_agent: Some(ids[1]),
+        ..crate::app::AgentActivityFocusState::default()
+    });
+    press(&mut state, KeyCode::Down);
+    assert_eq!(
+        state.agent_activity_focus.as_ref().unwrap().selected_agent,
+        Some(ids[2])
+    );
+    state.live_agent_activity[2].updated_at = at + chrono::Duration::seconds(20);
+    press(&mut state, KeyCode::Up);
+    assert_eq!(
+        state.agent_activity_focus.as_ref().unwrap().selected_agent,
+        Some(ids[1])
+    );
 }
 
 #[test]

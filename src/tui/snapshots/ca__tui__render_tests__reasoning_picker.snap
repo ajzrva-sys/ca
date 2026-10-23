@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca · agent · Coder Pro
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
 
 
@@ -28,12 +28,12 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
 
 
 
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                                                                   │
+╰────────────────────────────────────────────────────────────────────── agent · Coder Pro (medium) ╯
 / commands
 -- narrow --
- ca · agent · Coder Pro
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
 
 
 
@@ -53,7 +53,7 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
    └────────────────────────────────────────────────────┘
 
 
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                           │
+╰────────────────────────────── agent · Coder Pro (medium) ╯
 / commands

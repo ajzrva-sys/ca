@@ -850,13 +850,13 @@ where
     R: Read + std::os::fd::AsRawFd + Send + 'static,
 {
     thread::spawn(move || {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "freebsd"))]
         let nonblocking = 0x4;
         #[cfg(target_os = "linux")]
         let nonblocking = 0x800;
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "freebsd")))]
         return Err("bounded verifier pipes are unsupported on this platform".into());
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "linux", target_os = "freebsd"))]
         {
             let fd = reader.as_raw_fd();
             let flags = unsafe { fcntl(fd, 3) };

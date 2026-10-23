@@ -257,6 +257,9 @@ async fn run_inner(
         &worker,
         messages,
         crate::headless::HeadlessRunConfig {
+            native_mechanistic: false,
+            proactive_delegation: false,
+            review_changes: false,
             workspace_activity_scope: Some(paths.profile_data_dir(profile)),
             automation_policy: Some(worker_policy),
             outcome_sink: None,
@@ -888,6 +891,8 @@ mod tests {
         config.providers.insert(
             "fixture".into(),
             crate::config::ProviderConfig {
+                google: None,
+                tool_schema_policy: Default::default(),
                 base_url: endpoint,
                 api_key: "fixture-test-key".into(),
                 protocol: Default::default(),

@@ -484,6 +484,8 @@ mod tests {
             config.providers.insert(
                 provider.into(),
                 ProviderConfig {
+                    google: None,
+                    tool_schema_policy: Default::default(),
                     base_url: format!("http://127.0.0.1:{port}/v1"),
                     api_key: "test".into(),
                     protocol: crate::agent::ProviderProtocol::default(),

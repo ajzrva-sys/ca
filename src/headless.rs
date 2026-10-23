@@ -90,6 +90,9 @@ pub struct HeadlessRunConfig {
     pub skills: std::sync::Arc<std::sync::Mutex<crate::skills::SkillRegistry>>,
     pub mcp: Option<std::sync::Arc<crate::mcp::McpManager>>,
     pub mechanistic: crate::config::MechanisticMcpConfig,
+    pub native_mechanistic: bool,
+    pub proactive_delegation: bool,
+    pub review_changes: bool,
     pub lsp: Option<std::sync::Arc<crate::lsp::LspManager>>,
     pub email: Option<std::sync::Arc<crate::email::EmailManager>>,
     pub tool_policy: crate::tool_selection::ToolSelectionPolicy,
@@ -107,6 +110,33 @@ pub struct HeadlessRunConfig {
     /// boundary. Ordinary headless runs leave this empty; role-run supplies
     /// only the selected route's resolved credential.
     pub output_redactions: HeadlessOutputRedactions,
+}
+
+fn automatic_review_authority(
+    config: &HeadlessRunConfig,
+    verification_enabled: bool,
+    allow_unscoped_full: bool,
+) -> crate::automatic_review::ReviewAuthority {
+    crate::automatic_review::ReviewAuthority {
+        verification_enabled,
+        verification_timeout: std::time::Duration::from_secs(config.mechanistic.max_wait_seconds),
+        verification_backend: config
+            .mcp
+            .clone()
+            .filter(|manager| crate::mechanistic_delegation::external_backend_selected(manager)),
+        allow_unisolated_evidence: config.mechanistic.allow_unisolated_evidence,
+        allow_unscoped_full,
+        job_owner: config.job_owner,
+        approval: match config.approval_mode {
+            HeadlessApprovalMode::RequireApproval => crate::app::ApprovalMode::Allowlist,
+            HeadlessApprovalMode::AutoReview => crate::app::ApprovalMode::AutoReview,
+            HeadlessApprovalMode::Yolo => crate::app::ApprovalMode::RunEverything,
+        },
+        approval_rules: config.approval_rules.clone(),
+        permission_rules: config.permission_rules.clone(),
+        session_grants: config.session_grants.clone(),
+        tool_policy: config.tool_policy.clone(),
+    }
 }
 
 pub(crate) struct WorkspaceActivityGuard {
@@ -540,6 +570,7 @@ pub enum HeadlessFailureKind {
     IncompleteSubagents,
     LowYieldLoop,
     Verification,
+    ProviderFilter,
 }
 
 pub struct HeadlessEmitter<'a> {
@@ -1057,6 +1088,7 @@ fn clipped_preview(value: &str, limit: usize) -> String {
 
 fn provider_failure(error: &ProviderError) -> (i32, HeadlessFailureKind) {
     match error {
+        ProviderError::FilterStopped { .. } => (11, HeadlessFailureKind::ProviderFilter),
         ProviderError::Http { .. }
         | ProviderError::Transport(_)
         | ProviderError::MissingEnvironment(_) => (5, HeadlessFailureKind::ProviderTransport),
@@ -1243,7 +1275,7 @@ async fn execute_call(
     call: &AssembledToolCall,
     role_run_cancellation: Option<&RoleRunCancellation>,
 ) -> Result<ToolExecutionResult, CallDecisionError> {
-    execute_call_with_discovery(config, call, role_run_cancellation, None, None).await
+    execute_call_with_discovery(config, call, role_run_cancellation, None, None, None).await
 }
 
 async fn prepare_headless_native_read(
@@ -1272,7 +1304,8 @@ async fn prepare_headless_native_read(
         &config.permission_rules,
         &config.session_grants,
         crate::approval::ApprovalOrigin::Main,
-    );
+    )
+    .with_caller(crate::approval::DecisionCaller::Headless);
     let (prepared, decision) = broker
         .prepare(
             &call.name,
@@ -1300,6 +1333,7 @@ async fn execute_call_with_discovery(
     role_run_cancellation: Option<&RoleRunCancellation>,
     discovery: Option<&crate::tool_discovery::ToolDiscoverySession>,
     retained_output_cap: Option<usize>,
+    proactive: Option<&crate::proactive_delegation::ProactiveContext>,
 ) -> Result<ToolExecutionResult, CallDecisionError> {
     if role_run_cancellation.is_some_and(RoleRunCancellation::is_cancelled) {
         return Err(CallDecisionError::Interrupted);
@@ -1346,7 +1380,8 @@ async fn execute_call_with_discovery(
                 &config.permission_rules,
                 &config.session_grants,
                 crate::approval::ApprovalOrigin::Mcp(server.clone()),
-            );
+            )
+            .with_caller(crate::approval::DecisionCaller::Headless);
             let (_, decision) = broker.prepare_dynamic(
                 &call.name,
                 &raw_arguments,
@@ -1389,7 +1424,11 @@ async fn execute_call_with_discovery(
     let spec = registry
         .get(&call.name)
         .ok_or_else(|| CallDecisionError::Protocol(format!("unknown tool: {}", call.name)))?;
-    if (config.tool_constraints.transparent_mechanistic_enabled
+    if (config
+        .mcp
+        .as_ref()
+        .is_some_and(|manager| crate::mechanistic_delegation::external_backend_selected(manager))
+        && config.tool_constraints.transparent_mechanistic_enabled
         && crate::mechanistic_delegation::is_transparent_tool(&call.name))
         || (config.tool_constraints.automation_setup_enabled
             && crate::mechanistic_delegation::is_automation_setup_tool(&call.name))
@@ -1411,7 +1450,8 @@ async fn execute_call_with_discovery(
             &config.permission_rules,
             &config.session_grants,
             crate::approval::ApprovalOrigin::Main,
-        );
+        )
+        .with_caller(crate::approval::DecisionCaller::Headless);
         let (_, decision) = route_broker
             .prepare_with_combined_network_decision(
                 &call.name,
@@ -1515,13 +1555,17 @@ async fn execute_call_with_discovery(
         &config.permission_rules,
         &config.session_grants,
         crate::approval::ApprovalOrigin::Main,
-    );
+    )
+    .with_caller(crate::approval::DecisionCaller::Headless);
     let (prepared, broker_decision) = broker
-        .prepare(
+        .prepare_formatted(
             &call.name,
             &raw_arguments,
             crate::agent::registry::ToolOrigin::BuiltIn,
+            false,
+            config.sandbox_mode,
         )
+        .await
         .map_err(CallDecisionError::Protocol)?;
     let arguments = prepared.arguments;
 
@@ -1548,25 +1592,6 @@ async fn execute_call_with_discovery(
         return Err(CallDecisionError::Approval(
             "external communication requires an exact interactive one-use approval".into(),
         ));
-    }
-
-    if spec.capabilities.contains(&ToolCapability::Subagent) {
-        let Some(manager) = &config.agents else {
-            return Ok(ToolExecutionResult::Failure(
-                "headless subagent manager is unavailable".into(),
-            ));
-        };
-        return crate::agent::subagent::execute_manager_tool(
-            &call.name,
-            &arguments,
-            manager,
-            &config.work_state,
-            &workspace,
-        )
-        .await
-        .ok_or_else(|| {
-            CallDecisionError::Protocol(format!("unknown subagent tool: {}", call.name))
-        });
     }
 
     if spec.capabilities.contains(&ToolCapability::Interaction) {
@@ -1602,6 +1627,58 @@ async fn execute_call_with_discovery(
                 ));
             }
         },
+    }
+
+    if config.native_mechanistic
+        && !is_role_run(config)
+        && !config.mcp.as_ref().is_some_and(|manager| {
+            crate::mechanistic_delegation::external_backend_selected(manager)
+        })
+        && crate::tool_selection::TRANSPARENT_MECHANISTIC_TOOL_NAMES.contains(&call.name.as_str())
+    {
+        let request = crate::mechanistic_delegation::TransparentToolRequest {
+            name: call.name.clone(),
+            arguments: arguments.clone(),
+        };
+        return Ok(
+            match crate::mechanistic_delegation::execute_native_transparent_batch(
+                &workspace,
+                std::slice::from_ref(&request),
+                config.mechanistic.allow_unisolated_evidence,
+                std::time::Duration::from_secs(config.mechanistic.max_wait_seconds),
+            )
+            .await
+            {
+                Ok(Some(mut batch)) => batch.executions.pop().unwrap_or_else(|| {
+                    ToolExecutionResult::Failure(
+                        "native repository routing returned no result".into(),
+                    )
+                }),
+                Ok(None) => ToolExecutionResult::Failure(
+                    "native repository tools require a Git workspace".into(),
+                ),
+                Err(error) => ToolExecutionResult::Failure(error.to_string()),
+            },
+        );
+    }
+
+    if spec.capabilities.contains(&ToolCapability::Subagent) {
+        let Some(manager) = &config.agents else {
+            return Ok(ToolExecutionResult::Failure(
+                "headless subagent manager is unavailable".into(),
+            ));
+        };
+        return crate::agent::subagent::execute_manager_tool(
+            &call.name,
+            &arguments,
+            manager,
+            &config.work_state,
+            &workspace,
+        )
+        .await
+        .ok_or_else(|| {
+            CallDecisionError::Protocol(format!("unknown subagent tool: {}", call.name))
+        });
     }
 
     if is_role_run(config) {
@@ -1714,7 +1791,7 @@ async fn execute_call_with_discovery(
             ).await);
         }
     }
-    Ok(
+    let execution =
         crate::agent::tools::execute_prepared_tool_in_workspace_policy_owned_with_skills(
             &call.name,
             &arguments,
@@ -1725,8 +1802,13 @@ async fn execute_call_with_discovery(
             config.job_owner,
             &config.skills,
         )
-        .await,
-    )
+        .await;
+    if let (Some(proactive), Some(manager)) = (proactive, config.agents.as_ref()) {
+        proactive
+            .observe(manager, &call.name, &arguments, &execution)
+            .await;
+    }
+    Ok(execution)
 }
 
 #[derive(Debug)]
@@ -1744,7 +1826,12 @@ pub async fn run_with_backend<B: ChatBackend + ?Sized>(
     stderr: &mut dyn Write,
 ) -> HeadlessExit {
     let sink = config.outcome_sink.clone();
-    let exit = run_with_backend_inner(backend, messages, config, stdout, stderr).await;
+    // Keep the large request state machine off each caller's stack, including
+    // callers that perform several verification or repair runs in one future.
+    let exit = Box::pin(run_with_backend_inner(
+        backend, messages, config, stdout, stderr,
+    ))
+    .await;
     if let Some(sink) = sink {
         sink.flush_async().await;
     }
@@ -1898,26 +1985,87 @@ async fn run_with_backend_inner<B: ChatBackend + ?Sized>(
         .map(|reference| reference.id)
         .collect();
     let mut loop_guard = crate::loop_guard::LoopGuard::default();
-    let automatic_mechanistic_enabled = config.mechanistic.enabled
-        && config.tool_constraints.mechanistic_delegation_enabled
-        && !is_role_run(&config);
-    let automatic_preflight_context = if automatic_mechanistic_enabled
-        && config.mechanistic.automatic_preflight
-    {
-        match &config.mcp {
-            Some(manager) => {
-                crate::mechanistic_delegation::automatic_preflight_context(
-                    manager.clone(),
+    let external_mechanistic = config
+        .mcp
+        .as_ref()
+        .is_some_and(|manager| crate::mechanistic_delegation::external_backend_selected(manager));
+    let native_repository_available = config.native_mechanistic
+        && !external_mechanistic
+        && crate::mechanistic_delegation::native_repository_revision(&config.workspace)
+            .await
+            .is_ok();
+    let automatic_mechanistic_enabled = !is_role_run(&config)
+        && config.automation_policy.is_none()
+        && ((external_mechanistic && config.tool_constraints.mechanistic_delegation_enabled)
+            || native_repository_available);
+    let automatic_preflight_context =
+        if automatic_mechanistic_enabled && config.mechanistic.automatic_preflight {
+            if external_mechanistic {
+                match &config.mcp {
+                    Some(manager) => {
+                        crate::mechanistic_delegation::automatic_preflight_context(
+                            manager.clone(),
+                            &config.original_request,
+                            std::time::Duration::from_secs(
+                                config.mechanistic.preflight_timeout_seconds,
+                            ),
+                        )
+                        .await
+                    }
+                    None => None,
+                }
+            } else {
+                crate::mechanistic_delegation::workspace_native_preflight_context(
+                    &config.workspace,
                     &config.original_request,
                     std::time::Duration::from_secs(config.mechanistic.preflight_timeout_seconds),
                 )
                 .await
             }
-            None => None,
+        } else {
+            None
+        };
+    let review_enabled =
+        config.review_changes && !is_role_run(&config) && config.automation_policy.is_none();
+    let review_turn = config
+        .agents
+        .as_ref()
+        .map_or(config.run_id, |manager| manager.current_parent_turn());
+    let mut review_tracker = crate::automatic_review::ReviewTracker::default();
+    review_tracker.begin(review_turn);
+    let proactive_tracker = crate::proactive_delegation::ProactiveTracker::default();
+    proactive_tracker.begin(review_turn);
+    if let Some(manager) = &config.agents {
+        let policy = crate::agent::subagent::FrozenChildPolicy::from_authority(
+            &automatic_review_authority(&config, false, false),
+        );
+        if manager.frozen_parent_policy(review_turn).is_none() {
+            if let Err(message) = manager.set_parent_permission_policy(review_turn, policy.clone())
+            {
+                emit_or_pipe!(HeadlessEventV1::Failure {
+                    kind: HeadlessFailureKind::Input,
+                    message,
+                    exit_code: 2
+                });
+                return finish_with_code(emitter, 2);
+            }
         }
-    } else {
-        None
-    };
+        manager.refresh_permission_policy(policy);
+        let constraints = messages
+            .iter()
+            .take_while(|message| matches!(message.role.as_str(), "system" | "developer"))
+            .filter_map(|message| message.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        if let Err(message) = manager.set_parent_constraints(review_turn, &constraints) {
+            emit_or_pipe!(HeadlessEventV1::Failure {
+                kind: HeadlessFailureKind::Input,
+                message,
+                exit_code: 2
+            });
+            return finish_with_code(emitter, 2);
+        }
+    }
     let verification_suppressed =
         crate::mechanistic_delegation::automatic_verification_suppressed(&config.original_request);
     let allow_unscoped_full =
@@ -1942,6 +2090,10 @@ async fn run_with_backend_inner<B: ChatBackend + ?Sized>(
             .as_ref()
             .unwrap_or_else(|| ToolRegistry::builtins());
         let mut tool_constraints = config.tool_constraints.clone();
+        tool_constraints.native_mechanistic_enabled = config.native_mechanistic
+            && !external_mechanistic
+            && !is_role_run(&config)
+            && config.automation_policy.is_none();
         if config.automation_policy.is_some() {
             tool_constraints.images_supported = false;
         }
@@ -1988,11 +2140,75 @@ async fn run_with_backend_inner<B: ChatBackend + ?Sized>(
             .iter()
             .map(|tool| tool.function.name.clone())
             .collect::<std::collections::HashSet<_>>();
+        let proactive = crate::proactive_delegation::ProactiveContext {
+            tracker: proactive_tracker.clone(),
+            turn: review_turn,
+            enabled: config.proactive_delegation
+                && !is_role_run(&config)
+                && config.automation_policy.is_none()
+                && config.tool_profile == crate::agent::registry::ToolProfile::Main,
+            tools: advertised_tool_names.clone(),
+            workspace: config.workspace.clone(),
+            authority: automatic_review_authority(&config, false, false),
+            original_request: config.original_request.clone(),
+        };
+        if let Some(manager) = config.agents.as_ref() {
+            let ready = proactive_tracker.ready(&manager.subscribe_activity().borrow());
+            if let Some(result) = ready {
+                messages.push(ChatMessage {
+                    role: "system".into(),
+                    content: crate::image_content::ModelContent::text(&result.context),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    response_items: Vec::new(),
+                });
+                if let Some(tracker) = &mut emitter.outcome {
+                    tracker.event(
+                        "proactive_helper_integration",
+                        None,
+                        None,
+                        Some(result.status == crate::agent::subagent::AgentStatus::Completed),
+                        &result.context,
+                    );
+                }
+                proactive_tracker.acknowledge(&result);
+            }
+        }
         let stable_prefix_messages = messages
             .iter()
             .take_while(|message| matches!(message.role.as_str(), "system" | "developer"))
             .count();
         let mut request_messages = messages.clone();
+        if tool_constraints.native_mechanistic_enabled {
+            request_messages.push(ChatMessage {
+                role: "system".into(),
+                content: crate::image_content::ModelContent::text(include_str!(
+                    "../prompts/native_mechanistic_tools.md"
+                )),
+                tool_calls: None,
+                tool_call_id: None,
+                response_items: Vec::new(),
+            });
+        }
+        let delegation = crate::agent::subagent::proactive_delegation_guidance(
+            config.proactive_delegation
+                && !is_role_run(&config)
+                && config.automation_policy.is_none(),
+            config
+                .agents
+                .as_ref()
+                .is_some_and(|manager| manager.spawns_paused()),
+            advertised_tool_names.iter().map(String::as_str),
+        );
+        if !delegation.is_empty() {
+            request_messages.push(ChatMessage {
+                role: "system".into(),
+                content: crate::image_content::ModelContent::text(delegation),
+                tool_calls: None,
+                tool_call_id: None,
+                response_items: Vec::new(),
+            });
+        }
         if turn_number == 1 {
             if let Some(context) = automatic_preflight_context.as_ref() {
                 request_messages.push(ChatMessage {
@@ -2198,125 +2414,69 @@ async fn run_with_backend_inner<B: ChatBackend + ?Sized>(
         });
         exit_if_role_run_interrupted!();
 
-        if let Some(contract) = &config.structured_output {
-            let reports = turn
-                .tool_calls
-                .iter()
-                .filter(|call| call.name == crate::headless_contract::STRUCTURED_OUTPUT_TOOL)
-                .collect::<Vec<_>>();
-            if !reports.is_empty() {
-                exit_if_role_run_interrupted!();
-                if reports.len() != 1 || turn.tool_calls.len() != 1 {
-                    emit_or_pipe!(HeadlessEventV1::Failure {
-                        kind: HeadlessFailureKind::ProviderProtocol,
-                        message: "report_structured_output must be the sole final tool call".into(),
-                        exit_code: 6,
-                    });
-                    return finish_with_code(emitter, 6);
-                }
-                let value = match contract.validate_arguments(&reports[0].arguments) {
-                    Ok(value) => value,
-                    Err(message) => {
-                        emit_or_pipe!(HeadlessEventV1::Failure {
-                            kind: HeadlessFailureKind::ProviderProtocol,
-                            message: if is_role_run(&config) {
-                                "role-run structured output failed local validation".into()
-                            } else {
-                                message
-                            },
-                            exit_code: 6,
-                        });
-                        return finish_with_code(emitter, 6);
-                    }
+        let terminal_candidate = turn.tool_calls.is_empty()
+            || (turn.tool_calls.len() == 1
+                && turn.tool_calls[0].name == crate::headless_contract::STRUCTURED_OUTPUT_TOOL);
+        if terminal_candidate && proactive_tracker.pending(review_turn) {
+            if let Some(manager) = config.agents.as_ref() {
+                let result = tokio::select! {
+                    result = proactive_tracker.wait(manager, review_turn) => result,
+                    _ = wait_for_interruption(role_run_cancellation) => { emit_or_pipe!(HeadlessEventV1::Failure { kind: HeadlessFailureKind::Interrupted, message: "interrupted".into(), exit_code: 130 }); return finish_with_code(emitter, 130); },
                 };
-                let encoded = match serde_json::to_string(&value) {
-                    Ok(encoded) => encoded,
-                    Err(error) => {
+                if let Some(result) = result {
+                    let assistant = Message {
+                        role: Role::Assistant,
+                        content: turn.content.clone(),
+                        tool_calls: (!turn.tool_calls.is_empty()).then(|| {
+                            turn.tool_calls
+                                .iter()
+                                .map(|call| ToolCall {
+                                    id: call.id.clone(),
+                                    name: call.name.clone(),
+                                    arguments: call.arguments.clone(),
+                                    status: ToolStatus::Done,
+                                    output: Some(
+                                        "Final output held for proactive helper integration".into(),
+                                    ),
+                                })
+                                .collect()
+                        }),
+                        thinking: turn.reasoning.clone(),
+                        response_items: turn.response_items.clone(),
+                        timestamp: chrono::Utc::now(),
+                    };
+                    if let Err(error) =
+                        crate::agent::client::append_provider_messages(&mut messages, &assistant)
+                    {
                         emit_or_pipe!(HeadlessEventV1::Failure {
                             kind: HeadlessFailureKind::Internal,
-                            message: format!("could not encode structured output: {error}"),
-                            exit_code: 8,
+                            message: error.to_string(),
+                            exit_code: 8
                         });
                         return finish_with_code(emitter, 8);
                     }
-                };
-                if let Some(path) = config.output_last_message.as_deref() {
-                    if let Err(error) = atomic_write(path, &encoded) {
-                        emit_or_pipe!(HeadlessEventV1::Failure {
-                            kind: HeadlessFailureKind::Internal,
-                            message: format!("failed to write last message: {error}"),
-                            exit_code: 8,
-                        });
-                        return finish_with_code(emitter, 8);
-                    }
-                }
-                emitter.record_structured_output(value.clone());
-                if let Err(error) = emitter
-                    .emit_v2(crate::headless_contract::HeadlessEventV2::StructuredOutput { value })
-                {
-                    return match error {
-                        EmitError::BrokenPipe => HeadlessExit::SUCCESS,
-                        EmitError::Other(_) => HeadlessExit { code: 8 },
-                    };
-                }
-                if config.check_mode.enabled() {
-                    return finish_after_check(backend, &config, encoded, emitter, prompted_skills)
-                        .await;
-                }
-                exit_if_role_run_interrupted!();
-                let active = reap_incomplete_subagents(&config).await;
-                if active > 0 {
-                    emit_or_pipe!(HeadlessEventV1::Failure {
-                        kind: HeadlessFailureKind::IncompleteSubagents,
-                        message: format!(
-                            "headless run completed with {active} active subagent(s); they were cancelled and reaped"
-                        ),
-                        exit_code: 8,
+                    messages.push(ChatMessage {
+                        role: "system".into(),
+                        content: crate::image_content::ModelContent::text(&result.context),
+                        tool_calls: None,
+                        tool_call_id: None,
+                        response_items: Vec::new(),
                     });
-                    return finish_with_code(emitter, 8);
+                    if let Some(tracker) = &mut emitter.outcome {
+                        tracker.event(
+                            "proactive_helper_integration",
+                            None,
+                            None,
+                            Some(result.status == crate::agent::subagent::AgentStatus::Completed),
+                            &result.context,
+                        );
+                    }
+                    proactive_tracker.acknowledge(&result);
+                    continue;
                 }
-                exit_if_role_run_interrupted!();
-                if let Err(error) = emitter.complete(encoded) {
-                    return match error {
-                        EmitError::BrokenPipe => HeadlessExit::SUCCESS,
-                        EmitError::Other(_) => HeadlessExit { code: 8 },
-                    };
-                }
-                return match emitter.finish() {
-                    Ok(()) | Err(EmitError::BrokenPipe) => HeadlessExit::SUCCESS,
-                    Err(EmitError::Other(_)) => HeadlessExit { code: 8 },
-                };
             }
         }
-
-        if turn.tool_calls.is_empty() {
-            if verification_failed {
-                emit_or_pipe!(HeadlessEventV1::Failure {
-                    kind: HeadlessFailureKind::Verification,
-                    message: "codex-team verification remains unresolved".into(),
-                    exit_code: 10,
-                });
-                return finish_with_code(emitter, 10);
-            }
-            if config.structured_output.is_some() {
-                emit_or_pipe!(HeadlessEventV1::Failure {
-                    kind: HeadlessFailureKind::ProviderProtocol,
-                    message: "structured output response did not call report_structured_output"
-                        .into(),
-                    exit_code: 6,
-                });
-                return finish_with_code(emitter, 6);
-            }
-            if config.check_mode.enabled() {
-                return finish_after_check(
-                    backend,
-                    &config,
-                    turn.content,
-                    emitter,
-                    prompted_skills,
-                )
-                .await;
-            }
+        if terminal_candidate {
             let job_manager = crate::jobs::JobManager::process();
             let job_owner = config.job_owner;
             let mut completed_jobs = job_manager
@@ -2408,7 +2568,21 @@ async fn run_with_backend_inner<B: ChatBackend + ?Sized>(
                     let assistant = Message {
                         role: Role::Assistant,
                         content: turn.content.clone(),
-                        tool_calls: None,
+                        tool_calls: (!turn.tool_calls.is_empty()).then(|| {
+                            turn.tool_calls
+                                .iter()
+                                .map(|call| ToolCall {
+                                    id: call.id.clone(),
+                                    name: call.name.clone(),
+                                    arguments: call.arguments.clone(),
+                                    status: ToolStatus::Done,
+                                    output: Some(
+                                        "Final output held for background result integration"
+                                            .into(),
+                                    ),
+                                })
+                                .collect()
+                        }),
                         thinking: turn.reasoning.clone(),
                         response_items: turn.response_items.clone(),
                         timestamp: chrono::Utc::now(),
@@ -2434,6 +2608,273 @@ async fn run_with_backend_inner<B: ChatBackend + ?Sized>(
                     });
                     continue;
                 }
+            }
+        }
+        if terminal_candidate && crate::command_mutations::has_pending(config.job_owner) {
+            let captured = tokio::select! {
+                result = crate::command_mutations::finish(config.job_owner) => Some(result),
+                _ = wait_for_interruption(role_run_cancellation) => None,
+            };
+            let batches = match captured {
+                Some(Ok(batches)) => batches,
+                Some(Err(message)) => {
+                    emit_or_pipe!(HeadlessEventV1::Failure {
+                        kind: HeadlessFailureKind::Verification,
+                        message,
+                        exit_code: 10
+                    });
+                    return finish_with_code(emitter, 10);
+                }
+                None => {
+                    emit_or_pipe!(HeadlessEventV1::Failure {
+                        kind: HeadlessFailureKind::Interrupted,
+                        message: "interrupted".into(),
+                        exit_code: 130
+                    });
+                    return finish_with_code(emitter, 130);
+                }
+            };
+            for batch in &batches {
+                review_tracker.record_aggregate(review_turn, batch);
+            }
+        }
+        if terminal_candidate && review_enabled && !verification_failed {
+            let Some(manager) = config.agents.as_ref() else {
+                emit_or_pipe!(HeadlessEventV1::Failure {
+                    kind: HeadlessFailureKind::Verification,
+                    message: "independent review manager is unavailable".into(),
+                    exit_code: 10
+                });
+                return finish_with_code(emitter, 10);
+            };
+            let previous_digest = review_tracker.approved_digest.clone();
+            let authority = automatic_review_authority(
+                &config,
+                automatic_mechanistic_enabled
+                    && config.mechanistic.automatic_verification
+                    && !verification_suppressed,
+                allow_unscoped_full,
+            );
+            let reviewed = tokio::select! {
+                result = Box::pin(crate::automatic_review::run_barrier(manager.clone(), review_tracker.clone(), review_turn, config.workspace.clone(), config.original_request.clone(), authority)) => Some(result),
+                _ = wait_for_interruption(role_run_cancellation) => None,
+            };
+            let Some((tracker, outcome)) = reviewed else {
+                emit_or_pipe!(HeadlessEventV1::Failure {
+                    kind: HeadlessFailureKind::Interrupted,
+                    message: "interrupted".into(),
+                    exit_code: 130
+                });
+                return finish_with_code(emitter, 130);
+            };
+            review_tracker = tracker;
+            outcome.acknowledge_receipts(manager).await;
+            if let (Some(tracker), Some(verification)) =
+                (&mut emitter.outcome, &outcome.verification)
+            {
+                tracker.record_host_verification(verification);
+            }
+            let report = match outcome.result {
+                Ok(report) => report,
+                Err(message) => {
+                    emit_or_pipe!(HeadlessEventV1::Failure {
+                        kind: HeadlessFailureKind::Verification,
+                        message,
+                        exit_code: 10
+                    });
+                    return finish_with_code(emitter, 10);
+                }
+            };
+            if report.approved {
+                review_tracker.accept(outcome.digest.clone());
+            }
+            if outcome.digest != "no_changes"
+                && previous_digest.as_deref() != Some(outcome.digest.as_str())
+            {
+                if !report.approved && review_tracker.attempts >= 3 {
+                    emit_or_pipe!(HeadlessEventV1::Failure {
+                        kind: HeadlessFailureKind::Verification,
+                        message:
+                            "independent review findings remain after two repair continuations"
+                                .into(),
+                        exit_code: 10
+                    });
+                    return finish_with_code(emitter, 10);
+                }
+                let assistant = Message {
+                    role: Role::Assistant,
+                    content: turn.content.clone(),
+                    tool_calls: (!turn.tool_calls.is_empty()).then(|| {
+                        turn.tool_calls
+                            .iter()
+                            .map(|call| ToolCall {
+                                id: call.id.clone(),
+                                name: call.name.clone(),
+                                arguments: call.arguments.clone(),
+                                status: ToolStatus::Done,
+                                output: Some(
+                                    "Final output held for independent review integration".into(),
+                                ),
+                            })
+                            .collect()
+                    }),
+                    thinking: turn.reasoning.clone(),
+                    response_items: turn.response_items.clone(),
+                    timestamp: chrono::Utc::now(),
+                };
+                if let Err(error) =
+                    crate::agent::client::append_provider_messages(&mut messages, &assistant)
+                {
+                    emit_or_pipe!(HeadlessEventV1::Failure {
+                        kind: HeadlessFailureKind::Internal,
+                        message: error.to_string(),
+                        exit_code: 8
+                    });
+                    return finish_with_code(emitter, 8);
+                }
+                messages.push(ChatMessage { role: "system".into(), content: crate::image_content::ModelContent::text(format!("Host-owned independent review for candidate {}: {}. Findings: {}. {}", outcome.digest, report.summary, serde_json::to_string(&report.findings).unwrap_or_default(), if report.approved { "Integrate the accepted review in your final response. Further executable edits require a new independent review." } else { "Resolve the actionable findings, preserve source ownership, then finish for another independent review." })), tool_calls: None, tool_call_id: None, response_items: Vec::new() });
+                continue;
+            }
+        }
+
+        if let Some(contract) = &config.structured_output {
+            let reports = turn
+                .tool_calls
+                .iter()
+                .filter(|call| call.name == crate::headless_contract::STRUCTURED_OUTPUT_TOOL)
+                .collect::<Vec<_>>();
+            if !reports.is_empty() {
+                exit_if_role_run_interrupted!();
+                if verification_failed {
+                    emit_or_pipe!(HeadlessEventV1::Failure {
+                        kind: HeadlessFailureKind::Verification,
+                        message: "codex-team verification remains unresolved".into(),
+                        exit_code: 10
+                    });
+                    return finish_with_code(emitter, 10);
+                }
+                if reports.len() != 1 || turn.tool_calls.len() != 1 {
+                    emit_or_pipe!(HeadlessEventV1::Failure {
+                        kind: HeadlessFailureKind::ProviderProtocol,
+                        message: "report_structured_output must be the sole final tool call".into(),
+                        exit_code: 6,
+                    });
+                    return finish_with_code(emitter, 6);
+                }
+                let value = match contract.validate_arguments(&reports[0].arguments) {
+                    Ok(value) => value,
+                    Err(message) => {
+                        emit_or_pipe!(HeadlessEventV1::Failure {
+                            kind: HeadlessFailureKind::ProviderProtocol,
+                            message: if is_role_run(&config) {
+                                "role-run structured output failed local validation".into()
+                            } else {
+                                message
+                            },
+                            exit_code: 6,
+                        });
+                        return finish_with_code(emitter, 6);
+                    }
+                };
+                let encoded = match serde_json::to_string(&value) {
+                    Ok(encoded) => encoded,
+                    Err(error) => {
+                        emit_or_pipe!(HeadlessEventV1::Failure {
+                            kind: HeadlessFailureKind::Internal,
+                            message: format!("could not encode structured output: {error}"),
+                            exit_code: 8,
+                        });
+                        return finish_with_code(emitter, 8);
+                    }
+                };
+                if let Some(path) = config
+                    .output_last_message
+                    .as_deref()
+                    .filter(|_| !config.check_mode.enabled())
+                {
+                    if let Err(error) = atomic_write(path, &encoded) {
+                        emit_or_pipe!(HeadlessEventV1::Failure {
+                            kind: HeadlessFailureKind::Internal,
+                            message: format!("failed to write last message: {error}"),
+                            exit_code: 8,
+                        });
+                        return finish_with_code(emitter, 8);
+                    }
+                }
+                emitter.record_structured_output(value.clone());
+                if let Err(error) = emitter
+                    .emit_v2(crate::headless_contract::HeadlessEventV2::StructuredOutput { value })
+                {
+                    return match error {
+                        EmitError::BrokenPipe => HeadlessExit::SUCCESS,
+                        EmitError::Other(_) => HeadlessExit { code: 8 },
+                    };
+                }
+                if config.check_mode.enabled() {
+                    return Box::pin(finish_after_check(
+                        backend,
+                        &config,
+                        encoded,
+                        emitter,
+                        prompted_skills,
+                        review_tracker,
+                    ))
+                    .await;
+                }
+                exit_if_role_run_interrupted!();
+                let active = reap_incomplete_subagents(&config).await;
+                if active > 0 {
+                    emit_or_pipe!(HeadlessEventV1::Failure {
+                        kind: HeadlessFailureKind::IncompleteSubagents,
+                        message: format!(
+                            "headless run completed with {active} active subagent(s); they were cancelled and reaped"
+                        ),
+                        exit_code: 8,
+                    });
+                    return finish_with_code(emitter, 8);
+                }
+                exit_if_role_run_interrupted!();
+                if let Err(error) = emitter.complete(encoded) {
+                    return match error {
+                        EmitError::BrokenPipe => HeadlessExit::SUCCESS,
+                        EmitError::Other(_) => HeadlessExit { code: 8 },
+                    };
+                }
+                return match emitter.finish() {
+                    Ok(()) | Err(EmitError::BrokenPipe) => HeadlessExit::SUCCESS,
+                    Err(EmitError::Other(_)) => HeadlessExit { code: 8 },
+                };
+            }
+        }
+
+        if turn.tool_calls.is_empty() {
+            if verification_failed {
+                emit_or_pipe!(HeadlessEventV1::Failure {
+                    kind: HeadlessFailureKind::Verification,
+                    message: "codex-team verification remains unresolved".into(),
+                    exit_code: 10,
+                });
+                return finish_with_code(emitter, 10);
+            }
+            if config.structured_output.is_some() {
+                emit_or_pipe!(HeadlessEventV1::Failure {
+                    kind: HeadlessFailureKind::ProviderProtocol,
+                    message: "structured output response did not call report_structured_output"
+                        .into(),
+                    exit_code: 6,
+                });
+                return finish_with_code(emitter, 6);
+            }
+            if config.check_mode.enabled() {
+                return Box::pin(finish_after_check(
+                    backend,
+                    &config,
+                    turn.content,
+                    emitter,
+                    prompted_skills,
+                    review_tracker,
+                ))
+                .await;
             }
             let active = reap_incomplete_subagents(&config).await;
             if active > 0 {
@@ -2478,12 +2919,20 @@ async fn run_with_backend_inner<B: ChatBackend + ?Sized>(
                     spec.mutation == crate::agent::registry::ToolMutation::Mutating
                 })
             });
-        let repository_revision_before = if unscoped_mutation {
-            match &config.mcp {
-                Some(manager) => crate::mechanistic_delegation::repository_revision(manager)
+        let repository_revision_before = if automatic_mechanistic_enabled
+            && config.mechanistic.automatic_verification
+        {
+            if external_mechanistic {
+                match &config.mcp {
+                    Some(manager) => crate::mechanistic_delegation::repository_revision(manager)
+                        .await
+                        .ok(),
+                    None => None,
+                }
+            } else {
+                crate::mechanistic_delegation::native_repository_revision(&config.workspace)
                     .await
-                    .ok(),
-                None => None,
+                    .ok()
             }
         } else {
             None
@@ -2600,6 +3049,16 @@ async fn run_with_backend_inner<B: ChatBackend + ?Sized>(
                             _ = interruption_signal() => {emit_or_pipe!(HeadlessEventV1::Failure {kind: HeadlessFailureKind::Interrupted, message: "interrupted".into(), exit_code: 130}); return finish_with_code(emitter, 130);}
                         };
                         for (offset, result) in results.into_iter().enumerate() {
+                            if let Some(manager) = config.agents.as_ref() {
+                                proactive
+                                    .observe(
+                                        manager,
+                                        &prepared[offset].name,
+                                        &prepared[offset].args,
+                                        &result,
+                                    )
+                                    .await;
+                            }
                             native_results.insert(call_index + offset, result);
                         }
                     }
@@ -2627,6 +3086,7 @@ async fn run_with_backend_inner<B: ChatBackend + ?Sized>(
                     None,
                     Some(&discovery),
                     automation_tool_output_cap,
+                    Some(&proactive),
                 );
                 let operation = async {
                     if call.name == "run_command" {
@@ -2719,6 +3179,11 @@ async fn run_with_backend_inner<B: ChatBackend + ?Sized>(
                         &capsule,
                         config.mechanistic.capsule_bytes,
                     ));
+            }
+            if let Some(batch) = execution.mutation_batch() {
+                if review_enabled {
+                    review_tracker.record(review_turn, batch);
+                }
             }
             if execution.is_success() {
                 if let Some(batch) = execution.mutation_batch() {
@@ -2852,21 +3317,51 @@ async fn run_with_backend_inner<B: ChatBackend + ?Sized>(
                         "the user explicitly suppressed tests or codex-team automation",
                     ));
                 verification_failed = false;
-            } else if let Some(manager) = &config.mcp {
+            } else {
                 let paths = if unscoped_mutation {
                     Vec::new()
                 } else {
                     changed_paths.into_iter().collect()
                 };
-                let outcome = crate::mechanistic_delegation::automatic_verification(
-                    manager.clone(),
-                    paths,
-                    repository_revision_before,
-                    std::time::Duration::from_secs(config.mechanistic.max_wait_seconds),
-                    config.mechanistic.allow_unisolated_evidence,
-                    allow_unscoped_full,
-                )
-                .await;
+                let authority = automatic_review_authority(&config, true, allow_unscoped_full);
+                if let Err(message) = crate::automatic_review::authorize_invocation(
+                    &config.workspace,
+                    &authority,
+                    "verify_changes",
+                    &serde_json::json!({"paths":paths}),
+                ) {
+                    emit_or_pipe!(HeadlessEventV1::Failure {
+                        kind: HeadlessFailureKind::Verification,
+                        message,
+                        exit_code: 10,
+                    });
+                    return finish_with_code(emitter, 10);
+                }
+                let outcome = if external_mechanistic {
+                    crate::mechanistic_delegation::automatic_verification(
+                        config
+                            .mcp
+                            .as_ref()
+                            .expect("selected external backend")
+                            .clone(),
+                        paths,
+                        repository_revision_before,
+                        std::time::Duration::from_secs(config.mechanistic.max_wait_seconds),
+                        config.mechanistic.allow_unisolated_evidence,
+                        allow_unscoped_full,
+                    )
+                    .await
+                } else {
+                    crate::mechanistic_delegation::native_automatic_verification(
+                        &config.workspace,
+                        paths,
+                        repository_revision_before,
+                        std::time::Duration::from_secs(config.mechanistic.max_wait_seconds),
+                        config.mechanistic.allow_unisolated_evidence,
+                        allow_unscoped_full,
+                    )
+                    .await
+                };
                 if let Some(tracker) = &mut emitter.outcome {
                     tracker.record_host_verification(&outcome);
                 }
@@ -2878,7 +3373,12 @@ async fn run_with_backend_inner<B: ChatBackend + ?Sized>(
                     crate::mechanistic_delegation::AutomaticVerificationStatus::Unchanged => {}
                     crate::mechanistic_delegation::AutomaticVerificationStatus::Failed => {
                         verification_failed = true;
-                        if let Some(job_id) = outcome.job_id.as_deref() {
+                        if let Some((manager, job_id)) = config
+                            .mcp
+                            .as_ref()
+                            .filter(|_| external_mechanistic)
+                            .zip(outcome.job_id.as_deref())
+                        {
                             let diagnosis =
                                 crate::mechanistic_delegation::automatic_failure_diagnosis(
                                     manager.clone(),
@@ -2989,6 +3489,8 @@ fn subagent_tool_hard_denied(config: &HeadlessRunConfig, tool: &str) -> bool {
 
 fn headless_surface_tool_allowed(tool: &str) -> bool {
     tool != crate::privilege::TOOL_NAME
+        && tool != crate::write_access::TOOL_NAME
+        && tool != "plan_workflow"
         && tool != crate::process_watch::WATCH_PROCESS_TOOL_NAME
         && tool != crate::process_watch::STOP_WATCHER_TOOL_NAME
 }
@@ -2999,25 +3501,115 @@ struct CheckFailure {
     code: i32,
 }
 
+async fn review_checked_candidate(
+    config: &HeadlessRunConfig,
+    tracker: &mut crate::automatic_review::ReviewTracker,
+    emitter: &mut HeadlessEmitter<'_>,
+) -> Result<(), CheckFailure> {
+    let turn = config
+        .agents
+        .as_ref()
+        .map_or(config.run_id, |manager| manager.current_parent_turn());
+    if config.review_changes && !is_role_run(config) && config.automation_policy.is_none() {
+        let manager = config.agents.clone().ok_or_else(|| CheckFailure {
+            kind: HeadlessFailureKind::Verification,
+            message: "independent review manager is unavailable after check repairs".into(),
+            code: 10,
+        })?;
+        let authority = automatic_review_authority(
+            config,
+            config.mechanistic.automatic_verification
+                && (config.native_mechanistic
+                    || config.mcp.as_ref().is_some_and(|manager| {
+                        crate::mechanistic_delegation::external_backend_selected(manager)
+                    }))
+                && !crate::mechanistic_delegation::automatic_verification_suppressed(
+                    &config.original_request,
+                ),
+            crate::mechanistic_delegation::automatic_release_requested(&config.original_request)
+                || config.mechanistic.full_suite
+                    == crate::config::MechanisticFullSuitePolicy::ReleaseOrUnscoped,
+        );
+        let reviewed = tokio::select! {
+            result = Box::pin(crate::automatic_review::run_barrier(manager.clone(), tracker.clone(), turn, config.workspace.clone(), config.original_request.clone(), authority)) => Some(result),
+            _ = interruption_signal() => None,
+        };
+        let Some((updated, outcome)) = reviewed else {
+            return Err(CheckFailure {
+                kind: HeadlessFailureKind::Interrupted,
+                message: "interrupted".into(),
+                code: 130,
+            });
+        };
+        *tracker = updated;
+        outcome.acknowledge_receipts(&manager).await;
+        if let (Some(outcomes), Some(verification)) = (&mut emitter.outcome, &outcome.verification)
+        {
+            outcomes.record_host_verification(verification);
+        }
+        let report = outcome.result.map_err(|message| CheckFailure {
+            kind: HeadlessFailureKind::Verification,
+            message,
+            code: 10,
+        })?;
+        if !report.approved {
+            return Err(CheckFailure {
+                kind: HeadlessFailureKind::Verification,
+                message: format!(
+                    "Final check repairs remain incomplete after independent review: {}. {}",
+                    report.summary,
+                    report
+                        .findings
+                        .iter()
+                        .map(|finding| format!("{}: {}", finding.path, finding.message))
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                ),
+                code: 10,
+            });
+        }
+        tracker.accept(outcome.digest);
+    } else {
+        let batches = tokio::select! {
+            result = crate::command_mutations::finish(config.job_owner) => Some(result),
+            _ = interruption_signal() => None,
+        }
+        .ok_or_else(|| CheckFailure {
+            kind: HeadlessFailureKind::Interrupted,
+            message: "interrupted".into(),
+            code: 130,
+        })?
+        .map_err(|message| CheckFailure {
+            kind: HeadlessFailureKind::Verification,
+            message,
+            code: 10,
+        })?;
+        for batch in batches {
+            tracker.record_aggregate(turn, &batch);
+        }
+    }
+    Ok(())
+}
+
+fn export_checked_message(config: &HeadlessRunConfig, message: &str) -> Result<(), CheckFailure> {
+    if let Some(path) = config.output_last_message.as_deref() {
+        atomic_write(path, message).map_err(|error| CheckFailure {
+            kind: HeadlessFailureKind::Internal,
+            message: format!("failed to write last message: {error}"),
+            code: 8,
+        })?;
+    }
+    Ok(())
+}
+
 async fn finish_after_check<B: ChatBackend + ?Sized>(
     backend: &B,
     config: &HeadlessRunConfig,
     main_message: String,
     mut emitter: HeadlessEmitter<'_>,
     mut prompted_skills: std::collections::HashSet<String>,
+    mut review_tracker: crate::automatic_review::ReviewTracker,
 ) -> HeadlessExit {
-    if config.structured_output.is_none() {
-        if let Some(path) = config.output_last_message.as_deref() {
-            if let Err(error) = atomic_write(path, &main_message) {
-                let _ = emitter.emit(HeadlessEventV1::Failure {
-                    kind: HeadlessFailureKind::Internal,
-                    message: format!("failed to write last message: {error}"),
-                    exit_code: 8,
-                });
-                return finish_with_code(emitter, 8);
-            }
-        }
-    }
     emitter.final_message = Some(main_message.clone());
     if let Err(error) = emitter.emit_v2(crate::headless_contract::HeadlessEventV2::MainCompletion {
         message: main_message.clone(),
@@ -3034,6 +3626,7 @@ async fn finish_after_check<B: ChatBackend + ?Sized>(
             main_message,
             emitter,
             prompted_skills,
+            review_tracker,
         )
         .await;
     }
@@ -3043,6 +3636,7 @@ async fn finish_after_check<B: ChatBackend + ?Sized>(
         &main_message,
         &mut emitter,
         &mut prompted_skills,
+        &mut review_tracker,
     )
     .await
     {
@@ -3074,6 +3668,23 @@ async fn finish_after_check<B: ChatBackend + ?Sized>(
         );
         return finish_with_code(emitter, 9);
     }
+    if let Err(failure) = review_checked_candidate(config, &mut review_tracker, &mut emitter).await
+    {
+        let _ = emitter.emit(HeadlessEventV1::Failure {
+            kind: failure.kind,
+            message: failure.message,
+            exit_code: failure.code,
+        });
+        return finish_with_code(emitter, failure.code);
+    }
+    if let Err(failure) = export_checked_message(config, &main_message) {
+        let _ = emitter.emit(HeadlessEventV1::Failure {
+            kind: failure.kind,
+            message: failure.message,
+            exit_code: failure.code,
+        });
+        return finish_with_code(emitter, failure.code);
+    }
     let active = reap_incomplete_subagents(config).await;
     if active > 0 {
         let _ = emitter.emit(HeadlessEventV1::Failure {
@@ -3103,6 +3714,7 @@ async fn finish_after_convergent_check<B: ChatBackend + ?Sized>(
     main_message: String,
     mut emitter: HeadlessEmitter<'_>,
     mut prompted_skills: std::collections::HashSet<String>,
+    mut review_tracker: crate::automatic_review::ReviewTracker,
 ) -> HeadlessExit {
     let convergence = config
         .convergence
@@ -3240,6 +3852,18 @@ async fn finish_after_convergent_check<B: ChatBackend + ?Sized>(
                 return finish_with_code(emitter, 8);
             }
         };
+        if outcome.passed {
+            if let Err(failure) =
+                review_checked_candidate(config, &mut review_tracker, &mut emitter).await
+            {
+                let _ = emitter.emit(HeadlessEventV1::Failure {
+                    kind: failure.kind,
+                    message: failure.message,
+                    exit_code: failure.code,
+                });
+                return finish_with_code(emitter, failure.code);
+            }
+        }
         let packet = match crate::acceptance::build_packet(
             &config.original_request,
             revision,
@@ -3298,6 +3922,14 @@ async fn finish_after_convergent_check<B: ChatBackend + ?Sized>(
                 });
                 return finish_with_code(emitter, 8);
             }
+            if let Err(failure) = export_checked_message(config, &main_message) {
+                let _ = emitter.emit(HeadlessEventV1::Failure {
+                    kind: failure.kind,
+                    message: failure.message,
+                    exit_code: failure.code,
+                });
+                return finish_with_code(emitter, failure.code);
+            }
             if let Err(error) = emitter.complete(main_message) {
                 return match error {
                     EmitError::BrokenPipe => HeadlessExit::SUCCESS,
@@ -3327,6 +3959,7 @@ async fn finish_after_convergent_check<B: ChatBackend + ?Sized>(
             &main_message,
             &mut emitter,
             &mut prompted_skills,
+            &mut review_tracker,
         )
         .await
         {
@@ -3415,6 +4048,7 @@ async fn run_verification<B: ChatBackend + ?Sized>(
     main_message: &str,
     emitter: &mut HeadlessEmitter<'_>,
     prompted_skills: &mut std::collections::HashSet<String>,
+    review_tracker: &mut crate::automatic_review::ReviewTracker,
 ) -> Result<crate::headless_contract::VerificationOutcome, CheckFailure> {
     let repair_requested = config.check_mode.repair_requested();
     emitter
@@ -3663,6 +4297,13 @@ async fn run_verification<B: ChatBackend + ?Sized>(
                     });
                 }
             };
+            if let Some(batch) = execution.mutation_batch() {
+                let turn = config
+                    .agents
+                    .as_ref()
+                    .map_or(config.run_id, |manager| manager.current_parent_turn());
+                review_tracker.record(turn, batch);
+            }
             if repair_requested && !matches!(execution, ToolExecutionResult::Denied(_)) {
                 tools_run = tools_run.saturating_add(1);
             }
@@ -3861,6 +4502,7 @@ mod tests {
 
     #[test]
     fn interactive_only_tools_are_never_advertised_headlessly() {
+        assert!(!headless_surface_tool_allowed("plan_workflow"));
         assert!(!headless_surface_tool_allowed(crate::privilege::TOOL_NAME));
         assert!(!headless_surface_tool_allowed(
             crate::process_watch::WATCH_PROCESS_TOOL_NAME
@@ -4142,6 +4784,9 @@ mod tests {
             )),
             mcp: None,
             mechanistic: crate::config::MechanisticMcpConfig::default(),
+            native_mechanistic: false,
+            proactive_delegation: true,
+            review_changes: false,
             lsp: None,
             email: None,
             tool_policy: crate::tool_selection::ToolSelectionPolicy::default(),
@@ -4528,7 +5173,18 @@ mod tests {
         }));
         assert_eq!(
             backend.tool_sets()[0],
-            ["propose_plan", "configure_agent_graph", "edit_plan"]
+            [
+                "read_file",
+                "read_pdf",
+                "list_dir",
+                "run_command",
+                "search_files",
+                "glob",
+                "propose_plan",
+                "configure_agent_graph",
+                "edit_plan",
+                "list_agent_routes"
+            ]
         );
 
         let backend = FakeBackend::new(vec![text_turn("answer")]);
@@ -4716,6 +5372,274 @@ mod tests {
     }
 
     #[derive(Default)]
+    struct ReviewingRunner {
+        requests: Mutex<Vec<crate::agent::subagent::AgentSpawnRequest>>,
+    }
+    #[async_trait::async_trait]
+    impl crate::agent::subagent::AgentRunner for ReviewingRunner {
+        async fn run(
+            &self,
+            context: crate::agent::subagent::AgentRunContext,
+        ) -> Result<String, String> {
+            self.requests.lock().unwrap().push(context.request);
+            Ok(serde_json::json!({"approved":true,"findings":[],"summary":"Fixture independently reviewed"}).to_string())
+        }
+    }
+
+    #[tokio::test]
+    async fn preliminary_native_verification_honors_parent_denial_before_engine_dispatch() {
+        let temp = tempfile::tempdir().unwrap();
+        assert!(std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(temp.path())
+            .status()
+            .unwrap()
+            .success());
+        std::fs::write(temp.path().join("main.rs"), "fn main() {}\n").unwrap();
+        assert!(std::process::Command::new("git")
+            .args(["add", "main.rs"])
+            .current_dir(temp.path())
+            .status()
+            .unwrap()
+            .success());
+        let backend = FakeBackend::new(vec![tool_turn(
+            "edit",
+            "write_file",
+            serde_json::json!({"path":"main.rs", "content":"fn changed() {}\n"}),
+        )]);
+        let mut run = config(temp.path(), OutputFormat::Json);
+        run.approval_mode = HeadlessApprovalMode::Yolo;
+        run.native_mechanistic = true;
+        run.mechanistic.automatic_preflight = false;
+        run.permission_rules
+            .push(crate::permission::PermissionRule {
+                decision: crate::permission::PermissionDecision::Deny,
+                matcher: crate::permission::PermissionMatcher::Tool {
+                    tool: "verify_changes".into(),
+                },
+            });
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let exit = run_with_backend(&backend, messages(), run, &mut stdout, &mut stderr).await;
+        assert_eq!(exit.code, 10, "{}", String::from_utf8_lossy(&stderr));
+        assert_eq!(backend.requests().len(), 1);
+        assert!(String::from_utf8_lossy(&stdout).contains("denied"));
+        assert!(!temp.path().join(".orchestrator").exists());
+    }
+
+    #[tokio::test]
+    async fn check_repairs_receive_a_fresh_review_before_completion_and_export() {
+        struct PostRepairReviewer {
+            approve_repairs: bool,
+            output: PathBuf,
+            contexts: Mutex<Vec<String>>,
+        }
+        #[async_trait::async_trait]
+        impl crate::agent::subagent::AgentRunner for PostRepairReviewer {
+            async fn run(
+                &self,
+                context: crate::agent::subagent::AgentRunContext,
+            ) -> Result<String, String> {
+                assert!(
+                    !self.output.exists(),
+                    "final export preceded independent review"
+                );
+                let mut contexts = self.contexts.lock().unwrap();
+                contexts.push(context.request.context_summary);
+                let approved = contexts.len() == 1 || self.approve_repairs;
+                Ok(serde_json::json!({
+                    "approved":approved,
+                    "findings":if approved { serde_json::json!([]) } else { serde_json::json!([{"path":"main.rs","message":"Fixture rejects the final repair"}]) },
+                    "summary":"Fixture post-repair review"
+                }).to_string())
+            }
+        }
+        for approve_repairs in [true, false] {
+            let temp = tempfile::tempdir().unwrap();
+            let output = temp.path().join("last.txt");
+            let reviewer = std::sync::Arc::new(PostRepairReviewer {
+                approve_repairs,
+                output: output.clone(),
+                contexts: Mutex::new(Vec::new()),
+            });
+            let manager = crate::agent::subagent::AgentManager::new(
+                reviewer.clone(),
+                crate::agent::subagent::AgentLimits::default(),
+            );
+            let backend = FakeBackend::new(vec![
+                tool_turn(
+                    "edit",
+                    "write_file",
+                    serde_json::json!({"path":"main.rs","content":"fn main() {}\n"}),
+                ),
+                text_turn("Preliminary done"),
+                text_turn("Done after first review"),
+                tool_turn(
+                    "repair",
+                    "write_file",
+                    serde_json::json!({"path":"main.rs","content":"fn final_repair() {}\n"}),
+                ),
+                tool_turn(
+                    "checked",
+                    crate::headless_contract::VERIFICATION_TOOL,
+                    serde_json::json!({"passed":true,"summary":"Repair passed checks","issues":[],"evidence":[]}),
+                ),
+            ]);
+            let mut run = config(temp.path(), OutputFormat::Json);
+            run.approval_mode = HeadlessApprovalMode::Yolo;
+            run.review_changes = true;
+            run.agents = Some(manager);
+            run.check_mode = crate::headless_contract::CheckMode::Repair;
+            run.output_last_message = Some(output.clone());
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let exit = run_with_backend(&backend, messages(), run, &mut stdout, &mut stderr).await;
+            assert_eq!(
+                exit.code,
+                if approve_repairs { 0 } else { 10 },
+                "{}",
+                String::from_utf8_lossy(&stderr)
+            );
+            let contexts = reviewer.contexts.lock().unwrap();
+            assert_eq!(contexts.len(), 2);
+            assert!(contexts[1].contains("fn final_repair()"));
+            assert_eq!(output.exists(), approve_repairs);
+        }
+    }
+
+    #[tokio::test]
+    async fn headless_review_runs_once_then_requires_parent_integration_before_final_output() {
+        let temp = tempfile::tempdir().unwrap();
+        let runner = std::sync::Arc::new(ReviewingRunner::default());
+        let manager = crate::agent::subagent::AgentManager::new(
+            runner.clone(),
+            crate::agent::subagent::AgentLimits::default(),
+        );
+        let backend = FakeBackend::new(vec![
+            tool_turn(
+                "edit",
+                "write_file",
+                serde_json::json!({"path":"main.rs", "content":"fn main() {}\n"}),
+            ),
+            text_turn("Preliminary done"),
+            text_turn("Done after independent review"),
+        ]);
+        let mut run = config(temp.path(), OutputFormat::Json);
+        run.approval_mode = HeadlessApprovalMode::Yolo;
+        run.review_changes = true;
+        run.agents = Some(manager.clone());
+        let last = temp.path().join("last.txt");
+        run.output_last_message = Some(last.clone());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let exit = run_with_backend(&backend, messages(), run, &mut stdout, &mut stderr).await;
+        assert_eq!(exit.code, 0, "{}", String::from_utf8_lossy(&stderr));
+        assert_eq!(runner.requests.lock().unwrap().len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(last).unwrap(),
+            "Done after independent review"
+        );
+        assert_eq!(backend.requests().len(), 3);
+        let children = manager.list().await;
+        assert_eq!(children.len(), 1);
+        assert_eq!(
+            children[0].origin,
+            crate::agent::subagent::AgentRunOrigin::AutomaticReview
+        );
+        assert!(!children[0].grants.network);
+        assert!(children[0].grants.command_scopes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn structured_final_review_keeps_one_tool_result_and_delays_export() {
+        let temp = tempfile::tempdir().unwrap();
+        let runner = std::sync::Arc::new(ReviewingRunner::default());
+        let manager = crate::agent::subagent::AgentManager::new(
+            runner.clone(),
+            crate::agent::subagent::AgentLimits::default(),
+        );
+        let backend = FakeBackend::new(vec![
+            tool_turn(
+                "edit",
+                "write_file",
+                serde_json::json!({"path":"main.rs","content":"fn main() {}"}),
+            ),
+            tool_turn(
+                "draft-report",
+                crate::headless_contract::STRUCTURED_OUTPUT_TOOL,
+                serde_json::json!({"value":{"answer":1}}),
+            ),
+            tool_turn(
+                "final-report",
+                crate::headless_contract::STRUCTURED_OUTPUT_TOOL,
+                serde_json::json!({"value":{"answer":2}}),
+            ),
+        ]);
+        let mut run = config(temp.path(), OutputFormat::Json);
+        run.approval_mode = HeadlessApprovalMode::Yolo;
+        run.review_changes = true;
+        run.agents = Some(manager);
+        run.structured_output = Some(structured_contract(temp.path()));
+        let last = temp.path().join("last.txt");
+        run.output_last_message = Some(last.clone());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        assert_eq!(
+            run_with_backend(&backend, messages(), run, &mut stdout, &mut stderr)
+                .await
+                .code,
+            0,
+            "{}",
+            String::from_utf8_lossy(&stderr)
+        );
+        assert_eq!(runner.requests.lock().unwrap().len(), 1);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(last).unwrap())
+                .unwrap(),
+            serde_json::json!({"answer":2})
+        );
+        let requests = backend.requests();
+        let results = requests[2]
+            .iter()
+            .filter(|message| {
+                message.role == "tool" && message.tool_call_id.as_deref() == Some("draft-report")
+            })
+            .count();
+        assert_eq!(results, 1);
+    }
+
+    #[tokio::test]
+    async fn prose_only_headless_edits_skip_automatic_review() {
+        let temp = tempfile::tempdir().unwrap();
+        let runner = std::sync::Arc::new(ReviewingRunner::default());
+        let manager = crate::agent::subagent::AgentManager::new(
+            runner.clone(),
+            crate::agent::subagent::AgentLimits::default(),
+        );
+        let backend = FakeBackend::new(vec![
+            tool_turn(
+                "edit",
+                "write_file",
+                serde_json::json!({"path":"README.md","content":"Documentation prose"}),
+            ),
+            text_turn("Updated docs"),
+        ]);
+        let mut run = config(temp.path(), OutputFormat::Json);
+        run.approval_mode = HeadlessApprovalMode::Yolo;
+        run.review_changes = true;
+        run.agents = Some(manager);
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        assert_eq!(
+            run_with_backend(&backend, messages(), run, &mut stdout, &mut stderr)
+                .await
+                .code,
+            0
+        );
+        assert!(runner.requests.lock().unwrap().is_empty());
+    }
+
+    #[derive(Default)]
     struct RecordingRunner {
         requests: Mutex<Vec<crate::agent::subagent::AgentSpawnRequest>>,
         block_until_cancelled: bool,
@@ -4752,6 +5676,8 @@ mod tests {
         config.providers.insert(
             "openai".into(),
             crate::config::ProviderConfig {
+                google: None,
+                tool_schema_policy: Default::default(),
                 base_url: "https://api.openai.com/v1".into(),
                 api_key: "sk-mock-never-sent".into(),
                 protocol: crate::agent::ProviderProtocol::default(),
@@ -4764,6 +5690,8 @@ mod tests {
             config.providers.insert(
                 "mimo".into(),
                 crate::config::ProviderConfig {
+                    google: None,
+                    tool_schema_policy: Default::default(),
                     base_url: crate::pricing::MimoRegion::Singapore
                         .token_plan_url()
                         .into(),
@@ -4790,6 +5718,8 @@ mod tests {
             config.providers.insert(
                 "deepseek".into(),
                 crate::config::ProviderConfig {
+                    google: None,
+                    tool_schema_policy: Default::default(),
                     base_url: crate::pricing::DEEPSEEK_API_V1_BASE_URL.into(),
                     api_key: "sk-deepseek-mock-never-sent".into(),
                     protocol: crate::agent::ProviderProtocol::ChatCompletions,
@@ -4839,6 +5769,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn headless_delegation_checks_parent_approval_before_admitting_a_child() {
+        let temp = tempfile::tempdir().unwrap();
+        let runner = std::sync::Arc::new(RecordingRunner::default());
+        let manager = test_agent_manager(runner.clone(), delegation_config(true, false, false));
+        let call = AssembledToolCall {
+            index: 0,
+            id: "child".into(),
+            name: "spawn_agent".into(),
+            arguments: serde_json::json!({"task":"inspect fixture", "tools":["read_file"]})
+                .to_string(),
+        };
+        let mut run = config(temp.path(), OutputFormat::Text);
+        run.agents = Some(manager.clone());
+        assert!(matches!(
+            execute_call(&run, &call, None).await,
+            Err(CallDecisionError::Approval(_))
+        ));
+        run.approval_mode = HeadlessApprovalMode::Yolo;
+        run.permission_rules
+            .push(crate::permission::PermissionRule {
+                decision: crate::permission::PermissionDecision::Ask,
+                matcher: crate::permission::PermissionMatcher::Tool {
+                    tool: "spawn_agent".into(),
+                },
+            });
+        assert!(matches!(
+            execute_call(&run, &call, None).await,
+            Err(CallDecisionError::Approval(_))
+        ));
+        assert!(manager.list().await.is_empty());
+        assert!(runner.requests.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn sol_parent_routes_mocked_simple_tasks_to_luna_mimo_and_deepseek() {
         for (delegation, expected) in [
             (
@@ -4868,6 +5832,7 @@ mod tests {
             ]);
             let mut run = config(temp.path(), OutputFormat::Jsonl);
             run.agents = Some(manager.clone());
+            run.approval_mode = HeadlessApprovalMode::Yolo;
             let mut stdout = Vec::new();
             let mut stderr = Vec::new();
 
@@ -4991,6 +5956,7 @@ mod tests {
         ]);
         let mut run = config(temp.path(), OutputFormat::Jsonl);
         run.agents = Some(manager.clone());
+        run.approval_mode = HeadlessApprovalMode::Yolo;
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
@@ -5272,6 +6238,8 @@ mod tests {
             ca.providers.insert(
                 provider.into(),
                 crate::config::ProviderConfig {
+                    google: None,
+                    tool_schema_policy: Default::default(),
                     base_url: format!("http://127.0.0.1:{port}/v1"),
                     api_key: "test".into(),
                     protocol: crate::agent::ProviderProtocol::default(),

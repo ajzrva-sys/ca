@@ -1,0 +1,1581 @@
+Extracted attribution/license comments; original crate paths follow.
+
+===== build.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Build script for `google-cloud-auth` to generate environment variables
+//! at compile time, such as the active rustc version and package version.
+
+===== src/access_boundary.rs =====
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+===== src/build_errors.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Errors created during credentials construction.
+
+===== src/constants.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+===== src/credentials/anonymous.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Anonymous credentials.
+//!
+//! These credentials do not provide any authentication information. They are
+//! useful for accessing public resources that do not require authentication.
+
+===== src/credentials/api_key_credentials.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! [API Key] Credentials type.
+//!
+//! An API key is a simple encrypted string that you can use when calling
+//! Google Cloud APIs. When you use API keys in your applications, ensure that
+//! they are kept secure during both storage and transmission.
+//!
+//! [API Key]: https://cloud.google.com/api-keys/docs/overview
+
+===== src/credentials/crypto_provider.rs =====
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+===== src/credentials/external_account.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! [Workload Identity Federation] (or External Account) credentials.
+//!
+//! Workload identity federation allows applications running outside of Google Cloud
+//! to access Google Cloud resources without using a [Service Account Key]. Instead of
+//! a long-lived credential (like a service account key), you can exchange a credential
+//! from your workload's identity provider for a short-lived Google Cloud access token.
+//! As per [best practices], Workload Identity Federation is the recommended method of
+//! authentication if your workload is using an external identity provider.
+//!
+//! Refer to [Obtain short-lived tokens for Workforce Identity Federation] for
+//! creating configurations that can be used with this library for loading credentials
+//! using various external toke provider sources such as file, URL, or an executable.
+//!
+//! ## Example: Creating credentials from a JSON object
+//!
+//! ```
+//! # use google_cloud_auth::credentials::external_account;
+//! # use http::Extensions;
+//! #
+//! # async fn sample() -> anyhow::Result<()> {
+//! let project_id = "your-gcp-project-id";
+//! let pool_id = "your-workload-identity-pool-id";
+//! let provider_id = "your-provider-id";
+//!
+//! let audience = format!(
+//!     "//iam.googleapis.com/projects/{}/locations/global/workloadIdentityPools/{}/providers/{}",
+//!     project_id, pool_id, provider_id
+//! );
+//!
+//! // This is an example of a configuration for a file-sourced credential.
+//! // The actual configuration will depend on your identity provider.
+//! let external_account_config = serde_json::json!({
+//!     "type": "external_account",
+//!     "audience": audience,
+//!     "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+//!     "token_url": "https://sts.googleapis.com/v1/token",
+//!     "credential_source": {
+//!         "file": "/path/to/your/oidc/token.jwt"
+//!     }
+//! });
+//!
+//! let credentials = external_account::Builder::new(external_account_config)
+//!     .build()
+//!     .unwrap();
+//! let headers = credentials.headers(Extensions::new()).await?;
+//! println!("Headers: {headers:?}");
+//! # Ok(()) }
+//! ```
+//!
+//! ## Example: Creating credentials with custom retry behavior
+//!
+//! ```
+//! # use google_cloud_auth::credentials::external_account;
+//! # use http::Extensions;
+//! # use std::time::Duration;
+//! # async fn sample() -> anyhow::Result<()> {
+//! use google_cloud_gax::retry_policy::{AlwaysRetry, RetryPolicyExt};
+//! use google_cloud_gax::exponential_backoff::ExponentialBackoff;
+//! # let project_id = "your-gcp-project-id";
+//! # let pool_id = "your-workload-identity-pool-id";
+//! # let provider_id = "your-provider-id";
+//! #
+//! # let audience = format!(
+//! #     "//iam.googleapis.com/projects/{}/locations/global/workloadIdentityPools/{}/providers/{}",
+//! #     project_id, pool_id, provider_id
+//! # );
+//! #
+//! # let external_account_config = serde_json::json!({
+//! #     "type": "external_account",
+//! #     "audience": audience,
+//! #     "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+//! #     "token_url": "https://sts.googleapis.com/v1/token",
+//! #     "credential_source": {
+//! #         "file": "/path/to/your/oidc/token.jwt"
+//! #     }
+//! # });
+//! let backoff = ExponentialBackoff::default();
+//! let credentials = external_account::Builder::new(external_account_config)
+//!     .with_retry_policy(AlwaysRetry.with_attempt_limit(3))
+//!     .with_backoff_policy(backoff)
+//!     .build()
+//!     .unwrap();
+//! let headers = credentials.headers(Extensions::new()).await?;
+//! println!("Headers: {headers:?}");
+//! # Ok(()) }
+//! ```
+//!
+//! [Workload Identity Federation]: https://cloud.google.com/iam/docs/workload-identity-federation
+//! [AIP-4117]: https://google.aip.dev/auth/4117
+//! [Service Account Key]: https://cloud.google.com/iam/docs/service-account-creds#key-types
+//! [best practices]: https://cloud.google.com/docs/authentication#auth-decision-tree
+//! [Obtain short-lived tokens for Workforce Identity Federation]: https://cloud.google.com/iam/docs/workforce-obtaining-short-lived-credentials#use_configuration_files_for_sign-in
+
+===== src/credentials/external_account_sources/aws_sourced.rs =====
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+===== src/credentials/external_account_sources/executable_sourced.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+===== src/credentials/external_account_sources/file_sourced.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+===== src/credentials/external_account_sources/programmatic_sourced.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+===== src/credentials/external_account_sources/url_sourced.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+===== src/credentials/external_account_sources.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+===== src/credentials/gdch.rs =====
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! [Google Distributed Cloud] service identity authentication.
+//!
+//! A [Google Distributed Cloud] (GDC) service identity credential allows applications to
+//! authenticate and access services securely within private or hybrid cloud environments.
+//! Workloads authenticate using service identity keys to obtain short-lived access tokens
+//! from a dedicated token exchange endpoint.
+//!
+//! ## Example: Creating credentials from a JSON object
+//!
+//! ```
+//! # use google_cloud_auth::credentials::gdch;
+//! # use serde_json::json;
+//! # use http::Extensions;
+//!
+//! # async fn sample() -> anyhow::Result<()> {
+//! let gdch_key = json!({
+//!     "type": "gdch_service_account",
+//!     "format_version": "1",
+//!     "project": "my-project",
+//!     "private_key_id": "my-key-id",
+//!     "private_key": "-----BEGIN EC PRIVATE KEY-----\n...key bytes...\n-----END EC PRIVATE KEY-----\n",
+//!     "name": "my-service-identity",
+//!     "token_uri": "https://service-accounts.my-domain.com/authenticate"
+//! });
+//!
+//! let credentials = gdch::Builder::new("https://my-target-service-audience.com", gdch_key)
+//!     .build()?;
+//! let headers = credentials.headers(Extensions::new()).await?;
+//! println!("Headers: {headers:?}");
+//! # Ok(()) }
+//! ```
+//!
+//! [Google Distributed Cloud]: https://docs.cloud.google.com/distributed-cloud/docs
+
+===== src/credentials/idtoken/impersonated.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Obtain [OIDC ID tokens] using [impersonated service accounts].
+//!
+//! When the principal you are using doesn't have the permissions you need to
+//! accomplish your task, or you want to use a service account in a development
+//! environment, you can use service account impersonation. The typical principals
+//! used to impersonate a service account are [User Account] or another [Service Account].
+//!
+//! The principal that is trying to impersonate a target service account should have
+//! [Service Account Token Creator Role] on the target service account.
+//!
+//! ## Example: Creating impersonated credentials from a JSON object with target audience and sending ID Tokens.
+//!
+//! ```
+//! # use google_cloud_auth::credentials::idtoken;
+//! # use serde_json::json;
+//! # use reqwest;
+//! # async fn sample() -> anyhow::Result<()> {
+//! let source_credentials = json!({
+//!     "type": "authorized_user",
+//!     "client_id": "test-client-id",
+//!     "client_secret": "test-client-secret",
+//!     "refresh_token": "test-refresh-token"
+//! });
+//!
+//! let impersonated_credential = json!({
+//!     "type": "impersonated_service_account",
+//!     "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/test-principal:generateAccessToken",
+//!     "source_credentials": source_credentials,
+//! });
+//!
+//! let audience = "https://my-service.a.run.app";
+//! let credentials = idtoken::impersonated::Builder::new(audience, impersonated_credential)
+//!     .build()?;
+//! let id_token = credentials.id_token().await?;
+//!
+//! // Make request with ID Token as Bearer Token.
+//! let client = reqwest::Client::new();
+//! let target_url = format!("{audience}/api/method");
+//! client.get(target_url)
+//!     .bearer_auth(id_token)
+//!     .send()
+//!     .await?;
+//! # Ok(()) }
+//! ```
+//!
+//! [Impersonated service accounts]: https://cloud.google.com/docs/authentication/use-service-account-impersonation
+//! [OIDC ID tokens]: https://cloud.google.com/docs/authentication/token-types#identity-tokens
+//! [User Account]: https://cloud.google.com/docs/authentication#user-accounts
+//! [Service Account]: https://cloud.google.com/iam/docs/service-account-overview
+//! [Service Account Token Creator Role]: https://cloud.google.com/docs/authentication/use-service-account-impersonation#required-roles
+
+===== src/credentials/idtoken/mds.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Obtain [OIDC ID tokens] using [Metadata Service].
+//!
+//! Google Cloud environments such as [Google Compute Engine (GCE)][gce-link],
+//! [Google Kubernetes Engine (GKE)][gke-link], or [Cloud Run] provide a metadata service.
+//! This is a local service to the VM (or pod) which (as the name implies) provides
+//! metadata information about the environment. The service also provides access
+//! tokens associated with the [default service account] for the corresponding
+//! VM. This module provides a builder for `IDTokenCredentials`
+//! from such metadata service.
+//!
+//! The default host name of the metadata service is `metadata.google.internal`.
+//! If you would like to use a different hostname, you can set it using the
+//! `GCE_METADATA_HOST` environment variable.
+//!
+//! `IDTokenCredentials` obtain OIDC ID tokens, which are commonly
+//! used for [service to service authentication]. For example, when the
+//! target service is hosted in Cloud Run or mediated by Identity-Aware Proxy (IAP).
+//!
+//! Unlike access tokens, ID tokens are not used to authorize access to
+//! Google Cloud APIs but to verify the identity of a principal.
+//!
+//! ## Example: Creating MDS sourced credentials with target audience and sending ID Tokens.
+//!
+//! ```
+//! # use google_cloud_auth::credentials::idtoken;
+//! # use reqwest;
+//! # async fn sample() -> anyhow::Result<()> {
+//! let audience = "https://my-service.a.run.app";
+//! let credentials = idtoken::mds::Builder::new(audience)
+//!     .build()?;
+//! let id_token = credentials.id_token().await?;
+//!
+//! // Make request with ID Token as Bearer Token.
+//! let client = reqwest::Client::new();
+//! let target_url = format!("{audience}/api/method");
+//! client.get(target_url)
+//!     .bearer_auth(id_token)
+//!     .send()
+//!     .await?;
+//! # Ok(()) }
+//! ```
+//!
+//! [Application Default Credentials]: https://cloud.google.com/docs/authentication/application-default-credentials
+//! [OIDC ID Tokens]: https://cloud.google.com/docs/authentication/token-types#identity-tokens
+//! [Cloud Run]: https://cloud.google.com/run
+//! [default service account]: https://cloud.google.com/iam/docs/service-account-types#default
+//! [gce-link]: https://cloud.google.com/products/compute
+//! [gke-link]: https://cloud.google.com/kubernetes-engine
+//! [Service to Service Authentication]: https://cloud.google.com/run/docs/authenticating/service-to-service
+//! [Metadata Service]: https://cloud.google.com/compute/docs/metadata/overview
+
+===== src/credentials/idtoken/service_account.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Obtain [OIDC ID tokens] using [Service Accounts].
+//!
+//! While the Google Cloud client libraries for Rust automatically use the types
+//! in this module when ADC finds a service account key file, you may want to
+//! use these types directly when the service account key is obtained from
+//! Cloud Secret Manager or a similar service.
+//!
+//! `IDTokenCredentials` obtain OIDC ID tokens, which are commonly
+//! used for [service to service authentication]. For example, when the
+//! target service is hosted in Cloud Run or mediated by Identity-Aware Proxy (IAP).
+//!
+//! Unlike access tokens, ID tokens are not used to authorize access to
+//! Google Cloud APIs but to verify the identity of a principal.
+//!
+//! # Example: Creating Service Account sourced credentials with target audience and sending ID Tokens.
+//! ```
+//! # use google_cloud_auth::credentials::idtoken;
+//! # use serde_json::json;
+//! # use reqwest;
+//! # async fn sample() -> anyhow::Result<()> {
+//! let service_account_key = json!({
+//!     "client_email": "test-client-email",
+//!     "private_key_id": "test-private-key-id",
+//!     "private_key": "<YOUR_PKCS8_PEM_KEY_HERE>",
+//!     "project_id": "test-project-id",
+//!     "universe_domain": "test-universe-domain",
+//! });
+//! let audience = "https://my-service.a.run.app";
+//! let credentials = idtoken::service_account::Builder::new(audience, service_account_key)
+//!     .build()?;
+//! let id_token = credentials.id_token().await?;
+//!
+//! // Make request with ID Token as Bearer Token.
+//! let client = reqwest::Client::new();
+//! let target_url = format!("{audience}/api/method");
+//! client.get(target_url)
+//!     .bearer_auth(id_token)
+//!     .send()
+//!     .await?;
+//! # Ok(()) }
+//! ```
+//!
+//! [Best practices for using service accounts]: https://cloud.google.com/iam/docs/best-practices-service-accounts#choose-when-to-use
+//! [OIDC ID Tokens]: https://cloud.google.com/docs/authentication/token-types#identity-tokens
+//! [create a service account key]: https://cloud.google.com/iam/docs/keys-create-delete#creating
+//! [Service Accounts]: https://cloud.google.com/iam/docs/service-account-overview
+//! [service account key]: https://cloud.google.com/iam/docs/keys-create-delete#creating
+//! [Service to Service Authentication]: https://cloud.google.com/run/docs/authenticating/service-to-service
+
+===== src/credentials/idtoken/user_account.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Obtain [OIDC ID tokens] from an [user account].
+//!
+//! This module provides a builder for `IDTokenCredentials` from
+//! authorized user credentials, which are typically obtained by running
+//! `gcloud auth application-default login`.
+//!
+//! `IDTokenCredentials` obtain OIDC ID tokens, which are commonly
+//! used for [service to service authentication]. For example, when the
+//! target service is hosted in Cloud Run or mediated by Identity-Aware Proxy (IAP).
+//!
+//! Unlike access tokens, ID tokens are not used to authorize access to
+//! Google Cloud APIs but to verify the identity of a principal.
+//!
+//! ## Example: Creating user account sourced credentials from a JSON object with target audience and sending ID Tokens.
+//!
+//! ```
+//! # use google_cloud_auth::credentials::idtoken;
+//! # use serde_json::json;
+//! # use reqwest;
+//! # async fn sample() -> anyhow::Result<()> {
+//! let authorized_user = json!({
+//!     "client_id": "YOUR_CLIENT_ID.apps.googleusercontent.com", // Replace with your actual Client ID
+//!     "client_secret": "YOUR_CLIENT_SECRET", // Replace with your actual Client Secret - LOAD SECURELY!
+//!     "refresh_token": "YOUR_REFRESH_TOKEN", // Replace with the user's refresh token - LOAD SECURELY!
+//!     "type": "authorized_user",
+//! });
+//! let credentials = idtoken::user_account::Builder::new(authorized_user).build()?;
+//! let id_token = credentials.id_token().await?;
+//!
+//! // Make request with ID Token as Bearer Token.
+//! let client = reqwest::Client::new();
+//! let target_url = format!("https://my-service.a.run.app/api/method");
+//! client.get(target_url)
+//!     .bearer_auth(id_token)
+//!     .send()
+//!     .await?;
+//! # Ok(()) }
+//! ```
+//!
+//! [OIDC ID Tokens]: https://cloud.google.com/docs/authentication/token-types#identity-tokens
+//! [user account]: https://cloud.google.com/docs/authentication#user-accounts
+//! [Service to Service Authentication]: https://cloud.google.com/run/docs/authenticating/service-to-service
+
+===== src/credentials/idtoken/verifier.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Verify [OIDC ID tokens].
+//!
+//! [Verifier] is used to validate an OIDC ID token.
+//! This includes verifying the token's signature against the appropriate
+//! JSON Web Key Set (JWKS), and validating its claims, such as audience and issuer.
+//!
+//! ## Example: Verifying an ID token
+//!
+//! ```
+//! # use google_cloud_auth::credentials::idtoken;
+//! # use google_cloud_auth::credentials::idtoken::verifier::Verifier;
+//! # use std::time::Duration;
+//! let audience = "https://my-service.a.run.app";
+//! let verifier = idtoken::verifier::Builder::new([audience]).build();
+//!
+//! async fn verify_my_token(verifier: &Verifier, token: &str) -> anyhow::Result<()> {
+//!     let claims = verifier.verify(token).await?;
+//!
+//!     println!("Hello: {:?}", claims["email"]);
+//! #   Ok(())
+//! }
+//! ```
+//! [OIDC ID Tokens]: https://cloud.google.com/docs/authentication/token-types#identity-tokens
+
+===== src/credentials/idtoken.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Obtain, use, and verify [OIDC ID Tokens].
+//!
+//! `IDTokenCredentials` obtain OIDC ID tokens, which are commonly
+//! used for [service to service authentication]. For example, when the
+//! target service is hosted in Cloud Run or mediated by Identity-Aware Proxy (IAP).
+//!
+//! Unlike access tokens, ID tokens are not used to authorize access to
+//! Google Cloud APIs but to verify the identity of a principal.
+//!
+//! The main type in this module is [IDTokenCredentials].  This is an opaque type
+//! that implements the [IDTokenCredentialsProvider] trait and can be used to
+//! obtain OIDC ID tokens.  Use the builders in each submodule to create
+//! `IDTokenCredentials` based on different token sources.
+//!
+//! ## Example: Generating ID Tokens using Application Default Credentials
+//!
+//! This example shows how to create `IDTokenCredentials` using the
+//! Application Default Credentials (ADC) flow. The builder will locate
+//! and use the credentials from the environment.
+//!
+//! ```
+//! # use google_cloud_auth::credentials::idtoken;
+//! # use reqwest;
+//! #
+//! # async fn send_id_token() -> anyhow::Result<()> {
+//! let audience = "https://my-service.a.run.app";
+//! let credentials = idtoken::Builder::new(audience).build()?;
+//! let id_token = credentials.id_token().await?;
+//! // Make request with ID Token as Bearer Token.
+//! let client = reqwest::Client::new();
+//! let target_url = format!("{audience}/api/method");
+//! client.get(target_url)
+//!     .bearer_auth(id_token)
+//!     .send()
+//!     .await?;
+//! # Ok(())
+//! # }
+//! ```
+//! ## Example: Verifying an ID token
+//!
+//! Within the receiving private service, you can parse the authorization header to
+//! receive the information being sent by the Bearer token and use the
+//! [Verifier][verifier::Verifier] to check if the token is valid.
+//!
+//! ```
+//! use google_cloud_auth::credentials::idtoken::verifier::{Verifier, Builder};
+//! # use std::time::Duration;
+//! # async fn sample() -> anyhow::Result<()> {
+//! let audience = "https://my-service.a.run.app";
+//! let verifier = Builder::new([audience]).build();
+//!
+//! async fn verify_id_token(verifier: &Verifier, token: &str) -> anyhow::Result<()> {
+//!     let claims = verifier.verify(token).await?;
+//!     println!("Hello: {:?}", claims["email"]);
+//!     Ok(())
+//! }
+//! # Ok(()) }
+//! ```
+//! [Verifier]: https://docs.rs/google-cloud-auth/latest/google_cloud_auth/credentials/idtoken/struct.Verifier.html
+//! [OIDC ID Tokens]: https://cloud.google.com/docs/authentication/token-types#identity-tokens
+//! [Service to Service Authentication]: https://cloud.google.com/run/docs/authenticating/service-to-service
+
+===== src/credentials/impersonated.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! [Impersonated service account] credentials.
+//!
+//! When the principal you are using doesn't have the permissions you need to
+//! accomplish your task, or you want to use a service account in a development
+//! environment, you can use service account impersonation. The typical principals
+//! used to impersonate a service account are [User Account] or another [Service Account].
+//!
+//! The principal that is trying to impersonate a target service account should have
+//! [Service Account Token Creator Role] on the target service account.
+//!
+//! ## Example: Creating credentials from a JSON object
+//!
+//! ```
+//! # use google_cloud_auth::credentials::impersonated;
+//! # use serde_json::json;
+//! # use std::time::Duration;
+//! # use http::Extensions;
+//! #
+//! # async fn sample() -> anyhow::Result<()> {
+//! let source_credentials = json!({
+//!     "type": "authorized_user",
+//!     "client_id": "test-client-id",
+//!     "client_secret": "test-client-secret",
+//!     "refresh_token": "test-refresh-token"
+//! });
+//!
+//! let impersonated_credential = json!({
+//!     "type": "impersonated_service_account",
+//!     "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/test-principal:generateAccessToken",
+//!     "source_credentials": source_credentials,
+//! });
+//!
+//! let credentials = impersonated::Builder::new(impersonated_credential)
+//!     .with_lifetime(Duration::from_secs(500))
+//!     .build()?;
+//! let headers = credentials.headers(Extensions::new()).await?;
+//! println!("Headers: {headers:?}");
+//! # Ok(()) }
+//! ```
+//!
+//! ## Example: Creating credentials with custom retry behavior
+//!
+//! ```
+//! # use google_cloud_auth::credentials::impersonated;
+//! # use serde_json::json;
+//! # use std::time::Duration;
+//! # use http::Extensions;
+//! # async fn sample() -> anyhow::Result<()> {
+//! use google_cloud_gax::retry_policy::{AlwaysRetry, RetryPolicyExt};
+//! use google_cloud_gax::exponential_backoff::ExponentialBackoff;
+//! # let source_credentials = json!({
+//! #     "type": "authorized_user",
+//! #     "client_id": "test-client-id",
+//! #     "client_secret": "test-client-secret",
+//! #     "refresh_token": "test-refresh-token"
+//! # });
+//! #
+//! # let impersonated_credential = json!({
+//! #     "type": "impersonated_service_account",
+//! #     "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/test-principal:generateAccessToken",
+//! #     "source_credentials": source_credentials,
+//! # });
+//! let backoff = ExponentialBackoff::default();
+//! let credentials = impersonated::Builder::new(impersonated_credential)
+//!     .with_retry_policy(AlwaysRetry.with_attempt_limit(3))
+//!     .with_backoff_policy(backoff)
+//!     .build()?;
+//! let headers = credentials.headers(Extensions::new()).await?;
+//! println!("Headers: {headers:?}");
+//! # Ok(()) }
+//! ```
+//!
+//! [Impersonated service account]: https://cloud.google.com/docs/authentication/use-service-account-impersonation
+//! [User Account]: https://cloud.google.com/docs/authentication#user-accounts
+//! [Service Account]: https://cloud.google.com/iam/docs/service-account-overview
+//! [Service Account Token Creator Role]: https://cloud.google.com/docs/authentication/use-service-account-impersonation#required-roles
+
+===== src/credentials/internal/jwk_client.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+===== src/credentials/internal/sts_exchange.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+===== src/credentials/internal.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+===== src/credentials/mds.rs =====
+// Copyright 2024 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! [Metadata Service] Credentials type.
+//!
+//! Google Cloud environments such as [Google Compute Engine (GCE)][gce-link],
+//! [Google Kubernetes Engine (GKE)][gke-link], or [Cloud Run] provide a metadata service.
+//! This is a local service to the VM (or pod) which (as the name implies) provides
+//! metadata information about the VM. The service also provides access
+//! tokens associated with the [default service account] for the corresponding
+//! VM.
+//!
+//! The default host name of the metadata service is `metadata.google.internal`.
+//! If you would like to use a different hostname, you can set it using the
+//! `GCE_METADATA_HOST` environment variable.
+//!
+//! You can use this access token to securely authenticate with Google Cloud,
+//! without having to download secrets or other credentials. The types in this
+//! module allow you to retrieve these access tokens, and can be used with
+//! the Google Cloud client libraries for Rust.
+//!
+//! ## Example: Creating credentials with a custom quota project
+//!
+//! ```
+//! # use google_cloud_auth::credentials::mds::Builder;
+//! # use google_cloud_auth::credentials::Credentials;
+//! # use http::Extensions;
+//! # async fn sample() -> anyhow::Result<()> {
+//! let credentials: Credentials = Builder::default()
+//!     .with_quota_project_id("my-quota-project")
+//!     .build()?;
+//! let headers = credentials.headers(Extensions::new()).await?;
+//! println!("Headers: {headers:?}");
+//! # Ok(()) }
+//! ```
+//!
+//! ## Example: Creating credentials with custom retry behavior
+//!
+//! ```
+//! # use google_cloud_auth::credentials::mds::Builder;
+//! # use google_cloud_auth::credentials::Credentials;
+//! # use http::Extensions;
+//! # use std::time::Duration;
+//! # async fn sample() -> anyhow::Result<()> {
+//! use google_cloud_gax::retry_policy::{AlwaysRetry, RetryPolicyExt};
+//! use google_cloud_gax::exponential_backoff::ExponentialBackoff;
+//! let backoff = ExponentialBackoff::default();
+//! let credentials: Credentials = Builder::default()
+//!     .with_retry_policy(AlwaysRetry.with_attempt_limit(3))
+//!     .with_backoff_policy(backoff)
+//!     .build()?;
+//! let headers = credentials.headers(Extensions::new()).await?;
+//! println!("Headers: {headers:?}");
+//! # Ok(()) }
+//! ```
+//!
+//! [Application Default Credentials]: https://cloud.google.com/docs/authentication/application-default-credentials
+//! [Cloud Run]: https://cloud.google.com/run
+//! [default service account]: https://cloud.google.com/iam/docs/service-account-types#default
+//! [gce-link]: https://cloud.google.com/products/compute
+//! [gke-link]: https://cloud.google.com/kubernetes-engine
+//! [Metadata Service]: https://cloud.google.com/compute/docs/metadata/overview
+
+===== src/credentials/service_account/jws.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+===== src/credentials/service_account.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! [Service Account] Credentials type.
+//!
+//! A service account is an account for an application or compute workload
+//! instead of an individual end user. The default credentials used by the
+//! client libraries may be, and often are, associated with a service account.
+//! Therefore, you can use service accounts by configuring your environment,
+//! without any code changes.
+//!
+//! Sometimes the application needs to use a [service account key] directly.
+//! The types in this module will help you in this case. For more information
+//! on when service account keys are appropriate, consult the
+//! relevant section in the [Best practices for using service accounts] guide.
+//!
+//! You can create multiple service account keys for a single service account.
+//! When you [create a service account key], the key is returned as a string.
+//! This string contains an ID for the service account, as well as the
+//! cryptographic materials (an RSA private key) required to authenticate the caller.
+//!
+//! Therefore, service account keys should be treated as any other secret
+//! with security implications. Think of them as unencrypted passwords. Do not
+//! store them where unauthorized persons or programs may read them.
+//!
+//! The types in this module allow you to create access tokens, based on
+//! service account keys and can be used with the Google Cloud client
+//! libraries for Rust.
+//!
+//! While the Google Cloud client libraries for Rust automatically use the types
+//! in this module when ADC finds a service account key file, you may want to
+//! use these types directly when the service account key is obtained from
+//! Cloud Secret Manager or a similar service.
+//!
+//! # Example
+//! ```
+//! # use google_cloud_auth::credentials::service_account::Builder;
+//! # use google_cloud_auth::credentials::Credentials;
+//! # use http::Extensions;
+//! # async fn sample() -> anyhow::Result<()> {
+//! let service_account_key = serde_json::json!({
+//!     "client_email": "test-client-email",
+//!     "private_key_id": "test-private-key-id",
+//!     "private_key": "<YOUR_PKCS8_PEM_KEY_HERE>",
+//!     "project_id": "test-project-id",
+//!     "universe_domain": "googleapis.com",
+//! });
+//! let credentials: Credentials = Builder::new(service_account_key)
+//!     .with_quota_project_id("my-quota-project")
+//!     .build()?;
+//! let headers = credentials.headers(Extensions::new()).await?;
+//! println!("Headers: {headers:?}");
+//! # Ok(()) }
+//! ```
+//!
+//! [Best practices for using service accounts]: https://cloud.google.com/iam/docs/best-practices-service-accounts#choose-when-to-use
+//! [create a service account key]: https://cloud.google.com/iam/docs/keys-create-delete#creating
+//! [Service Account]: https://cloud.google.com/iam/docs/service-account-overview
+//! [service account key]: https://cloud.google.com/iam/docs/keys-create-delete#creating
+
+===== src/credentials/subject_token.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Subject Token Credential Type.
+//!
+//! A **subject token** is a credential that asserts the identity of a workload,
+//! application, or a user. In the case of the [Workload Identity Federation] flow,
+//! this allows applications to authenticate to Google Cloud, instead of using
+//! long-lived service account keys. The process involves exchanging this subject
+//! token for a short-lived Google Cloud access token via the
+//! [Security Token Service (STS)].
+//!
+//! This module provides the [`SubjectTokenProvider`] trait, which is used to
+//! fetch subject tokens. The Google Cloud client libraries for Rust will typically
+//! use the [`SubjectTokenProvider`] automatically for external account credentials.
+//! You might need to implement this trait for advanced authentication scenarios where
+//! you want to integrate a custom subject token fetching mechanism.
+//!
+//! # Example
+//!
+//! ```
+//! # use std::error::Error;
+//! # use std::fmt;
+//! # use std::future::Future;
+//! # use google_cloud_auth::credentials::subject_token::{
+//! #     Builder as SubjectTokenBuilder, SubjectToken, SubjectTokenProvider,
+//! # };
+//! # use google_cloud_auth::errors::SubjectTokenProviderError;
+//! #[derive(Debug)]
+//! struct CustomProviderError {
+//!     message: String,
+//!     is_transient: bool,
+//! }
+//!
+//! impl fmt::Display for CustomProviderError {
+//!     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+//!         write!(f, "CustomProviderError: {}", self.message)
+//!     }
+//! }
+//!
+//! impl Error for CustomProviderError {}
+//!
+//! impl SubjectTokenProviderError for CustomProviderError {
+//!     fn is_transient(&self) -> bool {
+//!         self.is_transient
+//!     }
+//! }
+//!
+//! #[derive(Debug)]
+//! struct MyCustomProvider {
+//!     api_key: String,
+//! }
+//!
+//! impl SubjectTokenProvider for MyCustomProvider {
+//!     type Error = CustomProviderError;
+//!
+//!     async fn subject_token(&self) -> Result<SubjectToken, Self::Error> {
+//!             let token_from_idp = "a-very-secret-token-from-your-idp";
+//!             Ok(SubjectTokenBuilder::new(token_from_idp.to_string()).build())
+//!     }
+//! }
+//! ```
+//!
+//! [Workload Identity Federation]: https://cloud.google.com/iam/docs/workload-identity-federation
+//! [Security Token Service (STS)]: https://cloud.google.com/iam/docs/reference/sts/rest
+
+===== src/credentials/user_account.rs =====
+// Copyright 2024 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! [User Account] Credentials type.
+//!
+//! User accounts represent a developer, administrator, or any other person who
+//! interacts with Google APIs and services. User accounts are managed as
+//! [Google Accounts], either via [Google Workspace] or [Cloud Identity].
+//!
+//! This module provides [Credentials] derived from user account
+//! information, specifically utilizing an OAuth 2.0 refresh token.
+//!
+//! This module is designed for refresh tokens obtained via the standard
+//! [Authorization Code grant]. Acquiring the initial refresh token (e.g., through
+//! user consent) is outside the scope of this library.
+//! See [RFC 6749 Section 4.1] for flow details.
+//!
+//! The Google Cloud client libraries for Rust will typically find and use these
+//! credentials automatically if a credentials file exists in the
+//! standard ADC search paths. This file is often created by running:
+//! `gcloud auth application-default login`. You might instantiate these credentials
+//! directly using the [`Builder`] if you need to:
+//! * Load credentials from a non-standard location or source.
+//! * Override the OAuth 2.0 **scopes** being requested for the access token.
+//! * Override the **quota project ID** for billing and quota management.
+//! * Override the **token URI** used to fetch access tokens.
+//! * Customize the **retry behavior** when fetching access tokens.
+//!
+//! ## Example: Creating credentials from a JSON object
+//!
+//! ```
+//! # use google_cloud_auth::credentials::user_account::Builder;
+//! # use google_cloud_auth::credentials::Credentials;
+//! # use http::Extensions;
+//! # async fn sample() -> anyhow::Result<()> {
+//! let authorized_user = serde_json::json!({
+//!     "client_id": "YOUR_CLIENT_ID.apps.googleusercontent.com", // Replace with your actual Client ID
+//!     "client_secret": "YOUR_CLIENT_SECRET", // Replace with your actual Client Secret - LOAD SECURELY!
+//!     "refresh_token": "YOUR_REFRESH_TOKEN", // Replace with the user's refresh token - LOAD SECURELY!
+//!     "type": "authorized_user",
+//!     // "quota_project_id": "your-billing-project-id", // Optional: Set if needed
+//!     // "token_uri" : "test-token-uri", // Optional: Set if needed
+//! });
+//! let credentials: Credentials = Builder::new(authorized_user).build()?;
+//! let headers = credentials.headers(Extensions::new()).await?;
+//! println!("Headers: {headers:?}");
+//! # Ok(()) }
+//! ```
+//!
+//! ## Example: Creating credentials with custom retry behavior
+//!
+//! ```
+//! # use google_cloud_auth::credentials::user_account::Builder;
+//! # use google_cloud_auth::credentials::Credentials;
+//! # use http::Extensions;
+//! # use std::time::Duration;
+//! # async fn sample() -> anyhow::Result<()> {
+//! use google_cloud_gax::retry_policy::{AlwaysRetry, RetryPolicyExt};
+//! use google_cloud_gax::exponential_backoff::ExponentialBackoff;
+//! let authorized_user = serde_json::json!({
+//!     "client_id": "YOUR_CLIENT_ID.apps.googleusercontent.com",
+//!     "client_secret": "YOUR_CLIENT_SECRET",
+//!     "refresh_token": "YOUR_REFRESH_TOKEN",
+//!     "type": "authorized_user",
+//! });
+//! let backoff = ExponentialBackoff::default();
+//! let credentials: Credentials = Builder::new(authorized_user)
+//!     .with_retry_policy(AlwaysRetry.with_attempt_limit(3))
+//!     .with_backoff_policy(backoff)
+//!     .build()?;
+//! let headers = credentials.headers(Extensions::new()).await?;
+//! println!("Headers: {headers:?}");
+//! # Ok(()) }
+//! ```
+//!
+//! [Authorization Code grant]: https://tools.ietf.org/html/rfc6749#section-1.3.1
+//! [Cloud Identity]: https://cloud.google.com/identity
+//! [Google Accounts]: https://myaccount.google.com/
+//! [Google Workspace]: https://workspace.google.com/
+//! [RFC 6749 Section 4.1]: https://datatracker.ietf.org/doc/html/rfc6749#section-4.1
+//! [User Account]: https://cloud.google.com/docs/authentication#user-accounts
+//! [Workforce Identity Federation]: https://cloud.google.com/iam/docs/workforce-identity-federation
+
+===== src/credentials.rs =====
+// Copyright 2024 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Types and functions to work with Google Cloud authentication [Credentials].
+//!
+//! [Credentials]: https://cloud.google.com/docs/authentication#credentials
+
+===== src/errors.rs =====
+// Copyright 2024 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Common errors generated by the components in this crate.
+
+===== src/headers_util.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Headers utility functions to work with Google Cloud authentication [Credentials].
+//!
+//! [Credentials]: https://cloud.google.com/docs/authentication#credentials
+
+===== src/lib.rs =====
+// Copyright 2024 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Google Cloud Client Libraries for Rust - Authentication Components
+//!
+//! This crate contains types and functions used to authenticate applications
+//! on Google Cloud.  The SDK clients consume an implementation of
+//! [credentials::Credentials] and use these credentials to authenticate RPCs
+//! issued by the application.
+//!
+//! [Authentication methods at Google] is a good introduction on the topic of
+//! authentication for Google Cloud services and other Google products. The
+//! guide also describes the common terminology used with authentication, such
+//! as [Principals], [Tokens], and [Credentials].
+//!
+//! # Features
+//!
+//! - `default-rustls-provider`: enabled by default. Use the default rustls
+//!   crypto provider ([aws-lc-rs]) for TLS and authentication. Applications
+//!   with specific requirements for cryptography (such as exclusively using the
+//!   [ring] crate) should disable this default and call
+//!   `rustls::CryptoProvider::install_default()`.
+//! - `idtoken`: disabled by default, this feature enables support to create and
+//!   verify [OIDC ID Tokens].
+//! - `default-idtoken-backend`: enabled by default, this feature enables a default
+//!   backend for the `idtoken` feature. Currently the feature is implemented using
+//!   the [jsonwebtoken] crate and uses `aws-lc-rs` as its default backend. We may
+//!   change the default backend at any time, applications that have specific needs
+//!   for this backend should not rely on the current default. To control the
+//!   backend selection:
+//!   - Configure this crate with `default-features = false`, and
+//!     `features = ["idtoken"]`
+//!   - Select the desired backend for `jsonwebtoken`.
+//!   - You **MUST** use the same major version of `jsonwebtoken` as we do.
+//!
+//! [aws-lc-rs]: https://crates.io/crates/aws-lc-rs
+//! [ring]: https://crates.io/crates/ring
+//! [jsonwebtoken]: https://crates.io/crates/jsonwebtoken
+//! [oidc id tokens]: https://cloud.google.com/docs/authentication/token-types#identity-tokens
+//! [Authentication methods at Google]: https://cloud.google.com/docs/authentication
+//! [Principals]: https://cloud.google.com/docs/authentication#principal
+//! [Tokens]: https://cloud.google.com/docs/authentication#token
+//! [Credentials]: https://cloud.google.com/docs/authentication#credentials
+
+===== src/mds/client.rs =====
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+===== src/mds/mod.rs =====
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+===== src/retry.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! The retry module
+
+===== src/signer/iam.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+===== src/signer/mds.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+===== src/signer/service_account.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+===== src/signer.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Abstraction for signing arbitrary bytes using Google Cloud [Credentials][crate::credentials::Credentials].
+//!
+//! A [`Signer`] is used to sign data, typically for authentication or
+//! authorization purposes. One primary use case in the Google Cloud
+//! ecosystem is generating [Signed URLs] for Google Cloud Storage.
+//!
+//! The main type in this module is [Signer]. This is an opaque type
+//! that implements the [SigningProvider] trait and can be used to
+//! sign content. Use [crate::credentials::Builder::build_signer]
+//! to create a `Signer` from loaded credentials.
+//!
+//! ## Example: Creating a Signer using [Application Default Credentials] (ADC)
+//!
+//! This is the recommended way for most applications. It automatically finds
+//! credentials from the environment. See how [Application Default Credentials]
+//! works.
+//!
+//! ```
+//! use google_cloud_auth::credentials::Builder;
+//! use google_cloud_auth::signer::Signer;
+//!
+//! # fn sample() -> anyhow::Result<()> {
+//! let signer: Signer = Builder::default().build_signer()?;
+//! # Ok(()) }
+//! ```
+//!
+//! ## Example: Creating a Signer using a Service Account Key File
+//!
+//! This is useful when you have a specific service account key file (JSON)
+//! and want to use it directly. Service account based signers work by local
+//! signing and do not make network requests, which can be useful in
+//! environments where network access is restricted and performance is
+//! critical.
+//!
+//! <div class="warning">
+//!     <strong>Caution:</strong> Service account keys are a security risk if not managed correctly.
+//!     See <a href="https://docs.cloud.google.com/iam/docs/best-practices-for-managing-service-account-keys">
+//!     Best practices for managing service account keys</a> for more information.
+//! </div>
+//!
+//! ```
+//! use google_cloud_auth::credentials::service_account::Builder;
+//! use google_cloud_auth::signer::Signer;
+//!
+//! # fn sample() -> anyhow::Result<()> {
+//! let service_account_key = serde_json::json!({ /* add details here */ });
+//!
+//! let signer: Signer = Builder::new(service_account_key).build_signer()?;
+//! # Ok(()) }
+//! ```
+//!
+//! [Application Default Credentials]: https://docs.cloud.google.com/docs/authentication/application-default-credentials
+//! [Signed URLs]: https://cloud.google.com/storage/docs/access-control/signed-urls
+
+===== src/token.rs =====
+// Copyright 2024 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Types and functions to work with auth [Tokens].
+//!
+//! [Tokens]: https://cloud.google.com/docs/authentication#token
+
+===== src/token_cache.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! The token cache
+
+===== src/universe_domain.rs =====
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+===== tests/credentials.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+===== tests/crypto_provider.rs =====
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+===== tests/transient.rs =====
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.

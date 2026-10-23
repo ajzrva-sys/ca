@@ -36,6 +36,8 @@ pub mod codex;
 pub mod config;
 pub mod context;
 pub mod domain;
+#[cfg(target_os = "freebsd")]
+pub mod freebsd_sandbox;
 pub mod fs_util;
 pub mod git;
 pub mod git_metadata;

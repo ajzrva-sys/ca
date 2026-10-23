@@ -6,11 +6,16 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "freebsd")]
+pub const EXECUTABLE: &str = "/usr/local/bin/git";
+#[cfg(not(target_os = "freebsd"))]
+pub const EXECUTABLE: &str = "/usr/bin/git";
+
 /// Construct a fixed Git process with no inherited credentials, Git environment
 /// overrides, global/system configuration, hooks, fsmonitor or credential helper.
 /// Callers still own typed arguments, scope, timeout and bounded output.
 pub fn command(root: &Path) -> Command {
-    let mut command = Command::new("/usr/bin/git");
+    let mut command = Command::new(EXECUTABLE);
     command
         .env_clear()
         .env("PATH", "/usr/bin:/bin")

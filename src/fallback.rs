@@ -84,11 +84,14 @@ pub fn cause_for_error(error: &ProviderError) -> Option<ProviderFallbackCause> {
         ProviderError::Transport(ProviderTransportFailure::Connect) => {
             Some(ProviderFallbackCause::Connect)
         }
-        ProviderError::Transport(ProviderTransportFailure::Timeout) => {
+        ProviderError::Transport(ProviderTransportFailure::Timeout)
+        | ProviderError::Transport(ProviderTransportFailure::FirstTokenTimeout) => {
             Some(ProviderFallbackCause::Timeout)
         }
-        ProviderError::Http { status: 429 } => Some(ProviderFallbackCause::RateLimited),
-        ProviderError::Http { status: 500..=599 } => Some(ProviderFallbackCause::ServerError),
+        ProviderError::Http { status: 429, .. } => Some(ProviderFallbackCause::RateLimited),
+        ProviderError::Http {
+            status: 500..=599, ..
+        } => Some(ProviderFallbackCause::ServerError),
         _ => None,
     }
 }
@@ -190,6 +193,8 @@ mod tests {
             config.providers.insert(
                 provider.into(),
                 crate::config::ProviderConfig {
+                    google: None,
+                    tool_schema_policy: Default::default(),
                     base_url: format!("https://{provider}.invalid/v1"),
                     api_key: String::new(),
                     protocol: crate::agent::ProviderProtocol::default(),
@@ -225,16 +230,40 @@ mod tests {
                 Some(ProviderFallbackCause::Timeout),
             ),
             (
-                ProviderError::Http { status: 429 },
+                ProviderError::Http {
+                    status: 429,
+                    body_excerpt: None,
+                },
                 Some(ProviderFallbackCause::RateLimited),
             ),
             (
-                ProviderError::Http { status: 503 },
+                ProviderError::Http {
+                    status: 503,
+                    body_excerpt: None,
+                },
                 Some(ProviderFallbackCause::ServerError),
             ),
-            (ProviderError::Http { status: 401 }, None),
-            (ProviderError::Http { status: 403 }, None),
-            (ProviderError::Http { status: 404 }, None),
+            (
+                ProviderError::Http {
+                    status: 401,
+                    body_excerpt: None,
+                },
+                None,
+            ),
+            (
+                ProviderError::Http {
+                    status: 403,
+                    body_excerpt: None,
+                },
+                None,
+            ),
+            (
+                ProviderError::Http {
+                    status: 404,
+                    body_excerpt: None,
+                },
+                None,
+            ),
             (
                 ProviderError::Transport(ProviderTransportFailure::Request),
                 None,
@@ -269,7 +298,10 @@ mod tests {
             &rules,
             "primary",
             "one",
-            &ProviderError::Http { status: 429 }
+            &ProviderError::Http {
+                status: 429,
+                body_excerpt: None
+            }
         )
         .is_none());
     }

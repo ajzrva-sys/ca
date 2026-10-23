@@ -2,8 +2,9 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 34), render_to_text(&state, 60, 28))"
 ---
- ca · agent · auto
-> Send the frozen draft
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
+ › Send the frozen draft
 
 
   Approve tool [1/1] — email_send
@@ -31,14 +32,14 @@ expression: "wide_narrow(render_to_text(&state, 100, 34), render_to_text(&state,
 
 
 
-
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
 1 messages · / commands
 -- narrow --
- ca · agent · auto
-> Send the frozen draft
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
+ › Send the frozen draft
 
 
   Approve tool [1/1] — email_send
@@ -60,8 +61,7 @@ bbbb · 1 attachment(s)
 
 
 
-
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                           │
+╰──────────────────────────────────────────── agent · auto ╯
 1 messages · / commands

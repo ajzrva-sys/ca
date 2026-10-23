@@ -140,6 +140,7 @@ pub enum ToolHandler {
     ReadScratch,
     CreatePlan,
     ProposePlan,
+    PlanWorkflow,
     ConfigureAgentGraph,
     ProposeMemory,
     ProposeAutomation,
@@ -148,6 +149,7 @@ pub enum ToolHandler {
     UpdatePlanTask,
     RecordPlanEvidence,
     RequestUserInput,
+    RequestWriteAccess,
     AskQuestion,
     UpdateTodos,
     CreateDirectory,
@@ -161,6 +163,7 @@ pub enum ToolHandler {
     Task,
     SpawnAgent,
     SpawnAgentBatch,
+    RequestGraphClarification,
     AwaitAgent,
     AwaitAgentBatch,
     SendAgentMessage,
@@ -168,6 +171,7 @@ pub enum ToolHandler {
     SetAgentSpawning,
     CancelAgentJob,
     ListAgents,
+    ListAgentRoutes,
     ActivateSkill,
     SkillView,
     SkillManage,
@@ -338,11 +342,7 @@ impl ToolContext {
             cwd: workspace.cwd().to_path_buf(),
             timeout_secs,
             profile,
-            workspace_roots: workspace
-                .roots()
-                .iter()
-                .map(|root| root.path.clone())
-                .collect(),
+            workspace_roots: workspace.execution_roots(),
             sandbox_mode,
             network_allowed: false,
             job_owner,
@@ -358,6 +358,7 @@ pub enum ToolExecutionResult {
         model_text: String,
         observation: crate::command_output::CommandObservation,
         success: bool,
+        mutation: Option<Box<crate::undo::FileMutationBatchReceipt>>,
     },
     SuccessMutation {
         marker: String,
@@ -388,11 +389,13 @@ impl std::fmt::Debug for ToolExecutionResult {
                 model_text,
                 observation,
                 success,
+                mutation,
             } => formatter
                 .debug_struct("Command")
                 .field("model_text", model_text)
                 .field("observation", observation)
                 .field("success", success)
+                .field("mutation", mutation)
                 .finish(),
             Self::SuccessMutation { marker, mutation } => formatter
                 .debug_struct("SuccessMutation")
@@ -478,6 +481,10 @@ impl ToolExecutionResult {
     pub fn mutation(&self) -> Option<&crate::undo::FileMutationReceipt> {
         match self {
             Self::SuccessMutation { mutation, .. } => Some(mutation.primary()),
+            Self::Command {
+                mutation: Some(mutation),
+                ..
+            } => Some(mutation.primary()),
             _ => None,
         }
     }
@@ -485,6 +492,10 @@ impl ToolExecutionResult {
     pub fn mutation_batch(&self) -> Option<&crate::undo::FileMutationBatchReceipt> {
         match self {
             Self::SuccessMutation { mutation, .. } => Some(mutation),
+            Self::Command {
+                mutation: Some(mutation),
+                ..
+            } => Some(mutation),
             _ => None,
         }
     }
@@ -558,6 +569,45 @@ impl ToolRegistry {
             }
             other => other,
         })?;
+        if matches!(
+            spec.handler,
+            ToolHandler::Task | ToolHandler::SpawnAgent | ToolHandler::SpawnAgentBatch
+        ) {
+            let invocations = if spec.handler == ToolHandler::SpawnAgentBatch {
+                arguments["tasks"]
+                    .as_array()
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[])
+            } else {
+                std::slice::from_ref(arguments)
+            };
+            for invocation in invocations {
+                if let Some(route) = invocation.get("route").filter(|route| !route.is_null()) {
+                    if invocation
+                        .get("complexity")
+                        .is_some_and(|complexity| !complexity.is_null())
+                    {
+                        return Err(ToolRegistryError::InvalidArguments {
+                            tool: name.to_string(),
+                            detail: "route and complexity cannot be combined".into(),
+                        });
+                    }
+                    for field in ["provider", "model"] {
+                        if route[field]
+                            .as_str()
+                            .is_none_or(|value| value.trim().is_empty())
+                        {
+                            return Err(ToolRegistryError::InvalidArguments {
+                                tool: name.to_string(),
+                                detail: format!(
+                                    "route {field} must be a non-empty exact configured identity"
+                                ),
+                            });
+                        }
+                    }
+                }
+            }
+        }
         if spec.handler == ToolHandler::WatchProcess {
             let request: ca_watch::WatchRequestV1 = serde_json::from_value(arguments.clone())
                 .map_err(|error| ToolRegistryError::InvalidArguments {
@@ -663,6 +713,10 @@ pub(crate) mod arguments {
 
     #[derive(Deserialize, JsonSchema)]
     pub(super) struct EmptyArgs {}
+
+    #[derive(Deserialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    pub(super) struct ListAgentRoutesArgs {}
 
     #[derive(Debug, Clone, Deserialize, JsonSchema)]
     #[serde(deny_unknown_fields)]
@@ -911,7 +965,8 @@ pub(crate) mod arguments {
         cwd: Option<String>,
         background: Option<bool>,
         /// Request network access for commands not recognized as an obvious
-        /// network client. SSH-family clients request it automatically.
+        /// network client. SSH-family clients, and local scripts that invoke
+        /// them, request it automatically.
         network: Option<bool>,
     }
     #[derive(Deserialize, JsonSchema)]
@@ -1042,6 +1097,14 @@ pub(crate) mod arguments {
         question: String,
     }
     #[derive(Deserialize, JsonSchema)]
+    pub(crate) struct RequestGraphClarificationArgs {
+        /// Bounded typed question addressed to the coordinating parent.
+        pub(crate) question: String,
+        /// Optional answer choices the parent may pick from.
+        #[serde(default)]
+        pub(crate) choices: Vec<String>,
+    }
+    #[derive(Deserialize, JsonSchema)]
     pub(super) struct UpdateTodosArgs {
         path: String,
         action: String,
@@ -1089,7 +1152,7 @@ pub(crate) mod arguments {
         /// Create a timestamped backup of the existing destination before replacing.
         #[serde(default = "default_true")]
         pub backup: bool,
-        /// Verify the installed binary matches the source SHA-256 after replacement.
+        /// Compatibility flag; integrity checks always run. Self-updates also verify version/help.
         #[serde(default = "default_true")]
         pub verify: bool,
     }
@@ -1097,14 +1160,41 @@ pub(crate) mod arguments {
         true
     }
     #[derive(Deserialize, JsonSchema)]
+    #[serde(rename_all = "lowercase")]
+    enum BuiltinSubagentName {
+        Explore,
+        Plan,
+        General,
+    }
+
+    #[derive(Deserialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    struct AgentRouteArgs {
+        /// Exact configured provider identity returned by list_agent_routes.
+        #[schemars(length(min = 1))]
+        provider: String,
+        /// Exact configured model identity belonging to that provider.
+        #[schemars(length(min = 1))]
+        model: String,
+    }
+
+    #[derive(Deserialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
     pub(super) struct TaskArgs {
         /// Use one available built-in name: explore, plan, or general.
+        #[schemars(with = "BuiltinSubagentName")]
         subagent_name: String,
         prompt: String,
         description: Option<String>,
+        /// Optional exact configured child route from list_agent_routes. This
+        /// overrides inherited/configured defaults and bypasses cost routing.
+        /// Cannot be combined with complexity.
+        route: Option<AgentRouteArgs>,
         /// Optional explicit inter-provider cost-routing request. When omitted,
-        /// the child inherits the current provider/model. Set this only when the
-        /// user explicitly requests automatic inter-provider routing.
+        /// the child inherits the current provider/model or configured default,
+        /// unless route selects an exact child. Cannot be combined with route.
+        /// Set this only when the user explicitly requests automatic
+        /// inter-provider cost routing.
         complexity: Option<crate::pricing::Complexity>,
     }
     #[derive(Deserialize, JsonSchema)]
@@ -1115,9 +1205,15 @@ pub(crate) mod arguments {
         tools: Vec<String>,
         assigned_files: Option<Vec<String>>,
         commands: Option<Vec<String>>,
+        /// Optional exact configured child route from list_agent_routes. This
+        /// overrides inherited/configured defaults and bypasses cost routing.
+        /// Cannot be combined with complexity.
+        route: Option<AgentRouteArgs>,
         /// Optional explicit inter-provider cost-routing request. When omitted,
-        /// the child inherits the current provider/model. Set this only when the
-        /// user explicitly requests automatic inter-provider routing.
+        /// the child inherits the current provider/model or configured default,
+        /// unless route selects an exact child. Cannot be combined with route.
+        /// Set this only when the user explicitly requests automatic
+        /// inter-provider cost routing.
         complexity: Option<crate::pricing::Complexity>,
         /// Optional bounded object-root JSON Schema for the final child value.
         output_schema: Option<Value>,
@@ -1182,6 +1278,10 @@ fn builtin_specs() -> Vec<ToolSpec> {
     let main = vec![ToolProfile::Main, ToolProfile::Subagent];
     let review = |mut profiles: Vec<ToolProfile>| {
         profiles.push(ToolProfile::Review);
+        profiles
+    };
+    let with_plan = |mut profiles: Vec<ToolProfile>| {
+        profiles.push(ToolProfile::Plan);
         profiles
     };
     let resource = |field, kind, required| ResourceFieldSpec {
@@ -1278,7 +1378,7 @@ fn builtin_specs() -> Vec<ToolSpec> {
             ReadOnly,
             [FilesystemRead],
             [resource("path", ResourceKind::Path, true)],
-            review(main.clone())
+            with_plan(review(main.clone()))
         ),
         spec!(
             ReadPdf,
@@ -1288,7 +1388,7 @@ fn builtin_specs() -> Vec<ToolSpec> {
             ReadOnly,
             [FilesystemRead],
             [resource("path", ResourceKind::Path, true)],
-            review(main.clone())
+            with_plan(review(main.clone()))
         ),
         spec!(
             ViewImage,
@@ -1298,7 +1398,7 @@ fn builtin_specs() -> Vec<ToolSpec> {
             ReadOnly,
             [FilesystemRead, Image],
             [resource("path", ResourceKind::Path, true)],
-            review(main.clone())
+            with_plan(review(main.clone()))
         ),
         spec!(
             Browser,
@@ -1331,7 +1431,7 @@ fn builtin_specs() -> Vec<ToolSpec> {
             ReadOnly,
             [FilesystemRead],
             [resource("path", ResourceKind::Path, true)],
-            review(main.clone())
+            with_plan(review(main.clone()))
         ),
         spec!(
             RunCommand,
@@ -1344,7 +1444,7 @@ fn builtin_specs() -> Vec<ToolSpec> {
                 resource("command", ResourceKind::Command, true),
                 resource("cwd", ResourceKind::WorkingDirectory, false)
             ],
-            main.clone()
+            with_plan(main.clone())
         ),
         spec!(
             RunPrivileged,
@@ -1414,7 +1514,7 @@ fn builtin_specs() -> Vec<ToolSpec> {
             ReadOnly,
             [FilesystemRead],
             [resource("path", ResourceKind::Path, false)],
-            review(main.clone())
+            with_plan(review(main.clone()))
         ),
         spec!(
             EditFile,
@@ -1464,7 +1564,7 @@ fn builtin_specs() -> Vec<ToolSpec> {
             ReadOnly,
             [FilesystemRead],
             [resource("path", ResourceKind::Path, false)],
-            review(main.clone())
+            with_plan(review(main.clone()))
         ),
         spec!(
             WebSearch,
@@ -1535,6 +1635,16 @@ fn builtin_specs() -> Vec<ToolSpec> {
             [Interaction],
             [],
             vec![ToolProfile::Plan]
+        ),
+        spec!(
+            PlanWorkflow,
+            crate::plan_workflow::PlanWorkflowArgs,
+            "plan_workflow",
+            "Create or control a persistent cross-provider planning workflow. Use named participants and ordered author/review/revise steps; implementation is optional and must follow the initiating user's request. The host runs stages and records the handoff graph. After queuing a change, finish this reply so the workflow can run.",
+            Mutating,
+            [Interaction, Subagent],
+            [],
+            vec![ToolProfile::Main, ToolProfile::Plan]
         ),
         spec!(
             ConfigureAgentGraph,
@@ -1615,6 +1725,16 @@ fn builtin_specs() -> Vec<ToolSpec> {
             [Interaction],
             [],
             main.clone()
+        ),
+        spec!(
+            RequestWriteAccess,
+            crate::write_access::RequestWriteAccessArgs,
+            "request_write_access",
+            "Ask the user once to allow writes to an existing absolute folder for this live session. Use this before exporting outside the workspace (for example to Desktop); then use ordinary native tools or run_command without sudo. A grant does not require an administrator password and expires on session switch or restart",
+            Mutating,
+            [Interaction, FilesystemWrite],
+            [],
+            vec![ToolProfile::Main]
         ),
         spec!(
             AskQuestion,
@@ -1713,7 +1833,7 @@ fn builtin_specs() -> Vec<ToolSpec> {
             InstallBinary,
             InstallBinaryArgs,
             "install_binary",
-            "Install a built binary to a destination path with SHA-256 verification, atomic replacement, and optional backup. Runs as native Rust inside the ca process, bypassing workspace and sandbox boundaries. Default destination is the current executable path",
+            "Install a locally built executable using the current user's permissions; prefer this tool for ca self-updates instead of sudo or shell copies. Signs macOS executables, stages beside the destination, atomically replaces, verifies integrity, and restores recovery on failure. Default destination is the current executable; ca self-updates always retain recovery and verify version/help",
             Mutating,
             [FilesystemWrite],
             [],
@@ -1723,7 +1843,7 @@ fn builtin_specs() -> Vec<ToolSpec> {
             Task,
             TaskArgs,
             "task",
-            "Run a delegated task using explore, plan, or general; omit complexity to inherit the current provider/model, and set it only when the user explicitly requests inter-provider cost routing",
+            "Use explore or plan for an independent bounded read-only investigation, or general for granted coding work. Use exactly an available name: explore, plan, or general. Use list_agent_routes to discover configured provider/model identities, then set route to select an exact child provider/model independently of the parent; this bypasses automatic cost routing. Otherwise omit complexity to inherit the current provider/model or configured delegation default. Set complexity only when the user explicitly requests automatic inter-provider cost routing; route and complexity cannot be combined",
             Mutating,
             [Subagent],
             [],
@@ -1733,7 +1853,7 @@ fn builtin_specs() -> Vec<ToolSpec> {
             SpawnAgent,
             SpawnAgentArgs,
             "spawn_agent",
-            "Spawn an asynchronous child agent with exact requested tool grants; omit complexity to inherit the current provider/model, and set it only when the user explicitly requests inter-provider cost routing",
+            "Proactively spawn a useful independent exploration, implementation, or review task and keep working concurrently. Supply exact registered tools, for example [read_file, search_files, glob, list_dir] for read-only exploration; await and integrate its evidence before finishing. Use list_agent_routes to discover configured provider/model identities, then set route to select an exact child provider/model independently of the parent; this bypasses automatic cost routing. Otherwise omit complexity to inherit the current provider/model or configured delegation default. Set complexity only when the user explicitly requests automatic inter-provider cost routing; route and complexity cannot be combined",
             Mutating,
             [Subagent],
             [],
@@ -1743,11 +1863,21 @@ fn builtin_specs() -> Vec<ToolSpec> {
             SpawnAgentBatch,
             SpawnAgentBatchArgs,
             "spawn_agent_batch",
-            "Atomically admit two or more asynchronous child tasks and return one ordered batch identity",
+            "Atomically admit two or more asynchronous child tasks and return one ordered batch identity. Each task may choose an exact configured route from list_agent_routes; route bypasses automatic cost routing and cannot be combined with complexity",
             Mutating,
             [Subagent],
             [],
             main.clone()
+        ),
+        spec!(
+            RequestGraphClarification,
+            RequestGraphClarificationArgs,
+            "request_graph_clarification",
+            "Ask the coordinating parent one bounded typed clarification question while running inside an agent graph task; the parent's answer is returned as this tool's result. Only agent graph lanes may call it, and only one question may be pending at a time",
+            ReadOnly,
+            [Interaction],
+            [],
+            vec![ToolProfile::Subagent]
         ),
         spec!(
             AwaitAgent,
@@ -1808,6 +1938,16 @@ fn builtin_specs() -> Vec<ToolSpec> {
             [Subagent, JobControl],
             [resource("job_id", ResourceKind::JobId, true)],
             main.clone()
+        ),
+        spec!(
+            ListAgentRoutes,
+            ListAgentRoutesArgs,
+            "list_agent_routes",
+            "List configured child provider/model routes without contacting providers or exposing credentials. Configuration is not proof of current authentication or availability. Use exact returned identities in route on task, spawn_agent, or spawn_agent_batch; the parent can retain its own provider while controlling these children",
+            ReadOnly,
+            [Subagent],
+            [],
+            vec![ToolProfile::Main, ToolProfile::Plan]
         ),
         spec!(
             ListAgents,
@@ -2200,7 +2340,8 @@ fn builtin_presentation(handler: ToolHandler) -> ToolPresentation {
         | ToolHandler::ApplyPatch
         | ToolHandler::DeleteFile
         | ToolHandler::CreateDirectory
-        | ToolHandler::InstallBinary => ToolPresentation::Activity(ToolActivityKind::File),
+        | ToolHandler::InstallBinary
+        | ToolHandler::RequestWriteAccess => ToolPresentation::Activity(ToolActivityKind::File),
         ToolHandler::RunCommand => ToolPresentation::Activity(ToolActivityKind::Command),
         ToolHandler::ReadFile
         | ToolHandler::ReadPdf
@@ -2278,7 +2419,7 @@ mod tests {
             assert_eq!(spec.origin, ToolOrigin::BuiltIn);
             assert_eq!(spec.schema["type"], "object", "{} schema", spec.name);
         }
-        assert_eq!(names.len(), 96);
+        assert_eq!(names.len(), 100);
 
         let valid_arguments = [
             ("search_tools", json!({"query":"agents","limit":5})),
@@ -2402,6 +2543,10 @@ mod tests {
                 json!({"question":"question", "kind":"free_text"}),
             ),
             ("ask_question", json!({"question":"question"})),
+            (
+                "request_write_access",
+                json!({"path":"/tmp/export", "reason":"Export the requested file"}),
+            ),
             ("update_todos", json!({"path":"out", "action":"add"})),
             ("create_directory", json!({"path":"out"})),
             ("switch_mode", json!({"mode":"ask"})),
@@ -2411,7 +2556,7 @@ mod tests {
             ("switch_branch", json!({"branch":"main"})),
             ("generate_image", json!({"prompt":"image"})),
             ("install_binary", json!({"source":"/tmp/test-binary"})),
-            ("task", json!({"subagent_name":"worker", "prompt":"work"})),
+            ("task", json!({"subagent_name":"explore", "prompt":"work"})),
             ("spawn_agent", json!({"task":"work", "tools":["read_file"]})),
             (
                 "spawn_agent_batch",
@@ -2419,6 +2564,10 @@ mod tests {
                     {"task":"one", "tools":["read_file"]},
                     {"task":"two", "tools":["read_file"]}
                 ]}),
+            ),
+            (
+                "request_graph_clarification",
+                json!({"question":"which path?"}),
             ),
             (
                 "await_agent",
@@ -2445,6 +2594,8 @@ mod tests {
                 }),
             ),
             ("list_agents", json!({})),
+            ("list_agent_routes", json!({})),
+            ("plan_workflow", json!({"action":"status"})),
             ("git_status", json!({})),
             ("git_diff", json!({})),
             ("git_log", json!({"max_entries":5})),
@@ -2660,7 +2811,7 @@ mod tests {
     #[test]
     fn profiles_mutations_capabilities_and_resources_are_centralized() {
         let registry = ToolRegistry::builtins();
-        assert_eq!(registry.definitions(ToolProfile::Main).len(), 91);
+        assert_eq!(registry.definitions(ToolProfile::Main).len(), 94);
         let main_names: HashSet<String> = registry
             .definitions(ToolProfile::Main)
             .into_iter()
@@ -2670,6 +2821,7 @@ mod tests {
         assert!(main_names.contains("propose_memory"));
         assert!(main_names.contains("propose_automation"));
         assert!(main_names.contains("list_local_automations"));
+        assert!(main_names.contains("plan_workflow"));
         assert!(main_names.contains("search_tools"));
         assert!(main_names.contains("browser"));
         assert!(main_names.contains("email_accounts"));
@@ -2695,9 +2847,18 @@ mod tests {
         assert_eq!(
             plan_names,
             HashSet::from_iter([
+                "read_file".into(),
+                "read_pdf".into(),
+                "view_image".into(),
+                "list_dir".into(),
+                "run_command".into(),
+                "search_files".into(),
+                "glob".into(),
                 "propose_plan".into(),
                 "configure_agent_graph".into(),
                 "edit_plan".into(),
+                "plan_workflow".into(),
+                "list_agent_routes".into(),
                 "search_tools".into(),
             ])
         );
@@ -2896,6 +3057,65 @@ mod tests {
 
         let command = registry.get("run_command").unwrap();
         assert!(command.description.contains("$TMPDIR"));
+    }
+
+    #[test]
+    fn explicit_agent_route_schema_and_validation_preserve_exact_selection() {
+        let registry = ToolRegistry::builtins();
+        let route = json!({"provider":"openai-codex", "model":"gpt-6.1-sol"});
+        for (name, mut arguments) in [
+            (
+                "task",
+                json!({"subagent_name":"explore", "prompt":"inspect"}),
+            ),
+            (
+                "spawn_agent",
+                json!({"task":"inspect", "tools":["read_file"]}),
+            ),
+        ] {
+            let spec = registry.get(name).unwrap();
+            assert!(spec.schema.pointer("/properties/route").is_some(), "{name}");
+            assert!(spec.description.contains("list_agent_routes"), "{name}");
+            arguments["route"] = route.clone();
+            registry.validate(name, &arguments).unwrap();
+            arguments["complexity"] = json!("simple");
+            assert!(registry.validate(name, &arguments).is_err(), "{name}");
+            arguments["complexity"] = Value::Null;
+            registry.validate(name, &arguments).unwrap();
+            arguments["route"]["provider"] = json!("");
+            assert!(registry.validate(name, &arguments).is_err(), "{name}");
+            arguments["route"] = json!({"provider":"openai-codex"});
+            assert!(registry.validate(name, &arguments).is_err(), "{name}");
+            arguments["route"] = route.clone();
+            arguments["route"]["api_key"] = json!("unexpected-field");
+            assert!(registry.validate(name, &arguments).is_err(), "{name}");
+            arguments["route"] = Value::Null;
+            arguments["provider"] = json!("openai-codex");
+            arguments["model"] = json!("gpt-6.1-sol");
+            assert!(registry.validate(name, &arguments).is_err(), "{name}");
+        }
+        let mut batch = json!({"tasks":[
+            {"task":"one", "tools":["read_file"], "route":route},
+            {"task":"two", "tools":["read_file"]}
+        ]});
+        registry.validate("spawn_agent_batch", &batch).unwrap();
+        batch["tasks"][0]["complexity"] = json!("complex");
+        assert!(registry.validate("spawn_agent_batch", &batch).is_err());
+    }
+
+    #[test]
+    fn configured_agent_route_discovery_is_main_and_plan_readonly_and_secret_free() {
+        let registry = ToolRegistry::builtins();
+        let spec = registry.get("list_agent_routes").unwrap();
+        assert_eq!(spec.mutation, ToolMutation::ReadOnly);
+        assert_eq!(spec.profiles, [ToolProfile::Main, ToolProfile::Plan]);
+        assert_eq!(spec.capabilities, [ToolCapability::Subagent]);
+        assert!(spec.description.contains("configured"));
+        assert!(spec.description.contains("authentication"));
+        registry.validate("list_agent_routes", &json!({})).unwrap();
+        assert!(registry
+            .validate("list_agent_routes", &json!({"api_key":"never-read"}))
+            .is_err());
     }
 
     #[test]

@@ -29,7 +29,7 @@ expression: "wide_narrow(wide, narrow)"
 │  4. Run completion checks [Pending]                                                              │
 │  5. Install the verified release [Pending]                                                       │
 │                                                                                                  │
-│Enter Execute · R Revise · N comment selection · Esc close · C copy all                           │
+│Enter Execute · R Revise · S Send · N comment selection · Esc close · C copy all                  │
 │↑/↓ scroll · PgUp/PgDn page · 29/29                                                               │
 │                                                                                                  │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
@@ -54,7 +54,7 @@ expression: "wide_narrow(wide, narrow)"
 │  4. Run completion checks [Pending]                      │
 │  5. Install the verified release [Pending]               │
 │                                                          │
-│Enter Execute · R Revise · N comment selection · Esc close│
-│· C copy all                                              │
+│Enter Execute · R Revise · S Send · N comment selection · │
+│Esc close · C copy all                                    │
 │↑/↓ scroll · PgUp/PgDn page · 49/49                       │
 └──────────────────────────────────────────────────────────┘

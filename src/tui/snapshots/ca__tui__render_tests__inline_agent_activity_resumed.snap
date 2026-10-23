@@ -2,13 +2,14 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 I launched two focused explorations.
 
 
-  ◆ Completed Agent — Audit session structure
+  ▾ Subagents 1
+  ◆ Reviewer Audit session structure · Completed                                    review-model 2s
       ↳ Session boundaries verified
-  Ctrl+X Down view agents
+  Ctrl+X J view agents
 
 
 
@@ -27,19 +28,19 @@ I launched two focused explorations.
 
 
 
-
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
 1 messages · / commands
 -- narrow --
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
 I launched two focused explorations.
 
 
-  ◆ Completed Agent — Audit session structure
+  ▾ Subagents 1
+  ◆ Reviewer Audit session struc… · Completed review-mo… 2s
       ↳ Session boundaries verified
-  Ctrl+X Down view agents
+  Ctrl+X J view agents
 
 
 
@@ -52,8 +53,7 @@ I launched two focused explorations.
 
 
 
-
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                           │
+╰──────────────────────────────────────────── agent · auto ╯
 1 messages · / commands

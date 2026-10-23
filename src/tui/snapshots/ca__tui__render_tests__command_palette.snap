@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
 
 
@@ -28,12 +28,12 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
   │    Set or manage a finite evidence-evaluated goal session                                    │
   │  /new                           Start a new session; keep the previous one                   │
   └ ↑↓ select · Tab complete · Enter choose · Esc dismiss ───────────────────────────────────────┘
-────────────────────────────────────────────────────────────────────────────────────────────────────
- → /session▌
-
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│› /session▌                                                                                       │
+╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
 ↑↓ select · Tab complete · Enter choose · Esc dismiss
 -- narrow --
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
 
 
 
@@ -53,7 +53,7 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
   │  /load-workspace <name>                              │
   │    Load a named workspace into the current session   │
   └ ↑↓ select · Tab complete · Enter choose · Esc dismiss┘
-────────────────────────────────────────────────────────────
- → /session▌
-
+╭──────────────────────────────────────────────────────────╮
+│› /session▌                                               │
+╰──────────────────────────────────────────── agent · auto ╯
 ↑↓ select · Tab complete · Enter choose · Esc dismiss

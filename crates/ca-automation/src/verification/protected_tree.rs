@@ -466,11 +466,15 @@ fn stat_at(directory: i32, name: &CString) -> Result<StatIdentity> {
     if stat.st_size < 0 {
         bail!("protected-tree entry has an invalid size");
     }
+    #[cfg(target_os = "freebsd")]
+    let (device, links) = (stat.st_dev, stat.st_nlink);
+    #[cfg(not(target_os = "freebsd"))]
+    let (device, links) = (stat.st_dev as u64, stat.st_nlink as u64);
     Ok(StatIdentity {
-        device: stat.st_dev as u64,
+        device,
         inode: stat.st_ino,
         mode: stat.st_mode as u32,
-        links: stat.st_nlink as u64,
+        links,
         size: stat.st_size as u64,
         modified_seconds: stat.st_mtime,
         changed_seconds: stat.st_ctime,

@@ -13,6 +13,7 @@ const MAX_STATUS_COMMAND_BYTES: usize = 1_024;
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum UiTheme {
+    /// Neutral charcoal conversation surfaces with purple agent identities.
     #[default]
     Default,
     Ocean,
@@ -516,7 +517,7 @@ pub struct StatusCommandOutput {
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum StatusCommandError {
-    #[error("custom status commands require the required macOS sandbox")]
+    #[error("custom status commands require a native sandbox")]
     SandboxUnavailable,
     #[error("custom status command could not be started")]
     StartFailed,

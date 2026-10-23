@@ -820,6 +820,8 @@ impl ManagedLocalServer {
 
     pub fn provider_config(&self) -> crate::config::ProviderConfig {
         crate::config::ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: self.info.base_url.clone(),
             api_key: String::new(),
             protocol: crate::agent::ProviderProtocol::ChatCompletions,

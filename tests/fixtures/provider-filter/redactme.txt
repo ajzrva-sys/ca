@@ -1,0 +1,5 @@
+redactme is the first token.
+REDACTME is the second token.
+Both appear here: redactme and REDACTME.
+The name on disk is redactme.txt.
+Leave redacted alone.

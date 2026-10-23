@@ -1013,7 +1013,9 @@ mod tests {
         }
         let binary = root.join("baseline-binary");
         std::fs::write(&binary, b"baseline executable bytes").unwrap();
-        let vault = LearningVault::open_at(root.join("vault")).unwrap();
+        let vault = LearningVault::open_at(root.join("vault"))
+            .unwrap()
+            .with_filesystem_space_probe(|_| Ok((200 * 1024_u64.pow(3), 1024 * 1024_u64.pow(3))));
         let (mut plan, _, _) = crate::harness_generation::tests::inputs();
         plan.baseline = source_snapshot(&repository).await.unwrap();
         plan.baseline_binary_digest = artifact_digest(&binary).unwrap();

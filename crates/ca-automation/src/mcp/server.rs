@@ -54,6 +54,7 @@ const POLL_HINT_MS: u64 = 2_000;
 const MCP_STEP_PROVENANCE_ENV: &str = "CODEX_TEAM_MCP_STEP_PROVENANCE";
 const MCP_STEP_BARRIER_FD_ENV: &str = "CODEX_TEAM_MCP_STEP_BARRIER_FD";
 const MCP_STEP_BARRIER_RELEASE: u8 = 0xa5;
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "freebsd"))]
 const MAX_PROCESS_INSPECTION_BYTES: usize = 4 * 1024 * 1024;
 
 static NEXT_JOB_ID: AtomicU64 = AtomicU64::new(1);
@@ -3427,7 +3428,7 @@ fn read_bounded_process_file(path: &Path, limit: usize) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 fn split_nul_entries(bytes: &[u8]) -> Result<Vec<Vec<u8>>> {
     if bytes.is_empty() || *bytes.last().unwrap_or(&1) != 0 {
         bail!("MCP step process data was not NUL terminated");
@@ -3442,7 +3443,135 @@ fn split_nul_entries(bytes: &[u8]) -> Result<Vec<Vec<u8>>> {
     Ok(entries)
 }
 
-#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+#[cfg(target_os = "freebsd")]
+fn inspect_live_process(process_id: i32) -> Result<LiveProcessSnapshot> {
+    use std::os::unix::ffi::OsStringExt as _;
+    use std::os::unix::fs::MetadataExt as _;
+
+    let identity = freebsd_process_identity(process_id)?;
+    let executable_bytes = freebsd_process_data(process_id, libc::KERN_PROC_PATHNAME)?;
+    let executable = std::ffi::CStr::from_bytes_with_nul(&executable_bytes)
+        .context("MCP step executable path was not NUL terminated")?;
+    let executable = std::fs::canonicalize(PathBuf::from(std::ffi::OsString::from_vec(
+        executable.to_bytes().to_vec(),
+    )))
+    .context("canonicalize live MCP step executable")?;
+    let executable_metadata = std::fs::metadata(&executable)?;
+
+    // KERN_PROC_CWD copies out one variable-length kinfo_file, ending after its
+    // NUL-terminated path. Validate its fixed header before reading that path.
+    let cwd_bytes = freebsd_process_data(process_id, libc::KERN_PROC_CWD)?;
+    let path_offset = std::mem::offset_of!(libc::kinfo_file, kf_path);
+    if cwd_bytes.len() <= path_offset || cwd_bytes.len() > std::mem::size_of::<libc::kinfo_file>() {
+        bail!("MCP step working directory record had an invalid size");
+    }
+    let field = |offset: usize| -> i32 {
+        i32::from_ne_bytes(
+            cwd_bytes[offset..offset + 4]
+                .try_into()
+                .expect("validated kinfo_file header"),
+        )
+    };
+    if usize::try_from(field(std::mem::offset_of!(libc::kinfo_file, kf_structsize)))?
+        != cwd_bytes.len()
+        || field(std::mem::offset_of!(libc::kinfo_file, kf_type)) != libc::KF_TYPE_VNODE
+        || field(std::mem::offset_of!(libc::kinfo_file, kf_fd)) != libc::KF_FD_TYPE_CWD
+    {
+        bail!("MCP step working directory record did not describe its current directory");
+    }
+    let cwd = std::ffi::CStr::from_bytes_until_nul(&cwd_bytes[path_offset..])
+        .context("MCP step working directory was not NUL terminated")?;
+    let cwd = std::fs::canonicalize(PathBuf::from(std::ffi::OsString::from_vec(
+        cwd.to_bytes().to_vec(),
+    )))
+    .context("canonicalize live MCP step working directory")?;
+    let argv = split_nul_entries(&freebsd_process_data(process_id, libc::KERN_PROC_ARGS)?)?;
+    let environment = split_nul_entries(&freebsd_process_data(process_id, libc::KERN_PROC_ENV)?)?;
+    if freebsd_process_identity(process_id)? != identity {
+        bail!("MCP step process identity changed during provenance inspection");
+    }
+    Ok(LiveProcessSnapshot {
+        start_token: format!("freebsd:{}:{}", identity.0, identity.1),
+        executable,
+        executable_device: executable_metadata.dev(),
+        executable_inode: executable_metadata.ino(),
+        cwd,
+        argv,
+        environment: Some(environment),
+    })
+}
+
+#[cfg(target_os = "freebsd")]
+fn freebsd_process_identity(process_id: i32) -> Result<(libc::time_t, libc::suseconds_t)> {
+    if process_id <= 0 {
+        bail!("invalid MCP step process ID for provenance inspection");
+    }
+    let mut mib = [
+        libc::CTL_KERN,
+        libc::KERN_PROC,
+        libc::KERN_PROC_PID,
+        process_id,
+    ];
+    let mut info = std::mem::MaybeUninit::<libc::kinfo_proc>::zeroed();
+    let mut size = std::mem::size_of::<libc::kinfo_proc>();
+    let result = unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            mib.len() as u32,
+            info.as_mut_ptr().cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error()).context("inspect MCP step FreeBSD identity");
+    }
+    if size != std::mem::size_of::<libc::kinfo_proc>() {
+        bail!("MCP step FreeBSD identity record was truncated");
+    }
+    let info = unsafe { info.assume_init() };
+    if info.ki_structsize != i32::try_from(size)?
+        || info.ki_pid != process_id
+        || info.ki_pgid != process_id
+        || info.ki_sid != process_id
+        || info.ki_uid != unsafe { libc::geteuid() }
+    {
+        bail!("live process does not have the expected MCP step ownership and session identity");
+    }
+    Ok((info.ki_start.tv_sec, info.ki_start.tv_usec))
+}
+
+#[cfg(target_os = "freebsd")]
+fn freebsd_process_data(process_id: i32, selector: i32) -> Result<Vec<u8>> {
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROC, selector, process_id];
+    let mut bytes = vec![0_u8; MAX_PROCESS_INSPECTION_BYTES];
+    let mut size = bytes.len();
+    let result = unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            mib.len() as u32,
+            bytes.as_mut_ptr().cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error())
+            .context("inspect bounded MCP step process data");
+    }
+    if size == 0 || size > bytes.len() {
+        bail!("MCP step process data had an invalid bounded size");
+    }
+    bytes.truncate(size);
+    Ok(bytes)
+}
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "macos", target_os = "freebsd"))
+))]
 fn inspect_live_process(_process_id: i32) -> Result<LiveProcessSnapshot> {
     bail!("MCP step process inspection is unsupported on this Unix platform")
 }
@@ -4166,6 +4295,15 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn test_shell() -> &'static str {
+        if cfg!(target_os = "freebsd") {
+            "/bin/sh"
+        } else {
+            "/bin/bash"
+        }
+    }
+
+    #[cfg(unix)]
     #[tokio::test]
     async fn asynchronous_step_persists_a_terminal_receipt() -> Result<()> {
         use std::os::unix::fs::PermissionsExt as _;
@@ -4175,7 +4313,10 @@ mod tests {
         let fake = repo.join(".orchestrator/fake-codex-team");
         fs::write(
             &fake,
-            "#!/bin/bash\nprintf '%s\\n' '{\"protocol_version\":1,\"outcome\":\"no_work\"}'\n",
+            format!(
+                "#!{}\nprintf '%s\\n' '{{\"protocol_version\":1,\"outcome\":\"no_work\"}}'\n",
+                test_shell()
+            ),
         )?;
         let mut permissions = fs::metadata(&fake)?.permissions();
         permissions.set_mode(0o700);
@@ -4205,7 +4346,7 @@ mod tests {
         let repo = temp_git_repo("cancel-step")?;
         prepare_operate_repo(&repo)?;
         let fake = repo.join(".orchestrator/fake-slow-codex-team");
-        fs::write(&fake, "#!/bin/bash\nsleep 30 &\nwait $!\n")?;
+        fs::write(&fake, format!("#!{}\nsleep 30 &\nwait $!\n", test_shell()))?;
         let mut permissions = fs::metadata(&fake)?.permissions();
         permissions.set_mode(0o700);
         fs::set_permissions(&fake, permissions)?;
@@ -4261,7 +4402,7 @@ mod tests {
         fs::write(
             &fake,
             format!(
-                "#!/bin/bash\nsleep 1\nexec {quoted_binary} --exact mcp::server::tests::mcp_nested_process_helper --nocapture\n"
+                "#!{}\nsleep 1\nexec {quoted_binary} --exact mcp::server::tests::mcp_nested_process_helper --nocapture\n", test_shell()
             ),
         )?;
         let mut permissions = fs::metadata(&fake)?.permissions();
@@ -4312,7 +4453,10 @@ mod tests {
         let repo = temp_git_repo("forged-marker")?;
         prepare_operate_repo(&repo)?;
         let fake = repo.join(".orchestrator/fake-slow-codex-team");
-        fs::write(&fake, "#!/bin/bash\nwhile :; do sleep 30; done\n")?;
+        fs::write(
+            &fake,
+            format!("#!{}\nwhile :; do sleep 30; done\n", test_shell()),
+        )?;
         let mut permissions = fs::metadata(&fake)?.permissions();
         permissions.set_mode(0o700);
         fs::set_permissions(&fake, permissions)?;
@@ -4366,7 +4510,7 @@ mod tests {
         let repo = temp_git_repo("shutdown-step")?;
         prepare_operate_repo(&repo)?;
         let fake = repo.join(".orchestrator/fake-shutdown-codex-team");
-        fs::write(&fake, "#!/bin/bash\nsleep 30 &\nwait $!\n")?;
+        fs::write(&fake, format!("#!{}\nsleep 30 &\nwait $!\n", test_shell()))?;
         let mut permissions = fs::metadata(&fake)?.permissions();
         permissions.set_mode(0o700);
         fs::set_permissions(&fake, permissions)?;
@@ -4404,7 +4548,7 @@ mod tests {
 
         let repo = temp_git_repo("restart-alive-step")?;
         prepare_operate_repo(&repo)?;
-        let executable = PathBuf::from("/bin/bash");
+        let executable = PathBuf::from(test_shell());
         let server = CodexTeamMcp::new(repo.clone(), McpAccess::Operate, 60)?
             .with_executable(executable.clone());
         let pinned_repo = server.repo.clone();
@@ -4569,7 +4713,7 @@ mod tests {
 
         let repo = temp_git_repo("restart-forged-outsider")?;
         prepare_operate_repo(&repo)?;
-        let executable = PathBuf::from("/bin/bash");
+        let executable = PathBuf::from(test_shell());
         let server = CodexTeamMcp::new(repo.clone(), McpAccess::Operate, 60)?
             .with_executable(executable.clone());
         let pinned_repo = server.repo.clone();

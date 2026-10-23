@@ -32,7 +32,7 @@ ca dashboard
 
 - Interactive Agent, Ask, Plan, and Debug workflows, plan review, streaming
   output, tool approvals, and interruptible turns.
-- Chat Completions, Responses, and Anthropic Messages adapters selected per
+- Chat Completions, Responses, Anthropic Messages, and native Gemini adapters selected per
   configured provider; configurable models, routing, and explicit fallbacks.
 - Workspace-aware file and command tools, Git review, managed worktrees,
   deterministic tool discovery, and bounded concurrent native reads.
@@ -54,13 +54,14 @@ service or an enabled integration.
 | Guide | What it covers |
 |---|---|
 | [Getting started](docs/GETTING_STARTED.md) | Prerequisites, build, install, first run |
+| [FreeBSD](docs/FREEBSD.md) | Native build, shared jail service, required isolation |
 | [Configuration](docs/CONFIGURATION.md) | Providers, credentials, profiles, policy |
 | [User guide](docs/USER_GUIDE.md) | Interactive and headless work, sessions, extensions |
 | [Automation](docs/AUTOMATION_GUIDE.md) | Scheduled work, native typed engine, recovery |
 | [Development](docs/DEVELOPMENT.md) | Workspace map, validation, contribution boundaries |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Build, provider, terminal, session, automation problems |
 | [CLI reference](docs/CLI_REFERENCE.md) | Help captured from the release executable |
-| [Publication validation](docs/PUBLICATION_VALIDATION.md) | Evidence for this initial source publication |
+| [Publication validation](docs/PUBLICATION_VALIDATION.md) | Current release evidence and historical publication results |
 | [Knowledge index](docs/.INDEX.md) | Detailed engineering and feature records |
 | [Architecture](ARCHITECTURE.md) | Module ownership and invariants |
 | [Service protocol](docs/SERVICE_PROTOCOL.md) | JSONL transport contracts |
@@ -96,7 +97,7 @@ history; the guides above describe the portable source checkout.
 
 ## Status and distribution
 
-Version: `0.1.0`. See [publication validation](docs/PUBLICATION_VALIDATION.md) for
+Version: `0.1.41`. See [publication validation](docs/PUBLICATION_VALIDATION.md) for
 the checks actually run. Historical validation is recorded in [TESTING.md](TESTING.md).
 Long-duration soak tests and selected real-model retrieval checks are separate
 from compiling and running the offline test suite.

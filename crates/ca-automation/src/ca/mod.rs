@@ -10,3 +10,5 @@ mod run;
 #[cfg(test)]
 pub(crate) use run::CaPreflightReceipt;
 pub(crate) use run::{CaProcessConfig, CaRoleAuthority, CaRunRequest, CaRunner, RealCaRunner};
+
+pub(crate) use run::run_ca_learning;

@@ -12,16 +12,24 @@ const PROBE_PROMPT: &str = "Reply with exactly OK and nothing else.";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderCheckStatus {
     Checking,
-    Working { model: String },
-    MissingEnvironment { variable: String },
+    Working {
+        model: String,
+    },
+    MissingEnvironment {
+        variable: String,
+    },
     CredentialRejected,
     AccessDenied,
     TimedOut,
     CannotConnect,
     EndpointNotFound,
     RateLimited,
-    ProviderError { status: Option<u16> },
+    ProviderError {
+        status: Option<u16>,
+    },
     InvalidResponse,
+    /// The process provider filter stopped the probe. This is not a provider fault.
+    FilterStopped,
     NeedsModel,
     AuthenticationRequired,
 }
@@ -153,21 +161,24 @@ fn status_for_error(error: ProviderError) -> ProviderCheckStatus {
         ProviderError::MissingEnvironment(variable) => {
             ProviderCheckStatus::MissingEnvironment { variable }
         }
-        ProviderError::Http { status: 401 } => ProviderCheckStatus::CredentialRejected,
-        ProviderError::Http { status: 403 } => ProviderCheckStatus::AccessDenied,
-        ProviderError::Http { status: 404 } => ProviderCheckStatus::EndpointNotFound,
-        ProviderError::Http { status: 429 } => ProviderCheckStatus::RateLimited,
-        ProviderError::Http { status } => ProviderCheckStatus::ProviderError {
+        ProviderError::Http { status: 401, .. } => ProviderCheckStatus::CredentialRejected,
+        ProviderError::Http { status: 403, .. } => ProviderCheckStatus::AccessDenied,
+        ProviderError::Http { status: 404, .. } => ProviderCheckStatus::EndpointNotFound,
+        ProviderError::Http { status: 429, .. } => ProviderCheckStatus::RateLimited,
+        ProviderError::Http { status, .. } => ProviderCheckStatus::ProviderError {
             status: Some(status),
         },
-        ProviderError::Transport(ProviderTransportFailure::Timeout) => {
-            ProviderCheckStatus::TimedOut
-        }
+        ProviderError::Transport(
+            ProviderTransportFailure::Timeout | ProviderTransportFailure::FirstTokenTimeout,
+        ) => ProviderCheckStatus::TimedOut,
         ProviderError::Transport(ProviderTransportFailure::Connect) => {
             ProviderCheckStatus::CannotConnect
         }
         ProviderError::Transport(ProviderTransportFailure::Request) => {
             ProviderCheckStatus::ProviderError { status: None }
+        }
+        ProviderError::Protocol(ref reason) if reason.starts_with("Vertex ADC") => {
+            ProviderCheckStatus::AuthenticationRequired
         }
         ProviderError::InvalidUtf8
         | ProviderError::EventTooLarge { .. }
@@ -181,6 +192,7 @@ fn status_for_error(error: ProviderError) -> ProviderCheckStatus {
         | ProviderError::UnresolvedToolCall { .. }
         | ProviderError::Protocol(_)
         | ProviderError::StreamAnomaly(_) => ProviderCheckStatus::InvalidResponse,
+        ProviderError::FilterStopped { .. } => ProviderCheckStatus::FilterStopped,
     }
 }
 
@@ -230,6 +242,8 @@ mod tests {
             provider: provider.into(),
             model: "test-model".into(),
             config: ProviderConfig {
+                google: None,
+                tool_schema_policy: Default::default(),
                 base_url,
                 api_key: api_key.into(),
                 protocol: crate::agent::ProviderProtocol::default(),
@@ -439,15 +453,24 @@ mod tests {
             status_for_error(ProviderError::ResponseIncomplete)
         );
         assert_eq!(
-            status_for_error(ProviderError::Http { status: 403 }),
+            status_for_error(ProviderError::Http {
+                status: 403,
+                body_excerpt: None
+            }),
             ProviderCheckStatus::AccessDenied
         );
         assert_eq!(
-            status_for_error(ProviderError::Http { status: 404 }),
+            status_for_error(ProviderError::Http {
+                status: 404,
+                body_excerpt: None
+            }),
             ProviderCheckStatus::EndpointNotFound
         );
         assert_eq!(
-            status_for_error(ProviderError::Http { status: 429 }),
+            status_for_error(ProviderError::Http {
+                status: 429,
+                body_excerpt: None
+            }),
             ProviderCheckStatus::RateLimited
         );
         assert_eq!(
@@ -459,6 +482,30 @@ mod tests {
                 crate::agent::stream::StreamAnomalyKind::RepetitionLoop
             )),
             ProviderCheckStatus::InvalidResponse
+        );
+    }
+    #[tokio::test]
+    async fn google_native_probe_uses_selected_protocol_and_reports_adc_setup() {
+        let body =
+            br#"data: {"candidates":[{"content":{"parts":[{"text":"OK"}]},"finishReason":"STOP"}]}
+
+"#
+            .to_vec();
+        let (url, captured) = one_shot_server("200 OK", body).await;
+        let mut probe = request("google-fixture", url, "fixture-google-key");
+        probe.config.protocol = crate::agent::ProviderProtocol::GoogleGenerateContent;
+        let result = probe_provider(probe).await;
+        assert!(result.status.working_model().is_some());
+        let captured = captured.await.unwrap();
+        assert!(captured
+            .starts_with("POST /v1/models/test-model:streamGenerateContent?alt=sse HTTP/1.1"));
+        assert!(captured.contains("x-goog-api-key: fixture-google-key"));
+        assert!(!captured.to_ascii_lowercase().contains("authorization:"));
+        assert_eq!(
+            status_for_error(ProviderError::Protocol(
+                "Vertex ADC token refresh failed".into()
+            )),
+            ProviderCheckStatus::AuthenticationRequired
         );
     }
 }

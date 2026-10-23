@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&empty, 100, 30), render_to_text(&empty, 60, 24))"
 ---
-main /workspace/ca  [Choose Ctrl+l]
+ca v0.0.0 │ main /workspace/ca  [Choose Ctrl+l]
  + New Agent                                                                        Worktree Ctrl+w
   No sessions yet · type a prompt to dispatch a new agent
 
@@ -33,7 +33,7 @@ main /workspace/ca  [Choose Ctrl+l]
 └─────────────────────────────────────────────────────────────────────────────────Coder · allowlist┘
 Enter:new session  |  Esc:close  |  Ctrl+.:shortcuts
 -- narrow --
-main /workspace/ca  [Choose Ctrl+l]
+ca v0.0.0 │ main /workspace/ca  [Choose Ctrl+l]
  + New Agent                                Worktree Ctrl+w
   No sessions yet · type a prompt to dispatch a new agent
 

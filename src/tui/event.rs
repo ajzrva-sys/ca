@@ -471,6 +471,18 @@ async fn scheduled_event(
     }
 }
 
+fn publish_filter_banner(state: &crate::app::AppState) {
+    state
+        .filter_banner
+        .store(crate::provider_filter::banner_active(), Ordering::Relaxed);
+    if let Ok(mut summary) = state.filter_summary.lock() {
+        *summary = crate::provider_filter::banner_detail();
+    }
+    if let Some((generation, text)) = crate::provider_filter::outbound_view() {
+        state.provider_pane.note(generation, text);
+    }
+}
+
 pub struct Tui {
     pub terminal: Terminal<CrosstermBackend<Stdout>>,
     event_rx: mpsc::UnboundedReceiver<QueuedEvent>,
@@ -652,6 +664,7 @@ impl Tui {
         }
         self.pending_draw = false;
         self.last_draw = now;
+        publish_filter_banner(state);
         let title_state = state
             .pane_deck
             .as_ref()
@@ -681,6 +694,7 @@ impl Tui {
         if self.pending_draw && frame_due(self.last_draw, std::time::Instant::now()) {
             self.pending_draw = false;
             self.last_draw = std::time::Instant::now();
+            publish_filter_banner(state);
             let title_state = state
                 .pane_deck
                 .as_ref()

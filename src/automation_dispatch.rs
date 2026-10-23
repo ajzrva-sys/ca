@@ -109,6 +109,9 @@ impl AutomationDispatchPolicy {
                 frozen.options = options;
                 Self::new(budget, frozen)
             }
+            PricingBindingV1::MeteredRoutes { .. } => Err(
+                "multi-route learning pricing requires the native bounded role-run worker".into(),
+            ),
             PricingBindingV1::LocalZero => {
                 let route = config
                     .providers
@@ -710,6 +713,8 @@ mod tests {
         config.providers.insert(
             "fixture-local".into(),
             crate::config::ProviderConfig {
+                google: None,
+                tool_schema_policy: Default::default(),
                 base_url: "http://127.0.0.1:12345/v1".into(),
                 api_key: String::new(),
                 protocol: Default::default(),

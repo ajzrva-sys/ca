@@ -123,10 +123,17 @@ impl JobExecutionPolicy {
     fn apply(&self, process: &mut Command, temporary_directory: &std::path::Path) {
         match &self.environment {
             JobEnvironmentPolicy::Inherit => {
+                let module_cache = temporary_directory.join("clang-module-cache");
+                let _ = std::fs::create_dir_all(&module_cache);
                 process
                     .env("TMPDIR", temporary_directory)
                     .env("TMP", temporary_directory)
-                    .env("TEMP", temporary_directory);
+                    .env("TEMP", temporary_directory)
+                    // swiftc writes its standard-library module here. The
+                    // default ~/.cache/clang/ModuleCache is not writable in
+                    // the sandbox, which fails the compile with
+                    // "unable to load standard library".
+                    .env("CLANG_MODULE_CACHE_PATH", module_cache);
                 if self
                     .authorized_command
                     .as_deref()
@@ -172,7 +179,13 @@ impl JobExecutionPolicy {
     ) {
         if matches!(self.environment, JobEnvironmentPolicy::Inherit) {
             _writable.push(std::path::PathBuf::from("/tmp"));
+            #[cfg(not(target_os = "freebsd"))]
             _read_only.push(std::path::PathBuf::from("/"));
+            // The native jail grants concrete installed runtime paths; an
+            // implicit full-host-root view is unsupported. Explicit policies
+            // still pass through the backend's strict validation unchanged.
+            #[cfg(target_os = "freebsd")]
+            _read_only.extend(ca_automation::freebsd_sandbox::system_reads());
             for path in trusted_developer_roots() {
                 if !_read_only.contains(&path) {
                     _read_only.push(path);
@@ -932,9 +945,7 @@ impl JobManager {
         .await
         .map_err(|_| "Workspace ownership worker stopped before command dispatch".to_string())?
         .map_err(|error| format!("Workspace ownership refused command dispatch: {error}"))?;
-        let temporary_directory = std::env::temp_dir().join(format!("ca-job-{}", Uuid::new_v4()));
-        std::fs::create_dir(&temporary_directory)
-            .map_err(|error| format!("Error creating job temporary directory: {error}"))?;
+        let temporary_directory = job_temporary_directory(&owner)?;
         let mut roots = roots;
         let mut read_only_roots = Vec::new();
         execution_policy.extend_sandbox_roots(&mut roots, &mut read_only_roots);
@@ -966,7 +977,7 @@ impl JobManager {
         ) {
             Ok(prepared) => prepared,
             Err(error) => {
-                let _ = std::fs::remove_dir(&temporary_directory);
+                discard_unused_job_temp(&temporary_directory);
                 return Err(error.to_string());
             }
         };
@@ -1011,7 +1022,7 @@ impl JobManager {
         let mut child = match process.spawn() {
             Ok(child) => child,
             Err(error) => {
-                let _ = std::fs::remove_dir(&temporary_directory);
+                discard_unused_job_temp(&temporary_directory);
                 return Err(format!("Error running command: {error}"));
             }
         };
@@ -1079,7 +1090,15 @@ impl JobManager {
             let mut chunk = [0u8; 4096];
             loop {
                 let count = match reader.read(&mut chunk).await {
-                    Ok(0) | Err(_) => break,
+                    Ok(0) => {
+                        let mut state = record.state.lock().await;
+                        match stream {
+                            JobStream::Stdout => state.stdout.push(&[]),
+                            JobStream::Stderr => state.stderr.push(&[]),
+                        }
+                        break;
+                    }
+                    Err(_) => break,
                     Ok(count) => count,
                 };
                 let text = String::from_utf8_lossy(&chunk[..count]).into_owned();
@@ -1625,6 +1644,37 @@ impl JobManager {
     }
 }
 
+fn job_temporary_directory(owner: &JobOwner) -> Result<std::path::PathBuf, String> {
+    // Commands in one session share a temporary directory. A later command
+    // can run a binary an earlier command compiled into `$TMPDIR`. A private
+    // directory per command made that path disappear (exit 127).
+    if let Some(session_id) = owner.session_id {
+        let path = std::env::temp_dir().join(format!("ca-session-{session_id}"));
+        std::fs::create_dir_all(&path)
+            .map_err(|error| format!("Error creating session temporary directory: {error}"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700));
+        }
+        return Ok(path);
+    }
+    let path = std::env::temp_dir().join(format!("ca-job-{}", Uuid::new_v4()));
+    std::fs::create_dir(&path)
+        .map_err(|error| format!("Error creating job temporary directory: {error}"))?;
+    Ok(path)
+}
+
+fn discard_unused_job_temp(path: &std::path::Path) {
+    if path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("ca-job-"))
+    {
+        let _ = std::fs::remove_dir_all(path);
+    }
+}
+
 fn cleanup_job_temp(path: &std::path::Path) {
     if path
         .file_name()
@@ -1732,6 +1782,7 @@ struct BoundedText {
     tail: Vec<u8>,
     total_bytes: usize,
     capacity: usize,
+    filter_carry: Vec<u8>,
 }
 impl BoundedText {
     fn new(capacity: usize) -> Self {
@@ -1740,9 +1791,17 @@ impl BoundedText {
             tail: Vec::new(),
             total_bytes: 0,
             capacity,
+            filter_carry: Vec::new(),
         }
     }
     fn push(&mut self, bytes: &[u8]) {
+        if crate::provider_filter::scan_outbound_chunk(&mut self.filter_carry, bytes).is_err() {
+            self.head.clear();
+            self.tail.clear();
+            self.total_bytes = 0;
+            self.filter_carry.clear();
+            return;
+        }
         self.total_bytes = self.total_bytes.saturating_add(bytes.len());
         let head_capacity = self.capacity.div_ceil(2);
         let tail_capacity = self.capacity / 2;
@@ -1921,7 +1980,15 @@ mod tests {
         let mut read_only = Vec::new();
         policy.extend_sandbox_roots(&mut writable, &mut read_only);
         assert_eq!(writable, [std::path::PathBuf::from("/tmp")]);
+        #[cfg(not(target_os = "freebsd"))]
         assert!(read_only.contains(&std::path::PathBuf::from("/")));
+        #[cfg(target_os = "freebsd")]
+        {
+            assert!(!read_only.contains(&std::path::PathBuf::from("/")));
+            for path in ca_automation::freebsd_sandbox::system_reads() {
+                assert!(read_only.contains(&path));
+            }
+        }
         if let Some(registry) = cargo_registry_root() {
             assert!(read_only.contains(&registry));
             assert!(!read_only.iter().any(|path| {
@@ -1945,6 +2012,153 @@ mod tests {
                 "{variable} did not use the private job directory"
             );
         }
+        assert!(stdout.lines().any(|line| {
+            line == format!(
+                "CLANG_MODULE_CACHE_PATH={}",
+                root.path().join("clang-module-cache").display()
+            )
+        }));
+    }
+
+    #[tokio::test]
+    async fn session_commands_share_one_temporary_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let manager = JobManager::new();
+        let owner = JobOwner::new(Some(Uuid::new_v4()));
+        let cwd = root.path().to_string_lossy().to_string();
+        let roots = vec![root.path().to_path_buf()];
+        let first = manager
+            .start_sandboxed_owned(
+                "mkdir -p \"$TMPDIR/build\" && printf '%s\\n' '#!/bin/sh' 'echo shared' > \"$TMPDIR/build/tool\" && chmod +x \"$TMPDIR/build/tool\" && printf '%s' \"$TMPDIR\"",
+                cwd.clone(),
+                false,
+                Duration::from_secs(3),
+                roots.clone(),
+                false,
+                crate::sandbox::SandboxMode::PolicyOnly,
+                owner,
+            )
+            .await
+            .unwrap();
+        let first = manager.await_job_owned(first, owner).await.unwrap();
+        assert!(
+            matches!(first.status, JobStatus::Completed { exit_code: 0 }),
+            "{} {}",
+            first.stdout,
+            first.stderr
+        );
+        let shared = std::path::PathBuf::from(first.stdout.trim());
+        assert!(
+            shared
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("ca-session-")),
+            "{}",
+            first.stdout
+        );
+        assert!(shared.join("build/tool").is_file());
+        let second = manager
+            .start_sandboxed_owned(
+                "\"$TMPDIR/build/tool\"",
+                cwd,
+                false,
+                Duration::from_secs(3),
+                roots,
+                false,
+                crate::sandbox::SandboxMode::PolicyOnly,
+                owner,
+            )
+            .await
+            .unwrap();
+        let second = manager.await_job_owned(second, owner).await.unwrap();
+        assert!(
+            matches!(second.status, JobStatus::Completed { exit_code: 0 }),
+            "{} {}",
+            second.stdout,
+            second.stderr
+        );
+        assert!(second.stdout.contains("shared"), "{}", second.stdout);
+        let _ = std::fs::remove_dir_all(&shared);
+    }
+
+    #[tokio::test]
+    async fn unscoped_job_temporary_directory_is_private_and_removed() {
+        let root = tempfile::tempdir().unwrap();
+        let manager = JobManager::new();
+        let owner = JobOwner::new(None);
+        let id = manager
+            .start_sandboxed_owned(
+                "printf '%s' \"$TMPDIR\"",
+                root.path().to_string_lossy().to_string(),
+                false,
+                Duration::from_secs(3),
+                vec![root.path().to_path_buf()],
+                false,
+                crate::sandbox::SandboxMode::PolicyOnly,
+                owner,
+            )
+            .await
+            .unwrap();
+        let job = manager.await_job_owned(id, owner).await.unwrap();
+        assert!(matches!(job.status, JobStatus::Completed { exit_code: 0 }));
+        let path = std::path::PathBuf::from(job.stdout.trim());
+        assert!(
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("ca-job-")),
+            "{}",
+            job.stdout
+        );
+        assert!(!path.exists());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn sandboxed_swiftc_loads_the_standard_library() {
+        let swift = tokio::process::Command::new("/usr/bin/xcrun")
+            .args(["--find", "swiftc"])
+            .output()
+            .await;
+        if !swift
+            .as_ref()
+            .is_ok_and(|output| output.status.success() && !output.stdout.is_empty())
+        {
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("hi.swift"), "print(\"ok\")\n").unwrap();
+        let manager = JobManager::new();
+        let owner = JobOwner::new(Some(Uuid::new_v4()));
+        let id = manager
+            .start_sandboxed_owned(
+                "swiftc -o hi hi.swift && ./hi",
+                root.path().to_string_lossy().to_string(),
+                false,
+                Duration::from_secs(60),
+                vec![std::fs::canonicalize(root.path()).unwrap()],
+                false,
+                crate::sandbox::SandboxMode::Required,
+                owner,
+            )
+            .await
+            .unwrap();
+        let job = manager.await_job_owned(id, owner).await.unwrap();
+        let output = format!("{}\n{}", job.stdout, job.stderr);
+        assert!(
+            matches!(job.status, JobStatus::Completed { exit_code: 0 }),
+            "{output}"
+        );
+        assert!(job.stdout.contains("ok"), "{output}");
+        assert!(
+            !output.contains("unable to load standard library"),
+            "{output}"
+        );
+        assert!(!output.contains("Operation not permitted"), "{output}");
+        assert!(
+            !output.contains("Failed to start fs event stream"),
+            "{output}"
+        );
+        assert!(!output.contains("DARWIN_USER_CACHE_DIR"), "{output}");
     }
 
     #[cfg(target_os = "macos")]
@@ -2114,7 +2328,7 @@ mod tests {
             "pub fn answer() -> String {\n    itoa::Buffer::new().format(42).to_owned()\n}\n",
         )
         .unwrap();
-        let initialized = std::process::Command::new("/usr/bin/git")
+        let initialized = std::process::Command::new(ca_automation::git_metadata::EXECUTABLE)
             .args(["init", "--quiet"])
             .current_dir(&workspace)
             .status()
@@ -2582,6 +2796,31 @@ mod tests {
             .claim_completed_model_jobs_owned(owner)
             .await
             .is_empty());
+    }
+
+    #[test]
+    fn provider_filter_job_capture_defers_url_prefix_and_flushes_eof() {
+        let config = crate::provider_filter::ProviderFilterConfig {
+            enabled: true,
+            urls: vec!["http://stop.example".into()],
+            ..Default::default()
+        };
+        crate::provider_filter::with_test_filter(&config, || {
+            let mut capture = BoundedText::new(8);
+            capture.push(b"http://stop.example");
+            assert!(!crate::provider_filter::is_tripped());
+            capture.push(b".allowed/path");
+            capture.push(&[]);
+            assert!(!crate::provider_filter::is_tripped());
+        });
+        crate::provider_filter::with_test_filter(&config, || {
+            let mut capture = BoundedText::new(8);
+            capture.push(b"http://stop.example");
+            assert!(!crate::provider_filter::is_tripped());
+            capture.push(&[]);
+            assert!(crate::provider_filter::is_tripped());
+            assert_eq!(capture.render("stdout"), "");
+        });
     }
 
     #[tokio::test]

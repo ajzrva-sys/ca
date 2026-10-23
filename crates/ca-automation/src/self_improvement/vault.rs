@@ -33,6 +33,7 @@ pub struct VaultHealthV1 {
 #[derive(Debug, Clone)]
 pub struct LearningVault {
     root: PathBuf,
+    filesystem_space_probe: fn(&Path) -> Result<(u64, u64)>,
 }
 
 impl LearningVault {
@@ -77,6 +78,7 @@ impl LearningVault {
                 inspect_private_directory(&root)?;
                 Ok(Some(Self {
                     root: fs::canonicalize(root)?,
+                    filesystem_space_probe: filesystem_space,
                 }))
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -88,7 +90,10 @@ impl LearningVault {
         validate_absolute_path(&root)?;
         ensure_private_directory(&root)?;
         let root = fs::canonicalize(&root)?;
-        let vault = Self { root };
+        let vault = Self {
+            root,
+            filesystem_space_probe: filesystem_space,
+        };
         for relative in [
             "harness",
             "harness/plans",
@@ -129,8 +134,17 @@ impl LearningVault {
         &self.root
     }
 
+    /// Inject filesystem measurements into a disposable debug fixture. Reopening
+    /// a vault always restores the real filesystem probe; clones retain this one.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn with_filesystem_space_probe(mut self, probe: fn(&Path) -> Result<(u64, u64)>) -> Self {
+        self.filesystem_space_probe = probe;
+        self
+    }
+
     pub fn health(&self) -> Result<VaultHealthV1> {
-        let (free_bytes, total_bytes) = filesystem_space(&self.root)?;
+        let (free_bytes, total_bytes) = (self.filesystem_space_probe)(&self.root)?;
         let percent_floor = total_bytes.saturating_mul(MIN_FREE_PERCENT) / 100;
         let minimum_free_bytes = MIN_FREE_BYTES.max(percent_floor);
         let mut issues = Vec::new();
@@ -334,7 +348,7 @@ impl LearningVault {
         Ok(path)
     }
 
-    fn ensure_relative_directory(&self, relative: &str) -> Result<PathBuf> {
+    pub(super) fn ensure_relative_directory(&self, relative: &str) -> Result<PathBuf> {
         let path = self.resolve_relative(relative)?;
         let mut current = self.root.clone();
         for component in Path::new(relative).components() {
@@ -608,10 +622,24 @@ fn filesystem_space(path: &Path) -> Result<(u64, u64)> {
     }
     let stats = unsafe { stats.assume_init() };
     let block_size = stats.f_frsize;
+    #[cfg(target_os = "freebsd")]
+    let (available, total) = (stats.f_bavail, stats.f_blocks);
+    #[cfg(not(target_os = "freebsd"))]
+    let (available, total) = (stats.f_bavail as u64, stats.f_blocks as u64);
     Ok((
-        (stats.f_bavail as u64).saturating_mul(block_size),
-        (stats.f_blocks as u64).saturating_mul(block_size),
+        available.saturating_mul(block_size),
+        total.saturating_mul(block_size),
     ))
+}
+
+#[cfg(test)]
+pub(super) fn fixture_filesystem_space(_path: &Path) -> Result<(u64, u64)> {
+    Ok((200 * 1024_u64.pow(3), 1024 * 1024_u64.pow(3)))
+}
+
+#[cfg(test)]
+pub(super) fn fixture_vault(root: PathBuf) -> Result<LearningVault> {
+    Ok(LearningVault::open_at(root)?.with_filesystem_space_probe(fixture_filesystem_space))
 }
 
 #[cfg(test)]
@@ -647,7 +675,7 @@ mod tests {
     fn vault_writes_private_immutable_records_and_rejects_tamper() -> Result<()> {
         let root = temp_root("immutable");
         fs::create_dir_all(root.parent().unwrap())?;
-        let vault = LearningVault::open_at(root.clone())?;
+        let vault = fixture_vault(root.clone())?;
         let mut record = capsule();
         let path = vault.write_immutable(&mut record)?;
         assert_eq!(fs::metadata(&path)?.permissions().mode() & 0o777, 0o600);
@@ -662,6 +690,69 @@ mod tests {
         assert!(vault
             .read_immutable::<LearningCapsuleV1>("capsules", "capsule-1")
             .is_err());
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn resource_fixture_keeps_absolute_and_percentage_floors_and_recovers() -> Result<()> {
+        let root = temp_root("resource-floor");
+        fs::create_dir_all(root.parent().unwrap())?;
+        let vault = fixture_vault(root.clone())?;
+        let absolute_floor = vault
+            .clone()
+            .with_filesystem_space_probe(|_| Ok((MIN_FREE_BYTES, 100 * 1024_u64.pow(3))));
+        assert!(absolute_floor.health()?.healthy);
+        assert_eq!(absolute_floor.health()?.minimum_free_bytes, MIN_FREE_BYTES);
+        assert!(
+            !vault
+                .clone()
+                .with_filesystem_space_probe(|_| {
+                    Ok((MIN_FREE_BYTES - 1, 100 * 1024_u64.pow(3)))
+                })
+                .health()?
+                .healthy
+        );
+        let percentage_floor = 1024_u64.pow(4) * MIN_FREE_PERCENT / 100;
+        let exact = vault.clone().with_filesystem_space_probe(|_| {
+            let total = 1024_u64.pow(4);
+            Ok((total * MIN_FREE_PERCENT / 100, total))
+        });
+        assert!(exact.health()?.healthy);
+        assert_eq!(exact.health()?.minimum_free_bytes, percentage_floor);
+        let pressured = vault.clone().with_filesystem_space_probe(|_| {
+            let total = 1024_u64.pow(4);
+            Ok((total * MIN_FREE_PERCENT / 100 - 1, total))
+        });
+        assert!(!pressured.health()?.healthy);
+        assert!(!pressured.clone().health()?.healthy);
+        let mut record = capsule();
+        let error = pressured.write_immutable(&mut record).unwrap_err();
+        assert!(error.to_string().contains("below the learning floor"));
+        assert!(!root.join("capsules/capsule-1.json").exists());
+        exact.write_immutable(&mut record)?;
+        assert!(root.join("capsules/capsule-1.json").is_file());
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn normal_open_and_reopen_restore_real_filesystem_measurements() -> Result<()> {
+        let root = temp_root("resource-default");
+        fs::create_dir_all(root.parent().unwrap())?;
+        let vault = LearningVault::open_at(root.clone())?;
+        assert!(std::ptr::fn_addr_eq(
+            vault.filesystem_space_probe,
+            filesystem_space as fn(&Path) -> Result<(u64, u64)>
+        ));
+        let fixture = vault.with_filesystem_space_probe(fixture_filesystem_space);
+        assert_eq!(fixture.health()?.free_bytes, 200 * 1024_u64.pow(3));
+        let reopened = LearningVault::existing_at(root.clone())?.unwrap();
+        assert!(std::ptr::fn_addr_eq(
+            reopened.filesystem_space_probe,
+            filesystem_space as fn(&Path) -> Result<(u64, u64)>
+        ));
+        assert_eq!(reopened.health()?.total_bytes, filesystem_space(&root)?.1);
         fs::remove_dir_all(root)?;
         Ok(())
     }

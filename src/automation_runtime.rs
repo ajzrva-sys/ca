@@ -305,6 +305,9 @@ fn execution_context_with_mode(
                 .map_err(|e| e.to_string())?
                 .display()
         )),
+        ScheduleTargetV2::KnowledgeLearning { vault_root, .. } => {
+            resources.push(format!("knowledge-learning:{}", vault_root.display()))
+        }
         ScheduleTargetV2::Monitor { .. } => {}
         _ => resources.push(format!(
             "workspace:{}",
@@ -384,7 +387,8 @@ fn coordinator_sandbox_mode(
         | ScheduleTargetV2::RepositoryTask { .. }
         | ScheduleTargetV2::HarnessDiscovery { .. }
         | ScheduleTargetV2::HarnessEvaluation { .. }
-        | ScheduleTargetV2::HarnessCycle { .. } => true,
+        | ScheduleTargetV2::HarnessCycle { .. }
+        | ScheduleTargetV2::KnowledgeLearning { .. } => true,
         _ => false,
     };
     if command_boundary && configured == crate::sandbox::SandboxMode::Required {
@@ -487,6 +491,11 @@ pub async fn execute(
                 read_roots.push(repository.clone());
             }
         }
+        ScheduleTargetV2::KnowledgeLearning { vault_root, .. } => {
+            write_roots.push(vault_root.clone());
+            write_roots.push(paths.data_dir.clone());
+            write_roots.push(paths.profile_data_dir(profile));
+        }
         _ => {}
     }
     // Native helpers create these private directories before physical dispatch.
@@ -542,6 +551,11 @@ pub async fn execute(
             crate::harness_automation::credential_providers(&definition.schedule, &cfg, profile)
                 .map_err(|error| error.to_string())?
         }
+        ScheduleTargetV2::KnowledgeLearning {
+            vault_root,
+            enrollment_digest,
+        } => crate::learning_automation::credential_providers(vault_root, enrollment_digest)
+            .map_err(|e| e.to_string())?,
         _ => definition.schedule.provider.iter().cloned().collect(),
     };
     if let ScheduleTargetV2::RepositoryTask { task } = &definition.schedule.target {
@@ -551,6 +565,21 @@ pub async fn execute(
     providers.dedup();
     let mut credential_values = Vec::new();
     for provider in providers {
+        if cfg
+            .providers
+            .get(&provider)
+            .is_some_and(crate::google_auth::is_vertex)
+        {
+            for key in [
+                "GOOGLE_APPLICATION_CREDENTIALS",
+                "GOOGLE_CLOUD_QUOTA_PROJECT",
+                "GCE_METADATA_HOST",
+            ] {
+                if let Some(value) = std::env::var_os(key) {
+                    command.env(key, value);
+                }
+            }
+        }
         if let Ok(crate::config::ProviderApiKeySource::Environment(key)) =
             config_store.provider_api_key_source(&provider)
         {
@@ -931,6 +960,18 @@ async fn run_host_target(
                         .map(|v| harness_result(v, &spec.budget))
                         .map_err(|e| e.to_string())
                     }
+                    ScheduleTargetV2::KnowledgeLearning {
+                        vault_root,
+                        enrollment_digest,
+                    } => crate::learning_automation::run_cycle(
+                        paths.clone(),
+                        profile.clone(),
+                        vault_root.clone(),
+                        enrollment_digest.clone(),
+                    )
+                    .await
+                    .map(|v| harness_result(v, &spec.budget))
+                    .map_err(|e| e.to_string()),
                     ScheduleTargetV2::Monitor { request } => {
                         crate::monitor_automation::run(request.clone(), &spec.context).await
                     }
@@ -1026,7 +1067,7 @@ fn harness_result(value: serde_json::Value, budget: &AutomationBudgetV1) -> Nati
         .get("status")
         .and_then(|v| v.as_str())
         .unwrap_or("needs_review");
-    let report = serde_json::json!({"schema":"ca.heartbeat-report.v1","status":match status{"unchanged"=>"unchanged","changed"=>"changed",_=>"needs_attention"},"summary":value.get("summary").cloned().unwrap_or_else(||serde_json::json!("Evaluation needs review")),"state":value.get("cycles").map(|v|v.to_string()).unwrap_or_else(||value.to_string())});
+    let report = serde_json::json!({"schema":"ca.heartbeat-report.v1","status":match status{"unchanged"=>"unchanged","changed"=>"changed","completed"=>"completed","failed"=>"failed",_=>"needs_attention"},"summary":value.get("summary").cloned().unwrap_or_else(||serde_json::json!("Evaluation needs review")),"state":value.get("cycles").map(|v|v.to_string()).unwrap_or_else(||value.to_string())});
     let mut result = model_free_result(report);
     usage.output_bytes = result.content.len() as u64;
     result.usage = usage;
@@ -1413,4 +1454,44 @@ mod worker_failure_tests {
         assert!(!error.contains("fixture-private-malformed-output"));
         assert_recovery_without_replay(&store, &result);
     }
+}
+#[test]
+fn learning_physical_accounting_distinguishes_absence_known_usage_and_unknown_attempt() {
+    use codex_team::self_improvement::{LearningCallAccounting, UsageV1};
+    let budget = AutomationBudgetV1::per_run_default();
+    let usage_result = |accounting| {
+        harness_result(
+            serde_json::json!({"status":"unchanged","usage":crate::learning_automation::stage_usage(accounting)}),
+            &budget,
+        ).usage
+    };
+    let absent = usage_result(None);
+    assert_eq!(absent.provider_requests, 0);
+    assert_eq!((absent.input_tokens, absent.output_tokens), (0, 0));
+    assert_eq!(absent.cost_usd, crate::usage::DecimalUsd::ZERO);
+    let known = usage_result(Some(&LearningCallAccounting {
+        provider_requests: Some(1),
+        reserved_provider_requests: 0,
+        usage: Some(UsageV1 {
+            input_tokens: 7,
+            output_tokens: 2,
+            estimated_microusd: 1_234,
+        }),
+        reserved_microusd: 0,
+    }));
+    assert_eq!(known.provider_requests, 1);
+    assert_eq!((known.input_tokens, known.output_tokens), (7, 2));
+    assert_eq!(known.cost_usd, "0.001234".parse().unwrap());
+    let unknown = usage_result(Some(&LearningCallAccounting {
+        provider_requests: None,
+        reserved_provider_requests: 1,
+        usage: None,
+        reserved_microusd: 1_234,
+    }));
+    assert_eq!(unknown.provider_requests, budget.provider_requests);
+    assert_eq!(
+        (unknown.input_tokens, unknown.output_tokens),
+        (budget.input_tokens, budget.output_tokens)
+    );
+    assert_eq!(unknown.cost_usd, budget.max_cost_usd);
 }

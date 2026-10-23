@@ -769,6 +769,13 @@ fn mention_tokens(input: &str) -> Result<Vec<Mention>, String> {
             index += 1;
             continue;
         }
+        // `@` inside a token is a shell prompt or an email address
+        // (`user@host`), not a composer file mention. Mentions are inserted
+        // as their own whitespace-delimited token.
+        if index > 0 && !bytes[index - 1].is_ascii_whitespace() {
+            index += 1;
+            continue;
+        }
         let mut end = index + 1;
         while end < bytes.len() && !bytes[end].is_ascii_whitespace() {
             end += 1;
@@ -820,6 +827,9 @@ fn append_path(
     }
     let bytes =
         fs::read(resolved).map_err(|_| format!("attachment could not be read: {}", mention.raw))?;
+    if let Err(error) = crate::provider_filter::scan_outbound(&bytes) {
+        return Err(crate::provider_filter::withheld_message(&error));
+    }
     if bytes.len() > MAX_FILE_BYTES {
         return Err(format!("attachment changed while reading: {}", mention.raw));
     }
@@ -984,6 +994,14 @@ mod tests {
         assert!(expand_file_mentions("@.", &workspace, &[]).is_err());
         fs::write(root.join("large.txt"), vec![b'x'; MAX_FILE_BYTES + 1]).unwrap();
         assert!(expand_file_mentions("@large.txt", &workspace, &[]).is_err());
+        let prompt = "aji@Andrews-MacBook-Pro bin % echo hi\nuser@example.com";
+        assert_eq!(
+            expand_file_mentions(prompt, &workspace, &[]).unwrap(),
+            prompt
+        );
+        let missing = expand_file_mentions("read @missing.txt", &workspace, &[]).unwrap();
+        assert!(missing.contains("(file not found: missing.txt)"));
+        assert!(!missing.contains("Andrews-MacBook-Pro"));
 
         #[cfg(unix)]
         {

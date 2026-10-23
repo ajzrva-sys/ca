@@ -630,6 +630,8 @@ pub(crate) mod tests {
             // Drop listener. Recovery must not need a second physical request.
         });
         let config = crate::config::ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: url,
             api_key: "synthetic".into(),
             protocol: ProviderProtocol::ChatCompletions,

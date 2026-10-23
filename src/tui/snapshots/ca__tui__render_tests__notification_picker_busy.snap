@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "render_to_text(&busy, 80, 24)"
 ---
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                                          [Dashboard]
 
 
 
@@ -22,7 +22,7 @@ expression: "render_to_text(&busy, 80, 24)"
              └────────────────────────────────────────────────────┘
 
 
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                                               │
+╰──────────────────────────────────────────────────────────────── agent · auto ╯
 / commands

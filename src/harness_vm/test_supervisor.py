@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import select
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -43,7 +44,7 @@ class Lifecycle(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.tart = self.root / 'tart'
-        self.tart.write_text(MOCK)
+        self.tart.write_text(MOCK.replace("#!/usr/bin/python3", "#!" + sys.executable, 1))
         self.tart.chmod(0o755)
         (self.root / 'vms' / 'base').mkdir(parents=True)
         self.config = {'profile': {'home': str(self.root), 'tart': str(self.tart), 'template': 'base'}, 'files': {}, 'seconds': 10}
@@ -59,7 +60,7 @@ class Lifecycle(unittest.TestCase):
         self.temp.cleanup()
 
     def start(self):
-        child = subprocess.Popen(['/usr/bin/python3', '-I', str(HERE / 'supervisor.py')], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        child = subprocess.Popen([sys.executable, '-I', str(HERE / 'supervisor.py')], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
         self.processes.append(child)
         child.stdin.write(json.dumps(self.config).encode() + b'\n')
         child.stdin.flush()
@@ -103,9 +104,9 @@ class Lifecycle(unittest.TestCase):
         # The actual owner exits without closing/waiting its supervisor. Only
         # kernel pipe EOF remains; the VM must not rely on owner destructors.
         owner = subprocess.Popen([
-            '/usr/bin/python3', '-I', '-c',
+            sys.executable, '-I', '-c',
             'import subprocess,sys,os; '
-            'p=subprocess.Popen(["/usr/bin/python3","-I",sys.argv[1]],'
+            'p=subprocess.Popen([sys.executable,"-I",sys.argv[1]],'
             'stdin=subprocess.PIPE,stdout=subprocess.PIPE,start_new_session=True); '
             'p.stdin.write(sys.argv[2].encode()+b"\\n"); p.stdin.flush(); '
             'print(p.stdout.readline().decode(),end="",flush=True); os._exit(7)',

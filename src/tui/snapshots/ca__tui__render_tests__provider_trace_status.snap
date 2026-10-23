@@ -1,5 +1,6 @@
 ---
 source: src/tui/render_tests.rs
+assertion_line: 6352
 expression: "wide_narrow(render_to_text(&status, 100, 30), render_to_text(&status, 60, 24))"
 ---
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
@@ -8,7 +9,7 @@ expression: "wide_narrow(render_to_text(&status, 100, 30), render_to_text(&statu
 │Status: off                                                                                       │
 │Captured: 0 B                                                                                     │
 │Per-trace cap: 16.0 MiB                                                                           │
-│Retention: until explicit deletion                                                                │
+│Retention: newest 4 (pruned on /trace on)                                                         │
 │Directory: /tmp/ca-profile/traces                                                                 │
 │                                                                                                  │
 │/trace on · /trace off · /trace list                                                              │
@@ -39,7 +40,7 @@ expression: "wide_narrow(render_to_text(&status, 100, 30), render_to_text(&statu
 │Status: off                                               │
 │Captured: 0 B                                             │
 │Per-trace cap: 16.0 MiB                                   │
-│Retention: until explicit deletion                        │
+│Retention: newest 4 (pruned on /trace on)                 │
 │Directory: /tmp/ca-profile/traces                         │
 │                                                          │
 │/trace on · /trace off · /trace list                      │

@@ -4,6 +4,8 @@ pub mod dashboard;
 pub mod event;
 pub mod input;
 pub(crate) mod output_layout;
+pub(crate) mod personality;
+pub(crate) mod provider_pane;
 pub mod render;
 pub mod selection;
 pub mod transcript;
@@ -21,3 +23,5 @@ mod render_tests;
 
 pub use event::Event;
 pub use render::render;
+
+pub(crate) const VERSION_LABEL: &str = concat!("ca v", env!("CARGO_PKG_VERSION"));

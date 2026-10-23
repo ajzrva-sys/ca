@@ -561,7 +561,7 @@ pub(crate) mod tests {
             vec!["add", "."],
             vec!["commit", "-m", "fixture"],
         ] {
-            let output = std::process::Command::new("/usr/bin/git")
+            let output = std::process::Command::new(ca_automation::git_metadata::EXECUTABLE)
                 .args([
                     "-c",
                     "commit.gpgsign=false",
@@ -674,6 +674,8 @@ pub(crate) mod tests {
             socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
         });
         let config = crate::config::ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: url,
             api_key: "synthetic".into(),
             protocol: ProviderProtocol::ChatCompletions,

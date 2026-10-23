@@ -2,14 +2,13 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 I launched two focused explorations.
 
 
-  ✿ Background Agent — Audit learning hooks and tools
-      ↳ read_file
- ›◆ Waiting for approval — Audit session structure
-      ↳ run_command
+  ▾ Subagents 2
+  ✿ Explorer Audit learning hooks and tools · Running read_file                    fixture-model 0s
+ ›◆ Reviewer Audit session structure · Waiting for approval                         review-model 0s
       status: Waiting for approval · id: bbbbbbbb
       │ 00:00:00  approval required for run_command
   ↑/↓ select · Enter details · m message · y/n approval · c cancel · Esc close
@@ -29,18 +28,18 @@ I launched two focused explorations.
 
 
 
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
 1 messages · / commands
 -- narrow --
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
 I launched two focused explorations.
 
 
-  ✿ Background Agent — Audit learning hooks and tools
-      ↳ read_file
- ›◆ Waiting for approval — Audit session structure
-      ↳ run_command
+  ▾ Subagents 2
+  ✿ Explorer Audit learn… · Running read_file fixture-m… 0s
+ ›◆ Reviewer Audit se… · Waiting for approval review-mo… 0s
       status: Waiting for approval · id: bbbbbbbb
       │ 00:00:00  approval required for run_command
   ↑/↓ select · Enter · m · y/n · c · Esc
@@ -54,6 +53,7 @@ I launched two focused explorations.
 
 
 
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                           │
+╰──────────────────────────────────────────── agent · auto ╯
 1 messages · / commands

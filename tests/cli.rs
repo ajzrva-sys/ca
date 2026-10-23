@@ -1590,7 +1590,10 @@ fn version_is_local_and_successful() {
         .expect("run ca --version");
 
     assert!(output.status.success());
-    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "ca 0.1.0");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        concat!("ca ", env!("CARGO_PKG_VERSION"))
+    );
     assert!(!home.path().join(".config/ca/config.toml").exists());
 }
 
@@ -1916,6 +1919,16 @@ fn loopback_yolo_tool_round_emits_typed_events_and_completes() {
             serde_json::json!({"path": target, "content":"written"}),
         ),
         text_sse("complete"),
+        tool_sse(
+            "report_structured_output",
+            "review-result",
+            serde_json::json!({"value": {
+                "approved": true,
+                "findings": [],
+                "summary": "Exact changed file reviewed."
+            }}),
+        ),
+        text_sse("complete after independent review"),
     ]);
     install_fake_config(home.path(), &base_url, 3);
 
@@ -1925,7 +1938,13 @@ fn loopback_yolo_tool_round_emits_typed_events_and_completes() {
         .output()
         .unwrap();
 
-    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "headless output: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(output.stderr.is_empty());
     assert_eq!(std::fs::read_to_string(target).unwrap(), "written");
     let stdout = String::from_utf8(output.stdout).unwrap();
@@ -1934,8 +1953,205 @@ fn loopback_yolo_tool_round_emits_typed_events_and_completes() {
     assert!(stdout.contains("\"status\":\"success\""));
     assert!(stdout.contains("completion"));
     let requests = server.join().unwrap();
-    assert_eq!(requests.len(), 2);
+    assert_eq!(requests.len(), 4);
     assert!(requests[1].contains("\"role\":\"tool\""));
+    let review: serde_json::Value =
+        serde_json::from_str(requests[2].split_once("\r\n\r\n").unwrap().1).unwrap();
+    let review_tools = review["tools"].as_array().unwrap();
+    let review_tool_names = review_tools
+        .iter()
+        .map(|tool| tool["function"]["name"].as_str().unwrap())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        review_tool_names,
+        std::collections::BTreeSet::from([
+            "read_file",
+            "list_dir",
+            "glob",
+            "search_files",
+            "report_structured_output",
+        ])
+    );
+    assert!(review["messages"].to_string().contains("written.txt"));
+    assert!(requests[3].contains("Host-owned independent review"));
+    assert!(stdout.contains("complete after independent review"));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn headless_native_candidate_verification_keeps_jsonl_clean_and_completes() {
+    use std::io::Read;
+    use std::os::unix::process::CommandExt;
+    use std::time::{Duration, Instant};
+
+    let home = tempfile::tempdir().unwrap();
+    let workspace = home.path().join("workspace");
+    std::fs::create_dir_all(workspace.join("src")).unwrap();
+    std::fs::write(
+        workspace.join("Cargo.toml"),
+        "[package]\nname = \"native_stdio_fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        workspace.join("Cargo.lock"),
+        "version = 4\n\n[[package]]\nname = \"native_stdio_fixture\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    std::fs::write(workspace.join(".gitignore"), "/target/\n").unwrap();
+    std::fs::write(
+        workspace.join("src/lib.rs"),
+        "pub fn answer() -> u32 { 0 }\n",
+    )
+    .unwrap();
+    for arguments in [vec!["init", "--quiet"], vec!["add", "."]] {
+        assert!(Command::new("git")
+            .args(arguments)
+            .current_dir(&workspace)
+            .status()
+            .unwrap()
+            .success());
+    }
+    assert!(Command::new("git")
+        .args([
+            "-c",
+            "user.name=NativeFixture",
+            "-c",
+            "user.email=native-fixture@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "baseline",
+        ])
+        .current_dir(&workspace)
+        .status()
+        .unwrap()
+        .success());
+    let source = "pub fn answer() -> u32 { 42 }\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn answer_is_correct() { assert_eq!(super::answer(), 42); }\n}\n";
+    let (base_url, server) = start_fake_provider(vec![
+        tool_sse(
+            "write_file",
+            "source-write",
+            serde_json::json!({"path":"src/lib.rs", "content":source}),
+        ),
+        text_sse("implemented and tested"),
+        tool_sse(
+            "report_structured_output",
+            "review-result",
+            serde_json::json!({"value": {
+                "approved": true,
+                "findings": [],
+                "summary": "Exact final source and regression reviewed."
+            }}),
+        ),
+        text_sse("completed after native checks and independent review"),
+    ]);
+    install_fake_config(home.path(), &base_url, 5);
+    let mut command = ca_command(home.path());
+    command
+        .current_dir(&workspace)
+        .env("XDG_CONFIG_HOME", home.path().join(".config"))
+        .env("XDG_DATA_HOME", home.path().join(".local/share"))
+        .env("XDG_CACHE_HOME", home.path().join(".cache"))
+        .env("TMPDIR", home.path())
+        .args([
+            "--workspace",
+            workspace.to_str().unwrap(),
+            "--trust",
+            "--yolo",
+            "--output-format",
+            "jsonl",
+            "--prompt",
+            "Fix the answer function and add a boundary regression.",
+        ])
+        .process_group(0)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = command.spawn().unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+    let mut stderr = child.stderr.take().unwrap();
+    let stdout_reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout.read_to_end(&mut bytes).unwrap();
+        bytes
+    });
+    let stderr_reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stderr.read_to_end(&mut bytes).unwrap();
+        bytes
+    });
+    let started = Instant::now();
+    let mut timed_out = false;
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if started.elapsed() >= Duration::from_secs(45) {
+            timed_out = true;
+            let _ = nix::sys::signal::killpg(
+                nix::unistd::Pid::from_raw(child.id() as i32),
+                nix::sys::signal::Signal::SIGKILL,
+            );
+            break child.wait().unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let stdout = stdout_reader.join().unwrap();
+    let stderr = stderr_reader.join().unwrap();
+    assert!(
+        !timed_out,
+        "headless native verification exceeded its bounded deadline"
+    );
+    assert_eq!(
+        status.code(),
+        Some(0),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&stdout),
+        String::from_utf8_lossy(&stderr),
+    );
+    assert!(
+        stderr.is_empty(),
+        "embedded native progress leaked onto stderr"
+    );
+    let events: Vec<serde_json::Value> = String::from_utf8(stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("non-JSON output contaminated JSONL"))
+        .collect();
+    let completions: Vec<_> = events
+        .iter()
+        .filter(|event| event["event"]["type"] == "completion")
+        .collect();
+    assert_eq!(completions.len(), 1);
+    assert_eq!(
+        completions[0]["event"]["message"],
+        "completed after native checks and independent review"
+    );
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("src/lib.rs")).unwrap(),
+        source
+    );
+    let requests = server.join().unwrap();
+    assert_eq!(requests.len(), 4);
+    let parent: serde_json::Value =
+        serde_json::from_str(requests[1].split_once("\r\n\r\n").unwrap().1).unwrap();
+    let context = parent["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|message| message["content"].as_str())
+        .find(|content| content.contains("Host-produced automatic verification evidence follows."))
+        .expect("parent did not receive native verification evidence");
+    let json_start = context.find('{').unwrap();
+    let receipt: serde_json::Value = serde_json::from_str(&context[json_start..]).unwrap();
+    assert_eq!(receipt["backend"], "native_codex_team");
+    assert_eq!(receipt["status"], "completed");
+    assert!(!receipt["receipt"]["action_results"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(requests[2].contains("Independently review the exact turn-owned candidate"));
+    assert!(requests[2].contains("src/lib.rs"));
+    assert!(requests[3].contains("Host-owned independent review"));
 }
 
 #[test]
@@ -2048,7 +2264,11 @@ fn loopback_default_text_keeps_assistant_on_stdout() {
 
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(String::from_utf8(output.stdout).unwrap(), "plain text\n");
-    assert!(output.stderr.is_empty());
+    assert!(
+        output.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     server.join().unwrap();
 }
 

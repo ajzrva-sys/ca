@@ -11,6 +11,7 @@ use uuid::Uuid;
 const DEFAULT_MAX_CONCURRENT: usize = 3;
 const DEFAULT_MAX_DEPTH: u8 = 2;
 const DEFAULT_MAX_CHILDREN_PER_TURN: usize = 8;
+pub const MAX_AUTOMATIC_REVIEWS_PER_TURN: usize = 3;
 const DEFAULT_MAX_TURNS: usize = 30;
 const DEFAULT_RUNTIME_SECS: u64 = 30 * 60;
 const DEFAULT_OUTPUT_BYTES: usize = 256 * 1024;
@@ -186,11 +187,14 @@ pub enum AgentRunPurpose {
 #[serde(rename_all = "snake_case")]
 pub enum AgentRunOrigin {
     Conversation,
+    AutomaticReview,
     TaskGraph,
     MultiRun,
+    PlanWorkflow,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(deny_unknown_fields)]
 pub struct AgentRoute {
     pub provider: String,
     pub model: String,
@@ -371,6 +375,15 @@ impl AgentRouteClients {
         Ok(Some((client, entry.images_supported)))
     }
 
+    fn routes(&self) -> Vec<AgentRoute> {
+        self.clients
+            .read()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .keys()
+            .cloned()
+            .collect()
+    }
+
     fn replace(&self, replacement: AgentRouteClients) {
         let replacement = replacement
             .clients
@@ -397,6 +410,40 @@ pub struct AgentEvent {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentExecutionPhase {
+    #[default]
+    Queued,
+    WaitingForResponse,
+    Thinking,
+    Tool,
+    WaitingApproval,
+    Finished,
+}
+
+impl AgentExecutionPhase {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Queued => "Queued",
+            Self::WaitingForResponse => "Waiting for response…",
+            Self::Thinking => "Thinking",
+            Self::Tool => "Running tool",
+            Self::WaitingApproval => "Waiting for approval",
+            Self::Finished => "Finished",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AgentMutationReceipt {
+    pub agent_id: AgentId,
+    pub parent_turn: Uuid,
+    pub mutation: crate::undo::FileMutationBatchReceipt,
+    pub aggregate: bool,
+    pub aggregate_started_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, Clone)]
 pub struct AgentSnapshot {
     pub id: AgentId,
@@ -405,6 +452,10 @@ pub struct AgentSnapshot {
     pub purpose: AgentRunPurpose,
     pub task_id: Option<crate::work::TaskId>,
     pub task: String,
+    pub role: Option<String>,
+    pub model: Option<String>,
+    pub provider: Option<String>,
+    pub phase: AgentExecutionPhase,
     pub parent: Option<AgentId>,
     pub depth: u8,
     pub context_mode: AgentContextMode,
@@ -475,6 +526,10 @@ pub struct AgentActivitySnapshot {
     pub purpose: AgentRunPurpose,
     pub status: AgentStatus,
     pub task: String,
+    pub role: Option<String>,
+    pub model: Option<String>,
+    pub provider: Option<String>,
+    pub phase: AgentExecutionPhase,
     pub current_action: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -491,6 +546,12 @@ pub enum AgentCommand {
 
 #[derive(Debug)]
 pub enum RunnerEvent {
+    Phase(AgentExecutionPhase),
+    Mutation(crate::undo::FileMutationBatchReceipt),
+    AggregateMutation {
+        batch: crate::undo::FileMutationBatchReceipt,
+        started_at: Option<DateTime<Utc>>,
+    },
     HarnessPrepared {
         snapshot: crate::harness_registry::ComponentSnapshot,
         model: String,
@@ -529,6 +590,27 @@ pub struct AgentRunContext {
     pub events: mpsc::UnboundedSender<RunnerEvent>,
     pub job_owner: crate::jobs::JobOwner,
     pub graph_budget: Option<crate::agent_graph::AgentAutonomyBudget>,
+    pub(crate) frozen_policy: Option<Arc<FrozenChildPolicy>>,
+}
+
+/// A human permission ceiling captured at admission, never replaced by a retry.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct FrozenChildPolicy {
+    pub approval: crate::app::ApprovalMode,
+    pub approval_rules: Vec<crate::config::ApprovalRule>,
+    pub permission_rules: Vec<crate::permission::PermissionRule>,
+    pub session_grants: Vec<crate::permission::PermissionMatcher>,
+}
+
+impl FrozenChildPolicy {
+    pub(crate) fn from_authority(authority: &crate::automatic_review::ReviewAuthority) -> Self {
+        Self {
+            approval: authority.approval.clone(),
+            approval_rules: authority.approval_rules.clone(),
+            permission_rules: authority.permission_rules.clone(),
+            session_grants: authority.session_grants.clone(),
+        }
+    }
 }
 
 #[async_trait]
@@ -536,6 +618,11 @@ pub trait AgentRunner: Send + Sync {
     async fn run(&self, context: AgentRunContext) -> Result<String, String>;
 
     fn replace_route_clients(&self, _clients: AgentRouteClients) {}
+
+    /// Configured route identities only; listing never resolves credentials.
+    fn available_routes(&self) -> Vec<AgentRoute> {
+        Vec::new()
+    }
 
     fn skill_constraint_ids(&self) -> (Option<Vec<String>>, Option<Vec<String>>) {
         (None, None)
@@ -567,6 +654,10 @@ pub struct ProviderAgentRunner {
 
 #[async_trait]
 impl AgentRunner for ProviderAgentRunner {
+    fn available_routes(&self) -> Vec<AgentRoute> {
+        self.route_clients.routes()
+    }
+
     fn verification_sandbox_mode(&self) -> Option<crate::sandbox::SandboxMode> {
         Some(self.sandbox_mode)
     }
@@ -632,6 +723,7 @@ impl AgentRunner for ProviderAgentRunner {
                 skill_view_ids,
                 mcp_enabled: false,
                 mechanistic_delegation_enabled: false,
+                native_mechanistic_enabled: false,
                 transparent_mechanistic_enabled: false,
                 remote_mechanistic_enabled: false,
                 automation_setup_enabled: false,
@@ -729,6 +821,9 @@ impl AgentRunner for ProviderAgentRunner {
                     provider: client.provider_id().into(),
                 });
             }
+            let _ = context
+                .events
+                .send(RunnerEvent::Phase(AgentExecutionPhase::WaitingForResponse));
             let stream_result = tokio::select! {
                 _ = wait_cancelled(context.cancelled.clone()) => return Err("cancelled".into()),
                 result = client.stream_prepared(&prepared) => result.map_err(|error| error.to_string()),
@@ -743,6 +838,9 @@ impl AgentRunner for ProviderAgentRunner {
             let assembled_result = tokio::select! {
                 _ = wait_cancelled(context.cancelled.clone()) => return Err("cancelled".into()),
                 result = crate::agent::stream::consume_stream(&mut stream, |event| {
+                    if matches!(event, crate::agent::stream::ProviderEvent::Reasoning(_)) {
+                        let _ = context.events.send(RunnerEvent::Phase(AgentExecutionPhase::Thinking));
+                    }
                     if let crate::agent::stream::ProviderEvent::Usage(usage) = event {
                         usage_span.observe(usage);
                     }
@@ -894,6 +992,7 @@ impl AgentRunner for ProviderAgentRunner {
             }
             let discovery_batch = discovery.begin_batch();
             let execution_grants = context.request.grants.clone();
+            let frozen_policy = context.frozen_policy.clone();
             let mut prefetched_reads = std::collections::HashMap::new();
             for (call_index, (call_id, name, raw_arguments)) in calls.iter().cloned().enumerate() {
                 if let Some(budget) = context
@@ -919,7 +1018,14 @@ impl AgentRunner for ProviderAgentRunner {
                         .send(RunnerEvent::ToolStarted { name: name.clone() });
                 }
                 let policy_prompt = matches!(
-                    child_permission_decision(self, &workspace, context.id, &name, &parsed),
+                    child_permission_decision(
+                        self,
+                        frozen_policy.as_deref(),
+                        &workspace,
+                        context.id,
+                        &name,
+                        &parsed
+                    ),
                     Ok(crate::approval::BrokerDecision::ExplicitPrompt)
                         | Ok(crate::approval::BrokerDecision::NetworkPrompt)
                 );
@@ -930,6 +1036,7 @@ impl AgentRunner for ProviderAgentRunner {
                     grant: &execution_grants,
                     workspace: &workspace,
                     policy_approved: false,
+                    frozen_policy: frozen_policy.as_deref(),
                 };
                 let result = if let Some(result) = prefetched_reads.remove(&call_index) {
                     result
@@ -939,7 +1046,7 @@ impl AgentRunner for ProviderAgentRunner {
                         .supports_native_read(&name, crate::agent::registry::ToolProfile::Subagent)
                 {
                     match prepare_child_tool(&native_context, &name, &parsed) {
-                        Err(result) => result,
+                        Err(result) => *result,
                         Ok(prepared) => {
                             let mut run = vec![crate::agent::tools::PreparedNativeRead {
                                 name: name.clone(),
@@ -985,11 +1092,7 @@ impl AgentRunner for ProviderAgentRunner {
                                 cwd: workspace.cwd().to_path_buf(),
                                 timeout_secs: self.command_timeout_secs,
                                 profile: crate::agent::registry::ToolProfile::Subagent,
-                                workspace_roots: workspace
-                                    .roots()
-                                    .iter()
-                                    .map(|root| root.path.clone())
-                                    .collect(),
+                                workspace_roots: workspace.execution_roots(),
                                 sandbox_mode: self.sandbox_mode,
                                 network_allowed: false,
                                 job_owner: owner,
@@ -1006,9 +1109,40 @@ impl AgentRunner for ProviderAgentRunner {
                             first
                         }
                     }
-                } else if name == "spawn_agent" && granted.contains(&name) {
-                    execute_nested_spawn(&context, &parsed, &self.manager_link).await
+                } else if name == "spawn_agent" && granted.contains(&name) && !policy_prompt {
+                    execute_child_nested_spawn(&context, &native_context, &parsed).await
+                } else if name == "request_graph_clarification" {
+                    if context.graph_budget.is_none() {
+                        crate::agent::registry::ToolExecutionResult::Failure(
+                            "request_graph_clarification is available only inside an agent graph task"
+                                .into(),
+                        )
+                    } else {
+                        match serde_json::from_value::<
+                            crate::agent::registry::arguments::RequestGraphClarificationArgs,
+                        >(parsed)
+                        {
+                            Ok(args) => await_graph_clarification(&mut context, args).await,
+                            Err(error) => crate::agent::registry::ToolExecutionResult::Failure(
+                                format!("invalid request_graph_clarification arguments: {error}"),
+                            ),
+                        }
+                    }
                 } else if !granted.contains(&name) || policy_prompt {
+                    if self
+                        .manager_link
+                        .get()
+                        .and_then(std::sync::Weak::upgrade)
+                        .is_some_and(|manager| {
+                            manager
+                                .headless_noninteractive
+                                .load(std::sync::atomic::Ordering::Acquire)
+                        })
+                    {
+                        return Err(format!(
+                            "headless child invocation {name} requires interactive approval"
+                        ));
+                    }
                     let approved = await_child_approval(
                         &mut context,
                         if !granted.contains(&name) {
@@ -1024,6 +1158,12 @@ impl AgentRunner for ProviderAgentRunner {
                         )
                     } else if name == crate::tool_discovery::SEARCH_TOOLS_NAME {
                         execute_child_discovery(&native_context, &parsed, true, &discovery)
+                    } else if name == "spawn_agent" {
+                        let approved_context = ChildToolContext {
+                            policy_approved: true,
+                            ..native_context
+                        };
+                        execute_child_nested_spawn(&context, &approved_context, &parsed).await
                     } else {
                         execute_child_tool(
                             ChildToolContext {
@@ -1033,6 +1173,7 @@ impl AgentRunner for ProviderAgentRunner {
                                 grant: &context.request.grants,
                                 workspace: &workspace,
                                 policy_approved: true,
+                                frozen_policy: frozen_policy.as_deref(),
                             },
                             &name,
                             &parsed,
@@ -1050,6 +1191,7 @@ impl AgentRunner for ProviderAgentRunner {
                             grant: &context.request.grants,
                             workspace: &workspace,
                             policy_approved: false,
+                            frozen_policy: frozen_policy.as_deref(),
                         },
                         &name,
                         &parsed,
@@ -1057,6 +1199,9 @@ impl AgentRunner for ProviderAgentRunner {
                     .await
                 };
                 discovery.touch(&name);
+                if let Some(mutation) = result.mutation_batch() {
+                    let _ = context.events.send(RunnerEvent::Mutation(mutation.clone()));
+                }
                 let _ = context.events.send(RunnerEvent::ToolEvidence {
                     turn: turn as u64,
                     call_id: call_id.clone(),
@@ -1094,7 +1239,13 @@ impl AgentRunner for ProviderAgentRunner {
                 });
                 messages.push(ChatMessage {
                     role: "tool".into(),
-                    content: crate::image_content::ModelContent::text(result.model_text()),
+                    content: crate::image_content::ModelContent::text(result.model_text())
+                        .with_prunable_tool_result(crate::context_pruning::qualified_result(
+                            &name,
+                            &raw_arguments,
+                            result.is_success() && result.image().is_none(),
+                        ))
+                        .with_tool_result_status(result.is_success()),
                     tool_calls: None,
                     tool_call_id: Some(call_id.clone()),
                     response_items: Vec::new(),
@@ -1137,27 +1288,156 @@ impl AgentRunner for ProviderAgentRunner {
     }
 }
 
+fn resolve_policy_prompt(
+    policy: &FrozenChildPolicy,
+    name: &str,
+    prepared: &crate::workspace::PreparedToolInvocation,
+    decision: crate::approval::BrokerDecision,
+) -> crate::approval::BrokerDecision {
+    if decision != crate::approval::BrokerDecision::Prompt {
+        return decision;
+    }
+    match &policy.approval {
+        crate::app::ApprovalMode::RunEverything => crate::approval::BrokerDecision::AllowedByRule,
+        crate::app::ApprovalMode::AutoReview
+            if crate::permission::auto_review_safe_invocation(name, &prepared.arguments) =>
+        {
+            crate::approval::BrokerDecision::AllowedByRule
+        }
+        _ => crate::approval::BrokerDecision::ExplicitPrompt,
+    }
+}
+
+fn prepared_policy_decision(
+    policy: &FrozenChildPolicy,
+    name: &str,
+    prepared: &crate::workspace::PreparedToolInvocation,
+) -> crate::approval::BrokerDecision {
+    use crate::approval::BrokerDecision;
+    let decision = match crate::permission::evaluate(
+        name,
+        &prepared.arguments,
+        &policy.approval_rules,
+        &policy.permission_rules,
+        &policy.session_grants,
+    ) {
+        crate::permission::PermissionOutcome::Deny => BrokerDecision::DeniedByRule,
+        crate::permission::PermissionOutcome::Ask => BrokerDecision::ExplicitPrompt,
+        _ if crate::permission::host_authorized_workflow_shape(name, &prepared.arguments) => {
+            BrokerDecision::AllowedByRule
+        }
+        _ if prepared.network_requested => BrokerDecision::NetworkPrompt,
+        crate::permission::PermissionOutcome::Allow => BrokerDecision::AllowedByRule,
+        crate::permission::PermissionOutcome::NoMatch => BrokerDecision::Prompt,
+    };
+    resolve_policy_prompt(policy, name, prepared, decision)
+}
+
+fn restrictive_decision(
+    left: crate::approval::BrokerDecision,
+    right: crate::approval::BrokerDecision,
+) -> crate::approval::BrokerDecision {
+    use crate::approval::BrokerDecision;
+    let rank = |decision| match decision {
+        BrokerDecision::DeniedByRule => 5,
+        BrokerDecision::ExplicitPrompt => 4,
+        BrokerDecision::NetworkPrompt => 3,
+        BrokerDecision::Prompt => 2,
+        BrokerDecision::AllowedByRule => 1,
+    };
+    if rank(left) >= rank(right) {
+        left
+    } else {
+        right
+    }
+}
+
+fn prepare_child_permission(
+    runner: &ProviderAgentRunner,
+    frozen_policy: Option<&FrozenChildPolicy>,
+    workspace: &crate::workspace::WorkspaceContext,
+    id: AgentId,
+    name: &str,
+    arguments: &serde_json::Value,
+) -> Result<
+    (
+        crate::workspace::PreparedToolInvocation,
+        crate::approval::BrokerDecision,
+    ),
+    String,
+> {
+    let fallback_grants = runner
+        .session_grants
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .snapshot();
+    let (rules, permissions, grants) = frozen_policy.map_or(
+        (
+            &runner.approval_rules,
+            &runner.permission_rules,
+            &fallback_grants,
+        ),
+        |policy| {
+            (
+                &policy.approval_rules,
+                &policy.permission_rules,
+                &policy.session_grants,
+            )
+        },
+    );
+    let (prepared, mut decision) = crate::approval::ApprovalBroker::with_policy(
+        workspace,
+        rules,
+        permissions,
+        grants,
+        crate::approval::ApprovalOrigin::Agent(id.to_string()),
+    )
+    .prepare(name, arguments, crate::agent::registry::ToolOrigin::BuiltIn)?;
+    if let Some(policy) = frozen_policy {
+        decision = resolve_policy_prompt(policy, name, &prepared, decision);
+    }
+    // Evaluate revocations against the *same* canonical invocation. A second
+    // prepare would permit a symlink replacement to remap the authorized path.
+    if let Some(policy) = runner
+        .manager_link
+        .get()
+        .and_then(std::sync::Weak::upgrade)
+        .and_then(|manager| manager.current_permission_policy())
+    {
+        decision =
+            restrictive_decision(decision, prepared_policy_decision(&policy, name, &prepared));
+    }
+    Ok((prepared, decision))
+}
+
 fn child_permission_decision(
     runner: &ProviderAgentRunner,
+    frozen_policy: Option<&FrozenChildPolicy>,
     workspace: &crate::workspace::WorkspaceContext,
     id: AgentId,
     name: &str,
     arguments: &serde_json::Value,
 ) -> Result<crate::approval::BrokerDecision, String> {
-    let session_grants = runner
-        .session_grants
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
-        .snapshot();
-    crate::approval::ApprovalBroker::with_policy(
-        workspace,
-        &runner.approval_rules,
-        &runner.permission_rules,
-        &session_grants,
-        crate::approval::ApprovalOrigin::Agent(id.to_string()),
-    )
-    .prepare(name, arguments, crate::agent::registry::ToolOrigin::BuiltIn)
-    .map(|(_, decision)| decision)
+    prepare_child_permission(runner, frozen_policy, workspace, id, name, arguments)
+        .map(|(_, decision)| decision)
+}
+
+async fn execute_child_nested_spawn(
+    context: &AgentRunContext,
+    tool_context: &ChildToolContext<'_>,
+    arguments: &serde_json::Value,
+) -> crate::agent::registry::ToolExecutionResult {
+    match prepare_child_tool(tool_context, "spawn_agent", arguments) {
+        Ok(prepared) => {
+            execute_nested_spawn(
+                context,
+                &prepared.arguments,
+                &tool_context.runner.manager_link,
+            )
+            .await
+        }
+        Err(result) => *result,
+    }
 }
 
 async fn execute_nested_spawn(
@@ -1192,16 +1472,15 @@ async fn execute_nested_spawn(
             "Nested agent tool grants must be a non-empty subset of the parent grants".into(),
         );
     }
-    let selection = match requested_complexity(arguments) {
-        Ok(Some(complexity)) => match manager.select_delegation_route(
-            complexity,
-            task,
-            &context.request.context_summary,
-        ) {
-            Ok(selection) => Some(selection),
-            Err(error) => return crate::agent::registry::ToolExecutionResult::Failure(error),
-        },
-        Ok(None) => None,
+    let (route, selection) = match resolve_child_route(
+        &manager,
+        arguments,
+        task,
+        &context.request.context_summary,
+        context.request.route.clone(),
+        false,
+    ) {
+        Ok(resolved) => resolved,
         Err(error) => return crate::agent::registry::ToolExecutionResult::Failure(error),
     };
     let output_contract = match arguments.get("output_schema") {
@@ -1242,15 +1521,7 @@ async fn execute_nested_spawn(
         },
         workspace: context.request.workspace.clone(),
         depth: context.request.depth.saturating_add(1),
-        route: selection.as_ref().map_or_else(
-            || context.request.route.clone(),
-            |selection| {
-                Some(AgentRoute {
-                    provider: selection.provider.clone(),
-                    model: selection.model.clone(),
-                })
-            },
-        ),
+        route: route.clone(),
         purpose: context.request.purpose,
         output_contract,
         isolation,
@@ -1260,10 +1531,13 @@ async fn execute_nested_spawn(
     } else {
         AgentRunOrigin::Conversation
     };
-    match manager.spawn_with_origin(request, origin).await {
-        Ok(id) => crate::agent::registry::ToolExecutionResult::Success(selection.map_or_else(
-            || format!("Spawned nested agent {id}"),
-            |selection| format!("Spawned nested agent {id} · routed {}", selection.render()),
+    match manager
+        .spawn_with_inherited_policy(request, origin, context.frozen_policy.clone())
+        .await
+    {
+        Ok(id) => crate::agent::registry::ToolExecutionResult::Success(format!(
+            "Spawned nested agent {id}{}",
+            child_route_suffix(route.as_ref(), selection.as_ref())
         )),
         Err(error) => crate::agent::registry::ToolExecutionResult::Failure(error.to_string()),
     }
@@ -1287,6 +1561,67 @@ async fn await_child_approval(
                 }
                 None => return Err("agent control channel closed".into()),
             }
+        }
+    }
+}
+
+pub const MAX_CLARIFICATION_QUESTION_CHARS: usize = 400;
+pub const MAX_CLARIFICATION_CHOICES: usize = 8;
+pub const MAX_CLARIFICATION_CHOICE_CHARS: usize = 80;
+pub const MAX_CLARIFICATION_ANSWER_CHARS: usize = 2_000;
+
+fn valid_clarification_text(value: &str, maximum: usize) -> bool {
+    !value.is_empty() && value.len() <= maximum && !value.chars().any(char::is_control)
+}
+
+/// The silo'd lane's typed question channel. A graph-task child calls
+/// `request_graph_clarification` and parks until the coordinator answers
+/// through the steering channel; the answer becomes the tool result and the
+/// lane resumes. Only one question can be pending at a time because the lane
+/// is parked inside this call.
+async fn await_graph_clarification(
+    context: &mut AgentRunContext,
+    args: crate::agent::registry::arguments::RequestGraphClarificationArgs,
+) -> crate::agent::registry::ToolExecutionResult {
+    use crate::agent::registry::ToolExecutionResult;
+    if !valid_clarification_text(&args.question, MAX_CLARIFICATION_QUESTION_CHARS)
+        || args.choices.len() > MAX_CLARIFICATION_CHOICES
+        || args
+            .choices
+            .iter()
+            .any(|choice| !valid_clarification_text(choice, MAX_CLARIFICATION_CHOICE_CHARS))
+    {
+        return ToolExecutionResult::Failure("invalid request_graph_clarification bounds".into());
+    }
+    let mut prompt = format!("clarification: {}", args.question.trim());
+    if !args.choices.is_empty() {
+        prompt.push_str(&format!(" [choices: {}]", args.choices.join(", ")));
+    }
+    let _ = context.events.send(RunnerEvent::ApprovalRequired(prompt));
+    tokio::select! {
+        _ = wait_cancelled(context.cancelled.clone()) => {
+            ToolExecutionResult::Failure("clarification cancelled".into())
+        }
+        command = context.commands.recv() => match command {
+            Some(AgentCommand::Message { id, text }) => {
+                let _ = context.events.send(RunnerEvent::SteerDelivered { id });
+                if !text.is_empty()
+                    && (text.len() > MAX_CLARIFICATION_ANSWER_CHARS
+                        || text.chars().any(char::is_control))
+                {
+                    return ToolExecutionResult::Failure(
+                        "clarification answer exceeds bounds".into(),
+                    );
+                }
+                ToolExecutionResult::Success(text)
+            }
+            Some(AgentCommand::Approval(true)) => ToolExecutionResult::Success(
+                "no answer provided; proceed with your best judgment".into(),
+            ),
+            Some(AgentCommand::Approval(false)) => {
+                ToolExecutionResult::Denied("clarification declined by the coordinator".into())
+            }
+            None => ToolExecutionResult::Failure("agent control channel closed".into()),
         }
     }
 }
@@ -1319,6 +1654,7 @@ struct ChildToolContext<'a> {
     grant: &'a AgentGrant,
     workspace: &'a crate::workspace::WorkspaceContext,
     policy_approved: bool,
+    frozen_policy: Option<&'a FrozenChildPolicy>,
 }
 
 fn execute_child_discovery(
@@ -1337,7 +1673,7 @@ fn execute_child_discovery(
         arguments,
     ) {
         Ok(prepared) => discovery.search(&prepared.arguments),
-        Err(result) => result,
+        Err(result) => *result,
     }
 }
 
@@ -1345,34 +1681,37 @@ fn prepare_child_tool(
     context: &ChildToolContext<'_>,
     name: &str,
     arguments: &serde_json::Value,
-) -> Result<crate::workspace::PreparedToolInvocation, crate::agent::registry::ToolExecutionResult> {
+) -> Result<
+    crate::workspace::PreparedToolInvocation,
+    Box<crate::agent::registry::ToolExecutionResult>,
+> {
     let runner = context.runner;
     let registry = crate::agent::registry::ToolRegistry::builtins();
     if let Err(error) = registry.validate(name, arguments) {
-        return Err(crate::agent::registry::ToolExecutionResult::Failure(
-            error.to_string(),
+        return Err(Box::new(
+            crate::agent::registry::ToolExecutionResult::Failure(error.to_string()),
         ));
     }
-    let session_grants = runner
-        .session_grants
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
-        .snapshot();
-    let broker = crate::approval::ApprovalBroker::with_policy(
+    let (prepared, decision) = match prepare_child_permission(
+        runner,
+        context.frozen_policy,
         context.workspace,
-        &runner.approval_rules,
-        &runner.permission_rules,
-        &session_grants,
-        crate::approval::ApprovalOrigin::Agent(context.id.to_string()),
-    );
-    let (prepared, decision) =
-        match broker.prepare(name, arguments, crate::agent::registry::ToolOrigin::BuiltIn) {
-            Ok(result) => result,
-            Err(error) => return Err(crate::agent::registry::ToolExecutionResult::Failure(error)),
-        };
+        context.id,
+        name,
+        arguments,
+    ) {
+        Ok(result) => result,
+        Err(error) => {
+            return Err(Box::new(
+                crate::agent::registry::ToolExecutionResult::Failure(error),
+            ))
+        }
+    };
     if decision == crate::approval::BrokerDecision::DeniedByRule {
-        return Err(crate::agent::registry::ToolExecutionResult::Denied(
-            "Denied by persistent approval rule".into(),
+        return Err(Box::new(
+            crate::agent::registry::ToolExecutionResult::Denied(
+                "Denied by persistent approval rule".into(),
+            ),
         ));
     }
     if matches!(
@@ -1381,13 +1720,15 @@ fn prepare_child_tool(
             | crate::approval::BrokerDecision::NetworkPrompt
     ) && !context.policy_approved
     {
-        return Err(crate::agent::registry::ToolExecutionResult::Denied(
-            "Child permission requires parent approval".into(),
+        return Err(Box::new(
+            crate::agent::registry::ToolExecutionResult::Denied(
+                "Child permission requires parent approval".into(),
+            ),
         ));
     }
     let Some(spec) = registry.get(name) else {
-        return Err(crate::agent::registry::ToolExecutionResult::Failure(
-            format!("unknown tool: {name}"),
+        return Err(Box::new(
+            crate::agent::registry::ToolExecutionResult::Failure(format!("unknown tool: {name}")),
         ));
     };
     for resource in &spec.resources {
@@ -1425,17 +1766,19 @@ fn prepare_child_tool(
             crate::agent::registry::ResourceKind::JobId => true,
         };
         if !within_scope {
-            return Err(crate::agent::registry::ToolExecutionResult::Denied(
-                format!(
+            return Err(Box::new(
+                crate::agent::registry::ToolExecutionResult::Denied(format!(
                     "Child resource is outside inherited scope: {}",
                     resource.field
-                ),
+                )),
             ));
         }
     }
     if prepared.network_requested && !context.grant.network {
-        return Err(crate::agent::registry::ToolExecutionResult::Denied(
-            "Child network access requires an explicit inherited grant".into(),
+        return Err(Box::new(
+            crate::agent::registry::ToolExecutionResult::Denied(
+                "Child network access requires an explicit inherited grant".into(),
+            ),
         ));
     }
     Ok(prepared)
@@ -1446,10 +1789,21 @@ async fn execute_child_tool(
     name: &str,
     arguments: &serde_json::Value,
 ) -> crate::agent::registry::ToolExecutionResult {
-    let prepared = match prepare_child_tool(&context, name, arguments) {
+    let mut prepared = match prepare_child_tool(&context, name, arguments) {
         Ok(prepared) => prepared,
-        Err(result) => return result,
+        Err(result) => return *result,
     };
+    if let Err(error) = crate::formatting::prepare_with_authority(
+        name,
+        &mut prepared.arguments,
+        context.workspace,
+        context.runner.sandbox_mode,
+        |invocation| prepare_child_tool(&context, "run_command", invocation).is_ok(),
+    )
+    .await
+    {
+        return crate::agent::registry::ToolExecutionResult::Failure(error);
+    }
     let runner = context.runner;
     crate::agent::tools::execute_prepared_tool_in_workspace_policy_owned_with_skills(
         name,
@@ -1473,9 +1827,9 @@ fn child_path_scopes(
         .and_then(serde_json::Value::as_array);
     if assigned.is_none_or(Vec::is_empty) {
         return Ok(workspace
-            .roots()
+            .execution_roots()
             .iter()
-            .map(|root| root.path.to_string_lossy().into_owned())
+            .map(|root| root.to_string_lossy().into_owned())
             .collect());
     }
 
@@ -1489,7 +1843,9 @@ fn child_path_scopes(
             let resolved = workspace
                 .resolve(raw, crate::workspace::PathOperation::Read)
                 .map_err(|error| error.to_string())?;
-            if workspace.root_relative(&resolved).is_none() {
+            if workspace.root_relative(&resolved).is_none()
+                && !workspace.has_session_write(&resolved)
+            {
                 return Err(format!(
                     "assigned file is outside workspace roots: {}",
                     resolved.display()
@@ -1574,24 +1930,15 @@ pub async fn execute_manager_tool(
             let context_summary = format!(
                 "Goal: {task}\nApproved plan/task:\n{work_summary}\nConstraints: exact tool grants; workspace roots do not widen; network denied\nCheckpoint: none\nAssigned files: {assigned_files}"
             );
-            let selection = match requested_complexity(arguments) {
-                Ok(Some(complexity)) => {
-                    match manager.select_delegation_route(complexity, &task, &context_summary) {
-                        Ok(selection) => Some(selection),
-                        Err(error) => return Some(ToolExecutionResult::Failure(error)),
-                    }
-                }
-                Ok(None) if manager.learned_delegation_enabled() => {
-                    match manager.select_delegation_route(
-                        crate::pricing::Complexity::Standard,
-                        &task,
-                        &context_summary,
-                    ) {
-                        Ok(selection) => Some(selection),
-                        Err(error) => return Some(ToolExecutionResult::Failure(error)),
-                    }
-                }
-                Ok(None) => None,
+            let (route, selection) = match resolve_child_route(
+                manager,
+                arguments,
+                &task,
+                &context_summary,
+                manager.default_delegation_route_for_turn(manager.parent_turn()),
+                manager.learned_delegation_enabled(),
+            ) {
+                Ok(resolved) => resolved,
                 Err(error) => return Some(ToolExecutionResult::Failure(error)),
             };
             let request = AgentSpawnRequest {
@@ -1624,15 +1971,7 @@ pub async fn execute_manager_tool(
                 },
                 workspace: workspace.clone(),
                 depth: 1,
-                route: selection.as_ref().map_or_else(
-                    || manager.default_delegation_route(),
-                    |selection| {
-                        Some(AgentRoute {
-                            provider: selection.provider.clone(),
-                            model: selection.model.clone(),
-                        })
-                    },
-                ),
+                route: route.clone(),
                 purpose: AgentRunPurpose::Subagent,
                 output_contract: match arguments.get("output_schema") {
                     None | Some(serde_json::Value::Null) => None,
@@ -1659,9 +1998,9 @@ pub async fn execute_manager_tool(
                 },
             };
             match manager.spawn(request).await {
-                Ok(id) => ToolExecutionResult::Success(selection.map_or_else(
-                    || format!("Spawned agent {id}"),
-                    |selection| format!("Spawned agent {id} · routed {}", selection.render()),
+                Ok(id) => ToolExecutionResult::Success(format!(
+                    "Spawned agent {id}{}",
+                    child_route_suffix(route.as_ref(), selection.as_ref())
                 )),
                 Err(error) => failure(error),
             }
@@ -1669,12 +2008,15 @@ pub async fn execute_manager_tool(
         "spawn_agent_batch" => {
             let tasks = arguments.get("tasks")?.as_array()?;
             let mut requests = Vec::with_capacity(tasks.len());
-            let mut routes = Vec::with_capacity(tasks.len());
+            let mut route_details = Vec::with_capacity(tasks.len());
             for task in tasks {
                 match build_spawn_request(task, manager, work_state, workspace) {
                     Ok((request, selection)) => {
+                        route_details.push(child_route_suffix(
+                            request.route.as_ref(),
+                            selection.as_ref(),
+                        ));
                         requests.push(request);
-                        routes.push(selection);
                     }
                     Err(error) => return Some(ToolExecutionResult::Failure(error)),
                 }
@@ -1686,16 +2028,9 @@ pub async fn execute_manager_tool(
                 Ok((batch_id, ids)) => {
                     let rows = ids
                         .iter()
-                        .zip(routes.iter())
+                        .zip(route_details.iter())
                         .enumerate()
-                        .map(|(index, (id, selection))| {
-                            selection.as_ref().map_or_else(
-                                || format!("{}. {id}", index + 1),
-                                |selection| {
-                                    format!("{}. {id} · routed {}", index + 1, selection.render())
-                                },
-                            )
-                        })
+                        .map(|(index, (id, details))| format!("{}. {id}{details}", index + 1))
                         .collect::<Vec<_>>();
                     ToolExecutionResult::Success(format!(
                         "Spawned batch {batch_id}\n{}",
@@ -1785,6 +2120,10 @@ pub async fn execute_manager_tool(
                 Err(error) => failure(error),
             }
         }
+        "list_agent_routes" => ToolExecutionResult::Success(
+            json!({"routes": manager.available_routes(), "authentication": "not_checked"})
+                .to_string(),
+        ),
         "list_agents" => {
             let snapshots = manager.list().await;
             ToolExecutionResult::Success(if snapshots.is_empty() {
@@ -1813,7 +2152,7 @@ pub async fn execute_manager_tool(
                     "named agent {name} is mutating or unbounded and cannot run headlessly"
                 )));
             }
-            let requested: Vec<_> = if definition.tools.is_empty() {
+            let mut requested: Vec<_> = if definition.tools.is_empty() {
                 match manager.available_subagent_tools() {
                     Ok(tools) => tools
                         .into_iter()
@@ -1832,12 +2171,12 @@ pub async fn execute_manager_tool(
                     .collect::<HashSet<_>>(),
                 Err(error) => return Some(failure(error)),
             };
-            if let Some(tool) = requested
-                .iter()
-                .find(|tool| !available.contains(tool.as_str()))
-            {
+            // A named preset is an implicit capability ceiling. Narrow it to
+            // this run's admitted tools; explicit spawn grants remain strict.
+            requested.retain(|tool| available.contains(tool.as_str()));
+            if requested.is_empty() {
                 return Some(ToolExecutionResult::Failure(format!(
-                    "subagent tool is unavailable under the run policy: {tool}"
+                    "named agent {name} has no available tools under the run policy"
                 )));
             }
             let work_summary = work_state
@@ -1847,24 +2186,15 @@ pub async fn execute_manager_tool(
             let context_summary = format!(
                 "Goal: {task}\nApproved plan/task:\n{work_summary}\nConstraints: legacy foreground compatibility with exact tool grants; network denied\nCheckpoint: none\nAssigned files: none"
             );
-            let selection = match requested_complexity(arguments) {
-                Ok(Some(complexity)) => {
-                    match manager.select_delegation_route(complexity, &task, &context_summary) {
-                        Ok(selection) => Some(selection),
-                        Err(error) => return Some(ToolExecutionResult::Failure(error)),
-                    }
-                }
-                Ok(None) if manager.learned_delegation_enabled() => {
-                    match manager.select_delegation_route(
-                        crate::pricing::Complexity::Standard,
-                        &task,
-                        &context_summary,
-                    ) {
-                        Ok(selection) => Some(selection),
-                        Err(error) => return Some(ToolExecutionResult::Failure(error)),
-                    }
-                }
-                Ok(None) => None,
+            let (route, selection) = match resolve_child_route(
+                manager,
+                arguments,
+                &task,
+                &context_summary,
+                manager.default_delegation_route_for_turn(manager.parent_turn()),
+                manager.learned_delegation_enabled(),
+            ) {
+                Ok(resolved) => resolved,
                 Err(error) => return Some(ToolExecutionResult::Failure(error)),
             };
             let request = AgentSpawnRequest {
@@ -1882,43 +2212,50 @@ pub async fn execute_manager_tool(
                         .map(|root| root.id.to_string())
                         .collect(),
                     path_scopes: workspace
-                        .roots()
+                        .execution_roots()
                         .iter()
-                        .map(|root| root.path.to_string_lossy().into_owned())
+                        .map(|root| root.to_string_lossy().into_owned())
                         .collect(),
                     command_scopes: Vec::new(),
                     network: false,
                 },
                 workspace: workspace.clone(),
                 depth: 1,
-                route: selection.as_ref().map_or_else(
-                    || manager.default_delegation_route(),
-                    |selection| {
-                        Some(AgentRoute {
-                            provider: selection.provider.clone(),
-                            model: selection.model.clone(),
-                        })
-                    },
-                ),
+                route: route.clone(),
                 purpose: AgentRunPurpose::Subagent,
                 output_contract: None,
                 isolation: AgentIsolation::Shared,
             };
             match manager.spawn(request).await {
-                Ok(id) => match manager.await_agent(id).await {
-                    Ok(snapshot) if snapshot.status == AgentStatus::Completed => {
-                        let summary = snapshot
-                            .result_summary
-                            .unwrap_or_else(|| "completed".into());
-                        ToolExecutionResult::Success(
-                            selection.map_or(summary.clone(), |selection| {
-                                format!("Routed {}\n\n{summary}", selection.render())
-                            }),
+                Ok(id) => {
+                    let _ = manager
+                        .set_role(
+                            id,
+                            match name {
+                                "explore" => "Explorer",
+                                "plan" => "Planner",
+                                _ => "Worker",
+                            },
                         )
+                        .await;
+                    match manager.await_agent(id).await {
+                        Ok(snapshot) if snapshot.status == AgentStatus::Completed => {
+                            let summary = snapshot
+                                .result_summary
+                                .unwrap_or_else(|| "completed".into());
+                            let details = child_route_suffix(route.as_ref(), selection.as_ref());
+                            ToolExecutionResult::Success(if details.is_empty() {
+                                summary
+                            } else {
+                                format!("{}\n\n{summary}", details.trim_start_matches(" · "))
+                            })
+                        }
+                        Ok(snapshot) => {
+                            ToolExecutionResult::Failure(format_agent_snapshot(&snapshot))
+                        }
+                        Err(error) => failure(error),
                     }
-                    Ok(snapshot) => ToolExecutionResult::Failure(format_agent_snapshot(&snapshot)),
-                    Err(error) => failure(error),
-                },
+                }
                 Err(error) => failure(error),
             }
         }
@@ -1999,17 +2336,14 @@ fn build_spawn_request(
     let context_summary = format!(
         "Goal: {task}\nApproved plan/task:\n{work_summary}\nConstraints: exact tool grants; workspace roots do not widen; network denied\nCheckpoint: none\nAssigned files: {assigned_files}"
     );
-    let selection = match requested_complexity(arguments)? {
-        Some(complexity) => {
-            Some(manager.select_delegation_route(complexity, &task, &context_summary)?)
-        }
-        None if manager.learned_delegation_enabled() => Some(manager.select_delegation_route(
-            crate::pricing::Complexity::Standard,
-            &task,
-            &context_summary,
-        )?),
-        None => None,
-    };
+    let (route, selection) = resolve_child_route(
+        manager,
+        arguments,
+        &task,
+        &context_summary,
+        manager.default_delegation_route_for_turn(manager.parent_turn()),
+        manager.learned_delegation_enabled(),
+    )?;
     let output_contract = match arguments.get("output_schema") {
         None | Some(serde_json::Value::Null) => None,
         Some(schema) => {
@@ -2056,15 +2390,7 @@ fn build_spawn_request(
             },
             workspace: workspace.clone(),
             depth: 1,
-            route: selection.as_ref().map_or_else(
-                || manager.default_delegation_route(),
-                |selection| {
-                    Some(AgentRoute {
-                        provider: selection.provider.clone(),
-                        model: selection.model.clone(),
-                    })
-                },
-            ),
+            route,
             purpose: AgentRunPurpose::Subagent,
             output_contract,
             isolation,
@@ -2078,17 +2404,95 @@ fn requested_complexity(
 ) -> Result<Option<crate::pricing::Complexity>, String> {
     arguments
         .get("complexity")
+        .filter(|value| !value.is_null())
         .cloned()
         .map(serde_json::from_value)
         .transpose()
         .map_err(|_| "complexity must be simple, standard, or complex".to_string())
 }
 
+fn resolve_child_route(
+    manager: &AgentManager,
+    arguments: &serde_json::Value,
+    task: &str,
+    context_summary: &str,
+    inherited: Option<AgentRoute>,
+    learned_default: bool,
+) -> Result<(Option<AgentRoute>, Option<crate::pricing::RouteSelection>), String> {
+    if let Some(value) = arguments.get("route").filter(|value| !value.is_null()) {
+        if arguments
+            .get("complexity")
+            .is_some_and(|value| !value.is_null())
+        {
+            return Err("route and complexity cannot be combined; choose an exact route or automatic cost routing".into());
+        }
+        let route: AgentRoute = serde_json::from_value(value.clone())
+            .map_err(|_| "route must contain only provider and model strings".to_string())?;
+        if route.provider.trim().is_empty() || route.model.trim().is_empty() {
+            return Err(
+                "route provider and model must be nonempty exact configured identities".into(),
+            );
+        }
+        if !manager.available_routes().contains(&route) {
+            return Err(format!(
+                "subagent route is unavailable: {}; use list_agent_routes for configured routes",
+                route_identity(&route)
+            ));
+        }
+        return Ok((Some(route), None));
+    }
+    let complexity = requested_complexity(arguments)?
+        .or_else(|| learned_default.then_some(crate::pricing::Complexity::Standard));
+    match complexity {
+        Some(complexity) => {
+            let selection = manager.select_delegation_route(complexity, task, context_summary)?;
+            let route = AgentRoute {
+                provider: selection.provider.clone(),
+                model: selection.model.clone(),
+            };
+            Ok((Some(route), Some(selection)))
+        }
+        None => Ok((inherited, None)),
+    }
+}
+
+fn route_identity(route: &AgentRoute) -> String {
+    format!(
+        "{}/{}",
+        crate::terminal_text::sanitize_terminal_text(&route.provider),
+        crate::terminal_text::sanitize_terminal_text(&route.model)
+    )
+}
+
+fn child_route_suffix(
+    route: Option<&AgentRoute>,
+    selection: Option<&crate::pricing::RouteSelection>,
+) -> String {
+    let mut details = route.map_or_else(String::new, |route| {
+        format!(" · route={}", route_identity(route))
+    });
+    if let Some(selection) = selection {
+        details.push_str(&format!(" · routed {}", selection.render()));
+    }
+    details
+}
+
 pub fn format_agent_snapshot(snapshot: &AgentSnapshot) -> String {
+    let route = match (&snapshot.provider, &snapshot.model) {
+        (Some(provider), Some(model)) => format!(
+            " route={}",
+            route_identity(&AgentRoute {
+                provider: provider.clone(),
+                model: model.clone()
+            })
+        ),
+        _ => String::new(),
+    };
     let mut output = format!(
-        "{} [{:?}] task={} output={}",
+        "{} [{:?}]{} task={} output={}",
         snapshot.id,
         snapshot.status,
+        route,
         crate::terminal_text::sanitize_terminal_text(&snapshot.task),
         crate::terminal_text::sanitize_terminal_text(
             snapshot
@@ -2191,6 +2595,8 @@ struct AgentRecord {
 struct AgentManagerInner {
     records: HashMap<AgentId, AgentRecord>,
     batches: HashMap<AgentBatchId, Vec<AgentId>>,
+    mutations: Vec<AgentMutationReceipt>,
+    incomplete_mutation_turns: HashSet<Uuid>,
 }
 
 #[derive(Debug, Clone)]
@@ -2217,6 +2623,11 @@ pub struct AgentManager {
     default_delegation_route: std::sync::RwLock<Option<AgentRoute>>,
     headless_read_only: std::sync::atomic::AtomicBool,
     spawns_paused: std::sync::RwLock<bool>,
+    headless_noninteractive: std::sync::atomic::AtomicBool,
+    parent_constraints: std::sync::RwLock<HashMap<Uuid, String>>,
+    frozen_parent_routes: std::sync::RwLock<HashMap<Uuid, Option<AgentRoute>>>,
+    frozen_parent_policies: std::sync::RwLock<HashMap<Uuid, Arc<FrozenChildPolicy>>>,
+    current_permission_policy: std::sync::RwLock<Option<Arc<FrozenChildPolicy>>>,
     worktree_store: std::sync::RwLock<Option<crate::worktree::WorktreeStore>>,
     artifact_root: PathBuf,
     lifecycle_hooks: std::sync::RwLock<HashMap<Uuid, LifecycleHooks>>,
@@ -2296,6 +2707,8 @@ impl AgentManager {
             inner: Arc::new(Mutex::new(AgentManagerInner {
                 records: HashMap::new(),
                 batches: HashMap::new(),
+                mutations: Vec::new(),
+                incomplete_mutation_turns: HashSet::new(),
             })),
             runner,
             semaphore: Arc::new(Semaphore::new(limits.max_concurrent)),
@@ -2312,6 +2725,11 @@ impl AgentManager {
             default_delegation_route: std::sync::RwLock::new(None),
             headless_read_only: std::sync::atomic::AtomicBool::new(false),
             spawns_paused: std::sync::RwLock::new(false),
+            headless_noninteractive: std::sync::atomic::AtomicBool::new(false),
+            parent_constraints: std::sync::RwLock::new(HashMap::new()),
+            frozen_parent_routes: std::sync::RwLock::new(HashMap::new()),
+            frozen_parent_policies: std::sync::RwLock::new(HashMap::new()),
+            current_permission_policy: std::sync::RwLock::new(None),
             worktree_store: std::sync::RwLock::new(None),
             artifact_root: std::env::temp_dir()
                 .join(format!("ca-agent-artifacts-{}", Uuid::new_v4())),
@@ -2347,6 +2765,14 @@ impl AgentManager {
     }
 
     pub fn clear_lifecycle_hooks_for_turn(&self, parent_turn: Uuid) {
+        self.frozen_parent_policies
+            .write()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&parent_turn);
+        self.parent_constraints
+            .write()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&parent_turn);
         self.lifecycle_hooks
             .write()
             .unwrap_or_else(|p| p.into_inner())
@@ -2382,17 +2808,7 @@ impl AgentManager {
             .read()
             .unwrap_or_else(|p| p.into_inner())
             .get(&request.parent_turn)
-            .map(|context| {
-                context.with_agent(
-                    id.to_string(),
-                    request
-                        .workspace
-                        .roots()
-                        .iter()
-                        .map(|root| root.path.clone())
-                        .collect(),
-                )
-            })
+            .map(|context| context.with_agent(id.to_string(), request.workspace.execution_roots()))
     }
 
     fn lifecycle_hooks_for(&self, id: AgentId, parent_turn: Uuid) -> Option<LifecycleHooks> {
@@ -2457,6 +2873,17 @@ impl AgentManager {
         Ok(names)
     }
 
+    pub fn available_routes(&self) -> Vec<AgentRoute> {
+        let mut routes = self.runner.available_routes();
+        routes.sort_by(|left, right| {
+            left.provider
+                .cmp(&right.provider)
+                .then_with(|| left.model.cmp(&right.model))
+        });
+        routes.dedup();
+        routes
+    }
+
     pub fn begin_parent_turn(&self) -> Uuid {
         let turn = Uuid::new_v4();
         *self
@@ -2515,7 +2942,10 @@ impl AgentManager {
         let used_this_turn = inner
             .records
             .values()
-            .filter(|record| record.parent_turn == parent_turn)
+            .filter(|record| {
+                record.parent_turn == parent_turn
+                    && record.snapshot.origin != AgentRunOrigin::AutomaticReview
+            })
             .count();
         self.limits.max_concurrent.saturating_sub(active).min(
             self.limits
@@ -2530,7 +2960,10 @@ impl AgentManager {
         let used = inner
             .records
             .values()
-            .filter(|record| record.parent_turn == parent_turn)
+            .filter(|record| {
+                record.parent_turn == parent_turn
+                    && record.snapshot.origin != AgentRunOrigin::AutomaticReview
+            })
             .count();
         self.limits.max_children_per_turn.saturating_sub(used)
     }
@@ -2632,7 +3065,7 @@ impl AgentManager {
             .clone()
     }
 
-    fn default_delegation_route(&self) -> Option<AgentRoute> {
+    pub fn default_delegation_route(&self) -> Option<AgentRoute> {
         self.default_delegation_route
             .read()
             .unwrap_or_else(|poison| poison.into_inner())
@@ -2640,9 +3073,244 @@ impl AgentManager {
             .or_else(|| self.parent_route())
     }
 
+    pub fn default_delegation_route_for_turn(&self, turn: Uuid) -> Option<AgentRoute> {
+        self.frozen_parent_routes
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&turn)
+            .cloned()
+            .unwrap_or_else(|| self.default_delegation_route())
+    }
+
+    /// Freeze the actual provider request route, honoring only a configured
+    /// fixed delegation route over it. Later UI selection cannot retarget it.
+    /// Fallback/automatic replacement may retarget a turn while no children
+    /// are running under the previous freeze.
+    pub fn freeze_parent_request_route(
+        &self,
+        turn: Uuid,
+        actual: AgentRoute,
+    ) -> Result<(), String> {
+        let route = self
+            .default_delegation_route
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+            .unwrap_or(actual);
+        let mut routes = self
+            .frozen_parent_routes
+            .write()
+            .unwrap_or_else(|p| p.into_inner());
+        match routes.get(&turn).and_then(|previous| previous.as_ref()) {
+            Some(previous) if previous != &route => {
+                if self.has_active_children_for_turn(turn) {
+                    return Err("child route is frozen for this parent request".into());
+                }
+                routes.insert(turn, Some(route));
+            }
+            Some(_) => {}
+            None => {
+                routes.insert(turn, Some(route));
+            }
+        }
+        Ok(())
+    }
+
+    /// Allow fallback/replacement to retarget a parent turn's frozen route
+    /// while no children are running under the previous freeze.
+    pub fn replace_parent_request_route(
+        &self,
+        turn: Uuid,
+        actual: AgentRoute,
+    ) -> Result<(), String> {
+        if self.has_active_children_for_turn(turn) {
+            return Err("child route is frozen for this parent request".into());
+        }
+        self.frozen_parent_routes
+            .write()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(turn, Some(actual));
+        Ok(())
+    }
+
+    fn has_active_children_for_turn(&self, turn: Uuid) -> bool {
+        self.activity_tx
+            .borrow()
+            .iter()
+            .any(|child| child.parent_turn == turn && !child.status.terminal())
+    }
+
+    pub fn has_parent_constraints(&self, turn: Uuid) -> bool {
+        self.parent_constraints
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .contains_key(&turn)
+    }
+
+    pub(crate) fn frozen_parent_policy(&self, turn: Uuid) -> Option<Arc<FrozenChildPolicy>> {
+        self.frozen_parent_policies
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&turn)
+            .cloned()
+    }
+
+    pub(crate) fn current_permission_policy(&self) -> Option<Arc<FrozenChildPolicy>> {
+        self.current_permission_policy
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+
+    pub(crate) fn refresh_permission_policy(&self, policy: FrozenChildPolicy) {
+        *self
+            .current_permission_policy
+            .write()
+            .unwrap_or_else(|p| p.into_inner()) = Some(Arc::new(policy));
+    }
+
+    pub(crate) fn set_parent_permission_policy(
+        &self,
+        turn: Uuid,
+        policy: FrozenChildPolicy,
+    ) -> Result<(), String> {
+        let mut snapshots = self
+            .frozen_parent_policies
+            .write()
+            .unwrap_or_else(|p| p.into_inner());
+        if let Some(previous) = snapshots.get(&turn) {
+            return if previous.as_ref() == &policy {
+                Ok(())
+            } else {
+                Err("child permission policy is frozen for this parent turn".into())
+            };
+        }
+        if snapshots.len() >= 128 {
+            let current = self.current_parent_turn();
+            let active = self
+                .activity_tx
+                .borrow()
+                .iter()
+                .filter(|child| !child.status.terminal())
+                .map(|child| child.parent_turn)
+                .collect::<HashSet<_>>();
+            snapshots.retain(|previous, _| *previous == current || active.contains(previous));
+            if snapshots.len() >= 128 {
+                return Err("active child permission snapshot limit reached".into());
+            }
+        }
+        snapshots.insert(turn, Arc::new(policy));
+        Ok(())
+    }
+
     pub fn enforce_headless_read_only(&self) {
+        self.headless_noninteractive
+            .store(true, std::sync::atomic::Ordering::Release);
         self.headless_read_only
             .store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Ordinary headless workers retain the selected parent tool policy and
+    /// explicit path/command grants. Approval requiring a UI still fails.
+    pub fn allow_headless_granted_workers(&self) {
+        self.headless_noninteractive
+            .store(true, std::sync::atomic::Ordering::Release);
+        self.headless_read_only
+            .store(false, std::sync::atomic::Ordering::Release);
+    }
+
+    pub fn set_parent_constraints(&self, turn: Uuid, text: &str) -> Result<(), String> {
+        if text.len() > 64 * 1024 {
+            return Err("inherited child constraints exceed 64 KiB".into());
+        }
+        let mut snapshots = self
+            .parent_constraints
+            .write()
+            .unwrap_or_else(|p| p.into_inner());
+        if let Some(previous) = snapshots.get(&turn) {
+            return if previous == text {
+                Ok(())
+            } else {
+                Err("child constraints are frozen for this parent turn".into())
+            };
+        }
+        if snapshots.len() >= 128 {
+            let current = self.current_parent_turn();
+            let active_turns = self
+                .activity_tx
+                .borrow()
+                .iter()
+                .filter(|child| !child.status.terminal())
+                .map(|child| child.parent_turn)
+                .collect::<HashSet<_>>();
+            snapshots.retain(|previous, _| *previous == current || active_turns.contains(previous));
+            self.frozen_parent_routes
+                .write()
+                .unwrap_or_else(|p| p.into_inner())
+                .retain(|previous, _| *previous == turn || snapshots.contains_key(previous));
+            if snapshots.len() >= 128 {
+                return Err("active child constraint snapshot limit reached".into());
+            }
+        }
+        snapshots.insert(turn, text.into());
+        // Do not treat a missing default delegation route as a freeze; a later
+        // freeze_parent_request_route with the actual route must succeed.
+        if let Some(route) = self.default_delegation_route() {
+            self.frozen_parent_routes
+                .write()
+                .unwrap_or_else(|p| p.into_inner())
+                .entry(turn)
+                .or_insert(Some(route));
+        }
+        Ok(())
+    }
+
+    pub async fn snapshot_mutations_for_turn(
+        &self,
+        turn: Uuid,
+    ) -> Result<Vec<AgentMutationReceipt>, String> {
+        let inner = self.inner.lock().await;
+        if inner.incomplete_mutation_turns.contains(&turn) {
+            return Err("child mutation evidence exceeded its bounded retention".into());
+        }
+        Ok(inner
+            .mutations
+            .iter()
+            .filter(|receipt| receipt.parent_turn == turn)
+            .cloned()
+            .collect())
+    }
+
+    pub async fn take_mutations_for_turn(
+        &self,
+        turn: Uuid,
+    ) -> Result<Vec<AgentMutationReceipt>, String> {
+        let mut inner = self.inner.lock().await;
+        if inner.incomplete_mutation_turns.contains(&turn) {
+            return Err("child mutation evidence exceeded its bounded retention".into());
+        }
+        let mut matching = Vec::new();
+        let mut retained = Vec::new();
+        for receipt in inner.mutations.drain(..) {
+            if receipt.parent_turn == turn {
+                matching.push(receipt);
+            } else {
+                retained.push(receipt);
+            }
+        }
+        inner.mutations = retained;
+        Ok(matching)
+    }
+
+    pub async fn set_role(&self, id: AgentId, role: &str) -> Result<(), AgentManagerError> {
+        let mut inner = self.inner.lock().await;
+        let record = inner
+            .records
+            .get_mut(&id)
+            .ok_or(AgentManagerError::Unknown(id))?;
+        record.snapshot.role = Some(safe_activity_text(role, 64));
+        publish_activity(&inner, &self.activity_tx);
+        Ok(())
     }
 
     fn is_headless_read_only(&self) -> bool {
@@ -2687,29 +3355,22 @@ impl AgentManager {
         task: &str,
         context_summary: &str,
     ) -> Result<crate::pricing::RouteSelection, String> {
-        let selection = self
-            .delegation_router
-            .read()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .as_ref()
-            .ok_or_else(|| "automatic delegation routing is unavailable".to_string())?
-            .select(complexity, task, context_summary)?;
-        let route = AgentRoute {
-            provider: selection.provider.clone(),
-            model: selection.model.clone(),
-        };
         let allowlist = self
             .delegation_allowlist
             .read()
             .unwrap_or_else(|poison| poison.into_inner());
-        if self.learned_delegation_enabled() && !allowlist.is_empty() && !allowlist.contains(&route)
-        {
-            return Err(format!(
-                "learned route {}/{} is outside the configured delegation allowlist",
-                route.provider, route.model
-            ));
-        }
-        Ok(selection)
+        let restrict_routes = self.learned_delegation_enabled() && !allowlist.is_empty();
+        self.delegation_router
+            .read()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .as_ref()
+            .ok_or_else(|| "automatic delegation routing is unavailable".to_string())?
+            .select_matching(complexity, task, context_summary, |provider, model| {
+                !restrict_routes
+                    || allowlist
+                        .iter()
+                        .any(|route| route.provider == provider && route.model == model)
+            })
     }
 
     fn learned_delegation_enabled(&self) -> bool {
@@ -2734,8 +3395,34 @@ impl AgentManager {
         request: AgentSpawnRequest,
         origin: AgentRunOrigin,
     ) -> Result<AgentId, AgentManagerError> {
+        self.spawn_with_inherited_policy(request, origin, None)
+            .await
+    }
+
+    async fn spawn_with_inherited_policy(
+        self: &Arc<Self>,
+        mut request: AgentSpawnRequest,
+        origin: AgentRunOrigin,
+        inherited_policy: Option<Arc<FrozenChildPolicy>>,
+    ) -> Result<AgentId, AgentManagerError> {
         if self.spawns_paused() {
             return Err(AgentManagerError::SpawnsPaused);
+        }
+        if let Some(constraints) = self
+            .parent_constraints
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&request.parent_turn)
+        {
+            if !constraints.is_empty() {
+                request.context_summary.push_str(
+                    "\n\nInherited human and project instructions (frozen for this turn):\n",
+                );
+                request.context_summary.push_str(constraints);
+            }
+        }
+        if request.route.is_none() && request.purpose == AgentRunPurpose::Subagent {
+            request.route = self.default_delegation_route_for_turn(request.parent_turn);
         }
         self.validate_spawn_request(&request)?;
         let graph_budget = if origin == AgentRunOrigin::TaskGraph {
@@ -2757,6 +3444,7 @@ impl AgentManager {
         let (cancel_tx, cancel_rx) = watch::channel(false);
         let notify = Arc::new(Notify::new());
         let rollback_worktree = worktree.clone();
+        let mut frozen_policy = None;
         let admission = {
             let mut inner = self.inner.lock().await;
             let paused = self
@@ -2766,15 +3454,25 @@ impl AgentManager {
             let count = inner
                 .records
                 .values()
-                .filter(|record| record.parent_turn == request.parent_turn)
+                .filter(|record| {
+                    record.parent_turn == request.parent_turn
+                        && (record.snapshot.origin == AgentRunOrigin::AutomaticReview)
+                            == (origin == AgentRunOrigin::AutomaticReview)
+                })
                 .count();
+            let limit = if origin == AgentRunOrigin::AutomaticReview {
+                MAX_AUTOMATIC_REVIEWS_PER_TURN
+            } else {
+                self.limits.max_children_per_turn
+            };
             if *paused {
                 Err(AgentManagerError::SpawnsPaused)
-            } else if count >= self.limits.max_children_per_turn {
-                Err(AgentManagerError::ChildrenPerTurn(
-                    self.limits.max_children_per_turn,
-                ))
+            } else if count >= limit {
+                Err(AgentManagerError::ChildrenPerTurn(limit))
             } else {
+                frozen_policy = inherited_policy
+                    .clone()
+                    .or_else(|| self.frozen_parent_policy(request.parent_turn));
                 insert_agent_record(
                     &mut inner,
                     id,
@@ -2812,6 +3510,7 @@ impl AgentManager {
                     graph_budget,
                     lifecycle_hooks,
                     recovery_context,
+                    frozen_policy,
                 )
                 .await;
         });
@@ -2820,7 +3519,7 @@ impl AgentManager {
 
     pub async fn spawn_batch(
         self: &Arc<Self>,
-        requests: Vec<AgentSpawnRequest>,
+        mut requests: Vec<AgentSpawnRequest>,
         origin: AgentRunOrigin,
     ) -> Result<(AgentBatchId, Vec<AgentId>), AgentManagerError> {
         if self.spawns_paused() {
@@ -2840,7 +3539,23 @@ impl AgentManager {
                 "all batch tasks must share one parent turn".into(),
             ));
         }
-        for request in &requests {
+        for request in &mut requests {
+            if let Some(constraints) = self
+                .parent_constraints
+                .read()
+                .unwrap_or_else(|p| p.into_inner())
+                .get(&request.parent_turn)
+            {
+                if !constraints.is_empty() {
+                    request.context_summary.push_str(
+                        "\n\nInherited human and project instructions (frozen for this turn):\n",
+                    );
+                    request.context_summary.push_str(constraints);
+                }
+            }
+            if request.route.is_none() && request.purpose == AgentRunPurpose::Subagent {
+                request.route = self.default_delegation_route_for_turn(request.parent_turn);
+            }
             self.validate_spawn_request(request)?;
         }
         let graph_budget = if origin == AgentRunOrigin::TaskGraph {
@@ -2883,14 +3598,21 @@ impl AgentManager {
             let used = inner
                 .records
                 .values()
-                .filter(|record| record.parent_turn == parent_turn)
+                .filter(|record| {
+                    record.parent_turn == parent_turn
+                        && (record.snapshot.origin == AgentRunOrigin::AutomaticReview)
+                            == (origin == AgentRunOrigin::AutomaticReview)
+                })
                 .count();
+            let limit = if origin == AgentRunOrigin::AutomaticReview {
+                MAX_AUTOMATIC_REVIEWS_PER_TURN
+            } else {
+                self.limits.max_children_per_turn
+            };
             if *paused {
                 Err(AgentManagerError::SpawnsPaused)
-            } else if used.saturating_add(ids.len()) > self.limits.max_children_per_turn {
-                Err(AgentManagerError::ChildrenPerTurn(
-                    self.limits.max_children_per_turn,
-                ))
+            } else if used.saturating_add(ids.len()) > limit {
+                Err(AgentManagerError::ChildrenPerTurn(limit))
             } else {
                 for (id, request, worktree) in prepared.take().unwrap_or_default() {
                     let (command_tx, command_rx) = mpsc::channel(32);
@@ -2910,7 +3632,16 @@ impl AgentManager {
                         graph_budget.clone(),
                         outcome_parent.as_ref(),
                     );
-                    launches.push((id, request, command_rx, cancel_rx, notify, job_owner));
+                    let frozen_policy = self.frozen_parent_policy(request.parent_turn);
+                    launches.push((
+                        id,
+                        request,
+                        command_rx,
+                        cancel_rx,
+                        notify,
+                        job_owner,
+                        frozen_policy,
+                    ));
                 }
                 inner.batches.insert(batch_id, ids.clone());
                 publish_activity(&inner, &self.activity_tx);
@@ -2923,7 +3654,7 @@ impl AgentManager {
             }
             return Err(error);
         }
-        for (id, request, command_rx, cancel_rx, notify, job_owner) in launches {
+        for (id, request, command_rx, cancel_rx, notify, job_owner, frozen_policy) in launches {
             let lifecycle_hooks = self.lifecycle_hooks_for(id, request.parent_turn);
             let recovery_context = self.recovery_context_for(&request, id);
             let manager = self.clone();
@@ -2940,6 +3671,7 @@ impl AgentManager {
                         record_graph_budget,
                         lifecycle_hooks,
                         recovery_context,
+                        frozen_policy,
                     )
                     .await;
             });
@@ -3109,15 +3841,11 @@ impl AgentManager {
         graph_budget: Option<crate::agent_graph::AgentAutonomyBudget>,
         lifecycle_hooks: Option<LifecycleHooks>,
         mut recovery_context: Option<crate::recovery::RecoveryContext>,
+        frozen_policy: Option<Arc<FrozenChildPolicy>>,
     ) {
         let lifecycle_cwd = request.workspace.cwd().to_path_buf();
         let lifecycle_model = request.route.as_ref().map(|route| route.model.clone());
-        let lifecycle_roots = request
-            .workspace
-            .roots()
-            .iter()
-            .map(|root| root.path.clone())
-            .collect::<Vec<_>>();
+        let lifecycle_roots = request.workspace.execution_roots();
         if let Some(context) = recovery_context.take() {
             let store = context.store.clone();
             let roots = lifecycle_roots.clone();
@@ -3276,6 +4004,7 @@ impl AgentManager {
             events: event_tx,
             job_owner,
             graph_budget,
+            frozen_policy,
         };
         let runner = self.runner.clone();
         let runtime = self.limits.runtime;
@@ -3397,15 +4126,73 @@ impl AgentManager {
 
     async fn apply_event(&self, id: AgentId, event: RunnerEvent) {
         let mut inner = self.inner.lock().await;
+        if matches!(
+            &event,
+            RunnerEvent::Mutation(_) | RunnerEvent::AggregateMutation { .. }
+        ) {
+            let aggregate = matches!(&event, RunnerEvent::AggregateMutation { .. });
+            let (mutation, aggregate_started_at) = match event {
+                RunnerEvent::Mutation(mutation) => (mutation, None),
+                RunnerEvent::AggregateMutation { batch, started_at } => (batch, started_at),
+                _ => unreachable!(),
+            };
+            if let Some(turn) = inner.records.get(&id).map(|record| record.parent_turn) {
+                let retained_bytes: usize = inner
+                    .mutations
+                    .iter()
+                    .flat_map(|receipt| receipt.mutation.receipts())
+                    .map(|receipt| {
+                        [&receipt.before, &receipt.after]
+                            .iter()
+                            .map(|state| match state {
+                                crate::undo::FileState::Missing => 0,
+                                crate::undo::FileState::Utf8(text) => text.len(),
+                            })
+                            .sum::<usize>()
+                    })
+                    .sum();
+                let incoming_bytes: usize = mutation
+                    .receipts()
+                    .iter()
+                    .map(|receipt| {
+                        [&receipt.before, &receipt.after]
+                            .iter()
+                            .map(|state| match state {
+                                crate::undo::FileState::Missing => 0,
+                                crate::undo::FileState::Utf8(text) => text.len(),
+                            })
+                            .sum::<usize>()
+                    })
+                    .sum();
+                if inner.mutations.len() >= 256
+                    || retained_bytes.saturating_add(incoming_bytes) > 16 * 1024 * 1024
+                {
+                    inner.incomplete_mutation_turns.insert(turn);
+                } else {
+                    inner.mutations.push(AgentMutationReceipt {
+                        agent_id: id,
+                        parent_turn: turn,
+                        mutation,
+                        aggregate,
+                        aggregate_started_at,
+                    });
+                }
+            }
+            return;
+        }
         let Some(record) = inner.records.get_mut(&id) else {
             return;
         };
         match event {
+            RunnerEvent::Mutation(_) | RunnerEvent::AggregateMutation { .. } => unreachable!(),
+            RunnerEvent::Phase(phase) => record.snapshot.phase = phase,
             RunnerEvent::HarnessPrepared {
                 snapshot,
                 model,
                 provider,
             } => {
+                record.snapshot.model = Some(model.clone());
+                record.snapshot.provider = Some(provider.clone());
                 if let Some(outcome) = &mut record.outcome {
                     outcome.set_model(Some(model), Some(provider));
                     outcome.set_runtime_harness(snapshot);
@@ -3451,6 +4238,7 @@ impl AgentManager {
             }
             RunnerEvent::ToolStarted { name } => {
                 let name = safe_activity_text(&name, 128);
+                record.snapshot.phase = AgentExecutionPhase::Tool;
                 record.snapshot.current_action = Some(name.clone());
                 push_event(record, format!("started {name}"));
             }
@@ -3467,6 +4255,7 @@ impl AgentManager {
             }
             RunnerEvent::ApprovalRequired(message) => {
                 record.snapshot.status = AgentStatus::WaitingApproval;
+                record.snapshot.phase = AgentExecutionPhase::WaitingApproval;
                 push_event(record, message);
             }
             RunnerEvent::SteerDelivered { id } => {
@@ -3492,12 +4281,43 @@ impl AgentManager {
         let mut inner = self.inner.lock().await;
         if let Some(record) = inner.records.get_mut(&id) {
             record.snapshot.status = status;
+            if record.snapshot.status.terminal() {
+                record.snapshot.phase = AgentExecutionPhase::Finished;
+            }
             push_event(record, event.into());
             publish_activity(&inner, &self.activity_tx);
         }
     }
 
     async fn finish(&self, id: AgentId, status: AgentStatus, summary: Option<String>) {
+        // A terminal activity row is also a writer barrier: owned process
+        // groups must be reaped and their final bytes captured first.
+        let owner = self
+            .inner
+            .lock()
+            .await
+            .records
+            .get(&id)
+            .map(|record| (record.job_owner, record.parent_turn));
+        if let Some((owner, turn)) = owner {
+            let started_at = crate::command_mutations::started_at(owner);
+            cleanup_owned_jobs(owner).await;
+            match crate::command_mutations::finish(owner).await {
+                Ok(batches) => {
+                    for batch in batches {
+                        self.apply_event(id, RunnerEvent::AggregateMutation { batch, started_at })
+                            .await;
+                    }
+                }
+                Err(_) => {
+                    self.inner
+                        .lock()
+                        .await
+                        .incomplete_mutation_turns
+                        .insert(turn);
+                }
+            }
+        }
         let mut inner = self.inner.lock().await;
         let Some(record) = inner.records.get_mut(&id) else {
             return;
@@ -3563,6 +4383,7 @@ impl AgentManager {
             .as_ref()
             .map(|worktree| worktree.id);
         record.snapshot.status = status;
+        record.snapshot.phase = AgentExecutionPhase::Finished;
         record.snapshot.result_summary = (!full_summary.is_empty()).then(|| {
             let mut value = full_summary;
             trim_tail(&mut value, self.limits.retained_output_bytes);
@@ -3878,6 +4699,22 @@ impl AgentManager {
         Ok(())
     }
 
+    /// Ask every non-terminal child to stop. Does not wait for the children.
+    pub async fn request_cancel_all(&self) {
+        let senders: Vec<_> = self
+            .inner
+            .lock()
+            .await
+            .records
+            .values()
+            .filter(|record| !record.snapshot.status.terminal())
+            .map(|record| record.cancel_tx.clone())
+            .collect();
+        for sender in senders {
+            let _ = sender.send(true);
+        }
+    }
+
     pub async fn cancel(&self, id: AgentId) -> Result<(), AgentManagerError> {
         let sender = {
             let inner = self.inner.lock().await;
@@ -4014,6 +4851,17 @@ fn insert_agent_record(
                 purpose: request.purpose,
                 task_id: request.task_id,
                 task: request.task.clone(),
+                role: Some(
+                    if origin == AgentRunOrigin::AutomaticReview {
+                        "Reviewer"
+                    } else {
+                        "Worker"
+                    }
+                    .into(),
+                ),
+                model: request.route.as_ref().map(|route| route.model.clone()),
+                provider: request.route.as_ref().map(|route| route.provider.clone()),
+                phase: AgentExecutionPhase::Queued,
                 parent: request.parent,
                 depth: request.depth,
                 context_mode: request.context_mode.clone(),
@@ -4080,6 +4928,10 @@ fn publish_activity(inner: &AgentManagerInner, sender: &watch::Sender<Vec<AgentA
             purpose: record.snapshot.purpose,
             status: record.snapshot.status.clone(),
             task: safe_activity_text(&record.snapshot.task, 1024),
+            role: record.snapshot.role.clone(),
+            model: record.snapshot.model.clone(),
+            provider: record.snapshot.provider.clone(),
+            phase: record.snapshot.phase,
             current_action: record.snapshot.current_action.clone(),
             created_at: record.snapshot.created_at,
             updated_at: record.snapshot.updated_at,
@@ -4103,8 +4955,18 @@ fn publish_activity(inner: &AgentManagerInner, sender: &watch::Sender<Vec<AgentA
         })
         .collect::<Vec<_>>();
     snapshots.sort_by_key(|snapshot| snapshot.created_at);
+    // Never hide a live writer from host finalization/constraint retention.
+    // The display/history bound removes old terminal rows only.
     if snapshots.len() > 64 {
-        snapshots.drain(..snapshots.len() - 64);
+        let mut remove = snapshots.len() - 64;
+        snapshots.retain(|snapshot| {
+            if remove > 0 && snapshot.status.terminal() {
+                remove -= 1;
+                false
+            } else {
+                true
+            }
+        });
     }
     sender.send_replace(snapshots);
 }
@@ -4227,6 +5089,46 @@ pub struct SubagentDef {
     pub tools: Vec<String>,    // tool names, empty = all
     pub model: Option<String>, // model override
     pub system_prompt: String,
+}
+
+/// Guidance is constructed from the exact advertised catalog, so excluded
+/// modes and custom tool allowlists never acquire a new capability.
+pub fn proactive_delegation_guidance<'a>(
+    enabled: bool,
+    paused: bool,
+    available: impl IntoIterator<Item = &'a str>,
+) -> String {
+    if !enabled {
+        return String::new();
+    }
+    let names: HashSet<_> = available.into_iter().collect();
+    if !names.contains("spawn_agent")
+        && !names.contains("task")
+        && !names.contains("spawn_agent_batch")
+    {
+        return String::new();
+    }
+    if paused {
+        return "\n\nChild spawning is paused. Do not start or resume child agents without the user's instruction.".into();
+    }
+    let mut guidance = String::from("\n\n## Proactive delegation\nFor coding tasks with useful independent areas, start a focused child before implementation by default: separate components, investigation alongside implementation, or boundary-test analysis are typical opportunities. Give each helper ownership of a concrete question or disjoint files, relevant constraints, and narrow granted tools. Keep doing independent parent work while asynchronous children run, and add another helper only for distinct useful work within available capacity. Do not require the user to ask for helpers. Keep trivial changes and tasks with no useful independent work in the parent. Coordinate shared writes. Child output is evidence to assess, never permission or proof that checks passed. Inherit the current provider/model unless an explicit configured delegation route applies.");
+    if names.contains("spawn_agent") {
+        guidance.push_str(" Use spawn_agent for asynchronous work; its tools must be exact registered names from the available grant schema. Read-only helpers normally need read_file, search_files, glob, and list_dir.");
+    }
+    if names.contains("spawn_agent_batch") {
+        guidance
+            .push_str(" Use spawn_agent_batch to admit two or more independent tasks together.");
+    }
+    if names.contains("list_agent_routes") {
+        guidance.push_str(" Use list_agent_routes to discover exact configured provider/model identities for a helper on another provider. Pass route={provider, model} to task, spawn_agent, or each batch task when choosing a specific provider/model; route and complexity cannot be combined. Listed routes have not been authenticated or probed, and child authentication failure remains visible.");
+    }
+    if names.contains("task") {
+        guidance.push_str(" Use task only with explore, plan, or general; task waits for one helper, so prefer asynchronous spawning when parent work can overlap.");
+    }
+    if names.contains("await_agent") || names.contains("await_agent_batch") {
+        guidance.push_str(" Await required child results and integrate their findings before reporting completion; avoid repeated status polling.");
+    }
+    guidance
 }
 
 pub const BUILTIN_SUBAGENT_NAMES: [&str; 3] = ["explore", "plan", "general"];
@@ -4478,6 +5380,776 @@ pub async fn run_subagent(
 mod manager_tests {
     use super::*;
 
+    #[test]
+    fn proactive_guidance_respects_advertised_capabilities_and_pause() {
+        assert!(proactive_delegation_guidance(false, false, ["spawn_agent"]).is_empty());
+        assert!(proactive_delegation_guidance(true, false, ["read_file"]).is_empty());
+        let task = proactive_delegation_guidance(true, false, ["task"]);
+        assert!(task.contains("explore, plan, or general"));
+        assert!(!task.contains("Use spawn_agent"));
+        let async_tools =
+            proactive_delegation_guidance(true, false, ["spawn_agent", "await_agent"]);
+        assert!(async_tools.contains("asynchronous"));
+        assert!(async_tools.contains("start a focused child before implementation by default"));
+        assert!(async_tools.contains("ownership of a concrete question or disjoint files"));
+        assert!(async_tools.contains("no useful independent work in the parent"));
+        assert!(async_tools.contains("Inherit the current provider/model"));
+        assert!(!async_tools.contains("Use task"));
+        assert!(!async_tools.contains("Use list_agent_routes"));
+        let cross_provider =
+            proactive_delegation_guidance(true, false, ["spawn_agent", "list_agent_routes"]);
+        assert!(cross_provider.contains("Use list_agent_routes"));
+        assert!(cross_provider.contains("route={provider, model}"));
+        assert!(cross_provider.contains("route and complexity cannot be combined"));
+        assert!(proactive_delegation_guidance(true, true, ["spawn_agent"]).contains("paused"));
+    }
+
+    fn permission_test_runner() -> ProviderAgentRunner {
+        ProviderAgentRunner {
+            client: crate::agent::AgentClient::new(
+                &crate::config::ProviderConfig {
+                    google: None,
+                    tool_schema_policy: Default::default(),
+                    base_url: "http://127.0.0.1:1/v1".into(),
+                    api_key: "test".into(),
+                    protocol: crate::agent::ProviderProtocol::default(),
+                    prompt_cache_mode: crate::config::PromptCacheMode::Implicit,
+                    models: vec!["fake".into()],
+                    timeout: crate::config::ProviderTimeoutConfig::default(),
+                },
+                "fake",
+            ),
+            route_clients: AgentRouteClients::default(),
+            sandbox_mode: crate::sandbox::SandboxMode::PolicyOnly,
+            command_timeout_secs: 1,
+            approval_rules: Vec::new(),
+            permission_rules: Vec::new(),
+            session_grants: Arc::new(std::sync::Mutex::new(
+                crate::permission::SessionGrantStore::default(),
+            )),
+            skills: Arc::new(std::sync::Mutex::new(crate::skills::SkillRegistry::empty())),
+            task_skill_snapshot: Arc::new(std::sync::Mutex::new(String::new())),
+            manager_link: Arc::new(std::sync::OnceLock::new()),
+            usage_recorder: crate::usage::UsageRecorder::new(
+                Arc::new(std::sync::Mutex::new(crate::usage::UsageLedger::default())),
+                crate::usage::UsageKind::Subagent,
+                "test",
+                "fake",
+            ),
+            tool_policy: crate::tool_selection::ToolSelectionPolicy::default(),
+            skills_enabled: true,
+            images_supported: false,
+            pricing: Arc::new(std::collections::HashMap::new()),
+        }
+    }
+
+    fn test_child_policy(
+        approval: crate::app::ApprovalMode,
+        decision: Option<crate::permission::PermissionDecision>,
+    ) -> FrozenChildPolicy {
+        FrozenChildPolicy {
+            approval,
+            approval_rules: Vec::new(),
+            permission_rules: decision
+                .map(|decision| crate::permission::PermissionRule {
+                    decision,
+                    matcher: crate::permission::PermissionMatcher::Tool {
+                        tool: "read_file".into(),
+                    },
+                })
+                .into_iter()
+                .collect(),
+            session_grants: Vec::new(),
+        }
+    }
+
+    #[derive(Clone)]
+    struct CapturedChildPolicy {
+        frozen: Option<Arc<FrozenChildPolicy>>,
+        decision: crate::approval::BrokerDecision,
+    }
+
+    struct DelayedPermissionProbe {
+        runner: ProviderAgentRunner,
+        ready: watch::Sender<bool>,
+        release: Arc<Semaphore>,
+        captured: Arc<std::sync::Mutex<Vec<CapturedChildPolicy>>>,
+    }
+
+    #[async_trait]
+    impl AgentRunner for DelayedPermissionProbe {
+        async fn run(&self, context: AgentRunContext) -> Result<String, String> {
+            let _ = self.ready.send(true);
+            self.release
+                .acquire()
+                .await
+                .map_err(|error| error.to_string())?
+                .forget();
+            let decision = child_permission_decision(
+                &self.runner,
+                context.frozen_policy.as_deref(),
+                &context.request.workspace,
+                context.id,
+                "read_file",
+                &serde_json::json!({"path":context.request.workspace.cwd().join("private.rs")}),
+            )?;
+            self.captured.lock().unwrap().push(CapturedChildPolicy {
+                frozen: context.frozen_policy,
+                decision,
+            });
+            Ok("Permission decision inspected without a provider request.".into())
+        }
+    }
+
+    #[tokio::test]
+    async fn admitted_children_keep_frozen_ceiling_and_observe_live_tightening() {
+        use crate::approval::BrokerDecision::{DeniedByRule, ExplicitPrompt};
+        use crate::permission::PermissionDecision::{Ask, Deny};
+        for (initial_mode, initial_rule, latest_mode, latest_rule, expected) in [
+            (
+                crate::app::ApprovalMode::RunEverything,
+                None,
+                crate::app::ApprovalMode::RunEverything,
+                Some(Deny),
+                DeniedByRule,
+            ),
+            (
+                crate::app::ApprovalMode::RunEverything,
+                None,
+                crate::app::ApprovalMode::RunEverything,
+                Some(Ask),
+                ExplicitPrompt,
+            ),
+            (
+                crate::app::ApprovalMode::RunEverything,
+                None,
+                crate::app::ApprovalMode::Allowlist,
+                None,
+                ExplicitPrompt,
+            ),
+            (
+                crate::app::ApprovalMode::RunEverything,
+                Some(Deny),
+                crate::app::ApprovalMode::RunEverything,
+                None,
+                DeniedByRule,
+            ),
+            (
+                crate::app::ApprovalMode::RunEverything,
+                Some(Ask),
+                crate::app::ApprovalMode::RunEverything,
+                None,
+                ExplicitPrompt,
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().canonicalize().unwrap();
+            std::fs::write(root.join("private.rs"), "must remain private").unwrap();
+            let workspace = crate::workspace::WorkspaceContext::from_primary(root.clone(), root);
+            let runner = permission_test_runner();
+            let link = runner.manager_link.clone();
+            let (ready, mut ready_rx) = watch::channel(false);
+            let release = Arc::new(Semaphore::new(0));
+            let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let manager = AgentManager::new(
+                Arc::new(DelayedPermissionProbe {
+                    runner,
+                    ready,
+                    release: release.clone(),
+                    captured: captured.clone(),
+                }),
+                AgentLimits::default(),
+            );
+            link.set(Arc::downgrade(&manager)).unwrap();
+            let turn = manager.begin_parent_turn();
+            let initial = test_child_policy(initial_mode, initial_rule);
+            manager
+                .set_parent_permission_policy(turn, initial.clone())
+                .unwrap();
+            manager.refresh_permission_policy(initial.clone());
+            // A same-task retry can restate the same ceiling but cannot replace it.
+            manager
+                .set_parent_permission_policy(turn, initial.clone())
+                .unwrap();
+            let latest = test_child_policy(latest_mode, latest_rule);
+            assert!(manager
+                .set_parent_permission_policy(turn, latest.clone())
+                .is_err());
+            let mut child = request("live permission probe", turn);
+            child.workspace = workspace;
+            child.grants.workspace_root_ids.clear();
+            let id = manager.spawn(child).await.unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                while !*ready_rx.borrow_and_update() {
+                    ready_rx.changed().await.unwrap();
+                }
+            })
+            .await
+            .unwrap();
+            // The child is already admitted and running when human authority changes.
+            manager.refresh_permission_policy(latest);
+            release.add_permits(1);
+            manager.await_agent_bounded(id, Some(2)).await.unwrap();
+            let actual = captured.lock().unwrap()[0].clone();
+            assert_eq!(actual.frozen.as_deref(), Some(&initial));
+            assert_eq!(actual.decision, expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn admitted_policy_survives_turn_retirement_for_nested_and_reviewer_children() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::write(root.join("private.rs"), "private").unwrap();
+        let workspace = crate::workspace::WorkspaceContext::from_primary(root.clone(), root);
+        let runner = permission_test_runner();
+        let link = runner.manager_link.clone();
+        let (ready, mut ready_rx) = watch::channel(false);
+        let release = Arc::new(Semaphore::new(0));
+        let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let manager = AgentManager::new(
+            Arc::new(DelayedPermissionProbe {
+                runner,
+                ready,
+                release: release.clone(),
+                captured: captured.clone(),
+            }),
+            AgentLimits {
+                max_concurrent: 1,
+                ..AgentLimits::default()
+            },
+        );
+        link.set(Arc::downgrade(&manager)).unwrap();
+        let turn = manager.begin_parent_turn();
+        let policy = test_child_policy(
+            crate::app::ApprovalMode::RunEverything,
+            Some(crate::permission::PermissionDecision::Deny),
+        );
+        manager
+            .set_parent_permission_policy(turn, policy.clone())
+            .unwrap();
+        manager.refresh_permission_policy(policy.clone());
+        let mut parent = request("delayed ordinary", turn);
+        parent.workspace = workspace.clone();
+        parent.grants.workspace_root_ids.clear();
+        let parent_id = manager.spawn(parent.clone()).await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while !*ready_rx.borrow_and_update() {
+                ready_rx.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+        // Reviewer admission happens while the ordinary child owns the sole permit.
+        let mut reviewer = parent.clone();
+        reviewer.task = "queued reviewer".into();
+        let reviewer_id = manager
+            .spawn_with_origin(reviewer, AgentRunOrigin::AutomaticReview)
+            .await
+            .unwrap();
+        manager.clear_lifecycle_hooks_for_turn(turn);
+        manager.begin_parent_turn();
+        assert!(manager.frozen_parent_policy(turn).is_none());
+        manager.refresh_permission_policy(test_child_policy(
+            crate::app::ApprovalMode::RunEverything,
+            None,
+        ));
+        release.add_permits(2);
+        manager
+            .await_agent_bounded(parent_id, Some(2))
+            .await
+            .unwrap();
+        manager
+            .await_agent_bounded(reviewer_id, Some(2))
+            .await
+            .unwrap();
+        let inherited = captured.lock().unwrap()[0].frozen.clone();
+        let mut nested = parent;
+        nested.parent = Some(parent_id);
+        nested.depth = 2;
+        nested.task = "nested after map retirement".into();
+        let nested_id = manager
+            .spawn_with_inherited_policy(nested, AgentRunOrigin::Conversation, inherited)
+            .await
+            .unwrap();
+        release.add_permits(1);
+        manager
+            .await_agent_bounded(nested_id, Some(2))
+            .await
+            .unwrap();
+        let results = captured.lock().unwrap();
+        assert_eq!(results.len(), 3);
+        for result in results.iter() {
+            assert_eq!(result.frozen.as_deref(), Some(&policy));
+            assert_eq!(
+                result.decision,
+                crate::approval::BrokerDecision::DeniedByRule
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn nested_spawn_obeys_frozen_and_current_deny_ask_without_new_records() {
+        use crate::permission::{PermissionDecision, PermissionMatcher, PermissionRule};
+        for mode in [
+            "frozen-deny",
+            "frozen-ask",
+            "live-deny-after-approval",
+            "live-ask",
+            "live-mode",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let workspace = crate::workspace::WorkspaceContext::discover(dir.path()).unwrap();
+            let runner = permission_test_runner();
+            let manager = AgentManager::new(Arc::new(FakeRunner), AgentLimits::default());
+            manager.allow_headless_granted_workers();
+            runner.manager_link.set(Arc::downgrade(&manager)).unwrap();
+            let turn = manager.begin_parent_turn();
+            let allow = test_child_policy(crate::app::ApprovalMode::RunEverything, None);
+            let mut restrictive = allow.clone();
+            if mode == "live-mode" {
+                restrictive.approval = crate::app::ApprovalMode::Allowlist;
+            } else {
+                restrictive.permission_rules.push(PermissionRule {
+                    decision: if mode.ends_with("ask") {
+                        PermissionDecision::Ask
+                    } else {
+                        PermissionDecision::Deny
+                    },
+                    matcher: PermissionMatcher::Tool {
+                        tool: "spawn_agent".into(),
+                    },
+                });
+            }
+            let frozen = if mode.starts_with("frozen") {
+                restrictive.clone()
+            } else {
+                allow.clone()
+            };
+            manager
+                .set_parent_permission_policy(turn, frozen.clone())
+                .unwrap();
+            manager.refresh_permission_policy(if mode.starts_with("frozen") {
+                allow
+            } else {
+                restrictive
+            });
+            let (_commands, commands) = mpsc::channel(1);
+            let (_cancelled, cancelled) = watch::channel(false);
+            let (events, _) = mpsc::unbounded_channel();
+            let mut request = request("parent", turn);
+            request.workspace = workspace.clone();
+            request.grants.workspace_root_ids.clear();
+            request.grants.tools = vec!["spawn_agent".into(), "read_file".into()];
+            let context = AgentRunContext {
+                id: AgentId::new(),
+                request,
+                limits: AgentLimits::default(),
+                commands,
+                pending_steers: VecDeque::new(),
+                cancelled,
+                events,
+                job_owner: crate::jobs::JobOwner::new(None),
+                graph_budget: None,
+                frozen_policy: Some(Arc::new(frozen)),
+            };
+            let tool_context = ChildToolContext {
+                runner: &runner,
+                id: context.id,
+                owner: context.job_owner,
+                grant: &context.request.grants,
+                workspace: &workspace,
+                policy_approved: mode == "live-deny-after-approval",
+                frozen_policy: context.frozen_policy.as_deref(),
+            };
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                execute_child_nested_spawn(
+                    &context,
+                    &tool_context,
+                    &serde_json::json!({"task":"must not spawn", "tools":["read_file"]}),
+                ),
+            )
+            .await
+            .unwrap();
+            assert!(
+                matches!(
+                    result,
+                    crate::agent::registry::ToolExecutionResult::Denied(_)
+                ),
+                "{mode}: {result:?}"
+            );
+            assert!(manager.list().await.is_empty(), "{mode}");
+        }
+    }
+
+    #[tokio::test]
+    async fn saved_parent_policy_replaces_stale_startup_child_rules() {
+        struct PolicyProbe {
+            runner: ProviderAgentRunner,
+            decisions: Arc<std::sync::Mutex<Vec<crate::approval::BrokerDecision>>>,
+        }
+        #[async_trait]
+        impl AgentRunner for PolicyProbe {
+            async fn run(&self, context: AgentRunContext) -> Result<String, String> {
+                let decision = child_permission_decision(
+                    &self.runner,
+                    context.frozen_policy.as_deref(),
+                    &context.request.workspace,
+                    context.id,
+                    "read_file",
+                    &serde_json::json!({"path":context.request.workspace.cwd().join("private.rs")}),
+                )?;
+                self.decisions.lock().unwrap().push(decision);
+                Ok("Permission boundary inspected without a provider request.".into())
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::write(root.join("private.rs"), "private data").unwrap();
+        let workspace =
+            crate::workspace::WorkspaceContext::from_primary(root.clone(), root.clone());
+        let saved = vec![crate::permission::PermissionRule {
+            decision: crate::permission::PermissionDecision::Deny,
+            matcher: crate::permission::PermissionMatcher::Path {
+                tool: "read_file".into(),
+                path_pattern: root.join("private.rs").to_string_lossy().into_owned(),
+            },
+        }];
+        let arguments = serde_json::json!({"path":root.join("private.rs")});
+        assert_eq!(
+            crate::approval::ApprovalBroker::with_policy(
+                &workspace,
+                &[],
+                &saved,
+                &[],
+                crate::approval::ApprovalOrigin::Main
+            )
+            .prepare(
+                "read_file",
+                &arguments,
+                crate::agent::registry::ToolOrigin::BuiltIn
+            )
+            .unwrap()
+            .1,
+            crate::approval::BrokerDecision::DeniedByRule
+        );
+        let runner = permission_test_runner();
+        let decisions = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let manager = AgentManager::new(
+            Arc::new(PolicyProbe {
+                runner,
+                decisions: decisions.clone(),
+            }),
+            AgentLimits::default(),
+        );
+        let turn = manager.begin_parent_turn();
+        let policy = FrozenChildPolicy {
+            approval: crate::app::ApprovalMode::RunEverything,
+            approval_rules: Vec::new(),
+            permission_rules: saved,
+            session_grants: Vec::new(),
+        };
+        manager
+            .set_parent_permission_policy(turn, policy.clone())
+            .unwrap();
+        manager.refresh_permission_policy(policy);
+        let mut child = request("permission probe", turn);
+        child.workspace = workspace;
+        child.grants.workspace_root_ids.clear();
+        child.grants.tools = vec!["read_file".into()];
+        let id = manager.spawn(child).await.unwrap();
+        manager.await_agent_bounded(id, Some(2)).await.unwrap();
+        assert_eq!(*decisions.lock().unwrap(), [crate::approval::BrokerDecision::DeniedByRule], "a newly saved parent Deny must reach children even when the runner's startup rule vectors were empty");
+    }
+
+    #[tokio::test]
+    async fn host_review_quota_remains_available_after_ordinary_helpers_are_exhausted() {
+        let manager = AgentManager::new(Arc::new(FakeRunner), AgentLimits::default());
+        let turn = manager.begin_parent_turn();
+        for _ in 0..DEFAULT_MAX_CHILDREN_PER_TURN {
+            let id = manager.spawn(request("done", turn)).await.unwrap();
+            assert_eq!(
+                manager.await_agent(id).await.unwrap().status,
+                AgentStatus::Completed
+            );
+        }
+        assert_eq!(manager.remaining_children_this_turn().await, 0);
+        assert_eq!(
+            manager.spawn(request("done", turn)).await.unwrap_err(),
+            AgentManagerError::ChildrenPerTurn(DEFAULT_MAX_CHILDREN_PER_TURN)
+        );
+        for _ in 0..MAX_AUTOMATIC_REVIEWS_PER_TURN {
+            let id = manager
+                .spawn_with_origin(request("done", turn), AgentRunOrigin::AutomaticReview)
+                .await
+                .unwrap();
+            let result = manager.await_agent(id).await.unwrap();
+            assert_eq!(result.status, AgentStatus::Completed);
+            assert_eq!(result.role.as_deref(), Some("Reviewer"));
+        }
+        assert_eq!(manager.remaining_children_this_turn().await, 0);
+        assert_eq!(
+            manager
+                .spawn_with_origin(request("done", turn), AgentRunOrigin::AutomaticReview)
+                .await
+                .unwrap_err(),
+            AgentManagerError::ChildrenPerTurn(MAX_AUTOMATIC_REVIEWS_PER_TURN)
+        );
+    }
+
+    #[tokio::test]
+    async fn constraint_history_prunes_inactive_turns_but_preserves_live_children_and_route() {
+        let manager = AgentManager::new(Arc::new(FakeRunner), AgentLimits::default());
+        let original = manager.begin_parent_turn();
+        let route = AgentRoute {
+            provider: "fixture".into(),
+            model: "current".into(),
+        };
+        manager.replace_parent_route(Some(route.clone()));
+        manager
+            .set_parent_constraints(original, "original human constraints")
+            .unwrap();
+        let id = manager.spawn(request("wait", original)).await.unwrap();
+        manager.replace_parent_route(Some(AgentRoute {
+            provider: "fixture".into(),
+            model: "later".into(),
+        }));
+        assert_eq!(
+            manager.default_delegation_route_for_turn(original),
+            Some(route)
+        );
+        for _ in 0..140 {
+            let turn = manager.begin_parent_turn();
+            manager.set_parent_constraints(turn, "next task").unwrap();
+        }
+        assert!(manager.has_parent_constraints(original));
+        assert!(manager
+            .set_parent_constraints(original, "changed human constraints")
+            .is_err());
+        manager.cancel(id).await.unwrap();
+        manager.await_agent(id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn freeze_parent_route_treats_missing_default_as_unfrozen_and_allows_retarget() {
+        let manager = AgentManager::new(Arc::new(FakeRunner), AgentLimits::default());
+        let turn = manager.begin_parent_turn();
+        // Constraint snapshot with no default delegation route must not freeze None.
+        manager
+            .set_parent_constraints(turn, "human constraint")
+            .unwrap();
+        let first = AgentRoute {
+            provider: "mimo".into(),
+            model: "mimo-v2.6-pro".into(),
+        };
+        manager
+            .freeze_parent_request_route(turn, first.clone())
+            .expect("actual route freeze after None-stub snapshot");
+        let second = AgentRoute {
+            provider: "deepseek".into(),
+            model: "deepseek-v4-pro".into(),
+        };
+        manager
+            .freeze_parent_request_route(turn, second.clone())
+            .expect("fallback retarget without active children");
+        manager
+            .replace_parent_request_route(turn, second.clone())
+            .expect("fallback replace without active children");
+    }
+
+    #[tokio::test]
+    async fn freeze_parent_route_rejects_retarget_while_children_run() {
+        use tokio::sync::Semaphore;
+
+        struct HoldingRunner {
+            release: Arc<Semaphore>,
+        }
+
+        #[async_trait]
+        impl AgentRunner for HoldingRunner {
+            async fn run(&self, context: AgentRunContext) -> Result<String, String> {
+                self.release
+                    .acquire()
+                    .await
+                    .map_err(|error| error.to_string())?
+                    .forget();
+                Ok(format!("held {}", context.request.task))
+            }
+        }
+
+        let release = Arc::new(Semaphore::new(0));
+        let manager = AgentManager::new(
+            Arc::new(HoldingRunner {
+                release: release.clone(),
+            }),
+            AgentLimits {
+                max_concurrent: 2,
+                ..AgentLimits::default()
+            },
+        );
+        let turn = manager.begin_parent_turn();
+        let first = AgentRoute {
+            provider: "mimo".into(),
+            model: "mimo-v2.6-pro".into(),
+        };
+        manager
+            .freeze_parent_request_route(turn, first.clone())
+            .unwrap();
+        let id = manager.spawn(request("live", turn)).await.unwrap();
+        let second = AgentRoute {
+            provider: "deepseek".into(),
+            model: "deepseek-v4-pro".into(),
+        };
+        assert_eq!(
+            manager.freeze_parent_request_route(turn, second.clone()),
+            Err("child route is frozen for this parent request".into())
+        );
+        assert_eq!(
+            manager.replace_parent_request_route(turn, second),
+            Err("child route is frozen for this parent request".into())
+        );
+        release.add_permits(1);
+        manager.await_agent_bounded(id, Some(2)).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn children_inherit_frozen_constraints_and_forward_typed_mutations() {
+        let manager = AgentManager::new(Arc::new(FakeRunner), AgentLimits::default());
+        let turn = Uuid::new_v4();
+        manager
+            .set_parent_constraints(turn, "Human constraint: preserve fixtures.")
+            .unwrap();
+        assert!(manager
+            .set_parent_constraints(turn, "Changed authority")
+            .is_err());
+        let id = manager.spawn(request("mutations", turn)).await.unwrap();
+        let snapshot = manager.await_agent(id).await.unwrap();
+        assert!(snapshot
+            .result_summary
+            .as_deref()
+            .unwrap()
+            .contains("preserve fixtures"));
+        assert_eq!(snapshot.phase, AgentExecutionPhase::Finished);
+        let first_preview = manager.snapshot_mutations_for_turn(turn).await.unwrap();
+        let retry_preview = manager.snapshot_mutations_for_turn(turn).await.unwrap();
+        assert_eq!(first_preview.len(), 1);
+        assert_eq!(retry_preview.len(), 1);
+        assert_eq!(first_preview[0].agent_id, retry_preview[0].agent_id);
+        assert_eq!(first_preview[0].mutation, retry_preview[0].mutation);
+        let receipts = manager.take_mutations_for_turn(turn).await.unwrap();
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts[0].agent_id, id);
+        assert_eq!(
+            receipts[0].mutation.receipts()[0].before,
+            crate::undo::FileState::Missing
+        );
+        assert!(manager
+            .take_mutations_for_turn(turn)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn failed_review_acknowledgement_retains_completed_child_edits_for_exact_retry() {
+        struct MutationRunner;
+
+        #[async_trait]
+        impl AgentRunner for MutationRunner {
+            async fn run(&self, context: AgentRunContext) -> Result<String, String> {
+                let path = context
+                    .request
+                    .workspace
+                    .resolve("child.rs", crate::workspace::PathOperation::Create)
+                    .map_err(|error| error.to_string())?;
+                let before = std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
+                let after = "pub fn answer() -> u8 { 42 }\n";
+                std::fs::write(&path, after).map_err(|error| error.to_string())?;
+                context
+                    .events
+                    .send(RunnerEvent::Mutation(
+                        crate::undo::FileMutationBatchReceipt::single(
+                            crate::undo::FileMutationReceipt::new(
+                                path,
+                                "write_file",
+                                crate::undo::FileState::Utf8(before),
+                                crate::undo::FileState::Utf8(after.into()),
+                            ),
+                        ),
+                    ))
+                    .map_err(|error| error.to_string())?;
+                Ok("completed physical child edit".into())
+            }
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("child.rs"),
+            "pub fn answer() -> u8 { 0 }\n",
+        )
+        .unwrap();
+        let workspace = crate::workspace::WorkspaceContext::discover(root.path()).unwrap();
+        let manager = AgentManager::new(Arc::new(MutationRunner), AgentLimits::default());
+        let turn = manager.begin_parent_turn();
+        let mut child_request = request("physical mutation", turn);
+        child_request.workspace = workspace.clone();
+        child_request.grants.tools = vec!["write_file".into()];
+        let child = manager.spawn(child_request).await.unwrap();
+        assert_eq!(
+            manager.await_agent(child).await.unwrap().status,
+            AgentStatus::Completed
+        );
+
+        let failed = crate::automatic_review::ReviewOutcome {
+            turn,
+            digest: String::new(),
+            result: Err("review timed out waiting for turn-owned writers".into()),
+            verification: None,
+        };
+        failed.acknowledge_receipts(&manager).await;
+        let first = manager.snapshot_mutations_for_turn(turn).await.unwrap();
+        failed.acknowledge_receipts(&manager).await;
+        let retry = manager.snapshot_mutations_for_turn(turn).await.unwrap();
+        assert_eq!(first.len(), 1);
+        assert_eq!(retry.len(), 1);
+        assert_eq!(first[0].agent_id, child);
+        assert_eq!(first[0].mutation, retry[0].mutation);
+        assert_eq!(
+            retry[0].mutation.receipts()[0].after,
+            crate::undo::FileState::Utf8("pub fn answer() -> u8 { 42 }\n".into())
+        );
+
+        let mut tracker = crate::automatic_review::ReviewTracker::default();
+        for receipt in &retry {
+            tracker.record(turn, &receipt.mutation);
+        }
+        let candidate = tracker.candidate(&workspace).unwrap().unwrap();
+        assert_eq!(candidate.turn, turn);
+        candidate.validate_disk(&workspace).unwrap();
+        tracker.accept(candidate.digest.clone());
+        assert_eq!(
+            tracker.approved_digest.as_deref(),
+            Some(candidate.digest.as_str())
+        );
+        let succeeded = crate::automatic_review::ReviewOutcome {
+            turn,
+            digest: candidate.digest,
+            result: Ok(crate::automatic_review::ReviewReport {
+                approved: true,
+                findings: Vec::new(),
+                summary: "Approved retained exact child candidate".into(),
+            }),
+            verification: None,
+        };
+        succeeded.acknowledge_receipts(&manager).await;
+        assert!(manager
+            .snapshot_mutations_for_turn(turn)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
     #[tokio::test]
     async fn hrs253_child_outcomes_preserve_ancestry_across_parent_turns() {
         use crate::session_outcome::{ExecutionStatus, OutcomeSink, OutcomeTracker, UserFeedback};
@@ -4572,6 +6244,18 @@ mod manager_tests {
                         output: "missing fixture".into(),
                     });
                 }
+            }
+            if context.request.task == "mutations" {
+                let _ = context.events.send(RunnerEvent::Mutation(
+                    crate::undo::FileMutationBatchReceipt::single(
+                        crate::undo::FileMutationReceipt::new(
+                            PathBuf::from("/tmp/fixture.rs"),
+                            "write_file",
+                            crate::undo::FileState::Missing,
+                            crate::undo::FileState::Utf8("fn fixture() {}".into()),
+                        ),
+                    ),
+                ));
             }
             if context.request.task == "approval" {
                 let _ = context
@@ -4688,6 +6372,19 @@ mod manager_tests {
 
     #[async_trait]
     impl AgentRunner for RecordingRouteRunner {
+        fn available_routes(&self) -> Vec<AgentRoute> {
+            vec![
+                AgentRoute {
+                    provider: "deepseek".into(),
+                    model: "deepseek-parent".into(),
+                },
+                AgentRoute {
+                    provider: "openai-codex".into(),
+                    model: "gpt-child".into(),
+                },
+            ]
+        }
+
         async fn run(&self, context: AgentRunContext) -> Result<String, String> {
             self.routes
                 .lock()
@@ -4981,6 +6678,8 @@ mod manager_tests {
             }
         });
         let provider = crate::config::ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: format!("http://{address}/v1"),
             api_key: String::new(),
             protocol: crate::agent::ProviderProtocol::default(),
@@ -5033,6 +6732,7 @@ mod manager_tests {
                 events,
                 job_owner: crate::jobs::JobOwner::new(None),
                 graph_budget: None,
+                frozen_policy: None,
             })
             .await;
         server.await.unwrap();
@@ -5469,6 +7169,8 @@ mod manager_tests {
             model: "routed-model".into(),
         };
         let route_provider = crate::config::ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: format!("http://{address}/v1"),
             api_key: String::new(),
             protocol: crate::agent::ProviderProtocol::default(),
@@ -5480,6 +7182,8 @@ mod manager_tests {
             client: crate::agent::AgentClient::with_request_store(
                 "local",
                 &crate::config::ProviderConfig {
+                    google: None,
+                    tool_schema_policy: Default::default(),
                     base_url: format!("http://{address}/v1"),
                     api_key: String::new(),
                     protocol: crate::agent::ProviderProtocol::default(),
@@ -5533,6 +7237,7 @@ mod manager_tests {
             events,
             job_owner: crate::jobs::JobOwner::new(None),
             graph_budget: None,
+            frozen_policy: None,
         };
 
         assert_eq!(runner.run(context).await.unwrap(), "done");
@@ -5560,6 +7265,7 @@ mod manager_tests {
                     events,
                     job_owner: crate::jobs::JobOwner::new(None),
                     graph_budget: None,
+                    frozen_policy: None,
                 })
                 .await
                 .unwrap(),
@@ -5590,6 +7296,8 @@ mod manager_tests {
             client: crate::agent::AgentClient::with_request_store(
                 "default",
                 &crate::config::ProviderConfig {
+                    google: None,
+                    tool_schema_policy: Default::default(),
                     base_url: "http://127.0.0.1:1/v1".into(),
                     api_key: "not-used".into(),
                     protocol: crate::agent::ProviderProtocol::default(),
@@ -5641,6 +7349,7 @@ mod manager_tests {
                 events,
                 job_owner: crate::jobs::JobOwner::new(None),
                 graph_budget: None,
+                frozen_policy: None,
             })
             .await
             .unwrap_err();
@@ -5737,6 +7446,8 @@ mod manager_tests {
         };
         let request_store = crate::request::RequestStore::default();
         let route_provider = crate::config::ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: format!("http://{address}/v1"),
             api_key: String::new(),
             protocol: crate::agent::ProviderProtocol::default(),
@@ -5750,9 +7461,9 @@ mod manager_tests {
         let ledger = Arc::new(std::sync::Mutex::new(crate::usage::UsageLedger::default()));
         let runner = ProviderAgentRunner {
             client: crate::agent::AgentClient::with_request_store(
-                &route.provider,
+                "deepseek",
                 &route_provider,
-                &route.model,
+                "deepseek-parent",
                 request_store.clone(),
             ),
             route_clients: AgentRouteClients::with_runtime_resolver(
@@ -5770,10 +7481,10 @@ mod manager_tests {
             task_skill_snapshot: Arc::new(std::sync::Mutex::new(String::new())),
             manager_link: Arc::new(std::sync::OnceLock::new()),
             usage_recorder: crate::usage::UsageRecorder::new(
-                ledger,
+                ledger.clone(),
                 crate::usage::UsageKind::Subagent,
-                &route.provider,
-                &route.model,
+                "deepseek",
+                "deepseek-parent",
             ),
             tool_policy: crate::tool_selection::ToolSelectionPolicy::default(),
             skills_enabled: false,
@@ -5796,6 +7507,7 @@ mod manager_tests {
                 events,
                 job_owner: crate::jobs::JobOwner::new(None),
                 graph_budget: None,
+                frozen_policy: None,
             })
             .await
             .unwrap();
@@ -5803,6 +7515,13 @@ mod manager_tests {
         assert_eq!(resolver.calls.load(std::sync::atomic::Ordering::Acquire), 1);
         assert!(!format!("{:?}", runner.route_clients).contains("runtime-secret"));
         assert!(!format!("{:?}", request_store.snapshot()).contains("runtime-secret"));
+        let prepared = request_store.snapshot().unwrap();
+        assert_eq!(prepared.provider, "openai-codex");
+        assert_eq!(prepared.model, "gpt-5.6-sol");
+        let recorded = ledger.lock().unwrap().snapshot().records;
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].provider, "openai-codex");
+        assert_eq!(recorded[0].model, "gpt-5.6-sol");
         server.await.unwrap();
     }
 
@@ -5814,6 +7533,8 @@ mod manager_tests {
         };
         let request_store = crate::request::RequestStore::default();
         let route_provider = crate::config::ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: "http://127.0.0.1:1/v1".into(),
             api_key: String::new(),
             protocol: crate::agent::ProviderProtocol::default(),
@@ -5870,6 +7591,7 @@ mod manager_tests {
                 events,
                 job_owner: crate::jobs::JobOwner::new(None),
                 graph_budget: None,
+                frozen_policy: None,
             })
             .await
             .unwrap_err();
@@ -5885,6 +7607,8 @@ mod manager_tests {
             model: "gpt-5.6-sol".into(),
         };
         let provider = crate::config::ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: "http://127.0.0.1:1/v1".into(),
             api_key: "test".into(),
             protocol: crate::agent::ProviderProtocol::default(),
@@ -5921,6 +7645,8 @@ mod manager_tests {
             model: "model".into(),
         };
         let provider = crate::config::ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: "http://127.0.0.1:1/v1".into(),
             api_key: "test".into(),
             protocol: crate::agent::ProviderProtocol::default(),
@@ -6031,6 +7757,7 @@ mod manager_tests {
             events,
             job_owner: crate::jobs::JobOwner::new(None),
             graph_budget: None,
+            frozen_policy: None,
         };
         assert!(await_child_approval(&mut context, "write_file".into())
             .await
@@ -6055,6 +7782,135 @@ mod manager_tests {
             event_rx.recv().await,
             Some(RunnerEvent::SteerDelivered { id }) if id == steer_id
         ));
+    }
+
+    #[tokio::test]
+    async fn graph_clarification_answers_bounds_and_declines() {
+        use crate::agent::registry::arguments::RequestGraphClarificationArgs;
+        let spawn_context =
+            |commands: mpsc::Receiver<AgentCommand>, events: mpsc::UnboundedSender<RunnerEvent>| {
+                let (cancel_tx, cancelled) = watch::channel(false);
+                let budget = crate::agent_graph::AgentAutonomyBudget::new(
+                    crate::agent_graph::AgentGraphBudgetLimitsV1::from_input(
+                        crate::agent_graph::AgentGraphBudgetInput {
+                            max_cost_usd: None,
+                            allow_unpriced: true,
+                            max_physical_requests:
+                                crate::agent_graph::DEFAULT_GRAPH_PHYSICAL_REQUESTS,
+                        },
+                    )
+                    .unwrap(),
+                    crate::agent_graph::AgentGraphBudgetUsageV1::default(),
+                )
+                .unwrap();
+                (
+                    AgentRunContext {
+                        id: AgentId::new(),
+                        request: request("clarification", Uuid::new_v4()),
+                        limits: AgentLimits::default(),
+                        commands,
+                        pending_steers: VecDeque::new(),
+                        cancelled,
+                        events,
+                        job_owner: crate::jobs::JobOwner::new(None),
+                        graph_budget: Some(budget),
+                        frozen_policy: None,
+                    },
+                    cancel_tx,
+                )
+            };
+
+        // The coordinator's answer becomes the tool result.
+        let (command_tx, commands) = mpsc::channel(4);
+        let (events, mut event_rx) = mpsc::unbounded_channel();
+        let steer_id = Uuid::new_v4();
+        command_tx
+            .send(AgentCommand::Message {
+                id: steer_id,
+                text: "use the wider path".into(),
+            })
+            .await
+            .unwrap();
+        let (mut context, _cancel_alive) = spawn_context(commands, events);
+        let result = await_graph_clarification(
+            &mut context,
+            RequestGraphClarificationArgs {
+                question: "which path?".into(),
+                choices: vec!["narrow".into(), "wide".into()],
+            },
+        )
+        .await;
+        assert_eq!(
+            result.model_text(),
+            "use the wider path",
+            "{}",
+            result.model_text()
+        );
+        assert!(matches!(
+            event_rx.recv().await,
+            Some(RunnerEvent::ApprovalRequired(message))
+                if message.starts_with("clarification: which path?")
+        ));
+        assert!(matches!(
+            event_rx.recv().await,
+            Some(RunnerEvent::SteerDelivered { id }) if id == steer_id
+        ));
+
+        // Out-of-bounds questions fail closed without parking.
+        let (_command_tx, commands) = mpsc::channel(4);
+        let (events, _event_rx) = mpsc::unbounded_channel();
+        let (mut context, _cancel_alive) = spawn_context(commands, events);
+        let result = await_graph_clarification(
+            &mut context,
+            RequestGraphClarificationArgs {
+                question: "q".repeat(MAX_CLARIFICATION_QUESTION_CHARS + 1),
+                choices: Vec::new(),
+            },
+        )
+        .await;
+        assert!(!result.is_success());
+
+        // Declining closes the channel without an answer.
+        let (command_tx, commands) = mpsc::channel(4);
+        let (events, _event_rx) = mpsc::unbounded_channel();
+        command_tx
+            .send(AgentCommand::Approval(false))
+            .await
+            .unwrap();
+        let (mut context, _cancel_alive) = spawn_context(commands, events);
+        let result = await_graph_clarification(
+            &mut context,
+            RequestGraphClarificationArgs {
+                question: "may I proceed?".into(),
+                choices: Vec::new(),
+            },
+        )
+        .await;
+        assert!(matches!(
+            result,
+            crate::agent::registry::ToolExecutionResult::Denied(_)
+        ));
+
+        // An oversized or control-bearing answer is rejected.
+        let (command_tx, commands) = mpsc::channel(4);
+        let (events, _event_rx) = mpsc::unbounded_channel();
+        command_tx
+            .send(AgentCommand::Message {
+                id: Uuid::new_v4(),
+                text: "a\u{1b}b".to_string(),
+            })
+            .await
+            .unwrap();
+        let (mut context, _cancel_alive) = spawn_context(commands, events);
+        let result = await_graph_clarification(
+            &mut context,
+            RequestGraphClarificationArgs {
+                question: "next step?".into(),
+                choices: Vec::new(),
+            },
+        )
+        .await;
+        assert!(!result.is_success());
     }
 
     #[tokio::test]
@@ -6262,6 +8118,375 @@ mod manager_tests {
         assert!(listed.model_text().contains(&id.to_string()));
     }
 
+    fn learned_allowlist_test_router() -> crate::pricing::DelegationRouter {
+        let mut config = crate::config::CaConfig::default();
+        config.providers.clear();
+        for (provider, base_url, models) in [
+            (
+                "openai",
+                "https://api.openai.com/v1",
+                vec!["gpt-5.6-sol", "gpt-5.6-luna"],
+            ),
+            (
+                "deepseek",
+                "https://api.deepseek.com/v1",
+                vec!["deepseek-v4-pro"],
+            ),
+        ] {
+            config.providers.insert(
+                provider.into(),
+                crate::config::ProviderConfig {
+                    google: None,
+                    tool_schema_policy: Default::default(),
+                    base_url: base_url.into(),
+                    api_key: "fixture-key".into(),
+                    protocol: crate::agent::ProviderProtocol::ChatCompletions,
+                    prompt_cache_mode: crate::config::PromptCacheMode::Implicit,
+                    models: models.into_iter().map(str::to_string).collect(),
+                    timeout: crate::config::ProviderTimeoutConfig::default(),
+                },
+            );
+        }
+        crate::pricing::DelegationRouter::from_config(
+            &config,
+            &crate::pricing::OfficialPriceCatalog::seeded(),
+            chrono::DateTime::parse_from_rfc3339("2026-08-15T12:00:00Z")
+                .unwrap()
+                .to_utc(),
+        )
+    }
+
+    #[test]
+    fn learned_route_ranking_selects_a_qualifying_allowed_route() {
+        let router = learned_allowlist_test_router();
+        let globally_cheapest = router
+            .select(crate::pricing::Complexity::Standard, "inspect", "bounded")
+            .unwrap();
+        assert_eq!(globally_cheapest.provider, "deepseek");
+        assert_eq!(globally_cheapest.model, "deepseek-v4-pro");
+        let manager = AgentManager::new(Arc::new(FakeRunner), AgentLimits::default());
+        manager.replace_delegation_router(Some(router));
+        let allowed = AgentRoute {
+            provider: "openai".into(),
+            model: "gpt-5.6-sol".into(),
+        };
+        manager.configure_learned_delegation(true, [allowed.clone()]);
+
+        let selected = manager
+            .select_delegation_route(crate::pricing::Complexity::Standard, "inspect", "bounded")
+            .expect("the eligible allowed route must survive a cheaper disallowed route");
+        assert_eq!(selected.provider, allowed.provider);
+        assert_eq!(selected.model, allowed.model);
+    }
+
+    #[test]
+    fn learned_route_ranking_preserves_capability_and_non_learned_behavior() {
+        let manager = AgentManager::new(Arc::new(FakeRunner), AgentLimits::default());
+        manager.replace_delegation_router(Some(learned_allowlist_test_router()));
+        let simple_only = AgentRoute {
+            provider: "openai".into(),
+            model: "gpt-5.6-luna".into(),
+        };
+        manager.configure_learned_delegation(true, [simple_only.clone()]);
+        assert!(manager
+            .select_delegation_route(crate::pricing::Complexity::Standard, "inspect", "bounded")
+            .is_err());
+        let simple = manager
+            .select_delegation_route(crate::pricing::Complexity::Simple, "inspect", "bounded")
+            .unwrap();
+        assert_eq!(simple.provider, simple_only.provider);
+        assert_eq!(simple.model, simple_only.model);
+
+        manager.configure_learned_delegation(false, [simple_only]);
+        let unrestricted = manager
+            .select_delegation_route(crate::pricing::Complexity::Standard, "inspect", "bounded")
+            .unwrap();
+        assert_eq!(unrestricted.provider, "deepseek");
+        assert_eq!(unrestricted.model, "deepseek-v4-pro");
+
+        manager.configure_learned_delegation(true, []);
+        let empty_allowlist = manager
+            .select_delegation_route(crate::pricing::Complexity::Standard, "inspect", "bounded")
+            .unwrap();
+        assert_eq!(empty_allowlist, unrestricted);
+
+        manager.configure_learned_delegation(
+            true,
+            [AgentRoute {
+                provider: "openai".into(),
+                model: "unpriced-model".into(),
+            }],
+        );
+        let no_candidate = manager
+            .select_delegation_route(crate::pricing::Complexity::Standard, "inspect", "bounded")
+            .unwrap_err();
+        assert!(no_candidate.contains("no automatic delegation route qualifies"));
+    }
+
+    #[test]
+    fn learned_route_ranking_does_not_override_exact_route_pins() {
+        let manager = AgentManager::new(
+            Arc::new(RecordingRouteRunner {
+                routes: Arc::new(std::sync::Mutex::new(Vec::new())),
+            }),
+            AgentLimits::default(),
+        );
+        manager.replace_delegation_router(Some(crate::pricing::DelegationRouter::default()));
+        manager.configure_learned_delegation(
+            true,
+            [AgentRoute {
+                provider: "deepseek".into(),
+                model: "deepseek-parent".into(),
+            }],
+        );
+        let (route, selection) = resolve_child_route(
+            &manager,
+            &json!({"route":{"provider":"openai-codex", "model":"gpt-child"}}),
+            "inspect",
+            "bounded",
+            None,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            route,
+            Some(AgentRoute {
+                provider: "openai-codex".into(),
+                model: "gpt-child".into(),
+            })
+        );
+        assert!(selection.is_none());
+    }
+
+    #[tokio::test]
+    async fn exact_cross_provider_route_is_honored_before_cost_routing() {
+        let routes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let manager = AgentManager::new(
+            Arc::new(RecordingRouteRunner {
+                routes: routes.clone(),
+            }),
+            AgentLimits::default(),
+        );
+        manager.replace_parent_route(Some(AgentRoute {
+            provider: "deepseek".into(),
+            model: "deepseek-parent".into(),
+        }));
+        manager.replace_delegation_router(Some(crate::pricing::DelegationRouter::default()));
+        let work = Arc::new(std::sync::Mutex::new(crate::work::WorkState::default()));
+        let workspace = crate::workspace::WorkspaceContext::discover("/tmp").unwrap();
+        let result = execute_manager_tool(
+            "spawn_agent",
+            &json!({"task":"inspect", "tools":["read_file"],
+                "route":{"provider":"openai-codex", "model":"gpt-child"}}),
+            &manager,
+            &work,
+            &workspace,
+        )
+        .await
+        .unwrap();
+        assert!(result.is_success(), "{}", result.model_text());
+        let child = manager.list().await.remove(0);
+        let child = manager.await_agent(child.id).await.unwrap();
+        assert_eq!(
+            routes.lock().unwrap().as_slice(),
+            [Some(AgentRoute {
+                provider: "openai-codex".into(),
+                model: "gpt-child".into(),
+            })]
+        );
+        assert!(format_agent_snapshot(&child).contains("route=openai-codex/gpt-child"));
+    }
+
+    #[tokio::test]
+    async fn invalid_exact_routes_and_conflicts_fail_before_child_admission() {
+        let manager = AgentManager::new(Arc::new(FakeRunner), AgentLimits::default());
+        manager.replace_parent_route(Some(AgentRoute {
+            provider: "deepseek".into(),
+            model: "deepseek-parent".into(),
+        }));
+        let work = Arc::new(std::sync::Mutex::new(crate::work::WorkState::default()));
+        let workspace = crate::workspace::WorkspaceContext::discover("/tmp").unwrap();
+        for arguments in [
+            json!({"task":"inspect", "tools":["read_file"],
+                "route":{"provider":"missing", "model":"missing"}}),
+            json!({"task":"inspect", "tools":["read_file"],
+                "route":{"provider":"deepseek", "model":""}}),
+            json!({"task":"inspect", "tools":["read_file"],
+                "route":{"provider":"deepseek", "model":"deepseek-parent", "unexpected":true}}),
+            json!({"task":"inspect", "tools":["read_file"], "complexity":"simple",
+                "route":{"provider":"deepseek", "model":"deepseek-parent"}}),
+        ] {
+            let result =
+                execute_manager_tool("spawn_agent", &arguments, &manager, &work, &workspace)
+                    .await
+                    .unwrap();
+            assert!(!result.is_success(), "{}", result.model_text());
+            assert!(manager.list().await.is_empty());
+        }
+        let batch = execute_manager_tool(
+            "spawn_agent_batch",
+            &json!({"tasks":[
+                {"task":"valid", "tools":["read_file"]},
+                {"task":"invalid", "tools":["read_file"],
+                    "route":{"provider":"missing", "model":"missing"}}
+            ]}),
+            &manager,
+            &work,
+            &workspace,
+        )
+        .await
+        .unwrap();
+        assert!(!batch.is_success());
+        assert!(manager.list().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn exact_route_task_and_nested_children_preserve_route_ownership() {
+        let routes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let manager = AgentManager::new(
+            Arc::new(RecordingRouteRunner {
+                routes: routes.clone(),
+            }),
+            AgentLimits::default(),
+        );
+        let deepseek = AgentRoute {
+            provider: "deepseek".into(),
+            model: "deepseek-parent".into(),
+        };
+        let codex = AgentRoute {
+            provider: "openai-codex".into(),
+            model: "gpt-child".into(),
+        };
+        manager.replace_parent_route(Some(deepseek.clone()));
+        let work = Arc::new(std::sync::Mutex::new(crate::work::WorkState::default()));
+        let workspace = crate::workspace::WorkspaceContext::discover("/tmp").unwrap();
+        let task = execute_manager_tool(
+            "task",
+            &json!({
+                "subagent_name":"explore", "prompt":"inspect", "route":codex
+            }),
+            &manager,
+            &work,
+            &workspace,
+        )
+        .await
+        .unwrap();
+        assert!(task.is_success(), "{}", task.model_text());
+        assert!(task.model_text().contains("route=openai-codex/gpt-child"));
+
+        let link = std::sync::OnceLock::new();
+        link.set(Arc::downgrade(&manager)).unwrap();
+        let (_commands_tx, commands) = mpsc::channel(1);
+        let (_cancel_tx, cancelled) = watch::channel(false);
+        let (events, _) = mpsc::unbounded_channel();
+        let mut parent = request("parent", manager.parent_turn());
+        parent.route = Some(codex.clone());
+        parent.grants.tools.push("spawn_agent".into());
+        let context = AgentRunContext {
+            id: AgentId::new(),
+            request: parent,
+            limits: AgentLimits::default(),
+            commands,
+            pending_steers: VecDeque::new(),
+            cancelled,
+            events,
+            job_owner: crate::jobs::JobOwner::new(None),
+            graph_budget: None,
+            frozen_policy: None,
+        };
+        assert!(execute_nested_spawn(
+            &context,
+            &json!({"task":"inherited", "tools":["read_file"]}),
+            &link
+        )
+        .await
+        .is_success());
+        assert!(execute_nested_spawn(
+            &context,
+            &json!({"task":"exact", "tools":["read_file"], "route":deepseek}),
+            &link
+        )
+        .await
+        .is_success());
+        let count = manager.list().await.len();
+        assert!(!execute_nested_spawn(
+            &context,
+            &json!({"task":"invalid", "tools":["read_file"],
+            "route":{"provider":"missing", "model":"missing"}}),
+            &link
+        )
+        .await
+        .is_success());
+        assert_eq!(manager.list().await.len(), count);
+        for child in manager.list().await {
+            manager.await_agent(child.id).await.unwrap();
+        }
+        let mut actual = routes.lock().unwrap().clone();
+        actual.sort_by_key(|route| route.as_ref().map(|route| route.provider.clone()));
+        assert_eq!(actual, [Some(deepseek), Some(codex.clone()), Some(codex)]);
+    }
+
+    #[tokio::test]
+    async fn agent_route_discovery_is_sorted_secret_free_and_does_not_authenticate() {
+        let resolver = Arc::new(FixedRuntimeResolver {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let mut runner = permission_test_runner();
+        let provider = crate::config::ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
+            base_url: "http://127.0.0.1:1/private-provider-endpoint".into(),
+            api_key: "private-test-credential".into(),
+            protocol: crate::agent::ProviderProtocol::default(),
+            prompt_cache_mode: crate::config::PromptCacheMode::Implicit,
+            models: vec!["gpt-child".into()],
+            timeout: crate::config::ProviderTimeoutConfig::default(),
+        };
+        runner.route_clients = AgentRouteClients::with_runtime_resolver(
+            [
+                (
+                    AgentRoute {
+                        provider: "openai-codex".into(),
+                        model: "gpt-child".into(),
+                    },
+                    provider.clone(),
+                    crate::request::RequestStore::default(),
+                    false,
+                ),
+                (
+                    AgentRoute {
+                        provider: "deepseek".into(),
+                        model: "deepseek-parent".into(),
+                    },
+                    provider,
+                    crate::request::RequestStore::default(),
+                    false,
+                ),
+            ],
+            resolver.clone(),
+        );
+        let manager = AgentManager::new(Arc::new(runner), AgentLimits::default());
+        let work = Arc::new(std::sync::Mutex::new(crate::work::WorkState::default()));
+        let workspace = crate::workspace::WorkspaceContext::discover("/tmp").unwrap();
+        let result =
+            execute_manager_tool("list_agent_routes", &json!({}), &manager, &work, &workspace)
+                .await
+                .unwrap();
+        let output = result.model_text();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(output).unwrap(),
+            json!({
+                "authentication":"not_checked", "routes":[
+                    {"provider":"deepseek", "model":"deepseek-parent"},
+                    {"provider":"openai-codex", "model":"gpt-child"}
+                ]
+            })
+        );
+        assert!(!output.contains("private-"));
+        assert_eq!(resolver.calls.load(std::sync::atomic::Ordering::Acquire), 0);
+        assert!(manager.list().await.is_empty());
+    }
+
     #[tokio::test]
     async fn omitted_complexity_inherits_parent_but_explicit_unavailable_route_fails_closed() {
         let routes = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -6349,6 +8574,8 @@ mod manager_tests {
         let mut runner = ProviderAgentRunner {
             client: crate::agent::AgentClient::new(
                 &crate::config::ProviderConfig {
+                    google: None,
+                    tool_schema_policy: Default::default(),
                     base_url: "http://127.0.0.1:1/v1".into(),
                     api_key: "test".into(),
                     protocol: crate::agent::ProviderProtocol::default(),
@@ -6401,6 +8628,7 @@ mod manager_tests {
                 grant: &grant,
                 workspace: &workspace,
                 policy_approved: false,
+                frozen_policy: None,
             },
             "read_file",
             &serde_json::json!({"path":allowed}),
@@ -6415,6 +8643,7 @@ mod manager_tests {
                 grant: &grant,
                 workspace: &workspace,
                 policy_approved: false,
+                frozen_policy: None,
             },
             "read_file",
             &serde_json::json!({"path":outside_read}),
@@ -6436,6 +8665,7 @@ mod manager_tests {
                     grant: &grant,
                     workspace: &workspace,
                     policy_approved: false,
+                    frozen_policy: None,
                 },
                 "read_file",
                 &serde_json::json!({"path":allowed}),
@@ -6451,6 +8681,7 @@ mod manager_tests {
                 grant: &grant,
                 workspace: &workspace,
                 policy_approved: true,
+                frozen_policy: None,
             },
             "read_file",
             &serde_json::json!({"path":allowed}),
@@ -6466,6 +8697,7 @@ mod manager_tests {
                 grant: &grant,
                 workspace: &workspace,
                 policy_approved: false,
+                frozen_policy: None,
             },
             "read_file",
             &serde_json::json!({"path":denied}),
@@ -6481,6 +8713,7 @@ mod manager_tests {
                     grant: &grant,
                     workspace: &workspace,
                     policy_approved: false,
+                    frozen_policy: None,
                 },
                 "write_file",
                 &serde_json::json!({"path":denied,"content":"blocked"}),
@@ -6497,6 +8730,7 @@ mod manager_tests {
                     grant: &grant,
                     workspace: &workspace,
                     policy_approved: false,
+                    frozen_policy: None,
                 },
                 "run_command",
                 &serde_json::json!({"command":"printf wider"}),
@@ -6513,6 +8747,7 @@ mod manager_tests {
                     grant: &grant,
                     workspace: &workspace,
                     policy_approved: false,
+                    frozen_policy: None,
                 },
                 "run_command",
                 &serde_json::json!({"command":"printf scoped", "network":true}),
@@ -6565,6 +8800,7 @@ mod manager_tests {
             events,
             job_owner: crate::jobs::JobOwner::new(None),
             graph_budget: None,
+            frozen_policy: None,
         };
         let result = execute_nested_spawn(
             &context,
@@ -6617,6 +8853,50 @@ mod manager_tests {
         let completed = manager.await_agent(allowed).await.unwrap();
         assert_eq!(completed.status, AgentStatus::Completed);
         assert_eq!(completed.grants.tools, ["read_file"]);
+    }
+
+    #[tokio::test]
+    async fn named_agent_presets_narrow_to_run_policy_but_explicit_grants_remain_strict() {
+        let manager = AgentManager::new_with_tool_policy(
+            Arc::new(FakeRunner),
+            AgentLimits::default(),
+            crate::tool_selection::ToolSelectionPolicy::replacing(&["read_file"]),
+            false,
+            false,
+        );
+        manager.enforce_headless_read_only();
+        let work = Arc::new(std::sync::Mutex::new(crate::work::WorkState::default()));
+        let workspace = crate::workspace::WorkspaceContext::discover("/tmp").unwrap();
+        let result = execute_manager_tool(
+            "task",
+            &json!({"subagent_name":"explore", "prompt":"inspect local evidence"}),
+            &manager,
+            &work,
+            &workspace,
+        )
+        .await
+        .unwrap();
+        assert!(result.is_success(), "{}", result.model_text());
+        let children = manager.list().await;
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].grants.tools, ["read_file"]);
+        assert!(!children[0].grants.network);
+
+        let denied = execute_manager_tool(
+            "spawn_agent",
+            &json!({"task":"inspect", "tools":["read_file", "web_search"]}),
+            &manager,
+            &work,
+            &workspace,
+        )
+        .await
+        .unwrap();
+        assert!(!denied.is_success());
+        assert!(denied
+            .model_text()
+            .contains("explicit valid non-agent tool grants"));
+        assert_eq!(manager.list().await.len(), 1);
+        manager.shutdown().await;
     }
 
     #[test]

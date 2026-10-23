@@ -539,7 +539,9 @@ fn tool_status(status: ToolResultStatus) -> ToolCallStatus {
 fn failure_stop_reason(kind: HeadlessFailureKind) -> StopReason {
     match kind {
         HeadlessFailureKind::MaximumTurns => StopReason::MaxTurnRequests,
-        HeadlessFailureKind::Interrupted => StopReason::Cancelled,
+        HeadlessFailureKind::Interrupted | HeadlessFailureKind::ProviderFilter => {
+            StopReason::Cancelled
+        }
         _ => StopReason::Refusal,
     }
 }

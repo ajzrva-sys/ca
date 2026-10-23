@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca · agent · gpt-5.6-sol
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
 
 
@@ -28,12 +28,12 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
             │                                                                          │
             │                                                                          │
             └──────────────────────────────────────────────────────────────────────────┘
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                                                                   │
+╰───────────────────────────────────────────────────────────────────────────── agent · gpt-5.6-sol ╯
 openai-codex: live · 7 models
 -- narrow --
- ca · agent · gpt-5.6-sol
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
   ┌──────────────────────────────────────────────────────┐
   │ Provider: openai-codex                               │
   │ Endpoint: https://chatgpt.com/backend-api/codex      │
@@ -53,7 +53,7 @@ openai-codex: live · 7 models
   │Enter select · ⇧A add model · ⇧E edit/add · ⇧C cache  │
   │⇧S settings · ⇧R refresh · ⇧D delete provider · Esc pr│
   │                                                      │
-  │                                                      │
- →│                                                      │
-  └──────────────────────────────────────────────────────┘
+╭─│                                                      │─╮
+│›│                                                      │ │
+╰─└──────────────────────────────────────────────────────┘ ╯
 openai-codex: live · 7 models

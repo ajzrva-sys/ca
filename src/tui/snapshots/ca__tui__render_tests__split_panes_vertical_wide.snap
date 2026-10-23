@@ -3,7 +3,7 @@ source: src/tui/render_tests.rs
 expression: "render_to_text(&vertical, 120, 32)"
 ---
 ┌ ○ pane 1 · idle ─────────────────────────────────────────┐┌ ● pane 2 · idle ─────────────────────────────────────────┐
-│ ca · agent · auto                                        ││ ca · agent · auto                                        │
+│ ca v0.0.0 │ /workspace/ca                    [Dashboard] ││ ca v0.0.0 │ /workspace/ca                    [Dashboard] │
 │Transcript owned by primary.                              ││Transcript owned by secondary.                            │
 │                                                          ││                                                          │
 │                                                          ││                                                          │
@@ -29,8 +29,8 @@ expression: "render_to_text(&vertical, 120, 32)"
 │                                                          ││                                                          │
 │                                                          ││                                                          │
 │                                                          ││                                                          │
-│                                                          ││──────────────────────────────────────────────────────────│
-│ → Ask anything…                                          ││ → Focused draft                                          │
-│                                                          ││                                                          │
+│╭────────────────────────────────────────────────────────╮││╭────────────────────────────────────────────────────────╮│
+││› Ask anything…                                         ││││› Focused draft                                         ││
+│╰────────────────────────────────────────── agent · auto ╯││╰────────────────────────────────────────── agent · auto ╯│
 │1 messages · / commands                                   ││1 messages                                                │
 └──────────────────────────────────────────────────────────┘└──────────────────────────────────────────────────────────┘

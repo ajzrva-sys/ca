@@ -30,6 +30,436 @@ const MAX_EVIDENCE_LEDGER_ENTRIES: usize = 100;
 const MAX_QUALITY_RECORDS: usize = 1_000;
 const MAX_QUALITY_BYTES: usize = 1024 * 1024;
 
+/// An explicitly selected external profile takes precedence over the native
+/// workspace engine. Merely having an MCP manager does not select a backend.
+pub fn external_backend_selected(manager: &McpManager) -> bool {
+    manager.mechanistic_config().enabled && manager.configured_mechanistic_server().is_some()
+}
+
+struct NativeCancellationGuard(codex_team::mechanistic::native::NativeCancellation);
+impl Drop for NativeCancellationGuard {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
+}
+
+/// A direct shared-engine backend. All callers must prepare the invocation
+/// against the parent's permissions before passing it here.
+pub async fn native_repository_revision(
+    workspace: &crate::workspace::WorkspaceContext,
+) -> Result<String, String> {
+    let root = workspace
+        .primary()
+        .ok_or("native repository tools need a workspace")?
+        .path
+        .clone();
+    tokio::task::spawn_blocking(move || {
+        codex_team::mechanistic::native::NativeMechanisticService::new(&root)
+            .and_then(|service| service.revision())
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+async fn execute_native_actions(
+    workspace: &crate::workspace::WorkspaceContext,
+    actions: Vec<MechanisticActionV1>,
+    purpose: MechanisticRequestPurposeV1,
+    allow_unisolated_evidence: bool,
+    timeout: Duration,
+) -> ToolExecutionResult {
+    execute_native_actions_at_revision(
+        workspace,
+        actions,
+        purpose,
+        allow_unisolated_evidence,
+        timeout,
+        None,
+    )
+    .await
+}
+
+async fn execute_native_actions_at_revision(
+    workspace: &crate::workspace::WorkspaceContext,
+    actions: Vec<MechanisticActionV1>,
+    purpose: MechanisticRequestPurposeV1,
+    allow_unisolated_evidence: bool,
+    timeout: Duration,
+    expected_revision: Option<String>,
+) -> ToolExecutionResult {
+    let Some(root) = workspace.primary().map(|root| root.path.clone()) else {
+        return ToolExecutionResult::Failure("native repository tools need a workspace".into());
+    };
+    let cancellation = codex_team::mechanistic::native::NativeCancellation::default();
+    let worker_cancellation = cancellation.clone();
+    let _cancel_on_drop = NativeCancellationGuard(cancellation.clone());
+    let mut worker = tokio::task::spawn_blocking(move || -> Result<Value, String> {
+        let service = codex_team::mechanistic::native::NativeMechanisticService::new(&root)
+            .map_err(|error| error.to_string())?;
+        let request = MechanisticRequestV1 {
+            schema: MECHANISTIC_REQUEST_SCHEMA.into(),
+            expected_revision: match expected_revision {
+                Some(revision) => revision,
+                None => service.revision().map_err(|error| error.to_string())?,
+            },
+            delegation_policy: DelegationPolicy::Require,
+            purpose,
+            allow_unisolated_evidence,
+            actions,
+        };
+        let receipt = if request.actions.iter().all(MechanisticActionV1::is_query) {
+            service.query(&request)
+        } else {
+            service.verify(&request, &worker_cancellation)
+        }
+        .map_err(|error| error.to_string())?;
+        Ok(json!({
+            "schema": FACADE_RECEIPT_SCHEMA,
+            "backend": "native_codex_team",
+            "status": if receipt.status == codex_team_protocol::MechanisticReceiptStatusV1::Completed { "completed" } else { "failed" },
+            "fallback_allowed": false,
+            "receipt": receipt,
+        }))
+    });
+    let outcome = match tokio::time::timeout(timeout, &mut worker).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(error)) => Err(error.to_string()),
+        Err(_) => {
+            cancellation.cancel();
+            // The token cancels every structured command/process group. Retain
+            // ownership through cleanup rather than abandoning a live worker.
+            let _ = worker.await;
+            Err("native shared-engine deadline exceeded".into())
+        }
+    };
+    match outcome {
+        Ok(value) if value.get("status").and_then(Value::as_str) == Some("completed") => ToolExecutionResult::Success(value.to_string()),
+        Ok(value) => ToolExecutionResult::Failure(value.to_string()),
+        Err(error) => ToolExecutionResult::Failure(json!({"schema":FACADE_RECEIPT_SCHEMA,"backend":"native_codex_team","status":"failed","fallback_allowed":false,"error":bounded(&error,2048)}).to_string()),
+    }
+}
+
+/// First-turn context uses the same bounded parser and shared query executor.
+/// Non-Git workspaces preserve CA's ordinary filesystem behavior.
+pub async fn workspace_native_preflight_context(
+    workspace: &crate::workspace::WorkspaceContext,
+    prompt: &str,
+    timeout: Duration,
+) -> Option<String> {
+    let actions = plan_automatic_preflight(prompt)
+        .into_iter()
+        .filter(MechanisticActionV1::is_query)
+        .collect::<Vec<_>>();
+    if actions.is_empty() || native_repository_revision(workspace).await.is_err() {
+        return None;
+    }
+    let result = execute_native_actions(
+        workspace,
+        actions,
+        MechanisticRequestPurposeV1::AutomaticPreflight,
+        false,
+        timeout,
+    )
+    .await;
+    Some(automatic_context(result.model_text()))
+}
+
+/// `None` preserves ordinary CA search/list/glob and untracked/non-Git reads;
+/// tracked-only shared queries must never silently shrink their native scope.
+pub async fn execute_native_transparent_batch(
+    workspace: &crate::workspace::WorkspaceContext,
+    requests: &[TransparentToolRequest],
+    allow_unisolated_evidence: bool,
+    timeout: Duration,
+) -> Result<Option<TransparentToolBatchResult>, TransparentRoutingError> {
+    if requests.is_empty() || requests.len() > 8 {
+        return Err(TransparentRoutingError::Invalid(
+            "native batches need 1-8 calls".into(),
+        ));
+    }
+    if requests.iter().any(|request| {
+        matches!(
+            request.name.as_str(),
+            "read_file" | "search_files" | "list_dir" | "glob"
+        )
+    }) {
+        return Ok(None);
+    }
+    let Some(root) = workspace.primary().map(|root| root.path.clone()) else {
+        return Ok(None);
+    };
+    let revision = match native_repository_revision(workspace).await {
+        Ok(revision) => revision,
+        Err(_) => return Ok(None),
+    };
+    let binding = MechanisticRepositoryBindingV1 {
+        canonical_root: root.to_string_lossy().into_owned(),
+        repository_hash: format!("{:x}", Sha256::digest(root.as_os_str().as_encoded_bytes())),
+        filesystem_identity: "host-workspace".into(),
+        revision,
+    };
+    let actions = requests
+        .iter()
+        .map(|request| transparent_action(&request.name, &request.arguments, &binding))
+        .collect::<Result<Vec<_>, _>>()?;
+    let result = execute_native_actions(
+        workspace,
+        actions,
+        MechanisticRequestPurposeV1::TransparentTool,
+        allow_unisolated_evidence,
+        timeout,
+    )
+    .await;
+    let value: Value = serde_json::from_str(result.model_text())
+        .map_err(|_| TransparentRoutingError::Invalid("native receipt was malformed".into()))?;
+    let action_results = value
+        .pointer("/receipt/action_results")
+        .and_then(Value::as_array);
+    let executions = if result.is_success()
+        && action_results.is_some_and(|results| results.len() == requests.len())
+    {
+        requests
+            .iter()
+            .zip(action_results.expect("checked above"))
+            .map(|(request, result)| {
+                adapt_transparent_result(&request.name, &request.arguments, result)
+            })
+            .collect()
+    } else {
+        (0..requests.len()).map(|_| result.clone()).collect()
+    };
+    Ok(Some(TransparentToolBatchResult {
+        executions,
+        capsule: None,
+    }))
+}
+
+pub async fn native_automatic_verification(
+    workspace: &crate::workspace::WorkspaceContext,
+    mut paths: Vec<String>,
+    revision_before: Option<String>,
+    timeout: Duration,
+    allow_unisolated_evidence: bool,
+    allow_unscoped_full: bool,
+) -> AutomaticVerificationOutcome {
+    paths.sort();
+    paths.dedup();
+    let scope = if paths.is_empty() {
+        let Some(before) = revision_before else {
+            return failed_verification_context(
+                "REVISION_UNAVAILABLE",
+                "pre-mutation native repository revision was unavailable",
+            );
+        };
+        match native_repository_revision(workspace).await {
+            Ok(after) if after == before => {
+                return AutomaticVerificationOutcome {
+                    status: AutomaticVerificationStatus::Unchanged,
+                    context: None,
+                    job_id: None,
+                    repository_revision: Some(after),
+                    receipt_digest: None,
+                    selected_paths: Vec::new(),
+                    selected_recipes: Vec::new(),
+                    reason_codes: vec!["repository_revision_unchanged".into()],
+                    cache_state: None,
+                    duration_millis: 0,
+                }
+            }
+            Ok(_) if allow_unscoped_full => VerificationScopeV1::Full,
+            Ok(_) => {
+                return failed_verification_context(
+                    "UNSCOPED_FULL_DISABLED",
+                    "unscoped edits need full-suite authority",
+                )
+            }
+            Err(error) => return failed_verification_context("REVISION_UNAVAILABLE", &error),
+        }
+    } else {
+        VerificationScopeV1::Focused
+    };
+    let result = execute_native_actions(
+        workspace,
+        vec![MechanisticActionV1::VerifyChangedFiles {
+            paths,
+            scope,
+            allow_full_escalation: allow_unscoped_full,
+            rust_api_baseline_ids: Vec::new(),
+            timeout_seconds: Some(timeout.as_secs()),
+        }],
+        MechanisticRequestPurposeV1::AutomaticVerification,
+        allow_unisolated_evidence,
+        timeout,
+    )
+    .await;
+    automatic_verification_outcome(result)
+}
+
+/// Verify an exact host-owned final candidate. New untracked files need the
+/// existing full-suite authority; an unchanged pre-edit revision never skips
+/// a known changed candidate.
+pub async fn native_candidate_verification(
+    workspace: &crate::workspace::WorkspaceContext,
+    mut paths: Vec<String>,
+    timeout: Duration,
+    allow_unisolated_evidence: bool,
+    allow_unscoped_full: bool,
+) -> AutomaticVerificationOutcome {
+    paths.sort();
+    paths.dedup();
+    let Some(root) = workspace.primary().map(|root| root.path.clone()) else {
+        return failed_verification_context(
+            "REPOSITORY_UNAVAILABLE",
+            "final candidate has no workspace",
+        );
+    };
+    let candidate_paths = paths.clone();
+    let tracked = tokio::task::spawn_blocking(move || {
+        let service = codex_team::mechanistic::native::NativeMechanisticService::new(&root)?;
+        let revision = service.revision()?;
+        service.require_projected_candidate_paths(&candidate_paths)?;
+        let tracked = service.tracked_paths()?;
+        anyhow::ensure!(
+            service.revision()? == revision,
+            "repository changed while candidate projection scope was validated"
+        );
+        Ok::<_, anyhow::Error>((tracked, revision))
+    })
+    .await;
+    let (tracked, revision) = match tracked {
+        Ok(Ok((paths, revision))) => (paths.into_iter().collect::<BTreeSet<_>>(), revision),
+        Ok(Err(error)) => {
+            return failed_verification_context(
+                "CANDIDATE_PROJECTION_UNAVAILABLE",
+                &error.to_string(),
+            )
+        }
+        Err(error) => {
+            return failed_verification_context("REPOSITORY_UNAVAILABLE", &error.to_string())
+        }
+    };
+    let untracked = paths.iter().any(|path| !tracked.contains(path));
+    if untracked && !allow_unscoped_full {
+        return failed_verification_context(
+            "UNTRACKED_FULL_DISABLED",
+            "final candidate includes new files and full-suite authority is disabled",
+        );
+    }
+    let action = MechanisticActionV1::VerifyChangedFiles {
+        paths: if untracked { Vec::new() } else { paths },
+        scope: if untracked {
+            VerificationScopeV1::Full
+        } else {
+            VerificationScopeV1::Focused
+        },
+        allow_full_escalation: allow_unscoped_full,
+        rust_api_baseline_ids: Vec::new(),
+        timeout_seconds: Some(timeout.as_secs()),
+    };
+    automatic_verification_outcome(
+        execute_native_actions_at_revision(
+            workspace,
+            vec![action],
+            MechanisticRequestPurposeV1::AutomaticVerification,
+            allow_unisolated_evidence,
+            timeout,
+            Some(revision),
+        )
+        .await,
+    )
+}
+
+/// External-profile equivalent of final-candidate verification, with an
+/// explicit binding check before any delegated evidence process runs.
+pub async fn candidate_verification(
+    workspace: &crate::workspace::WorkspaceContext,
+    backend: Option<Arc<McpManager>>,
+    mut paths: Vec<String>,
+    timeout: Duration,
+    allow_unisolated_evidence: bool,
+    allow_unscoped_full: bool,
+) -> AutomaticVerificationOutcome {
+    let Some(backend) = backend else {
+        return native_candidate_verification(
+            workspace,
+            paths,
+            timeout,
+            allow_unisolated_evidence,
+            allow_unscoped_full,
+        )
+        .await;
+    };
+    let binding = match repository_binding(&backend).await {
+        Ok(binding) if binding_matches_workspace(&binding, workspace) => binding,
+        Ok(_) => {
+            return failed_verification_context(
+                "CANDIDATE_BINDING_MISMATCH",
+                "external verification root differs from the final candidate workspace",
+            )
+        }
+        Err(error) => {
+            return failed_verification_context("REPOSITORY_UNAVAILABLE", &error.to_string())
+        }
+    };
+    let root = PathBuf::from(binding.canonical_root);
+    let candidate_paths = paths.clone();
+    let tracked = match tokio::task::spawn_blocking(move || {
+        let service = codex_team::mechanistic::native::NativeMechanisticService::new(&root)?;
+        let revision = service.revision()?;
+        service.require_projected_candidate_paths(&candidate_paths)?;
+        let tracked = service.tracked_paths()?;
+        anyhow::ensure!(
+            service.revision()? == revision,
+            "repository changed while candidate projection scope was validated"
+        );
+        Ok::<_, anyhow::Error>((tracked, revision))
+    })
+    .await
+    {
+        Ok(Ok((paths, revision))) => (paths.into_iter().collect::<BTreeSet<_>>(), revision),
+        Ok(Err(error)) => {
+            return failed_verification_context(
+                "CANDIDATE_PROJECTION_UNAVAILABLE",
+                &error.to_string(),
+            )
+        }
+        Err(error) => {
+            return failed_verification_context("REPOSITORY_UNAVAILABLE", &error.to_string())
+        }
+    };
+    let (tracked, revision) = tracked;
+    paths.sort();
+    paths.dedup();
+    let untracked = paths.iter().any(|path| !tracked.contains(path));
+    if untracked && !allow_unscoped_full {
+        return failed_verification_context(
+            "UNTRACKED_FULL_DISABLED",
+            "final candidate includes new files and full-suite authority is disabled",
+        );
+    }
+    let arguments = json!({"actions":[{"kind":"verify_changed_files","paths":if untracked { Vec::new() } else { paths },"scope":if untracked { VerificationScopeV1::Full } else { VerificationScopeV1::Focused },"allow_full_escalation":allow_unscoped_full}]});
+    match tokio::time::timeout(
+        timeout,
+        execute_with_options_observed_at_revision(
+            backend,
+            &arguments,
+            allow_unisolated_evidence,
+            None,
+            MechanisticRequestPurposeV1::AutomaticVerification,
+            Some(revision),
+        ),
+    )
+    .await
+    {
+        Ok(result) => automatic_verification_outcome(result),
+        Err(_) => failed_verification_context(
+            "VERIFICATION_TIMEOUT",
+            "final candidate verification exceeded its host-side deadline",
+        ),
+    }
+}
+
 fn transparent_routing_degradation() -> &'static Mutex<Option<String>> {
     static STATE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
     STATE.get_or_init(|| Mutex::new(None))
@@ -3975,6 +4405,25 @@ async fn execute_with_options_observed(
     started_observer: Option<JobStartedObserver>,
     purpose: MechanisticRequestPurposeV1,
 ) -> ToolExecutionResult {
+    execute_with_options_observed_at_revision(
+        manager,
+        arguments,
+        allow_unisolated_evidence,
+        started_observer,
+        purpose,
+        None,
+    )
+    .await
+}
+
+async fn execute_with_options_observed_at_revision(
+    manager: Arc<McpManager>,
+    arguments: &Value,
+    allow_unisolated_evidence: bool,
+    started_observer: Option<JobStartedObserver>,
+    purpose: MechanisticRequestPurposeV1,
+    expected_revision: Option<String>,
+) -> ToolExecutionResult {
     let args: FacadeArgs = match serde_json::from_value(arguments.clone()) {
         Ok(args) => args,
         Err(error) => return ToolExecutionResult::Failure(format!("Invalid delegation: {error}")),
@@ -4005,6 +4454,15 @@ async fn execute_with_options_observed(
         Ok(revision) => revision,
         Err(error) => return unavailable("revision", &error),
     };
+    if expected_revision
+        .as_ref()
+        .is_some_and(|expected| expected != &revision)
+    {
+        return unavailable(
+            "revision",
+            "repository changed after final candidate projection membership was validated",
+        );
+    }
     let request = MechanisticRequestV1 {
         schema: MECHANISTIC_REQUEST_SCHEMA.to_string(),
         purpose,
@@ -4822,6 +5280,129 @@ fn bounded(value: &str, max_chars: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn native_candidate_projection_revision_drift_fails_before_evidence() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(root.path())
+            .status()
+            .unwrap()
+            .success());
+        std::fs::write(root.path().join("new.rs"), "actual final candidate bytes\n").unwrap();
+        let service =
+            codex_team::mechanistic::native::NativeMechanisticService::new(root.path()).unwrap();
+        service
+            .require_projected_candidate_paths(&["new.rs".into()])
+            .unwrap();
+        let revision = service.revision().unwrap();
+        std::fs::write(root.path().join(".gitignore"), "new.rs\n").unwrap();
+        let workspace = crate::workspace::WorkspaceContext::discover(root.path()).unwrap();
+        let result = execute_native_actions_at_revision(
+            &workspace,
+            vec![MechanisticActionV1::VerifyChangedFiles {
+                paths: Vec::new(),
+                scope: VerificationScopeV1::Full,
+                allow_full_escalation: true,
+                rust_api_baseline_ids: Vec::new(),
+                timeout_seconds: Some(2),
+            }],
+            MechanisticRequestPurposeV1::AutomaticVerification,
+            false,
+            Duration::from_secs(2),
+            Some(revision),
+        )
+        .await;
+        assert!(!result.is_success());
+        assert!(
+            result.model_text().contains("repository revision is stale"),
+            "{}",
+            result.model_text()
+        );
+    }
+
+    #[tokio::test]
+    async fn native_candidate_verification_rejects_ignored_final_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(root.path())
+            .status()
+            .unwrap()
+            .success());
+        std::fs::write(root.path().join(".gitignore"), "ignored.rs\n").unwrap();
+        std::fs::write(
+            root.path().join("ignored.rs"),
+            "final bytes excluded from projection\n",
+        )
+        .unwrap();
+        let workspace = crate::workspace::WorkspaceContext::discover(root.path()).unwrap();
+        let outcome = native_candidate_verification(
+            &workspace,
+            vec!["ignored.rs".into()],
+            Duration::from_secs(2),
+            false,
+            true,
+        )
+        .await;
+        assert_eq!(outcome.status, AutomaticVerificationStatus::Failed);
+        assert!(outcome
+            .context
+            .unwrap()
+            .contains("CANDIDATE_PROJECTION_UNAVAILABLE"));
+        assert!(outcome.job_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn native_routing_preserves_untracked_and_non_git_native_reads() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("draft.txt"), "untracked content").unwrap();
+        let workspace = crate::workspace::WorkspaceContext::discover(root.path()).unwrap();
+        let ordinary = TransparentToolRequest {
+            name: "read_file".into(),
+            arguments: json!({"path":"draft.txt"}),
+        };
+        assert!(execute_native_transparent_batch(
+            &workspace,
+            &[ordinary],
+            false,
+            Duration::from_secs(2)
+        )
+        .await
+        .unwrap()
+        .is_none());
+        let query = TransparentToolRequest {
+            name: "git_status".into(),
+            arguments: json!({}),
+        };
+        assert!(execute_native_transparent_batch(
+            &workspace,
+            std::slice::from_ref(&query),
+            false,
+            Duration::from_secs(2)
+        )
+        .await
+        .unwrap()
+        .is_none());
+        assert!(std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(root.path())
+            .status()
+            .unwrap()
+            .success());
+        let result =
+            execute_native_transparent_batch(&workspace, &[query], false, Duration::from_secs(5))
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(result.executions.len(), 1);
+        assert!(
+            result.executions[0].is_success(),
+            "{}",
+            result.executions[0].model_text()
+        );
+    }
+
     use super::*;
 
     #[test]

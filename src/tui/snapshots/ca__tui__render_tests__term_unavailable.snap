@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
       ┌ Durable terminals ───────────────────────────────────────────────────────────────────┐
       │tmux unavailable · install tmux and reopen /term                                      │
@@ -28,12 +28,12 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
       │                                                                                      │
       │Enter attach · Shift+A create · Shift+D detach                                        │
       │Shift+K kill · r refresh · Esc close                                                  │
-      │tmux is not installed or is not available on PATH                                     │
- → ▌As└──────────────────────────────────────────────────────────────────────────────────────┘
-
+╭─────│tmux is not installed or is not available on PATH                                     │─────╮
+│› ▌As└──────────────────────────────────────────────────────────────────────────────────────┘     │
+╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
 / commands
 -- narrow --
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
  ┌ Durable terminals ─────────────────────────────────────┐
  │tmux unavailable · install tmux and reopen /term        │
  │>                                                       │
@@ -53,7 +53,7 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
  │                                                        │
  │                                                        │
  │Enter attach · ⇧A add · ⇧D detach                       │
- │⇧K kill · Esc close                                     │
- │tmux is not installed or is not available on PATH       │
- └────────────────────────────────────────────────────────┘
+╭│⇧K kill · Esc close                                     │╮
+││tmux is not installed or is not available on PATH       ││
+╰└────────────────────────────────────────────────────────┘╯
 / commands

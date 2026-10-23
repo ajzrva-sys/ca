@@ -68,7 +68,8 @@ pub struct LearningTraceV1 {
     pub repository_fingerprint: String,
     pub acceptance_evidence_ids: Vec<String>,
     pub timing: TimingV1,
-    pub usage: UsageV1,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<UsageV1>,
     pub outcome: String,
     pub core_revision: String,
     pub overlay_revision: String,
@@ -258,7 +259,8 @@ pub struct EvaluationCaseResultV1 {
     pub acceptance_properties: BTreeSet<String>,
     pub output_equivalence_digest: String,
     pub elapsed_millis: u64,
-    pub estimated_microusd: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimated_microusd: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -340,6 +342,7 @@ pub enum LearningWorkflowStageV1 {
     Quarantined,
     CoolingDown,
     WaitingForEvidence,
+    BudgetPaused,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]

@@ -1,12 +1,16 @@
 {
   "schema_version": 1,
   "scope": "Conservative complete Cargo.lock registry inventory; includes target-specific, build, dev and optional resolution. Not a release binary bill of materials.",
-  "cargo_lock_sha256": "0abf757bc8f6a46bb04835af48639dfcf91a57ae6db0d6b2932cb2bcb7b8c7c2",
-  "registry_package_count": 650,
+  "cargo_lock_sha256": "1a385c75a55e94b3140c21883744852917095ad6446cbbaa54af1a714db6ab04",
+  "registry_package_count": 666,
   "legal_text_gaps": [
     "adobe-cmap-parser@0.4.1",
     "cesu8@1.1.0",
     "dispatch2@0.3.1",
+    "google-cloud-auth@1.17.0",
+    "google-cloud-gax@1.15.0",
+    "google-cloud-rpc@1.6.0",
+    "google-cloud-wkt@1.10.0",
     "mail-parser@0.11.5",
     "objc2@0.6.4",
     "objc2-app-kit@0.3.2",
@@ -1959,6 +1963,35 @@
       "attribution_text_count": 3
     },
     {
+      "name": "block-buffer",
+      "version": "0.12.1",
+      "license_expression": "MIT OR Apache-2.0",
+      "repository": "https://github.com/RustCrypto/utils",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "crate_sha256": "d2f6c7dbe95a6ed67ad9f18e57daf93a2f034c524b99fd2b76d18fdfeb6660aa",
+      "source_url": "https://static.crates.io/crates/block-buffer/block-buffer-0.12.1.crate",
+      "texts": [
+        {
+          "path": "licenses/third-party/crates/block-buffer-0.12.1/LICENSE-APACHE",
+          "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+          "origin": "crate"
+        },
+        {
+          "path": "licenses/third-party/crates/block-buffer-0.12.1/LICENSE-MIT",
+          "sha256": "98181e7249d0c01737645ec982499ce99a0f07eb8f7d625b8840d799d10dbc01",
+          "origin": "crate"
+        },
+        {
+          "path": "licenses/third-party/crates/block-buffer-0.12.1/EMBEDDED_NOTICES.txt",
+          "sha256": "e5334ad60ac8ec280511f423d52f4383c25ddcc1dc1a87c2bed6294abbde543d",
+          "origin": "embedded-comments"
+        }
+      ],
+      "primary_original_license_text_found": true,
+      "primary_text_review_exclusions": {},
+      "attribution_text_count": 3
+    },
+    {
       "name": "block-padding",
       "version": "0.3.3",
       "license_expression": "MIT OR Apache-2.0",
@@ -2798,6 +2831,35 @@
       "attribution_text_count": 3
     },
     {
+      "name": "cmov",
+      "version": "0.5.4",
+      "license_expression": "Apache-2.0 OR MIT",
+      "repository": "https://github.com/RustCrypto/utils",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "crate_sha256": "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a",
+      "source_url": "https://static.crates.io/crates/cmov/cmov-0.5.4.crate",
+      "texts": [
+        {
+          "path": "licenses/third-party/crates/cmov-0.5.4/LICENSE-APACHE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "origin": "crate"
+        },
+        {
+          "path": "licenses/third-party/crates/cmov-0.5.4/LICENSE-MIT",
+          "sha256": "70c9d40f1f9545c3f133b8a67206e89da850f6468eed072281bb3701514114a9",
+          "origin": "crate"
+        },
+        {
+          "path": "licenses/third-party/crates/cmov-0.5.4/EMBEDDED_NOTICES.txt",
+          "sha256": "8e7c334378d46f0e260f41548b671d6d0aa263de28c7fc88502ff9274bc21ed1",
+          "origin": "embedded-comments"
+        }
+      ],
+      "primary_original_license_text_found": true,
+      "primary_text_review_exclusions": {},
+      "attribution_text_count": 3
+    },
+    {
       "name": "color_quant",
       "version": "1.1.0",
       "license_expression": "MIT",
@@ -3438,6 +3500,64 @@
       "attribution_text_count": 3
     },
     {
+      "name": "crypto-common",
+      "version": "0.2.2",
+      "license_expression": "MIT OR Apache-2.0",
+      "repository": "https://github.com/RustCrypto/traits",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "crate_sha256": "ce6e4c961d6cd6c9a86db418387425e8bdeaf05b3c8bc1411e6dca4c252f1453",
+      "source_url": "https://static.crates.io/crates/crypto-common/crypto-common-0.2.2.crate",
+      "texts": [
+        {
+          "path": "licenses/third-party/crates/crypto-common-0.2.2/LICENSE-APACHE",
+          "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+          "origin": "crate"
+        },
+        {
+          "path": "licenses/third-party/crates/crypto-common-0.2.2/LICENSE-MIT",
+          "sha256": "d2e7ec5355c96eeade56b09187ceb48a6a30299da3ce7531a66d3d11405ab963",
+          "origin": "crate"
+        },
+        {
+          "path": "licenses/third-party/crates/crypto-common-0.2.2/EMBEDDED_NOTICES.txt",
+          "sha256": "e5334ad60ac8ec280511f423d52f4383c25ddcc1dc1a87c2bed6294abbde543d",
+          "origin": "embedded-comments"
+        }
+      ],
+      "primary_original_license_text_found": true,
+      "primary_text_review_exclusions": {},
+      "attribution_text_count": 3
+    },
+    {
+      "name": "ctutils",
+      "version": "0.4.3",
+      "license_expression": "Apache-2.0 OR MIT",
+      "repository": "https://github.com/RustCrypto/utils",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "crate_sha256": "03bb0e1cc970d482d121d9a1744999169b69a07470b3d644a7894e53fcaf4574",
+      "source_url": "https://static.crates.io/crates/ctutils/ctutils-0.4.3.crate",
+      "texts": [
+        {
+          "path": "licenses/third-party/crates/ctutils-0.4.3/LICENSE-APACHE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "origin": "crate"
+        },
+        {
+          "path": "licenses/third-party/crates/ctutils-0.4.3/LICENSE-MIT",
+          "sha256": "91585c36e4fb9ab4ca0d3dfac5d66d3c0c62cc51f640a0e1196542daf2267eae",
+          "origin": "crate"
+        },
+        {
+          "path": "licenses/third-party/crates/ctutils-0.4.3/EMBEDDED_NOTICES.txt",
+          "sha256": "8e7c334378d46f0e260f41548b671d6d0aa263de28c7fc88502ff9274bc21ed1",
+          "origin": "embedded-comments"
+        }
+      ],
+      "primary_original_license_text_found": true,
+      "primary_text_review_exclusions": {},
+      "attribution_text_count": 3
+    },
+    {
       "name": "darling",
       "version": "0.23.0",
       "license_expression": "MIT",
@@ -3773,6 +3893,35 @@
         },
         {
           "path": "licenses/third-party/crates/digest-0.10.7/EMBEDDED_NOTICES.txt",
+          "sha256": "e5334ad60ac8ec280511f423d52f4383c25ddcc1dc1a87c2bed6294abbde543d",
+          "origin": "embedded-comments"
+        }
+      ],
+      "primary_original_license_text_found": true,
+      "primary_text_review_exclusions": {},
+      "attribution_text_count": 3
+    },
+    {
+      "name": "digest",
+      "version": "0.11.3",
+      "license_expression": "MIT OR Apache-2.0",
+      "repository": "https://github.com/RustCrypto/traits",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "crate_sha256": "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2",
+      "source_url": "https://static.crates.io/crates/digest/digest-0.11.3.crate",
+      "texts": [
+        {
+          "path": "licenses/third-party/crates/digest-0.11.3/LICENSE-APACHE",
+          "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+          "origin": "crate"
+        },
+        {
+          "path": "licenses/third-party/crates/digest-0.11.3/LICENSE-MIT",
+          "sha256": "af59cea35d7f5e2777a713b8d155d65efa2c339eb43f3c14e868c6ac8506edad",
+          "origin": "crate"
+        },
+        {
+          "path": "licenses/third-party/crates/digest-0.11.3/EMBEDDED_NOTICES.txt",
           "sha256": "e5334ad60ac8ec280511f423d52f4383c25ddcc1dc1a87c2bed6294abbde543d",
           "origin": "embedded-comments"
         }
@@ -5337,6 +5486,106 @@
       "attribution_text_count": 3
     },
     {
+      "name": "google-cloud-auth",
+      "version": "1.17.0",
+      "license_expression": "Apache-2.0",
+      "repository": "https://github.com/googleapis/google-cloud-rust/tree/main",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "crate_sha256": "ac9870b8ea484519aa8601e14886f2efc148ea490034e43d04bef1d246170cc9",
+      "source_url": "https://static.crates.io/crates/google-cloud-auth/google-cloud-auth-1.17.0.crate",
+      "texts": [
+        {
+          "path": "licenses/third-party/crates/google-cloud-auth-1.17.0/EMBEDDED_NOTICES.txt",
+          "sha256": "ec1cce25ed6a1995d9b4b4f2f7c12342cb9c7ac071182555cc66dd9d478f7276",
+          "origin": "embedded-comments"
+        },
+        {
+          "path": "licenses/third-party/upstream/license-templates/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+          "origin": "canonical-template",
+          "url": "https://raw.githubusercontent.com/spdx/license-list-data/v3.26.0/text/Apache-2.0.txt"
+        }
+      ],
+      "primary_original_license_text_found": false,
+      "primary_text_review_exclusions": {},
+      "attribution_text_count": 1
+    },
+    {
+      "name": "google-cloud-gax",
+      "version": "1.15.0",
+      "license_expression": "Apache-2.0",
+      "repository": "https://github.com/googleapis/google-cloud-rust/tree/main",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "crate_sha256": "fc64ee071c0d22cb68662b454f1bea5424506cafeaddc51260fbc585bac1d29d",
+      "source_url": "https://static.crates.io/crates/google-cloud-gax/google-cloud-gax-1.15.0.crate",
+      "texts": [
+        {
+          "path": "licenses/third-party/crates/google-cloud-gax-1.15.0/EMBEDDED_NOTICES.txt",
+          "sha256": "679758357b92e00f3df39760644a790fb76e838856728a53ca3f56265490469c",
+          "origin": "embedded-comments"
+        },
+        {
+          "path": "licenses/third-party/upstream/license-templates/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+          "origin": "canonical-template",
+          "url": "https://raw.githubusercontent.com/spdx/license-list-data/v3.26.0/text/Apache-2.0.txt"
+        }
+      ],
+      "primary_original_license_text_found": false,
+      "primary_text_review_exclusions": {},
+      "attribution_text_count": 1
+    },
+    {
+      "name": "google-cloud-rpc",
+      "version": "1.6.0",
+      "license_expression": "Apache-2.0",
+      "repository": "https://github.com/googleapis/google-cloud-rust/tree/main",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "crate_sha256": "e2162c08a89118130979ba261080e960e44cdcb2d6e2ab8ca9b1da245285d353",
+      "source_url": "https://static.crates.io/crates/google-cloud-rpc/google-cloud-rpc-1.6.0.crate",
+      "texts": [
+        {
+          "path": "licenses/third-party/crates/google-cloud-rpc-1.6.0/EMBEDDED_NOTICES.txt",
+          "sha256": "1d6c3365950ca2d3857b74f6d84dacba9cf0589bfa01ccd71fb2632316d8741b",
+          "origin": "embedded-comments"
+        },
+        {
+          "path": "licenses/third-party/upstream/license-templates/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+          "origin": "canonical-template",
+          "url": "https://raw.githubusercontent.com/spdx/license-list-data/v3.26.0/text/Apache-2.0.txt"
+        }
+      ],
+      "primary_original_license_text_found": false,
+      "primary_text_review_exclusions": {},
+      "attribution_text_count": 1
+    },
+    {
+      "name": "google-cloud-wkt",
+      "version": "1.10.0",
+      "license_expression": "Apache-2.0",
+      "repository": "https://github.com/googleapis/google-cloud-rust/tree/main",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "crate_sha256": "75baa147c141fa2b11047827e7ff4eea3a84ab00c3d2cf44fccd132b2ed326cf",
+      "source_url": "https://static.crates.io/crates/google-cloud-wkt/google-cloud-wkt-1.10.0.crate",
+      "texts": [
+        {
+          "path": "licenses/third-party/crates/google-cloud-wkt-1.10.0/EMBEDDED_NOTICES.txt",
+          "sha256": "74d21669c14aeb71b7f944a419e98cb01352f8e5cdf52553e51594a6f68ee429",
+          "origin": "embedded-comments"
+        },
+        {
+          "path": "licenses/third-party/upstream/license-templates/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+          "origin": "canonical-template",
+          "url": "https://raw.githubusercontent.com/spdx/license-list-data/v3.26.0/text/Apache-2.0.txt"
+        }
+      ],
+      "primary_original_license_text_found": false,
+      "primary_text_review_exclusions": {},
+      "attribution_text_count": 1
+    },
+    {
       "name": "h2",
       "version": "0.3.27",
       "license_expression": "MIT",
@@ -5628,6 +5877,35 @@
       "attribution_text_count": 3
     },
     {
+      "name": "hmac",
+      "version": "0.13.0",
+      "license_expression": "MIT OR Apache-2.0",
+      "repository": "https://github.com/RustCrypto/MACs",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "crate_sha256": "6303bc9732ae41b04cb554b844a762b4115a61bfaa81e3e83050991eeb56863f",
+      "source_url": "https://static.crates.io/crates/hmac/hmac-0.13.0.crate",
+      "texts": [
+        {
+          "path": "licenses/third-party/crates/hmac-0.13.0/LICENSE-APACHE",
+          "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+          "origin": "crate"
+        },
+        {
+          "path": "licenses/third-party/crates/hmac-0.13.0/LICENSE-MIT",
+          "sha256": "9e0dfd2dd4173a530e238cb6adb37aa78c34c6bc7444e0e10c1ab5d8881f63ba",
+          "origin": "crate"
+        },
+        {
+          "path": "licenses/third-party/crates/hmac-0.13.0/EMBEDDED_NOTICES.txt",
+          "sha256": "e5334ad60ac8ec280511f423d52f4383c25ddcc1dc1a87c2bed6294abbde543d",
+          "origin": "embedded-comments"
+        }
+      ],
+      "primary_original_license_text_found": true,
+      "primary_text_review_exclusions": {},
+      "attribution_text_count": 3
+    },
+    {
       "name": "hound",
       "version": "3.5.1",
       "license_expression": "Apache-2.0",
@@ -5833,6 +6111,35 @@
       "primary_original_license_text_found": true,
       "primary_text_review_exclusions": {},
       "attribution_text_count": 2
+    },
+    {
+      "name": "hybrid-array",
+      "version": "0.4.15",
+      "license_expression": "MIT OR Apache-2.0",
+      "repository": "https://github.com/RustCrypto/hybrid-array",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "crate_sha256": "27f864f10dfb56725ce5ce5472bc52252c8f93a4ab86327122cebf62c5f59a17",
+      "source_url": "https://static.crates.io/crates/hybrid-array/hybrid-array-0.4.15.crate",
+      "texts": [
+        {
+          "path": "licenses/third-party/crates/hybrid-array-0.4.15/LICENSE-APACHE",
+          "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+          "origin": "crate"
+        },
+        {
+          "path": "licenses/third-party/crates/hybrid-array-0.4.15/LICENSE-MIT",
+          "sha256": "70c9d40f1f9545c3f133b8a67206e89da850f6468eed072281bb3701514114a9",
+          "origin": "crate"
+        },
+        {
+          "path": "licenses/third-party/crates/hybrid-array-0.4.15/EMBEDDED_NOTICES.txt",
+          "sha256": "2353b1d7c799f2fccd2f3dbbf51a2aaa5b4e95254405296d4fb320ac520923cf",
+          "origin": "embedded-comments"
+        }
+      ],
+      "primary_original_license_text_found": true,
+      "primary_text_review_exclusions": {},
+      "attribution_text_count": 3
     },
     {
       "name": "hyper",
@@ -7121,6 +7428,25 @@
       "primary_original_license_text_found": true,
       "primary_text_review_exclusions": {},
       "attribution_text_count": 2
+    },
+    {
+      "name": "jsonwebtoken",
+      "version": "11.1.0",
+      "license_expression": "MIT",
+      "repository": "https://github.com/Keats/jsonwebtoken",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "crate_sha256": "e75fe14a82d81e5f5af639997db37d8b96045938a7ac6ab18cdbe1c7467e05e1",
+      "source_url": "https://static.crates.io/crates/jsonwebtoken/jsonwebtoken-11.1.0.crate",
+      "texts": [
+        {
+          "path": "licenses/third-party/crates/jsonwebtoken-11.1.0/LICENSE",
+          "sha256": "a8012be84ea176195305bfb4e9109ed6f28860a8e697bc50302e75c2040813f3",
+          "origin": "crate"
+        }
+      ],
+      "primary_original_license_text_found": true,
+      "primary_text_review_exclusions": {},
+      "attribution_text_count": 1
     },
     {
       "name": "lazy_static",
@@ -12375,6 +12701,35 @@
       "attribution_text_count": 3
     },
     {
+      "name": "sha2",
+      "version": "0.11.1",
+      "license_expression": "MIT OR Apache-2.0",
+      "repository": "https://github.com/RustCrypto/hashes",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "crate_sha256": "47d7069beb7d6ac7b9acd1039986e73443f24234f41074da099d6f994ac9ad19",
+      "source_url": "https://static.crates.io/crates/sha2/sha2-0.11.1.crate",
+      "texts": [
+        {
+          "path": "licenses/third-party/crates/sha2-0.11.1/LICENSE-APACHE",
+          "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+          "origin": "crate"
+        },
+        {
+          "path": "licenses/third-party/crates/sha2-0.11.1/LICENSE-MIT",
+          "sha256": "831e0f43ad0bf014c1c4fec5767aae470434c1d66d6e671be2d823e729063e25",
+          "origin": "crate"
+        },
+        {
+          "path": "licenses/third-party/crates/sha2-0.11.1/EMBEDDED_NOTICES.txt",
+          "sha256": "190083ee72bd8e15903fbf5db6675f87ed5500afe3ed5cf18e26f37b8eb14f2f",
+          "origin": "embedded-comments"
+        }
+      ],
+      "primary_original_license_text_found": true,
+      "primary_text_review_exclusions": {},
+      "attribution_text_count": 3
+    },
+    {
       "name": "sharded-slab",
       "version": "0.1.7",
       "license_expression": "MIT",
@@ -12536,6 +12891,35 @@
         {
           "path": "licenses/third-party/crates/signal-hook-registry-1.4.8/EMBEDDED_NOTICES.txt",
           "sha256": "47a6ae1932d921570c0f8d8c988a49ec6999f11d4d7fc8027ffabfa87a48e137",
+          "origin": "embedded-comments"
+        }
+      ],
+      "primary_original_license_text_found": true,
+      "primary_text_review_exclusions": {},
+      "attribution_text_count": 3
+    },
+    {
+      "name": "signature",
+      "version": "2.2.0",
+      "license_expression": "Apache-2.0 OR MIT",
+      "repository": "https://github.com/RustCrypto/traits/tree/master/signature",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "crate_sha256": "77549399552de45a898a580c1b41d445bf730df867cc44e6c0233bbc4b8329de",
+      "source_url": "https://static.crates.io/crates/signature/signature-2.2.0.crate",
+      "texts": [
+        {
+          "path": "licenses/third-party/crates/signature-2.2.0/LICENSE-APACHE",
+          "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+          "origin": "crate"
+        },
+        {
+          "path": "licenses/third-party/crates/signature-2.2.0/LICENSE-MIT",
+          "sha256": "b3470648aff02beb36d7a53240fc9260ed80ed93bd43bace6b67d7ef7336ee33",
+          "origin": "crate"
+        },
+        {
+          "path": "licenses/third-party/crates/signature-2.2.0/EMBEDDED_NOTICES.txt",
+          "sha256": "cdae5f7139c7e703077d9960421f4c5e85dd696fc45b05be8926984c8f804715",
           "origin": "embedded-comments"
         }
       ],
@@ -14832,6 +15216,30 @@
       "primary_original_license_text_found": true,
       "primary_text_review_exclusions": {},
       "attribution_text_count": 1
+    },
+    {
+      "name": "untrusted",
+      "version": "0.7.1",
+      "license_expression": "ISC",
+      "repository": "https://github.com/briansmith/untrusted",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "crate_sha256": "a156c684c91ea7d62626509bce3cb4e1d9ed5c4d978f7b4352658f96a4c26b4a",
+      "source_url": "https://static.crates.io/crates/untrusted/untrusted-0.7.1.crate",
+      "texts": [
+        {
+          "path": "licenses/third-party/crates/untrusted-0.7.1/LICENSE.txt",
+          "sha256": "7abd9b6960dcf7d4d0a48606a5b71bfe37d472db68d70637f3a58a56785f1621",
+          "origin": "crate"
+        },
+        {
+          "path": "licenses/third-party/crates/untrusted-0.7.1/EMBEDDED_NOTICES.txt",
+          "sha256": "9584bbabc22e7abb29ac3e5a0fbc3689a1d7a815564a39db1808b6b85f207145",
+          "origin": "embedded-comments"
+        }
+      ],
+      "primary_original_license_text_found": true,
+      "primary_text_review_exclusions": {},
+      "attribution_text_count": 2
     },
     {
       "name": "untrusted",
@@ -17249,6 +17657,35 @@
         },
         {
           "path": "licenses/third-party/crates/zeroize-1.9.0/EMBEDDED_NOTICES.txt",
+          "sha256": "8e7c334378d46f0e260f41548b671d6d0aa263de28c7fc88502ff9274bc21ed1",
+          "origin": "embedded-comments"
+        }
+      ],
+      "primary_original_license_text_found": true,
+      "primary_text_review_exclusions": {},
+      "attribution_text_count": 3
+    },
+    {
+      "name": "zeroize_derive",
+      "version": "1.5.0",
+      "license_expression": "Apache-2.0 OR MIT",
+      "repository": "https://github.com/RustCrypto/utils",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "crate_sha256": "3c50655cbb0fe3fc43170059e702f1ce5e19b84cec58dc87b037a09935c2f328",
+      "source_url": "https://static.crates.io/crates/zeroize_derive/zeroize_derive-1.5.0.crate",
+      "texts": [
+        {
+          "path": "licenses/third-party/crates/zeroize_derive-1.5.0/LICENSE-APACHE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "origin": "crate"
+        },
+        {
+          "path": "licenses/third-party/crates/zeroize_derive-1.5.0/LICENSE-MIT",
+          "sha256": "b8c6939380a400f53e11923d50fcc4dd2fa1ba8339fd9d04cda38a0251b6c9b0",
+          "origin": "crate"
+        },
+        {
+          "path": "licenses/third-party/crates/zeroize_derive-1.5.0/EMBEDDED_NOTICES.txt",
           "sha256": "8e7c334378d46f0e260f41548b671d6d0aa263de28c7fc88502ff9274bc21ed1",
           "origin": "embedded-comments"
         }

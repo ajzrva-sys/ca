@@ -455,7 +455,43 @@ fn process_start(pid: u32) -> Option<String> {
     Some(fields.get(19)?.to_string())
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(target_os = "freebsd")]
+fn process_start(pid: u32) -> Option<String> {
+    let mut mib = [
+        libc::CTL_KERN,
+        libc::KERN_PROC,
+        libc::KERN_PROC_PID,
+        pid.try_into().ok()?,
+    ];
+    let mut info = std::mem::MaybeUninit::<libc::kinfo_proc>::zeroed();
+    let mut size = std::mem::size_of::<libc::kinfo_proc>();
+    let status = unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            mib.len() as _,
+            info.as_mut_ptr().cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if status != 0 || size != std::mem::size_of::<libc::kinfo_proc>() {
+        return None;
+    }
+    let info = unsafe { info.assume_init() };
+    if info.ki_structsize != i32::try_from(size).ok()?
+        || info.ki_pid != pid as libc::pid_t
+        || info.ki_uid != unsafe { libc::geteuid() }
+    {
+        return None;
+    }
+    Some(format!(
+        "{}:{}",
+        info.ki_start.tv_sec, info.ki_start.tv_usec
+    ))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "freebsd")))]
 fn process_start(_pid: u32) -> Option<String> {
     None
 }

@@ -83,12 +83,17 @@ pub enum SandboxError {
     InvalidPath(String),
     #[error("process executable is outside sandbox-readable locations: {0}")]
     ExecutableOutsidePolicy(String),
+    #[cfg(target_os = "freebsd")]
+    #[error("native FreeBSD sandbox policy could not be prepared: {0}")]
+    NativePolicy(String),
 }
 
 #[derive(Debug, Clone)]
 pub struct SandboxBackend {
     mode: SandboxMode,
     executable: PathBuf,
+    #[cfg(all(test, target_os = "freebsd"))]
+    test_executor: bool,
 }
 
 impl SandboxBackend {
@@ -96,16 +101,54 @@ impl SandboxBackend {
         Self {
             mode,
             executable: PathBuf::from("/usr/bin/sandbox-exec"),
+            #[cfg(all(test, target_os = "freebsd"))]
+            test_executor: false,
         }
     }
 
     #[cfg(test)]
     pub fn with_executable(mode: SandboxMode, executable: PathBuf) -> Self {
-        Self { mode, executable }
+        Self {
+            mode,
+            executable,
+            #[cfg(target_os = "freebsd")]
+            test_executor: true,
+        }
     }
 
     pub fn is_available(&self) -> bool {
+        #[cfg(target_os = "freebsd")]
+        {
+            if self.use_native_freebsd() {
+                ca_automation::freebsd_sandbox::available()
+            } else {
+                self.seatbelt_available()
+            }
+        }
+        #[cfg(not(target_os = "freebsd"))]
+        {
+            self.seatbelt_available()
+        }
+    }
+
+    fn seatbelt_available(&self) -> bool {
+        #[cfg(all(test, target_os = "freebsd"))]
+        if self.test_executor {
+            return self.executable.is_file();
+        }
         cfg!(target_os = "macos") && self.executable.is_file()
+    }
+
+    #[cfg(target_os = "freebsd")]
+    fn use_native_freebsd(&self) -> bool {
+        #[cfg(test)]
+        {
+            !self.test_executor
+        }
+        #[cfg(not(test))]
+        {
+            true
+        }
     }
 
     pub fn prepare_shell(
@@ -119,7 +162,16 @@ impl SandboxBackend {
                 arguments: vec!["-c".into(), command.into()],
             });
         }
-        if !cfg!(target_os = "macos") || !self.executable.is_file() {
+        #[cfg(target_os = "freebsd")]
+        if self.use_native_freebsd() {
+            return self.prepare_freebsd(
+                Path::new("/bin/sh"),
+                &["-c".into(), command.into()],
+                policy,
+                &[],
+            );
+        }
+        if !self.seatbelt_available() {
             return Err(SandboxError::Unavailable);
         }
         let profile = sandbox_profile(policy)?;
@@ -164,7 +216,11 @@ impl SandboxBackend {
                 arguments: arguments.to_vec(),
             });
         }
-        if !cfg!(target_os = "macos") || !self.executable.is_file() {
+        #[cfg(target_os = "freebsd")]
+        if self.use_native_freebsd() {
+            return self.prepare_freebsd(program, arguments, policy, denied_paths);
+        }
+        if !self.seatbelt_available() {
             return Err(SandboxError::Unavailable);
         }
         let mut profile = sandbox_profile(policy)?;
@@ -206,6 +262,30 @@ impl SandboxBackend {
             program: self.executable.clone(),
             arguments: prepared_arguments,
         })
+    }
+
+    #[cfg(target_os = "freebsd")]
+    fn prepare_freebsd(
+        &self,
+        program: &Path,
+        arguments: &[String],
+        policy: &SandboxPolicy,
+        denied_paths: &[PathBuf],
+    ) -> Result<PreparedProcess, SandboxError> {
+        let mut writable = policy.roots.clone();
+        writable.push(policy.temporary_directory.clone());
+        let mut readable = ca_automation::freebsd_sandbox::system_reads();
+        readable.extend_from_slice(&policy.read_only_roots);
+        let (program, arguments) = ca_automation::freebsd_sandbox::prepare_process(
+            program,
+            arguments,
+            &writable,
+            &readable,
+            denied_paths,
+            policy.network_allowed,
+        )
+        .map_err(|error| SandboxError::NativePolicy(error.to_string()))?;
+        Ok(PreparedProcess { program, arguments })
     }
 }
 
@@ -268,6 +348,21 @@ pub(crate) fn sandbox_profile(policy: &SandboxPolicy) -> Result<String, SandboxE
                 profile.push_str(&format!("(allow file-read* (subpath \"{literal}\"))\n"));
             }
         }
+    }
+    if !policy.hide_other_processes {
+        // xcodebuild and swiftc call confstr for the Darwin user cache and
+        // temp directories, and Xcode watches files through FSEvents. Without
+        // these lookups the compiler logs EIO, then fails to write
+        // ~/.cache/clang/ModuleCache. The write rules cover only xcrun's
+        // database and Swift's TemporaryDirectory, not the rest of the user
+        // temporary folder.
+        profile.push_str(
+            "(allow mach-lookup (global-name \"com.apple.bsd.dirhelper\"))\n\
+             (allow mach-lookup (global-name \"com.apple.FSEvents\"))\n\
+             (allow file-write*\n\
+             (regex #\"^/(private/)?var/folders/[^/]+/[^/]+/T/xcrun_db\")\n\
+             (regex #\"^/(private/)?var/folders/[^/]+/[^/]+/T/TemporaryDirectory\\.\"))\n",
+        );
     }
     // Ordinary jobs may use conventional /tmp paths, but host-owned privilege
     // handoffs always remain invisible even when the parent environment places
@@ -452,6 +547,33 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "freebsd")]
+    fn required_backend_uses_the_native_helper_or_fails_closed() {
+        let backend = SandboxBackend::new(SandboxMode::Required);
+        let prepared = backend.prepare_shell(
+            "true",
+            &SandboxPolicy {
+                roots: vec![PathBuf::from("/tmp/workspace")],
+                read_only_roots: Vec::new(),
+                temporary_directory: PathBuf::from("/tmp/job"),
+                network_allowed: false,
+                hide_other_processes: true,
+            },
+        );
+        let helper = Path::new(ca_automation::freebsd_sandbox::HELPER_PATH);
+        if !helper.exists() {
+            assert!(matches!(prepared, Err(SandboxError::NativePolicy(_))));
+            return;
+        }
+        let prepared = prepared.unwrap();
+        assert_eq!(prepared.program, helper);
+        assert_eq!(&prepared.arguments[..2], ["run", "--permissions-json"]);
+        assert_eq!(prepared.arguments[3..], ["--", "/bin/sh", "-c", "true"]);
+        let policy: serde_json::Value = serde_json::from_str(&prepared.arguments[2]).unwrap();
+        assert_eq!(policy["network"], "restricted");
+    }
+
+    #[test]
     fn policy_only_is_explicit_and_does_not_claim_a_sandbox() {
         let backend = SandboxBackend::new(SandboxMode::PolicyOnly);
         let process = backend
@@ -628,6 +750,10 @@ mod tests {
         .unwrap();
         assert!(profile.contains("com.apple.system.opendirectoryd.libinfo"));
         assert!(profile.contains("(allow file-read-metadata (literal \"/etc\"))"));
+        assert!(profile.contains("com.apple.bsd.dirhelper"));
+        assert!(profile.contains("com.apple.FSEvents"));
+        assert!(profile.contains("TemporaryDirectory\\."));
+        assert!(profile.contains("xcrun_db"));
         assert!(!profile.contains("(allow file-write* (subpath \"/etc\"))"));
         assert!(!profile.contains("com.apple.system.opendirectoryd.api"));
         assert!(!profile.contains("com.apple.system.opendirectoryd.membership"));
@@ -646,6 +772,8 @@ mod tests {
         assert!(profile.contains("com.apple.system.opendirectoryd.libinfo"));
         assert!(profile.contains("(deny process-info*)"));
         assert!(profile.contains("(deny sysctl-read)"));
+        assert!(!profile.contains("com.apple.bsd.dirhelper"));
+        assert!(!profile.contains("com.apple.FSEvents"));
         assert!(!profile.contains("com.apple.system.opendirectoryd.api"));
         assert!(!profile.contains("com.apple.system.opendirectoryd.membership"));
     }

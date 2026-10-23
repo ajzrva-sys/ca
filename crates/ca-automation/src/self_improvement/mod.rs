@@ -6,6 +6,7 @@
 
 mod artifacts;
 mod contracts;
+mod daily_budget;
 mod evaluation;
 mod harness;
 mod harness_protected;
@@ -18,6 +19,7 @@ mod vault;
 
 pub use artifacts::*;
 pub use contracts::*;
+pub use daily_budget::*;
 pub use evaluation::*;
 pub use harness::*;
 pub use harness_source::*;

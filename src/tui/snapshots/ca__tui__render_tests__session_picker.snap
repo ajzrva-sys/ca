@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
 
     Sessions                                                                                 Esc
@@ -16,7 +16,7 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
     Named session browser                                                               12:00 AM
 
     Enter open  ·  Ctrl+R rename  ·  Ctrl+G generate name
-    Shift+P pin  ·  Shift+A archive  ·  Shift+D delete  ·  Tab archived
+    Shift+P pin  ·  Shift+A archive  ·  Shift+D purge  ·  Tab archived
 
 
 
@@ -28,12 +28,12 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
 
 
 
-
- →
-
+╭─                                                                                                ─╮
+│›                                                                                                 │
+╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
 / commands
 -- narrow --
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
 
 
     Sessions                                         Esc
@@ -48,12 +48,12 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
 
     Enter open · Ctrl+R rename
     Ctrl+G generate name · Tab archived
-    Up/Down move · Esc close
+    Shift+D purge · Esc close
 
 
 
 
-
- →
-
+╭─                                                        ─╮
+│›                                                         │
+╰──────────────────────────────────────────── agent · auto ╯
 / commands

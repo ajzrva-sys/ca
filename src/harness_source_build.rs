@@ -567,7 +567,7 @@ pub(crate) mod tests {
         })
         .unwrap();
         let git = |arguments: &[&str]| {
-            std::process::Command::new("/usr/bin/git")
+            std::process::Command::new(ca_automation::git_metadata::EXECUTABLE)
                 .args(arguments)
                 .current_dir(&repository)
                 .output()

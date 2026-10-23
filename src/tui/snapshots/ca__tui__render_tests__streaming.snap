@@ -2,8 +2,9 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca · agent · auto
-> Inspect the project
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
+ › Inspect the project
 
 I am checking the relevant files.▌
 
@@ -27,14 +28,14 @@ I am checking the relevant files.▌
 
 
 
-
-────────────────────────────────────────────────────────────────────────────────────────────────────
- → ▌Add a follow-up…
- Esc stop · Enter interrupt · Alt+Enter queue
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│› ▌Add a follow-up…                                                                                │
+╰ Esc stop · Enter interrupt · Alt+Enter queue ────────────────────────────────────── agent · auto ╯
 Ctrl+C also stops · Alt+Up edits the latest queued message
 -- narrow --
- ca · agent · auto
-> Inspect the project
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
+ › Inspect the project
 
 I am checking the relevant files.▌
 
@@ -52,8 +53,7 @@ I am checking the relevant files.▌
 
 
 
-
-────────────────────────────────────────────────────────────
- → ▌Add a follow-up…
- Esc stop · Enter interrupt · Alt+Enter queue
-Ctrl+C also stops · Alt+Up edits the latest queued message
+╭──────────────────────────────────────────────────────────╮
+│› ▌Add a follow-up…                                        │
+╰ Esc stop · Enter interrupt · Alt+Enter queue ────────────╯
+agent · auto · Ctrl+C stops

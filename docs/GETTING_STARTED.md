@@ -9,9 +9,10 @@ install the normal compiler/SDK tools for your platform. The macOS build also
 includes Security.framework and audio support. Git is required for repository
 and worktree features. Provider-backed conversations require a configured route.
 
-The publication build was checked on macOS. FreeBSD-specific code and historical
-checks exist, but this publication does not establish a fresh FreeBSD or Linux
-build result.
+Native FreeBSD setup, sandbox prerequisites and platform limits are described
+in [FreeBSD support](FREEBSD.md). Current validation results for macOS and
+FreeBSD are recorded in [Publication validation](PUBLICATION_VALIDATION.md).
+Linux behavior has not received a fresh native qualification in this update.
 
 ## Build
 

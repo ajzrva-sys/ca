@@ -15,6 +15,16 @@ pub enum ApprovalRule {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CaConfig {
+    #[serde(
+        default,
+        skip_serializing_if = "crate::formatting::FormatterConfig::is_default"
+    )]
+    pub formatting: crate::formatting::FormatterConfig,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::context_pruning::PruningConfig::is_default"
+    )]
+    pub context_pruning: crate::context_pruning::PruningConfig,
     #[serde(default)]
     pub providers: HashMap<String, ProviderConfig>,
     #[serde(default)]
@@ -57,6 +67,11 @@ pub struct CaConfig {
     pub sessions: SessionsConfig,
     #[serde(default)]
     pub fallbacks: Vec<crate::fallback::ProviderFallbackRule>,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::provider_filter::ProviderFilterConfig::is_disabled"
+    )]
+    pub provider_filter: crate::provider_filter::ProviderFilterConfig,
     #[serde(default)]
     pub memory: MemoryConfig,
     #[serde(default)]
@@ -560,14 +575,30 @@ fn default_voice_transcription_timeout() -> u64 {
     30
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MemoryConfig {
+    #[serde(default = "default_cache_budget_mib")]
+    pub cache_budget_mib: u64,
     #[serde(default)]
     pub user: MemoryScopeConfig,
     #[serde(default)]
     pub workspace: MemoryScopeConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_hybrid: Option<LocalHybridMemoryConfig>,
+}
+
+fn default_cache_budget_mib() -> u64 {
+    256
+}
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self {
+            cache_budget_mib: default_cache_budget_mib(),
+            user: MemoryScopeConfig::default(),
+            workspace: MemoryScopeConfig::default(),
+            local_hybrid: None,
+        }
+    }
 }
 
 /// Optional native-memory retrieval through one explicitly managed local model.
@@ -1339,9 +1370,10 @@ pub struct ProviderTimeoutConfig {
     pub connect_timeout_secs: Option<u64>,
     /// Timeout to receive HTTP response headers in seconds. Default: 60.
     pub headers_timeout_secs: Option<u64>,
-    /// Timeout for first SSE event in the response body in seconds. Default: 60.
+    /// Timeout for first body bytes in the response body in seconds. Default: 60.
     pub first_event_timeout_secs: Option<u64>,
-    /// Stall timeout between SSE events in seconds. Default: 120.
+    /// Stall timeout between received body bytes in seconds. Default: 120.
+    /// Any non-empty chunk counts as liveness, including SSE keep-alives.
     pub no_progress_timeout_secs: Option<u64>,
     /// Maximum retry attempts (clamped 1..=2). Default: 2.
     pub max_attempts: Option<usize>,
@@ -1391,6 +1423,13 @@ impl ProviderTimeoutConfig {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ProviderConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub google: Option<crate::google_auth::Config>,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::tool_schema::Policy::is_default"
+    )]
+    pub tool_schema_policy: crate::tool_schema::Policy,
     pub base_url: String,
     pub api_key: String,
     #[serde(default)]
@@ -1519,6 +1558,7 @@ pub enum ProviderApiKeyUpdate {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderApiKeySource {
+    ApplicationDefaultCredentials,
     None,
     Environment(String),
     Keychain,
@@ -1546,6 +1586,7 @@ pub struct ProviderManagementSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderSettingsUpdate {
+    pub google: Option<crate::google_auth::Config>,
     pub provider: String,
     pub base_url: String,
     pub api_key: ProviderApiKeyUpdate,
@@ -1566,6 +1607,7 @@ pub struct ProviderDeleteUpdate {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderModelUpdate {
+    pub google: Option<crate::google_auth::Config>,
     pub provider: String,
     pub base_url: String,
     pub api_key: ProviderApiKeyUpdate,
@@ -1783,9 +1825,15 @@ pub fn validate_route_preset_for_config(
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
+    /// Ordinary tasks delegate useful independent work without a special mode.
+    #[serde(default = "default_keep_awake")]
+    pub proactive_delegation: bool,
+    /// Host-owned exact-candidate review before completing source changes.
+    #[serde(default = "default_keep_awake")]
+    pub review_changes: bool,
     #[serde(default = "default_max_turns")]
     pub max_turns: usize,
-    #[serde(default = "default_keep_awake")]
+    #[serde(default = "default_idle_inhibition")]
     pub keep_awake: bool,
     #[serde(default = "default_approval")]
     pub approval_mode: String,
@@ -1867,6 +1915,11 @@ fn default_max_turns() -> usize {
 fn default_keep_awake() -> bool {
     true
 }
+fn default_idle_inhibition() -> bool {
+    // FreeBSD has no native idle-inhibition backend. An explicit request still
+    // reports unavailability; ordinary runs do not request an unsupported feature.
+    !cfg!(target_os = "freebsd")
+}
 fn default_approval() -> String {
     "auto-review".into()
 }
@@ -1898,8 +1951,10 @@ fn default_subagent_output() -> usize {
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
+            proactive_delegation: true,
+            review_changes: true,
             max_turns: default_max_turns(),
-            keep_awake: default_keep_awake(),
+            keep_awake: default_idle_inhibition(),
             approval_mode: default_approval(),
             command_timeout_secs: default_command_timeout(),
             command_output: CommandOutputPolicy::Bounded,
@@ -1919,6 +1974,8 @@ impl Default for AgentConfig {
 impl Default for CaConfig {
     fn default() -> Self {
         Self {
+            context_pruning: crate::context_pruning::PruningConfig::default(),
+            formatting: crate::formatting::FormatterConfig::default(),
             providers: HashMap::new(),
             defaults: DefaultsConfig {
                 provider: default_provider(),
@@ -1943,6 +2000,7 @@ impl Default for CaConfig {
             keymap: crate::keymap::KeymapConfig::new(),
             sessions: SessionsConfig::default(),
             fallbacks: Vec::new(),
+            provider_filter: crate::provider_filter::ProviderFilterConfig::default(),
             memory: MemoryConfig::default(),
             learning: crate::learning::LearningConfig::default(),
             harness_improvement: crate::harness_idle::AutomationConfig::default(),
@@ -2092,6 +2150,8 @@ impl CaConfig {
         cfg.providers.insert(
             "deepseek".into(),
             ProviderConfig {
+                google: None,
+                tool_schema_policy: Default::default(),
                 base_url: "https://api.deepseek.com/v1".into(),
                 api_key: "${DEEPSEEK_API_KEY}".into(),
                 protocol: crate::agent::ProviderProtocol::default(),
@@ -2103,6 +2163,8 @@ impl CaConfig {
         cfg.providers.insert(
             "ofox".into(),
             ProviderConfig {
+                google: None,
+                tool_schema_policy: Default::default(),
                 base_url: "https://api.ofox.ai/v1".into(),
                 api_key: "${OFOX_API_KEY}".into(),
                 protocol: crate::agent::ProviderProtocol::default(),
@@ -2114,6 +2176,8 @@ impl CaConfig {
         cfg.providers.insert(
             "ollama".into(),
             ProviderConfig {
+                google: None,
+                tool_schema_policy: Default::default(),
                 base_url: "http://127.0.0.1:11434/v1".into(),
                 api_key: "ollama".into(),
                 protocol: crate::agent::ProviderProtocol::default(),
@@ -2125,6 +2189,8 @@ impl CaConfig {
         cfg.providers.insert(
             "mimo".into(),
             ProviderConfig {
+                google: None,
+                tool_schema_policy: Default::default(),
                 base_url: "https://token-plan-sgp.xiaomimimo.com/v1".into(),
                 api_key: "${MIMO_API_KEY}".into(),
                 protocol: crate::agent::ProviderProtocol::OpenAiResponses,
@@ -2757,6 +2823,11 @@ impl ConfigStore {
         if migrated_approval_mode && self.writes_enabled {
             self.atomic_write(&raw)?;
         }
+        crate::formatting::validate(&config.formatting).map_err(anyhow::Error::msg)?;
+        config.provider_filter.validate()?;
+        crate::provider_filter::install(&config.provider_filter)?;
+        crate::formatting::install(&config).map_err(anyhow::Error::msg)?;
+        crate::context_pruning::install(&config);
         Ok(config)
     }
 
@@ -2787,6 +2858,13 @@ impl ConfigStore {
     pub fn provider_api_key_source(&self, provider: &str) -> anyhow::Result<ProviderApiKeySource> {
         let raw = self.raw_text()?;
         let config: CaConfig = toml::from_str(&raw)?;
+        if config
+            .providers
+            .get(provider)
+            .is_some_and(crate::google_auth::is_vertex)
+        {
+            return Ok(ProviderApiKeySource::ApplicationDefaultCredentials);
+        }
         let Some(value) = config
             .providers
             .get(provider)
@@ -2855,7 +2933,11 @@ impl ConfigStore {
             .providers
             .iter()
             .map(|(id, provider)| ProviderManagementEntry {
-                api_key_source: self.provider_api_key_source_value(id, provider.api_key.trim()),
+                api_key_source: if crate::google_auth::is_vertex(provider) {
+                    ProviderApiKeySource::ApplicationDefaultCredentials
+                } else {
+                    self.provider_api_key_source_value(id, provider.api_key.trim())
+                },
                 id: id.clone(),
                 base_url: safe_provider_base_url(&provider.base_url),
                 configured_models: provider.models.clone(),
@@ -4219,6 +4301,24 @@ pub(crate) fn safe_provider_base_url(value: &str) -> String {
     crate::terminal_text::sanitize_terminal_text(url.as_str())
 }
 
+fn write_google_settings(table: &mut toml_edit::Table, google: &crate::google_auth::Config) {
+    let mut settings = toml_edit::Table::new();
+    settings["mode"] = toml_edit::value(match google.mode {
+        crate::google_auth::Mode::AiStudio => "ai_studio",
+        crate::google_auth::Mode::Vertex => "vertex",
+    });
+    for (key, value) in [
+        ("project_id", &google.project_id),
+        ("location", &google.location),
+        ("quota_project_id", &google.quota_project_id),
+    ] {
+        if let Some(value) = value {
+            settings[key] = toml_edit::value(value);
+        }
+    }
+    table["google"] = toml_edit::Item::Table(settings);
+}
+
 fn provider_settings_update_document(
     raw: &str,
     update: &ProviderSettingsUpdate,
@@ -4233,6 +4333,14 @@ fn provider_settings_update_document(
         .get_mut(&update.provider)
         .and_then(toml_edit::Item::as_table_mut)
         .ok_or_else(|| anyhow::anyhow!("provider {} must be a TOML table", update.provider))?;
+    if let Some(google) = &update.google {
+        if config.providers[&update.provider].protocol
+            != crate::agent::ProviderProtocol::GoogleGenerateContent
+        {
+            anyhow::bail!("Google settings require google_generate_content");
+        }
+        write_google_settings(table, google);
+    }
     table["base_url"] = toml_edit::value(update.base_url.trim());
     match &update.api_key {
         ProviderApiKeyUpdate::Preserve => {}
@@ -4432,6 +4540,8 @@ fn provider_model_update_document(
     }
 
     let mut provider = existing.unwrap_or_else(|| ProviderConfig {
+        google: None,
+        tool_schema_policy: Default::default(),
         base_url: String::new(),
         api_key: String::new(),
         protocol: crate::agent::ProviderProtocol::default(),
@@ -4493,6 +4603,14 @@ fn provider_model_update_document(
         .ok_or_else(|| anyhow::anyhow!("provider {} must be a TOML table", update.provider))?;
     table["base_url"] = toml_edit::value(&provider.base_url);
     table["api_key"] = toml_edit::value(&provider.api_key);
+    if let Some(google) = &update.google {
+        if update.protocol_override.unwrap_or(provider.protocol)
+            != crate::agent::ProviderProtocol::GoogleGenerateContent
+        {
+            anyhow::bail!("Google settings require google_generate_content");
+        }
+        write_google_settings(table, google);
+    }
     if let Some(protocol) = update.protocol_override {
         table["protocol"] = toml_edit::value(protocol.label());
     }
@@ -4626,6 +4744,19 @@ fn validate_provider_model_update(update: &ProviderModelUpdate) -> anyhow::Resul
     validate_model_id(&update.model)?;
     validate_base_url(&update.base_url, false)?;
     validate_api_key_update(&update.api_key)?;
+    if let Some(google) = &update.google {
+        google.validate().map_err(anyhow::Error::msg)?;
+        if update.protocol_override.is_some_and(|protocol| {
+            protocol != crate::agent::ProviderProtocol::GoogleGenerateContent
+        }) || (update.require_new_provider
+            && update.protocol_override
+                != Some(crate::agent::ProviderProtocol::GoogleGenerateContent))
+        {
+            anyhow::bail!(
+                "Google settings require google_generate_content while adding a provider"
+            );
+        }
+    }
     if update.protocol_override.is_some() && !update.require_new_provider {
         anyhow::bail!("provider protocol can only be set while adding a new provider");
     }
@@ -4635,6 +4766,9 @@ fn validate_provider_model_update(update: &ProviderModelUpdate) -> anyhow::Resul
 fn validate_provider_settings_update(update: &ProviderSettingsUpdate) -> anyhow::Result<()> {
     validate_provider_id(&update.provider)?;
     validate_base_url(&update.base_url, true)?;
+    if let Some(google) = &update.google {
+        google.validate().map_err(anyhow::Error::msg)?;
+    }
     validate_api_key_update(&update.api_key)
 }
 
@@ -4856,6 +4990,21 @@ fn validate_review_config(config: &CaConfig) -> anyhow::Result<()> {
 }
 
 fn validate_provider_billing(config: &CaConfig) -> anyhow::Result<()> {
+    for (id, provider) in &config.providers {
+        if provider.protocol == crate::agent::ProviderProtocol::GoogleGenerateContent {
+            provider
+                .google
+                .clone()
+                .unwrap_or_default()
+                .validate()
+                .map_err(|error| anyhow::anyhow!("provider {id}: {error}"))?;
+            for model in &provider.models {
+                crate::google_provider::model_path(model).map_err(anyhow::Error::msg)?;
+            }
+        } else if provider.google.is_some() {
+            anyhow::bail!("provider {id}: google settings require google_generate_content");
+        }
+    }
     for (provider, billing) in &config.provider_billing {
         let configured = config
             .providers
@@ -4947,7 +5096,7 @@ fn exact_environment_reference(value: &str) -> Option<&str> {
 
 #[derive(Clone)]
 pub(crate) struct LearningExecutionProfilePlan {
-    contents: String,
+    pub(crate) contents: String,
     pub digest: String,
     pub providers: Vec<(String, Vec<String>)>,
 }
@@ -4994,6 +5143,7 @@ pub(crate) fn plan_learning_execution_profile(
         provider_id == "openai-codex"
             || !provider.api_key.trim().is_empty()
             || provider.protocol == crate::agent::ProviderProtocol::OpenAiResponses
+            || crate::google_auth::is_vertex(provider)
     });
     if providers.len() < 2 {
         anyhow::bail!(
@@ -5047,6 +5197,7 @@ pub(crate) fn plan_learning_execution_profile(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn install_learning_execution_profile(
     target: &Path,
     plan: &LearningExecutionProfilePlan,
@@ -5145,8 +5296,10 @@ mod config_store_tests {
     use std::sync::{Arc, Mutex};
 
     fn assert_semantic_agent_defaults(agent: &AgentConfig) {
+        assert!(agent.proactive_delegation);
+        assert!(agent.review_changes);
         assert_eq!(agent.max_turns, 100);
-        assert!(agent.keep_awake);
+        assert_eq!(agent.keep_awake, !cfg!(target_os = "freebsd"));
         assert_eq!(agent.approval_mode, "auto-review");
         assert_eq!(agent.command_timeout_secs, 30);
         assert_eq!(agent.sandbox_mode, "required");
@@ -5157,6 +5310,15 @@ mod config_store_tests {
         assert_eq!(agent.subagent_runtime_secs, 30 * 60);
         assert_eq!(agent.subagent_output_bytes, 256 * 1024);
         assert!(agent.modes.is_empty());
+    }
+
+    #[test]
+    fn legacy_agent_defaults_delegate_and_review_but_explicit_choices_survive() {
+        let legacy: AgentConfig = toml::from_str("").unwrap();
+        assert!(legacy.proactive_delegation && legacy.review_changes);
+        let explicit: AgentConfig =
+            toml::from_str("proactive_delegation = false\nreview_changes = false\n").unwrap();
+        assert!(!explicit.proactive_delegation && !explicit.review_changes);
     }
 
     #[derive(Default)]
@@ -5658,6 +5820,7 @@ env = { TOKEN = "${ROLE_RUN_MCP_SECRET}" }
 
     fn direct_key_update(provider: &str) -> ProviderModelUpdate {
         ProviderModelUpdate {
+            google: None,
             provider: provider.into(),
             base_url: "https://example.invalid/v1".into(),
             api_key: ProviderApiKeyUpdate::Keychain,
@@ -5711,6 +5874,7 @@ model = "current-model"
         std::fs::write(&path, original).unwrap();
         let store = ConfigStore::new(&path);
         let update = ProviderModelUpdate {
+            google: None,
             provider: OPENAI_PROVIDER_TEMPLATE_ID.into(),
             base_url: OPENAI_PROVIDER_TEMPLATE_BASE_URL.into(),
             api_key: ProviderApiKeyUpdate::Environment(OPENAI_PROVIDER_TEMPLATE_API_KEY_ENV.into()),
@@ -6296,6 +6460,7 @@ fallback_model = "old-model"
         store
             .upsert_provider_model_with_secret(
                 &ProviderModelUpdate {
+                    google: None,
                     provider: "test".into(),
                     base_url: "https://new.example/v1".into(),
                     api_key: ProviderApiKeyUpdate::Preserve,
@@ -6339,6 +6504,7 @@ fallback_model = "old-model"
         store
             .upsert_provider_model_with_secret(
                 &ProviderModelUpdate {
+                    google: None,
                     provider: "test".into(),
                     base_url: String::new(),
                     api_key: ProviderApiKeyUpdate::Preserve,
@@ -6473,6 +6639,7 @@ model = "one"
         store
             .update_provider_with_secret(
                 &ProviderSettingsUpdate {
+                    google: None,
                     provider: "test".into(),
                     base_url: "https://new.invalid/v1".into(),
                     api_key: ProviderApiKeyUpdate::Environment("NEW_KEY".into()),
@@ -6771,6 +6938,8 @@ model = "model-a"
     #[test]
     fn provider_config_debug_redacts_runtime_authority() {
         let provider = ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: "https://user:password@example.invalid/v1?token=query-secret".into(),
             api_key: "sentinel-provider-secret".into(),
             protocol: crate::agent::ProviderProtocol::ChatCompletions,
@@ -6808,6 +6977,7 @@ models = ["one"]
         let error = store
             .upsert_provider_model_with_secret(
                 &ProviderModelUpdate {
+                    google: None,
                     provider: "test".into(),
                     base_url: "https://new.invalid/v1".into(),
                     api_key: ProviderApiKeyUpdate::Environment("NEW_KEY".into()),
@@ -7021,6 +7191,7 @@ model = "one"
         let error = store
             .upsert_provider_model_with_secret(
                 &ProviderModelUpdate {
+                    google: None,
                     provider: "bad provider".into(),
                     base_url: "https://example.invalid/v1".into(),
                     api_key: ProviderApiKeyUpdate::Environment("literal-secret!".into()),
@@ -7039,6 +7210,7 @@ model = "one"
         store
             .upsert_provider_model_with_secret(
                 &ProviderModelUpdate {
+                    google: None,
                     provider: "new-provider".into(),
                     base_url: "https://example.invalid/v1".into(),
                     api_key: ProviderApiKeyUpdate::Environment("NEW_PROVIDER_API_KEY".into()),
@@ -7678,6 +7850,8 @@ disabled = ["unsafe-skill"]
         let store = ConfigStore::with_secret_store(&path, secrets.clone());
         let secret = SecretValue::from_text("tp-never-write-to-config");
         let provider = ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: crate::pricing::MimoRegion::Singapore
                 .token_plan_url()
                 .into(),
@@ -8804,6 +8978,7 @@ open_editor = "ctrl+k"
         let renamed = provider_model_update_document(
             raw,
             &ProviderModelUpdate {
+                google: None,
                 provider: "mimo".into(),
                 base_url: "https://example.invalid/v1".into(),
                 api_key: ProviderApiKeyUpdate::Preserve,
@@ -9031,6 +9206,8 @@ open_editor = "ctrl+k"
         config.providers.insert(
             "first".into(),
             ProviderConfig {
+                google: None,
+                tool_schema_policy: Default::default(),
                 base_url: "http://127.0.0.1:1/v1".into(),
                 api_key: "test".into(),
                 protocol: crate::agent::ProviderProtocol::default(),
@@ -9042,6 +9219,8 @@ open_editor = "ctrl+k"
         config.providers.insert(
             "second".into(),
             ProviderConfig {
+                google: None,
+                tool_schema_policy: Default::default(),
                 base_url: "http://127.0.0.1:2/v1".into(),
                 api_key: "test".into(),
                 protocol: crate::agent::ProviderProtocol::default(),
@@ -9086,6 +9265,8 @@ open_editor = "ctrl+k"
         config.providers.insert(
             "first".into(),
             ProviderConfig {
+                google: None,
+                tool_schema_policy: Default::default(),
                 base_url: "http://127.0.0.1:1/v1".into(),
                 api_key: "test".into(),
                 protocol: crate::agent::ProviderProtocol::default(),
@@ -9115,5 +9296,41 @@ open_editor = "ctrl+k"
         config.review.convergence.max_provider_requests = 48;
         config.review.convergence.max_output_bytes = 0;
         assert!(validate_review_config(&config).is_err());
+    }
+    #[test]
+    fn google_settings_validate_and_persist_additively_without_tokens() {
+        let mut update = direct_key_update("vertex");
+        update.api_key = ProviderApiKeyUpdate::Preserve;
+        update.protocol_override = Some(crate::agent::ProviderProtocol::GoogleGenerateContent);
+        update.google = Some(crate::google_auth::Config {
+            mode: crate::google_auth::Mode::Vertex,
+            project_id: Some("example-project".into()),
+            location: Some("global".into()),
+            quota_project_id: Some("quota-project".into()),
+        });
+        validate_provider_model_update(&update).unwrap();
+        let output =
+            provider_model_update_document("", &update, "unused-keychain-reference").unwrap();
+        let config: CaConfig = toml::from_str(&output).unwrap();
+        assert_eq!(config.providers["vertex"].google, update.google);
+        assert_eq!(config.providers["vertex"].api_key, "");
+        assert!(!output.contains("access_token"));
+        validate_provider_billing(&config).unwrap();
+        let mut invalid = config.clone();
+        invalid
+            .providers
+            .get_mut("vertex")
+            .unwrap()
+            .google
+            .as_mut()
+            .unwrap()
+            .project_id = None;
+        assert!(validate_provider_billing(&invalid).is_err());
+        let legacy:ProviderConfig=toml::from_str("base_url='https://generativelanguage.googleapis.com/v1beta/openai'\napi_key='${GOOGLE_API_KEY}'\nmodels=['gemini-existing']").unwrap();
+        assert_eq!(
+            legacy.protocol,
+            crate::agent::ProviderProtocol::ChatCompletions
+        );
+        assert!(legacy.google.is_none());
     }
 }

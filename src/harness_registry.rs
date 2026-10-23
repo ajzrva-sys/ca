@@ -282,7 +282,13 @@ fn now_epoch() -> u64 {
 // Storage
 // ---------------------------------------------------------------------------
 
-/// Save a component snapshot to disk.
+/// Snapshots are write-once per digest and only the newest is ever read back
+/// (`load_latest_snapshot`). Retaining a small recent window keeps diff history
+/// without letting the directory grow one file per harness configuration ever seen.
+pub const MAX_RETAINED_SNAPSHOTS: usize = 8;
+
+/// Save a component snapshot to disk, pruning older snapshots beyond the
+/// retention window.
 pub fn save_snapshot(snapshot: &ComponentSnapshot, data_dir: &Path) -> std::io::Result<()> {
     let dir = data_dir.join("harness-snapshots");
     std::fs::create_dir_all(&dir)?;
@@ -295,10 +301,38 @@ pub fn save_snapshot(snapshot: &ComponentSnapshot, data_dir: &Path) -> std::io::
     temporary.write_all(json.as_bytes())?;
     temporary.as_file().sync_all()?;
     match temporary.persist_noclobber(path) {
-        Ok(_) => Ok(()),
-        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
-        Err(error) => Err(error.error),
+        Ok(_) => {}
+        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error.error),
     }
+    prune_snapshots(&dir)
+}
+
+/// List snapshot files newest-first by mtime.
+fn snapshot_files_newest_first(dir: &Path) -> std::io::Result<Vec<std::path::PathBuf>> {
+    let mut entries: Vec<_> = std::fs::read_dir(dir)?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
+        .map(|e| {
+            let modified = e
+                .metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            (modified, e.path())
+        })
+        .collect();
+    entries.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
+    Ok(entries.into_iter().map(|(_, path)| path).collect())
+}
+
+/// Drop snapshots older than the retention window. Best-effort: a locked or
+/// unreadable leftover never blocks saving the current snapshot.
+fn prune_snapshots(dir: &Path) -> std::io::Result<()> {
+    let files = snapshot_files_newest_first(dir)?;
+    for path in files.into_iter().skip(MAX_RETAINED_SNAPSHOTS) {
+        let _ = std::fs::remove_file(path);
+    }
+    Ok(())
 }
 
 /// Load the most recent snapshot from disk.
@@ -307,22 +341,9 @@ pub fn load_latest_snapshot(data_dir: &Path) -> std::io::Result<Option<Component
     if !dir.exists() {
         return Ok(None);
     }
-    let mut entries: Vec<_> = std::fs::read_dir(&dir)?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
-        .collect();
-    entries.sort_by(|a, b| {
-        b.metadata()
-            .and_then(|m| m.modified())
-            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
-            .cmp(
-                &a.metadata()
-                    .and_then(|m| m.modified())
-                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
-            )
-    });
-    if let Some(entry) = entries.first() {
-        let data = std::fs::read_to_string(entry.path())?;
+    let files = snapshot_files_newest_first(&dir)?;
+    if let Some(path) = files.first() {
+        let data = std::fs::read_to_string(path)?;
         let snapshot: ComponentSnapshot = serde_json::from_str(&data)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         return Ok(Some(snapshot));
@@ -419,6 +440,51 @@ mod tests {
 
         let after = ComponentSnapshot::default();
         assert!(before.component_changed(&after, HarnessComponent::Hooks));
+    }
+
+    #[test]
+    fn save_snapshot_prunes_to_the_retention_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let total = MAX_RETAINED_SNAPSHOTS + 5;
+        for index in 0..total {
+            let mut snapshot = ComponentSnapshot::default();
+            // Distinct component hashes give distinct digests, so each save is
+            // a new file rather than an idempotent rewrite.
+            snapshot
+                .components
+                .insert(HarnessComponent::Config, format!("digest-{index}"));
+            snapshot.captured_at = index as u64 + 1;
+            save_snapshot(&snapshot, dir.path()).unwrap();
+            // Pin mtimes so newest-first ordering is deterministic.
+            let path = dir
+                .path()
+                .join("harness-snapshots")
+                .join(format!("{}.json", snapshot.digest()));
+            let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+            let when = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000 + index as u64);
+            file.set_modified(when).unwrap();
+        }
+        let mut stored: Vec<_> = std::fs::read_dir(dir.path().join("harness-snapshots"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        stored.sort();
+        assert_eq!(stored.len(), MAX_RETAINED_SNAPSHOTS);
+
+        // The newest survives and still loads.
+        let loaded = load_latest_snapshot(dir.path()).unwrap().unwrap();
+        assert_eq!(
+            loaded.components.get(&HarnessComponent::Config).unwrap(),
+            &format!("digest-{}", total - 1)
+        );
+    }
+
+    #[test]
+    fn load_latest_snapshot_survives_a_missing_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(load_latest_snapshot(dir.path()).unwrap().is_none());
     }
 }
 

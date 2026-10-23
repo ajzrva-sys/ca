@@ -2,8 +2,9 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&streaming, 100, 30),\nrender_to_text(&streaming, 60, 24))"
 ---
- ca · agent · auto
-> Continue even if the primary is temporarily unavailable
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
+ › Continue even if the primary is temporarily unavailable
 
 * Provider fallback · mimo/mimo-v2.5-pro → deepseek/deepseek-v4-pro · rate limited
 
@@ -27,14 +28,14 @@ The backup provider is answering now.▌
 
 
 
-
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
 1 messages · / commands
 -- narrow --
- ca · agent · auto
-> Continue even if the primary is temporarily unavailable
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
+ › Continue even if the primary is temporarily unavailable
 
 * Provider fallback · mimo/mimo-v2.5-pro →
 deepseek/deepseek-v4-pro · rate limited
@@ -52,8 +53,7 @@ The backup provider is answering now.▌
 
 
 
-
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                           │
+╰──────────────────────────────────────────── agent · auto ╯
 1 messages · / commands

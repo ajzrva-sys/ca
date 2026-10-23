@@ -1064,12 +1064,14 @@ mod tests {
         }
     }
 
-    async fn read_request(stream: &mut tokio::net::TcpStream) -> (String, String, Vec<u8>) {
+    async fn read_request(stream: &mut tokio::net::TcpStream) -> Option<(String, String, Vec<u8>)> {
         let mut bytes = Vec::new();
         let header_end = loop {
             let mut chunk = [0_u8; 2048];
             let count = stream.read(&mut chunk).await.unwrap();
-            assert!(count > 0);
+            if count == 0 {
+                return None; // The cancellation fixture can close during headers.
+            }
             bytes.extend_from_slice(&chunk[..count]);
             if let Some(index) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
                 break index + 4;
@@ -1092,11 +1094,11 @@ mod tests {
             assert!(count > 0);
             bytes.extend_from_slice(&chunk[..count]);
         }
-        (
+        Some((
             method,
             path,
             bytes[header_end..header_end + content_length].to_vec(),
-        )
+        ))
     }
 
     async fn write_json(
@@ -1137,7 +1139,9 @@ mod tests {
                     break;
                 };
                 let (mut stream, _) = accepted.unwrap();
-                let request = read_request(&mut stream).await;
+                let Some(request) = read_request(&mut stream).await else {
+                    continue;
+                };
                 let path = request.1.clone();
                 if path.contains("oauth-protected-resource") {
                     write_json(
@@ -1270,7 +1274,9 @@ mod tests {
             let mut token_polls = 0;
             loop {
                 let (mut stream, _) = listener.accept().await.unwrap();
-                let request = read_request(&mut stream).await;
+                let request = read_request(&mut stream)
+                    .await
+                    .expect("complete device request");
                 let path = request.1.clone();
                 if path.contains("oauth-protected-resource") {
                     write_json(

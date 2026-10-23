@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
 
 
@@ -28,12 +28,12 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
 
 
 
-────────────────────────────────────────────────────────────────────────────────────────────────────
- → ▌Add a follow-up…
- Esc stop · Enter interrupt · Alt+Enter queue
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│› ▌Add a follow-up…                                                                                │
+╰ Esc stop · Enter interrupt · Alt+Enter queue ────────────────────────────────────── agent · auto ╯
 Working on your request…
 -- narrow --
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
 
 
 
@@ -53,7 +53,7 @@ Working on your request…
 
 
 
-────────────────────────────────────────────────────────────
- → ▌Add a follow-up…
- Esc stop · Enter interrupt · Alt+Enter queue
+╭──────────────────────────────────────────────────────────╮
+│› ▌Add a follow-up…                                        │
+╰ Esc stop · Enter interrupt · Alt+Enter queue ────────────╯
 Working on your request…

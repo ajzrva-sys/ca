@@ -51,6 +51,40 @@ pub(crate) async fn run_unified_quiet(
         .map_err(|error| error.to_string())
 }
 
+/// Stable service wakes only this typed target; unrelated due jobs remain queued.
+pub(crate) async fn run_learning_quiet(
+    paths: &crate::runtime::RuntimePaths,
+    profile: &crate::runtime::ActiveProfile,
+) -> Result<(), String> {
+    let _admission = ca_automation::runtime::ResourceLease::acquire(
+        &crate::automation_runtime::lease_root(paths),
+        &format!("admission:{}", profile.label()),
+    )
+    .map_err(|e| e.to_string())?;
+    crate::learning_automation::register_enrolled(paths, profile).map_err(|e| e.to_string())?;
+    if !crate::learning_automation::stage_ready(paths, profile).map_err(|e| e.to_string())? {
+        return Ok(());
+    }
+    let store = crate::automation::AutomationStore::for_paths(paths, profile);
+    let due = store
+        .records()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .any(|r| {
+            r.definition.id == crate::learning_automation::AUTOMATION_ID
+                && r.enabled
+                && r.blocked_reason.is_none()
+                && r.active_run_id.is_none()
+                && r.next_occurrence.is_some_and(|o| o.at <= Utc::now())
+        });
+    if due {
+        crate::automation::run_now(paths, profile, crate::learning_automation::AUTOMATION_ID)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 #[derive(Debug, Parser)]
 #[command(
     name = "ca schedule",
@@ -1115,6 +1149,10 @@ async fn tick_unified(
     )
     .load()
     .map_err(|e| ScheduleError::State(e.to_string()))?;
+    let learning_registration_failure =
+        crate::learning_automation::register_enrolled(paths, &cli.active_profile)
+            .err()
+            .map(|e| ScheduleError::State(e.to_string()));
     let registration_failure =
         crate::harness_automation::register_enabled(paths, &cli.active_profile, &config)
             .err()
@@ -1123,7 +1161,7 @@ async fn tick_unified(
         .map_err(automation_error)?;
     recover_native_v2(paths, v2, journal, cli).await?;
     v2.recover_dead_owners(journal, now).map_err(v2_error)?;
-    let mut failure = registration_failure;
+    let mut failure = learning_registration_failure.or(registration_failure);
     for _ in 0..if drain { 256 } else { 1 } {
         let mut due = Vec::new();
         for r in store.load()?.records {
@@ -2223,6 +2261,7 @@ pub(crate) async fn execute_automation_target_inner(
             | ScheduleTargetV2::HarnessDiscovery { .. }
             | ScheduleTargetV2::HarnessEvaluation { .. }
             | ScheduleTargetV2::HarnessCycle { .. }
+            | ScheduleTargetV2::KnowledgeLearning { .. }
             | ScheduleTargetV2::Monitor { .. } => Err(WorkerFailure::Failed {
                 code: Some(2),
                 message: "native target must use its owned worker".into(),

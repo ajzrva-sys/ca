@@ -1,0 +1,60 @@
+---
+source: src/tui/render_tests.rs
+assertion_line: 153
+expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
+---
+┌ Plan workflow ───────────────────────────────────────────────────────────────────────────────────┐
+│Plan café and 界 面 , review on another provider, then return to the author                         │
+│Paused · 3 stages · 2 agents · Agents                                                             │
+│                                                                                                  │
+│  author                                                                                          │
+│  first-provider/planning-model                                                                   │
+│  Enter drafts a handoff to this agent                                                            │
+│                                                                                                  │
+│▶ reviewer                                                                                        │
+│  second-provider/review-model                                                                    │
+│  Enter drafts a handoff to this agent                                                            │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│Paused after interruption; resume explicitly                                                      │
+│↑↓ select · Enter draft handoff · Tab handoffs                                                    │
+│S Send · E Execute · P Pause/Resume · C Cancel                                                    │
+│Esc close · 2/2                                                                                   │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+-- narrow --
+┌ Plan workflow ───────────────────────────────────────────┐
+│Plan café and 界 面 , review on another provider, then      │
+│return to the author                                      │
+│Paused · 3 stages · 2 agents · Agents                     │
+│  author                                                  │
+│  first-provider/planning-model                           │
+│  Enter drafts a handoff to this agent                    │
+│                                                          │
+│▶ reviewer                                                │
+│  second-provider/review-model                            │
+│  Enter drafts a handoff to this agent                    │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│Paused after interruption; resume explicitly              │
+│↑↓ select · Enter draft handoff · Tab handoffs            │
+│S Send · E Execute · P Pause/Resume · C Cancel            │
+│Esc close · 2/2                                           │
+└──────────────────────────────────────────────────────────┘

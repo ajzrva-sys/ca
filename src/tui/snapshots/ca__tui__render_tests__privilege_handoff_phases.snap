@@ -3,8 +3,9 @@ source: src/tui/render_tests.rs
 expression: "wide_narrow(wide, narrow)"
 ---
 === CACHE CHECKING ===
- ca · agent · auto
-> Apply the approved system change
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
+ › Apply the approved system change
 
 
   Approve tool [1/1] — run_privileged
@@ -32,14 +33,14 @@ expression: "wide_narrow(wide, narrow)"
 
 
 
-
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
 Checking administrator authorization…
 === MASKED INPUT ===
- ca · agent · auto
-> Apply the approved system change
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
+ › Apply the approved system change
 
 
   Approve tool [1/1] — run_privileged
@@ -49,8 +50,7 @@ Checking administrator authorization…
     cwd: "/Users/example/project"
     Filesystem authority: system-wide · Network: OS-denied
     Invocation digest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  [y] authorize once  [n/Esc] deny
-              ┌ Input required ──────────────────────────────────────────────────────┐
+  [y] authoriz┌ Input required ──────────────────────────────────────────────────────┐
               │Administrator password                                                │
               │One keyboard-only attempt for invocation                              │
               │aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa      │
@@ -68,13 +68,14 @@ Checking administrator authorization…
 
 
 
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
 Administrator authentication required (Esc cancels)
 === CANCELLATION ===
- ca · agent · auto
-> Apply the approved system change
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
+ › Apply the approved system change
 
 
   Approve tool [1/1] — run_privileged
@@ -102,14 +103,14 @@ Administrator authentication required (Esc cancels)
 
 
 
-
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
 Cancelling administrator authentication…
 === AUTH FAILURE ===
- ca · agent · auto
-> Apply the approved system change
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
+ › Apply the approved system change
 
 
   Approve tool [1/1] — run_privileged
@@ -137,14 +138,14 @@ Cancelling administrator authentication…
 
 
 
-
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
 Administrator authentication failed
 === EXECUTION ===
- ca · agent · auto
-> Apply the approved system change
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
+ › Apply the approved system change
 
 
   Approve tool [1/1] — run_privileged
@@ -172,14 +173,14 @@ Administrator authentication failed
 
 
 
-
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
 Executing approved administrator command…
 === COMPLETION ===
- ca · agent · auto
-> Apply the approved system change
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
+ › Apply the approved system change
 
 
   Approve tool [1/1] — run_privileged
@@ -207,15 +208,15 @@ Executing approved administrator command…
 
 
 
-
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
 Administrator command completed
 -- narrow --
 === CACHE CHECKING ===
- ca · agent · auto
-> Apply the approved system change
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
+ › Apply the approved system change
 
 
   Approve tool [1/1] — run_privileged
@@ -239,14 +240,14 @@ aaaa
 
 
 
-
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                           │
+╰──────────────────────────────────────────── agent · auto ╯
 Checking administrator authorization…
 === MASKED INPUT ===
- ca · agent · auto
-> Apply the approved system change
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
+ › Apply the approved system change
 
 
   Approve tool [1/1] — run_privileged
@@ -254,11 +255,10 @@ Checking administrator authorization…
     argv[0]: "space value"
     argv[1]: "$(literal);&|"
     cwd: "/Users/example/project"
-    Filesystem authority: system-wide · Network: OS-denied
   ┌ Input required ──────────────────────────────────────┐
-aa│Administrator password                                │aa
-aa│One keyboard-only attempt for invocation              │
-  │aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa│
+  │Administrator password                                │
+aa│One keyboard-only attempt for invocation              │aa
+aa│aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa│
   │aaaaaaaaaa                                            │
   │                                                      │
   │  Secret:                                             │
@@ -271,13 +271,14 @@ aa│One keyboard-only attempt for invocation              │
 
 
 
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                           │
+╰──────────────────────────────────────────── agent · auto ╯
 Administrator authentication required (Esc cancels)
 === CANCELLATION ===
- ca · agent · auto
-> Apply the approved system change
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
+ › Apply the approved system change
 
 
   Approve tool [1/1] — run_privileged
@@ -301,14 +302,14 @@ aaaa
 
 
 
-
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                           │
+╰──────────────────────────────────────────── agent · auto ╯
 Cancelling administrator authentication…
 === AUTH FAILURE ===
- ca · agent · auto
-> Apply the approved system change
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
+ › Apply the approved system change
 
 
   Approve tool [1/1] — run_privileged
@@ -332,14 +333,14 @@ aaaa
 
 
 
-
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                           │
+╰──────────────────────────────────────────── agent · auto ╯
 Administrator authentication failed
 === EXECUTION ===
- ca · agent · auto
-> Apply the approved system change
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
+ › Apply the approved system change
 
 
   Approve tool [1/1] — run_privileged
@@ -363,14 +364,14 @@ aaaa
 
 
 
-
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                           │
+╰──────────────────────────────────────────── agent · auto ╯
 Executing approved administrator command…
 === COMPLETION ===
- ca · agent · auto
-> Apply the approved system change
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
+ › Apply the approved system change
 
 
   Approve tool [1/1] — run_privileged
@@ -394,8 +395,7 @@ aaaa
 
 
 
-
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                           │
+╰──────────────────────────────────────────── agent · auto ╯
 Administrator command completed

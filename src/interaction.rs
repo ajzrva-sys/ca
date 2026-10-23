@@ -166,6 +166,7 @@ pub struct PendingInteraction {
     pub id: InteractionId,
     pub tool_call_id: String,
     pub request: InteractionRequest,
+    pub write_access: Option<crate::write_access::WriteAccessRequest>,
 }
 
 impl PendingInteraction {
@@ -174,6 +175,7 @@ impl PendingInteraction {
             id: InteractionId::new(),
             tool_call_id,
             request,
+            write_access: None,
         }
     }
 }
@@ -453,6 +455,24 @@ impl InteractionState {
             KeyCode::Down if count > 0 => {
                 self.selected_index = (self.selected_index + 1).min(count - 1);
             }
+            KeyCode::Char('y' | 'Y')
+                if self.request.mode == InteractionMode::Confirmation
+                    && (modifiers.is_empty() || modifiers == KeyModifiers::SHIFT) =>
+            {
+                if let Some(index) = self.choice_index("yes") {
+                    self.selected_index = index;
+                    return self.activate_choice();
+                }
+            }
+            KeyCode::Char('n' | 'N')
+                if self.request.mode == InteractionMode::Confirmation
+                    && (modifiers.is_empty() || modifiers == KeyModifiers::SHIFT) =>
+            {
+                if let Some(index) = self.choice_index("no") {
+                    self.selected_index = index;
+                    return self.activate_choice();
+                }
+            }
             KeyCode::Char(character @ '1'..='9') if modifiers.is_empty() => {
                 let index = character.to_digit(10).unwrap() as usize - 1;
                 if index < count {
@@ -471,6 +491,13 @@ impl InteractionState {
             _ => {}
         }
         None
+    }
+
+    fn choice_index(&self, value: &str) -> Option<usize> {
+        self.request
+            .choices
+            .iter()
+            .position(|choice| choice.resolved_value() == value)
     }
 
     fn is_editor_mode(&self) -> bool {
@@ -750,6 +777,9 @@ mod tests {
     #[test]
     fn single_multi_confirmation_shortcuts_and_other_are_deterministic() {
         let mut single = InteractionState::host(request(ModelInteractionKind::SingleChoice));
+        assert!(single
+            .handle_key(KeyCode::Char('y'), KeyModifiers::NONE)
+            .is_none());
         let answer = single
             .handle_key(KeyCode::Char('2'), KeyModifiers::NONE)
             .unwrap();
@@ -776,11 +806,24 @@ mod tests {
             allow_other: false,
         })
         .unwrap();
-        let mut confirmation = InteractionState::host(confirmation);
-        let answer = confirmation
+        let mut by_number = InteractionState::host(confirmation.clone());
+        let answer = by_number
             .handle_key(KeyCode::Char('1'), KeyModifiers::NONE)
             .unwrap();
         assert!(answer.outcome.model_result().unwrap().contains("yes"));
+        let mut by_yes = InteractionState::host(confirmation.clone());
+        let answer = by_yes
+            .handle_key(KeyCode::Char('y'), KeyModifiers::NONE)
+            .unwrap();
+        assert!(answer.outcome.model_result().unwrap().contains("yes"));
+        let mut by_no = InteractionState::host(confirmation);
+        let answer = by_no
+            .handle_key(KeyCode::Char('N'), KeyModifiers::SHIFT)
+            .unwrap();
+        assert_eq!(
+            answer.outcome.model_result().unwrap(),
+            r#"{"selected":["no"]}"#
+        );
 
         let mut other = InteractionState::host(request(ModelInteractionKind::SingleChoice));
         other.handle_key(KeyCode::Char('3'), KeyModifiers::NONE);

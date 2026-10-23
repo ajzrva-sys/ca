@@ -212,7 +212,7 @@ fn git(root: &Path, home: &Path, args: &[&str]) -> Result<()> {
     }
     crate::harness_idle::preparation_boundary()?;
     let mut child = Child(
-        Command::new("/usr/bin/git")
+        Command::new(ca_automation::git_metadata::EXECUTABLE)
             .args([
                 "-c",
                 "core.hooksPath=/dev/null",
@@ -369,7 +369,7 @@ pub(crate) fn resolve(
 pub(crate) mod tests {
     use super::*;
     fn git_read(root: &Path, args: &[&str]) -> Vec<u8> {
-        let output = std::process::Command::new("/usr/bin/git")
+        let output = std::process::Command::new(ca_automation::git_metadata::EXECUTABLE)
             .args(args)
             .current_dir(root)
             .env("GIT_CONFIG_NOSYSTEM", "1")

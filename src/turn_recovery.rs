@@ -7,6 +7,7 @@ const MAX_FAILURES: usize = 20;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Category {
     Timeout,
+    FirstTokenTimeout,
     Connect,
     Transport,
     Http(u16),
@@ -15,18 +16,23 @@ pub(crate) enum Category {
     Protocol,
     Incomplete,
     Refused,
+    FilterStopped,
 }
 
 impl Category {
     pub(crate) fn of(error: &ProviderError) -> Self {
         match error {
             ProviderError::Transport(ProviderTransportFailure::Timeout) => Self::Timeout,
+            ProviderError::Transport(ProviderTransportFailure::FirstTokenTimeout) => {
+                Self::FirstTokenTimeout
+            }
             ProviderError::Transport(ProviderTransportFailure::Connect) => Self::Connect,
             ProviderError::Transport(_) => Self::Transport,
-            ProviderError::Http { status } => Self::Http(*status),
+            ProviderError::Http { status, .. } => Self::Http(*status),
             ProviderError::PrematureEof => Self::PrematureEof,
             ProviderError::MissingEnvironment(_) => Self::Authentication,
             ProviderError::ResponseRefused => Self::Refused,
+            ProviderError::FilterStopped { .. } => Self::FilterStopped,
             ProviderError::IncompleteFinish(_)
             | ProviderError::ResponseIncomplete
             | ProviderError::OutputTokenLimit
@@ -39,6 +45,7 @@ impl Category {
         matches!(
             self,
             Self::Timeout
+                | Self::FirstTokenTimeout
                 | Self::Connect
                 | Self::Transport
                 | Self::PrematureEof
@@ -48,7 +55,8 @@ impl Category {
 
     pub(crate) fn label(self) -> String {
         match self {
-            Self::Timeout => "request timeout".into(),
+            Self::Timeout => "stream stall".into(),
+            Self::FirstTokenTimeout => "first token timeout".into(),
             Self::Connect => "connection failed".into(),
             Self::Transport => "transport failed".into(),
             Self::Http(status) => format!("HTTP {status}"),
@@ -57,6 +65,7 @@ impl Category {
             Self::Protocol => "invalid provider stream".into(),
             Self::Incomplete => "incomplete provider response".into(),
             Self::Refused => "provider refused response".into(),
+            Self::FilterStopped => "provider filter stopped".into(),
         }
     }
 }
@@ -121,6 +130,7 @@ struct Failure {
     category: Category,
     resolution: &'static str,
     save_error: Option<String>,
+    provider_detail: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -131,6 +141,9 @@ pub(crate) struct State {
     pub notice: Option<String>,
     pub continuation: Option<ContinuationRequest>,
     pub continuation_retry_used: bool,
+    /// Last prepared route survives taking a frozen continuation for retry.
+    /// Contains identifiers only, never request bodies or credentials.
+    pub request_route: Option<(String, String)>,
     failures: VecDeque<Failure>,
 }
 
@@ -148,6 +161,7 @@ impl State {
         self.notice = None;
         self.continuation = None;
         self.continuation_retry_used = false;
+        self.request_route = None;
         self.context = user_index.map(|user_index| Context {
             user_index,
             user_timestamp: None,
@@ -172,6 +186,7 @@ impl State {
         self.pending = false;
         self.before_submit_effects = false;
         self.continuation = None;
+        self.request_route = None;
         self.resolve("cancelled");
     }
 
@@ -185,7 +200,27 @@ impl State {
             category,
             resolution: "manual retry available",
             save_error: None,
+            provider_detail: None,
         });
+    }
+
+    pub(crate) fn record_error(&mut self, provider: &str, model: &str, error: &ProviderError) {
+        self.record(provider, model, Category::of(error));
+        if let ProviderError::Http {
+            body_excerpt: Some(detail),
+            ..
+        } = error
+        {
+            if let Some(failure) = self.failures.back_mut() {
+                failure.provider_detail = Some(
+                    crate::terminal_text::sanitize_terminal_text(detail)
+                        .chars()
+                        .map(|ch| if ch.is_control() { ' ' } else { ch })
+                        .take(512)
+                        .collect(),
+                );
+            }
+        }
     }
 
     pub(crate) fn resolve(&mut self, resolution: &'static str) {
@@ -223,8 +258,14 @@ impl State {
             if let Some(error) = &failure.save_error {
                 output.push_str(&format!("  {error}\n"));
             }
+            if let Some(detail) = &failure.provider_detail {
+                output.push_str(&format!("  Provider: {detail}\n"));
+                if failure.category == Category::Http(400) && detail.contains("reasoning_content") {
+                    output.push_str("  Older history may lack required reasoning. Use /new to start a clean conversation.\n");
+                }
+            }
         }
-        output.push_str("\nProvider bodies, prompts and credentials are not retained here.\n/errors dismiss clears the footer; /retry creates a manual branch.\n");
+        output.push_str("\nOnly bounded, redacted provider error messages are shown. Prompts and credentials are not retained here.\n/errors dismiss clears the footer; /retry creates a manual branch.\n");
         output
     }
 }
@@ -239,19 +280,44 @@ mod tests {
             Category::of(&ProviderError::ResponseIncomplete)
         );
         for error in [
-            ProviderError::Http { status: 400 },
-            ProviderError::Http { status: 401 },
-            ProviderError::Http { status: 403 },
+            ProviderError::Http {
+                status: 400,
+                body_excerpt: None,
+            },
+            ProviderError::Http {
+                status: 401,
+                body_excerpt: None,
+            },
+            ProviderError::Http {
+                status: 403,
+                body_excerpt: None,
+            },
             ProviderError::Protocol("secret".into()),
             ProviderError::ResponseIncomplete,
             ProviderError::OutputTokenLimit,
             ProviderError::ResponseRefused,
+            ProviderError::FilterStopped {
+                rule: "rule".into(),
+            },
         ] {
             assert!(!Category::of(&error).retryable());
             assert!(!Category::of(&error).label().contains("secret"));
         }
         assert!(Category::of(&ProviderError::PrematureEof).retryable());
         assert!(Category::Http(503).retryable());
+    }
+
+    #[test]
+    fn prepared_route_is_cleared_on_begin_and_cancel() {
+        let mut state = State {
+            request_route: Some(("mimo".into(), "mimo-v2.6-pro".into())),
+            ..Default::default()
+        };
+        state.begin(Some(0), 1);
+        assert!(state.request_route.is_none());
+        state.request_route = Some(("mimo".into(), "mimo-v2.6-pro".into()));
+        state.cancel();
+        assert!(state.request_route.is_none());
     }
 
     #[test]

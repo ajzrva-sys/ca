@@ -1,0 +1,44 @@
+---
+source: src/tui/render_tests.rs
+expression: text
+---
+ ca v0.0.0 │ /workspace/ca                                                                                                                                     78K / 256K │ [Dashboard]
+
+ › Review this workspace for public release.
+
+◆ Thought for 29.7s
+I am checking the release surfaces.
+
+  ┌────────────────────────────────────────────────────────────┐
+  │ rust
+  │ fn ready(checks: usize) -> bool { checks > 0 }
+  └────────────────────────────────────────────────────────────┘
+
+
+  ▾ Subagents 1
+  ◆ Reviewer Public release · Waiting for response…                                                                                                          fixture-review-model 7m07s
+  Ctrl+X J view agents
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                                                                                                                                                       │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── agent · Fixture (high) ╯
+2 messages · / commands

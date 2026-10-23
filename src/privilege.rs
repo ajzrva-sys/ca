@@ -18,7 +18,7 @@ const MAX_FIELD_BYTES: usize = 4 * 1024;
 const MAX_INVOCATION_BYTES: usize = 32 * 1024;
 const PRIVATE_CAPTURE_BYTES: usize = 64 * 1024;
 const MAX_TIMEOUT_SECS: u64 = 60 * 60;
-const CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
+const AUTHORIZATION_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const PRIVATE_READER_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
 const PRIVATE_TERM_RELAY_GRACE: Duration = Duration::from_secs(2);
 const PROCESS_GROUP_TERM_GRACE: Duration = Duration::from_millis(100);
@@ -147,7 +147,7 @@ impl std::fmt::Debug for SupervisorHandle {
 }
 
 fn cleanup_latched_message() -> String {
-    "Privilege execution is disabled for this process because sudo credential cleanup failed or was indeterminate; run sudo -k manually before restarting ca".into()
+    "Privilege execution is disabled for this process because private process cleanup failed or was indeterminate; restart ca before requesting another administrator command".into()
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -968,74 +968,6 @@ impl Drop for SecretPattern {
     }
 }
 
-struct CleanupTicket {
-    invocation: PreparedPrivilegeInvocation,
-    armed: bool,
-}
-
-impl CleanupTicket {
-    fn new(invocation: PreparedPrivilegeInvocation) -> Self {
-        Self {
-            invocation,
-            armed: true,
-        }
-    }
-
-    async fn complete(mut self) -> Result<(), String> {
-        self.armed = false;
-        final_invalidate(&self.invocation).await
-    }
-}
-
-impl std::fmt::Debug for CleanupTicket {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("CleanupTicket([HOST ONLY])")
-    }
-}
-
-impl Drop for CleanupTicket {
-    fn drop(&mut self) {
-        if !self.armed {
-            return;
-        }
-        self.armed = false;
-        let invocation = self.invocation.clone();
-        match tokio::runtime::Handle::try_current() {
-            Ok(runtime) => {
-                let cleanup_guard = CleanupFailureGuard::new(invocation.supervisor.clone());
-                runtime.spawn(final_invalidate_guarded(invocation, cleanup_guard));
-            }
-            Err(_) => invocation.supervisor.disable_after_cleanup_failure(),
-        }
-    }
-}
-
-struct CleanupFailureGuard {
-    supervisor: SupervisorHandle,
-    completed: bool,
-}
-
-impl CleanupFailureGuard {
-    fn new(supervisor: SupervisorHandle) -> Self {
-        Self {
-            supervisor,
-            completed: false,
-        }
-    }
-
-    fn disarm(&mut self) {
-        self.completed = true;
-    }
-}
-
-impl Drop for CleanupFailureGuard {
-    fn drop(&mut self) {
-        if !self.completed {
-            self.supervisor.disable_after_cleanup_failure();
-        }
-    }
-}
-
 struct StreamingRedactor {
     pattern: Arc<SecretPattern>,
     pending: Vec<u8>,
@@ -1603,18 +1535,6 @@ async fn deliver_askpass_once(
     result
 }
 
-fn revalidate_helper_binding(invocation: &PreparedPrivilegeInvocation) -> Result<(), String> {
-    let current = if invocation.production_trust {
-        trusted_native_identity(&invocation.helper, true)?
-    } else {
-        identity(&invocation.helper)?
-    };
-    if current != invocation.helper_identity {
-        return Err("The approved privilege helper binding changed".into());
-    }
-    Ok(())
-}
-
 fn latch_cleanup_failure(invocation: &PreparedPrivilegeInvocation) -> String {
     invocation.supervisor.disable_after_cleanup_failure();
     cleanup_latched_message()
@@ -1627,72 +1547,9 @@ fn private_cleanup_indeterminate(error: &str) -> bool {
         || error.contains("process group state")
 }
 
-async fn initial_invalidate(
-    invocation: &PreparedPrivilegeInvocation,
-    cancel: watch::Receiver<bool>,
-) -> Result<(), String> {
-    if revalidate_helper_binding(invocation).is_err() {
-        return Err(latch_cleanup_failure(invocation));
-    }
-    let output = run_private_process_owned(
-        invocation.helper.clone(),
-        vec!["-k".into()],
-        PathBuf::from("/"),
-        None,
-        CLEANUP_TIMEOUT,
-        None,
-        None,
-        cancel,
-    )
-    .await;
-    match output {
-        Ok(PrivateProcessOutput {
-            status: crate::jobs::JobStatus::Completed { exit_code: 0 },
-            ..
-        }) => Ok(()),
-        Err(error) if error.contains("cancelled") => Err(error),
-        _ => Err(latch_cleanup_failure(invocation)),
-    }
-}
-
-async fn final_invalidate(invocation: &PreparedPrivilegeInvocation) -> Result<(), String> {
-    let cleanup_guard = CleanupFailureGuard::new(invocation.supervisor.clone());
-    final_invalidate_guarded(invocation.clone(), cleanup_guard).await
-}
-
-async fn final_invalidate_guarded(
-    invocation: PreparedPrivilegeInvocation,
-    mut cleanup_guard: CleanupFailureGuard,
-) -> Result<(), String> {
-    let result = async {
-        revalidate_helper_binding(&invocation)?;
-        let arguments = vec!["-k".into()];
-        let output = run_private_process(
-            invocation.helper(),
-            &arguments,
-            Path::new("/"),
-            CLEANUP_TIMEOUT,
-            None,
-            None,
-        )
-        .await?;
-        match output.status {
-            crate::jobs::JobStatus::Completed { exit_code: 0 } => Ok(()),
-            _ => Err("sudo credential invalidation did not complete".to_string()),
-        }
-    }
-    .await;
-    match result {
-        Ok(()) => {
-            cleanup_guard.disarm();
-            Ok(())
-        }
-        Err(_) => Err(cleanup_latched_message()),
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CachedAuthorization {
+    Available,
     PasswordRequired,
 }
 
@@ -1701,7 +1558,28 @@ pub async fn check_cached_authorization(
     owner: crate::jobs::JobOwner,
 ) -> Result<CachedAuthorization, String> {
     invocation.revalidate(owner)?;
-    Ok(CachedAuthorization::PasswordRequired)
+    let output = run_private_process(
+        invocation.helper(),
+        &["-n".into(), "-v".into()],
+        Path::new("/"),
+        AUTHORIZATION_PROBE_TIMEOUT,
+        None,
+        None,
+    )
+    .await
+    .map_err(|error| {
+        if private_cleanup_indeterminate(&error) {
+            latch_cleanup_failure(invocation)
+        } else {
+            error
+        }
+    })?;
+    invocation.revalidate(owner)?;
+    match output.status {
+        crate::jobs::JobStatus::Completed { exit_code: 0 } => Ok(CachedAuthorization::Available),
+        crate::jobs::JobStatus::Failed { .. } => Ok(CachedAuthorization::PasswordRequired),
+        _ => Err("Administrator authorization check timed out or did not complete".into()),
+    }
 }
 
 pub async fn authenticate(
@@ -1719,40 +1597,20 @@ pub async fn execute(
     timeout: Duration,
     pattern: Option<Arc<SecretPattern>>,
 ) -> crate::agent::registry::ToolExecutionResult {
-    let cleanup = CleanupTicket::new(invocation.clone());
     let (cancel_tx, cancel_rx) = watch::channel(false);
     let mut cancel = CancelOnDrop(Some(cancel_tx));
-    let task = tokio::spawn(execute_owned(
-        invocation.clone(),
-        owner,
-        timeout,
-        pattern,
-        cleanup,
-        cancel_rx,
-    ));
+    let owned_invocation = invocation.clone();
+    let task = tokio::spawn(async move {
+        execute_inner(&owned_invocation, owner, timeout, pattern, cancel_rx).await
+    });
     match task.await {
         Ok(result) => {
             cancel.disarm();
             result
         }
-        Err(_) => crate::agent::registry::ToolExecutionResult::Failure(
-            "Private privilege execution supervisor failed".into(),
-        ),
-    }
-}
-
-async fn execute_owned(
-    invocation: PreparedPrivilegeInvocation,
-    owner: crate::jobs::JobOwner,
-    runtime_timeout: Duration,
-    pattern: Option<Arc<SecretPattern>>,
-    cleanup: CleanupTicket,
-    cancel: watch::Receiver<bool>,
-) -> crate::agent::registry::ToolExecutionResult {
-    let result = execute_inner(&invocation, owner, runtime_timeout, pattern, cancel).await;
-    match cleanup.complete().await {
-        Ok(()) => result,
-        Err(error) => crate::agent::registry::ToolExecutionResult::Failure(error),
+        Err(_) => {
+            crate::agent::registry::ToolExecutionResult::Failure(latch_cleanup_failure(invocation))
+        }
     }
 }
 
@@ -1766,11 +1624,6 @@ async fn execute_inner(
     if let Err(error) = invocation.revalidate(owner) {
         return crate::agent::registry::ToolExecutionResult::Failure(error);
     }
-    let Some(pattern) = pattern else {
-        return crate::agent::registry::ToolExecutionResult::Failure(
-            "A fresh masked administrator password is required for this exact command".into(),
-        );
-    };
     let temporary_directory = match create_private_temporary_directory() {
         Ok(directory) => directory,
         Err(_) => {
@@ -1784,8 +1637,10 @@ async fn execute_inner(
         return crate::agent::registry::ToolExecutionResult::Failure(error);
     }
     let fifo = temporary_path.join("askpass");
-    if let Err(error) = create_private_fifo(&fifo) {
-        return crate::agent::registry::ToolExecutionResult::Failure(error);
+    if pattern.is_some() {
+        if let Err(error) = create_private_fifo(&fifo) {
+            return crate::agent::registry::ToolExecutionResult::Failure(error);
+        }
     }
     let roots = invocation.roots.clone();
     let prepared = crate::sandbox::SandboxBackend::new(invocation.sandbox_mode)
@@ -1809,17 +1664,6 @@ async fn execute_inner(
             {
                 return crate::agent::registry::ToolExecutionResult::Failure(error);
             }
-            let Some(secret) = pattern.take_secret() else {
-                return crate::agent::registry::ToolExecutionResult::Failure(
-                    "The masked administrator password was already consumed".into(),
-                );
-            };
-            if let Err(error) = initial_invalidate(invocation, cancel.clone()).await {
-                return crate::agent::registry::ToolExecutionResult::Failure(error);
-            }
-            if let Err(error) = invocation.revalidate(owner) {
-                return crate::agent::registry::ToolExecutionResult::Failure(error);
-            }
             let bound_cwd =
                 match open_bound_working_directory(&invocation.cwd, &invocation.cwd_identity) {
                     Ok(directory) => directory,
@@ -1827,14 +1671,28 @@ async fn execute_inner(
                         return crate::agent::registry::ToolExecutionResult::Failure(error);
                     }
                 };
-            let mut arguments = vec![
-                "-A".into(),
-                "-p".into(),
-                fifo.to_string_lossy().into_owned(),
-                "-k".into(),
-                "-H".into(),
-                "--".into(),
-            ];
+            let (mut arguments, askpass) = if let Some(pattern) = pattern.as_ref() {
+                let Some(secret) = pattern.take_secret() else {
+                    return crate::agent::registry::ToolExecutionResult::Failure(
+                        "The masked administrator password was already consumed".into(),
+                    );
+                };
+                (
+                    vec![
+                        "-A".into(),
+                        "-p".into(),
+                        fifo.to_string_lossy().into_owned(),
+                    ],
+                    Some(PrivateAskpassInput {
+                        program: invocation.askpass.clone(),
+                        fifo,
+                        secret,
+                    }),
+                )
+            } else {
+                (vec!["-n".into()], None)
+            };
+            arguments.extend(["-H".into(), "--".into()]);
             arguments.push(prepared.program.to_string_lossy().into_owned());
             arguments.extend(prepared.arguments);
             let result = run_private_process_owned(
@@ -1843,12 +1701,8 @@ async fn execute_inner(
                 invocation.cwd.clone(),
                 Some(bound_cwd),
                 invocation.effective_timeout(runtime_timeout),
-                Some(PrivateAskpassInput {
-                    program: invocation.askpass.clone(),
-                    fifo,
-                    secret,
-                }),
-                Some(pattern),
+                askpass,
+                pattern,
                 cancel,
             )
             .await;
@@ -1885,6 +1739,7 @@ async fn execute_inner(
         model_text: job.formatted_output(),
         observation: crate::command_output::CommandObservation::from_job(&job, false),
         success,
+        mutation: None,
     }
 }
 
@@ -1983,23 +1838,37 @@ log=$base/sudo-log
   printf 'SUDO_ASKPASS=%s\n' "${SUDO_ASKPASS-}"
   printf 'END\n'
 } >> "$log"
-if [ "$1" = "-k" ] && [ "$#" = 1 ]; then
-  if [ -f "$base/fail-cleanup" ]; then exit 1; fi
-  exit 0
+if [ "$1" = "-n" ] && [ "$2" = "-v" ] && [ "$#" = 2 ]; then
+  [ -f "$base/timestamp" ] || [ -f "$base/nopasswd" ]
+  exit $?
 fi
-if [ "$1" = "-A" ] && [ "$2" = "-p" ] && [ "$4" = "-k" ] && [ "$5" = "-H" ] && [ "$6" = "--" ]; then
+if [ "$1" = "-A" ] && [ "$2" = "-p" ]; then
   prompt=$3
+  shift 3
+  [ "$1" = "-H" ] && [ "$2" = "--" ] || exit 64
+  shift 2
   printf '%s' "$$" > "$base/pid"
-  if [ ! -f "$base/nopasswd" ]; then
+  if [ ! -f "$base/nopasswd" ] && [ ! -f "$base/timestamp" ]; then
     if [ -f "$base/slow-before-askpass" ]; then sleep 2; fi
-    : > "$base/askpass-invoked"
+    printf 'asked\n' >> "$base/askpass-invoked"
     [ "${SUDO_ASKPASS-}" = "/bin/cat" ] || exit 65
     password=$("$SUDO_ASKPASS" "$prompt") || exit 66
     if [ -f "$base/reject-password" ]; then exit 1; fi
     printf 'sudo-out:%s' "$password"
     printf 'sudo-err:%s' "$password" >&2
   fi
-  shift 6
+  : > "$base/timestamp"
+elif [ "$1" = "-n" ] && [ "$2" = "-H" ] && [ "$3" = "--" ]; then
+  if [ ! -f "$base/timestamp" ] && [ ! -f "$base/nopasswd" ]; then
+    printf 'sudo: a password is required\n' >&2
+    exit 1
+  fi
+  printf '%s' "$$" > "$base/pid"
+  shift 3
+else
+  exit 64
+fi
+  printf 'executed\n' >> "$base/target-executed"
   : > "$argv"
   for value in "$@"; do printf '%s\n' "$value" >> "$argv"; done
   unset SUDO_ASKPASS
@@ -2012,8 +1881,6 @@ if [ "$1" = "-A" ] && [ "$2" = "-p" ] && [ "$4" = "-k" ] && [ "$5" = "-H" ] && [
     exit $?
   fi
   exec "$@"
-fi
-exit 64
 "##,
         );
         write_executable(
@@ -2035,7 +1902,6 @@ case "$1" in
   --sleep) sleep 5 ;;
   --linger) (sleep 0.25; printf survived > "$2") & wait ;;
   --leader-exits) (sleep 0.25; printf survived > "$2") & exit 0 ;;
-  --cleanup-fail) : > "$base/fail-cleanup" ;;
 esac
 printf 'target-ok\n'
 "##,
@@ -2086,16 +1952,18 @@ printf 'target-ok\n'
     }
 
     #[cfg(unix)]
-    async fn wait_for_log_matches(path: &Path, pattern: &str, count: usize) -> String {
-        for _ in 0..200 {
-            if let Ok(log) = std::fs::read_to_string(path) {
-                if log.matches(pattern).count() >= count {
-                    return log;
-                }
+    async fn wait_for_process_exit(pid: i32) {
+        for _ in 0..300 {
+            if unsafe { libc::kill(pid, 0) } == -1 {
+                assert_eq!(
+                    std::io::Error::last_os_error().raw_os_error(),
+                    Some(libc::ESRCH)
+                );
+                return;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        panic!("fake privilege helper did not record {count} matches for {pattern:?}");
+        panic!("fake privilege process {pid} was not reaped");
     }
 
     #[cfg(unix)]
@@ -2229,6 +2097,44 @@ printf 'target-ok\n'
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn fake_sudo_reuses_os_cache_between_separately_approved_commands() {
+        let (directory, first) = fake_privilege_fixture();
+        let owner = crate::jobs::JobOwner::process();
+        assert_eq!(
+            check_cached_authorization(&first, owner).await.unwrap(),
+            CachedAuthorization::PasswordRequired
+        );
+        let pattern = authenticate(&first, owner, secret_handle("ca-once-62e4"))
+            .await
+            .unwrap();
+        let result = execute(&first, owner, Duration::from_secs(2), Some(pattern)).await;
+        assert!(result.is_success(), "{result:?}");
+        let second = PreparedPrivilegeInvocation::prepare_for_test(
+            first.program.clone(),
+            vec!["second command".into()],
+            first.cwd.clone(),
+            first.helper.clone(),
+            crate::sandbox::SandboxMode::Off,
+            first.roots.clone(),
+            owner,
+        )
+        .unwrap();
+        assert!(first.one_use != second.one_use);
+        let cached = check_cached_authorization(&second, owner).await.unwrap();
+        assert_eq!(cached, CachedAuthorization::Available);
+        let result = execute(&second, owner, Duration::from_secs(2), None).await;
+        assert!(result.is_success(), "{result:?}");
+        let asks = std::fs::read_to_string(directory.path().join("askpass-invoked")).unwrap();
+        assert_eq!(asks.lines().count(), 1);
+        let targets = std::fs::read_to_string(directory.path().join("target-executed")).unwrap();
+        assert_eq!(targets.lines().count(), 2);
+        let log = std::fs::read_to_string(directory.path().join("sudo-log")).unwrap();
+        assert!(!log.contains("ARG=-k\n"), "{log}");
+        assert_no_regular_file_contains(directory.path(), b"ca-once-62e4");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn fake_sudo_direct_password_flow_preserves_argv_and_closes_target_stdin() {
         let (directory, invocation) = fake_privilege_fixture();
         let owner = crate::jobs::JobOwner::process();
@@ -2238,11 +2144,15 @@ printf 'target-ok\n'
                 .unwrap(),
             CachedAuthorization::PasswordRequired
         );
-        assert!(!directory.path().join("sudo-log").exists());
+        let probe_log = std::fs::read_to_string(directory.path().join("sudo-log")).unwrap();
+        assert!(probe_log.starts_with("BEGIN\nARG=-n\nARG=-v\n"));
         let pattern = authenticate(&invocation, owner, secret_handle("correct horse"))
             .await
             .unwrap();
-        assert!(!directory.path().join("sudo-log").exists());
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("sudo-log")).unwrap(),
+            probe_log
+        );
         let execution = execute(&invocation, owner, Duration::from_secs(2), Some(pattern)).await;
         assert!(execution.is_success(), "{execution:?}");
         assert!(!execution.model_text().contains("correct horse"));
@@ -2308,6 +2218,12 @@ printf 'target-ok\n'
     async fn fake_sudo_uses_a_minimal_environment_and_exact_supervisor_order() {
         let (directory, invocation) = fake_privilege_fixture();
         let owner = crate::jobs::JobOwner::process();
+        assert_eq!(
+            check_cached_authorization(&invocation, owner)
+                .await
+                .unwrap(),
+            CachedAuthorization::PasswordRequired
+        );
         let pattern = authenticate(&invocation, owner, secret_handle("correct horse"))
             .await
             .unwrap();
@@ -2320,17 +2236,12 @@ printf 'target-ok\n'
             .split("BEGIN\n")
             .filter(|entry| !entry.is_empty())
             .collect::<Vec<_>>();
-        assert_eq!(invocations.len(), 3, "{log}");
-        assert!(invocations[0].starts_with("ARG=-k\n"), "{log}");
+        assert_eq!(invocations.len(), 2, "{log}");
+        assert!(invocations[0].starts_with("ARG=-n\nARG=-v\n"), "{log}");
         assert!(invocations[1].starts_with("ARG=-A\nARG=-p\nARG="), "{log}");
-        assert!(
-            invocations[1].contains("\nARG=-k\nARG=-H\nARG=--\n"),
-            "{log}"
-        );
-        assert!(invocations[2].starts_with("ARG=-k\n"), "{log}");
-        assert!(!log.contains("ARG=-v\n"), "{log}");
+        assert!(invocations[1].contains("\nARG=-H\nARG=--\n"), "{log}");
+        assert!(!log.contains("ARG=-k\n"), "{log}");
         assert!(!log.contains("ARG=-S\n"), "{log}");
-        assert!(!log.contains("ARG=-n\n"), "{log}");
         for (index, invocation) in invocations.into_iter().enumerate() {
             assert!(invocation.contains(&format!("PATH={fixed_path}\n")));
             assert!(invocation.contains("LC_ALL=C\n"));
@@ -2353,80 +2264,101 @@ printf 'target-ok\n'
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn authorization_check_is_side_effect_free_and_nopasswd_never_reads_secret() {
-        let (password_directory, password_invocation) = fake_privilege_fixture();
+    async fn authorization_check_uses_os_cache_and_nopasswd_never_reads_secret() {
+        let (directory, invocation) = fake_privilege_fixture();
         let owner = crate::jobs::JobOwner::process();
         assert_eq!(
-            check_cached_authorization(&password_invocation, owner)
+            check_cached_authorization(&invocation, owner)
                 .await
                 .unwrap(),
             CachedAuthorization::PasswordRequired
         );
-        assert!(!password_directory.path().join("sudo-log").exists());
-        let pattern = authenticate(
-            &password_invocation,
-            owner,
-            secret_handle("ca-secret-84f02e"),
-        )
-        .await
-        .unwrap();
-        let result = execute(
-            &password_invocation,
-            owner,
-            Duration::from_secs(5),
-            Some(pattern),
-        )
-        .await;
-        assert!(result.is_success(), "{result:?}");
-        let log = std::fs::read_to_string(password_directory.path().join("sudo-log")).unwrap();
-        let calls = log
-            .split("BEGIN\n")
-            .filter(|entry| !entry.is_empty())
-            .collect::<Vec<_>>();
-        assert_eq!(calls.len(), 3, "{log}");
-        assert!(calls[0].starts_with("ARG=-k\n"), "{log}");
-        assert!(calls[1].starts_with("ARG=-A\nARG=-p\n"), "{log}");
-        assert!(calls[1].contains("\nARG=-k\nARG=-H\nARG=--\n"), "{log}");
-        assert!(calls[2].starts_with("ARG=-k\n"), "{log}");
-        assert!(!log.contains("ARG=-v\n"), "{log}");
+        assert!(!directory.path().join("askpass-invoked").exists());
+        assert!(!directory.path().join("target-executed").exists());
+        let log = std::fs::read_to_string(directory.path().join("sudo-log")).unwrap();
+        assert_eq!(log.matches("BEGIN\n").count(), 1);
+        assert!(log.starts_with("BEGIN\nARG=-n\nARG=-v\n"), "{log}");
 
-        let (nopasswd_directory, nopasswd_invocation) = fake_privilege_fixture();
-        std::fs::write(nopasswd_directory.path().join("nopasswd"), "").unwrap();
+        std::fs::write(directory.path().join("nopasswd"), "").unwrap();
         assert_eq!(
-            check_cached_authorization(&nopasswd_invocation, owner)
+            check_cached_authorization(&invocation, owner)
                 .await
                 .unwrap(),
-            CachedAuthorization::PasswordRequired
+            CachedAuthorization::Available
         );
-        assert!(!nopasswd_directory.path().join("sudo-log").exists());
-        let pattern = authenticate(&nopasswd_invocation, owner, secret_handle("ca-unused-0a8b"))
-            .await
-            .unwrap();
-        let result = execute(
-            &nopasswd_invocation,
-            owner,
-            Duration::from_secs(5),
-            Some(pattern),
-        )
-        .await;
+        let result = execute(&invocation, owner, Duration::from_secs(2), None).await;
         assert!(result.is_success(), "{result:?}");
-        assert!(!nopasswd_directory.path().join("askpass-invoked").exists());
-        assert!(!result.model_text().contains("ca-unused-0a8b"));
-        assert_no_regular_file_contains(nopasswd_directory.path(), b"ca-unused-0a8b");
-        let log = std::fs::read_to_string(nopasswd_directory.path().join("sudo-log")).unwrap();
+        assert!(!directory.path().join("askpass-invoked").exists());
+        let log = std::fs::read_to_string(directory.path().join("sudo-log")).unwrap();
         let calls = log
             .split("BEGIN\n")
             .filter(|entry| !entry.is_empty())
             .collect::<Vec<_>>();
         assert_eq!(calls.len(), 3, "{log}");
-        assert!(calls[0].starts_with("ARG=-k\n"), "{log}");
-        assert!(calls[1].starts_with("ARG=-A\nARG=-p\n"), "{log}");
-        assert!(calls[2].starts_with("ARG=-k\n"), "{log}");
+        assert!(calls[2].starts_with("ARG=-n\nARG=-H\nARG=--\n"), "{log}");
+        assert!(
+            calls.iter().all(|call| call.contains("SUDO_ASKPASS=\n")),
+            "{log}"
+        );
+        assert!(!log.contains("ARG=-k\n"), "{log}");
     }
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn fake_sudo_finally_invalidates_after_password_rejection_and_target_timeout() {
+    async fn expired_os_cache_needs_authentication_without_running_the_target() {
+        let (directory, first) = fake_privilege_fixture();
+        let owner = crate::jobs::JobOwner::process();
+        std::fs::write(directory.path().join("timestamp"), "").unwrap();
+        assert_eq!(
+            check_cached_authorization(&first, owner).await.unwrap(),
+            CachedAuthorization::Available
+        );
+        std::fs::remove_file(directory.path().join("timestamp")).unwrap();
+        let expired = execute(&first, owner, Duration::from_secs(2), None).await;
+        assert!(!expired.is_success());
+        assert!(expired.model_text().contains("a password is required"));
+        assert!(!directory.path().join("target-executed").exists());
+        assert!(!directory.path().join("askpass-invoked").exists());
+
+        let retry = PreparedPrivilegeInvocation::prepare_for_test(
+            first.program.clone(),
+            first.args.clone(),
+            first.cwd.clone(),
+            first.helper.clone(),
+            crate::sandbox::SandboxMode::Off,
+            first.roots.clone(),
+            owner,
+        )
+        .unwrap();
+        assert_eq!(
+            check_cached_authorization(&retry, owner).await.unwrap(),
+            CachedAuthorization::PasswordRequired
+        );
+        let pattern = authenticate(&retry, owner, secret_handle("ca-renewed-9ee7"))
+            .await
+            .unwrap();
+        let result = execute(&retry, owner, Duration::from_secs(2), Some(pattern)).await;
+        assert!(result.is_success(), "{result:?}");
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("askpass-invoked"))
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("target-executed"))
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
+        assert_no_regular_file_contains(directory.path(), b"ca-renewed-9ee7");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn fake_sudo_rejects_wrong_password_and_preserves_timeout_cleanup() {
         let (auth_directory, auth_invocation) = fake_privilege_fixture();
         let owner = crate::jobs::JobOwner::process();
         std::fs::write(auth_directory.path().join("reject-password"), "").unwrap();
@@ -2443,7 +2375,10 @@ printf 'target-ok\n'
         assert!(!rejected.is_success());
         assert!(!rejected.model_text().contains("ca-rejected-e11a"));
         let auth_log = std::fs::read_to_string(auth_directory.path().join("sudo-log")).unwrap();
-        assert_eq!(auth_log.matches("ARG=-k\n").count(), 3, "{auth_log}");
+        assert_eq!(auth_log.matches("BEGIN\n").count(), 1, "{auth_log}");
+        assert!(!auth_log.contains("ARG=-k\n"), "{auth_log}");
+        assert!(!auth_directory.path().join("target-executed").exists());
+        assert!(!auth_directory.path().join("timestamp").exists());
 
         let (timeout_directory, timeout_base) = fake_privilege_fixture();
         let timeout = PreparedPrivilegeInvocation::prepare_for_test(
@@ -2465,11 +2400,12 @@ printf 'target-ok\n'
         let timeout_log =
             std::fs::read_to_string(timeout_directory.path().join("sudo-log")).unwrap();
         assert!(
-            timeout_log.contains("ARG=-A\nARG=-p\n")
-                && timeout_log.contains("ARG=-k\nARG=-H\nARG=--\n"),
+            timeout_log.contains("ARG=-A\nARG=-p\n") && timeout_log.contains("ARG=-H\nARG=--\n"),
             "{timeout_log}\n{execution:?}"
         );
-        assert_eq!(timeout_log.matches("ARG=-k\n").count(), 3, "{timeout_log}");
+        assert!(!timeout_log.contains("ARG=-k\n"), "{timeout_log}");
+        let pid = wait_for_pid(&timeout_directory.path().join("pid")).await;
+        wait_for_process_exit(pid).await;
     }
 
     #[cfg(unix)]
@@ -2490,7 +2426,7 @@ printf 'target-ok\n'
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn cancelling_direct_handoff_reaps_the_group_and_finally_invalidates() {
+    async fn cancelling_direct_handoff_reaps_the_group_without_invalidating_os_cache() {
         let owner = crate::jobs::JobOwner::process();
         let (cancel_directory, cancel_invocation) = fake_privilege_fixture();
         let cancel_invocation = PreparedPrivilegeInvocation::prepare_for_test(
@@ -2518,14 +2454,14 @@ printf 'target-ok\n'
         let pid = wait_for_pid(&cancel_directory.path().join("pid")).await;
         task.abort();
         let _ = task.await;
-        let cancel_log =
-            wait_for_log_matches(&cancel_directory.path().join("sudo-log"), "ARG=-k\n", 3).await;
+        wait_for_process_exit(pid).await;
+        let cancel_log = std::fs::read_to_string(cancel_directory.path().join("sudo-log")).unwrap();
         assert_eq!(
             unsafe { libc::kill(pid, 0) },
             -1,
             "cancelled direct sudo child was not reaped"
         );
-        assert_eq!(cancel_log.matches("ARG=-k\n").count(), 3, "{cancel_log}");
+        assert!(!cancel_log.contains("ARG=-k\n"), "{cancel_log}");
         assert!(!cancel_log.contains("ca-cancel-194a"));
     }
 
@@ -2576,7 +2512,8 @@ printf 'target-ok\n'
         let pid = wait_for_pid(&directory.path().join("monitor-pid")).await;
         task.abort();
         let _ = task.await;
-        let log = wait_for_log_matches(&directory.path().join("sudo-log"), "ARG=-k\n", 3).await;
+        wait_for_process_exit(pid).await;
+        let log = std::fs::read_to_string(directory.path().join("sudo-log")).unwrap();
         tokio::time::sleep(Duration::from_millis(1100)).await;
 
         assert!(
@@ -2588,7 +2525,7 @@ printf 'target-ok\n'
             -1,
             "sudo monitor command was not reaped"
         );
-        assert_eq!(log.matches("ARG=-k\n").count(), 3, "{log}");
+        assert!(!log.contains("ARG=-k\n"), "{log}");
         assert!(!log.contains("ca-monitor-72ab"));
     }
 
@@ -2663,8 +2600,8 @@ printf 'target-ok\n'
         let pid = wait_for_pid(&reap_directory.path().join("pid")).await;
         task.abort();
         let _ = task.await;
-        let reap_log =
-            wait_for_log_matches(&reap_directory.path().join("sudo-log"), "ARG=-k\n", 3).await;
+        wait_for_process_exit(pid).await;
+        let reap_log = std::fs::read_to_string(reap_directory.path().join("sudo-log")).unwrap();
         tokio::time::sleep(Duration::from_millis(350)).await;
         assert!(!marker.exists(), "cancelled private process group survived");
         assert_eq!(
@@ -2672,7 +2609,7 @@ printf 'target-ok\n'
             -1,
             "private child was not reaped"
         );
-        assert_eq!(reap_log.matches("ARG=-k\n").count(), 3, "{reap_log}");
+        assert!(!reap_log.contains("ARG=-k\n"), "{reap_log}");
     }
 
     #[cfg(unix)]
@@ -2708,33 +2645,20 @@ printf 'target-ok\n'
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn cleanup_failure_latches_the_shared_supervisor_and_reports_manual_recovery() {
-        let (_directory, base) = fake_privilege_fixture();
+    async fn indeterminate_process_cleanup_latches_the_shared_supervisor() {
+        let (_directory, invocation) = fake_privilege_fixture();
         let owner = crate::jobs::JobOwner::process();
-        let invocation = PreparedPrivilegeInvocation::prepare_for_test(
-            base.program.clone(),
-            vec!["--cleanup-fail".into()],
-            base.cwd.clone(),
-            base.helper.clone(),
-            crate::sandbox::SandboxMode::Off,
-            base.roots.clone(),
-            owner,
-        )
-        .unwrap();
-        let pattern = authenticate(&invocation, owner, secret_handle("ca-cleanup-788f"))
-            .await
-            .unwrap();
-        let result = execute(&invocation, owner, Duration::from_secs(5), Some(pattern)).await;
-        assert!(!result.is_success());
-        assert!(
-            result.model_text().contains("run sudo -k manually"),
-            "{result:?}"
-        );
+        let message = latch_cleanup_failure(&invocation);
+        assert!(message.contains("private process cleanup"));
+        assert!(!message.contains("sudo -k"));
         assert!(invocation.supervisor.0.disabled());
-        assert!(invocation
-            .revalidate(owner)
-            .unwrap_err()
-            .contains("run sudo -k manually"));
+        assert_eq!(invocation.revalidate(owner).unwrap_err(), message);
+        assert_eq!(
+            check_cached_authorization(&invocation, owner)
+                .await
+                .unwrap_err(),
+            message
+        );
     }
 
     #[cfg(unix)]

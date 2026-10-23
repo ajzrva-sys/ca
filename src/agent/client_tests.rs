@@ -75,6 +75,8 @@ fn official_contract(
     crate::provider_contract::resolve(
         provider,
         &ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: base_url.into(),
             api_key: String::new(),
             protocol,
@@ -320,6 +322,8 @@ fn runtime_prompt_cache_contract_sends_fields_only_for_declared_routes() {
         .with_prompt_cache(scope, 1)
     };
     let provider = |base_url: &str, protocol| ProviderConfig {
+        google: None,
+        tool_schema_policy: Default::default(),
         base_url: base_url.into(),
         api_key: String::new(),
         protocol,
@@ -987,6 +991,49 @@ fn reasoning_content_tool_continuation_is_provider_scoped_and_byte_faithful() {
 }
 
 #[test]
+fn final_reasoning_replay_is_deepseek_only_and_requires_provenance() {
+    for (provider, model, expected) in [
+        ("deepseek", "deepseek-v4-pro", Some("  final\n雪  ")),
+        ("mimo", "mimo-v2.5-pro", None),
+    ] {
+        let mut assistant = Message {
+            role: Role::Assistant,
+            content: "answer".into(),
+            tool_calls: None,
+            thinking: Some("display-only reasoning".into()),
+            response_items: vec![ProviderResponseItem::ChatReasoning {
+                source: crate::agent::stream::ProviderStateSourceV1::for_test(
+                    provider,
+                    crate::agent::ProviderProtocol::ChatCompletions,
+                ),
+                content: "  final\n雪  ".into(),
+            }],
+            timestamp: fixed_time(),
+        };
+        for provenanced in [true, false] {
+            if !provenanced {
+                assistant.response_items.clear();
+            }
+            let request = crate::request::PreparedModelRequest::new(
+                crate::request::RequestKind::MainTurn,
+                provider,
+                model,
+                AgentClient::build_messages(None, &[assistant.clone()], None, &[]).unwrap(),
+                Vec::new(),
+                ChatRequestOptions::default(),
+            );
+            let value = crate::agent::provider::chat_completions_json_for_test(&request);
+            assert_eq!(
+                value["messages"][0]
+                    .get("reasoning_content")
+                    .and_then(Value::as_str),
+                if provenanced { expected } else { None },
+            );
+        }
+    }
+}
+
+#[test]
 fn multiple_tool_results_preserve_call_order() {
     let state_messages = vec![assistant_with_calls(vec![
         call("call-a", ToolStatus::Done, Some("alpha")),
@@ -1172,6 +1219,8 @@ fn mixed_assistant_and_legacy_duplicate_is_rejected() {
 fn runtime_client_debug_redacts_endpoint_and_credential() {
     let client = AgentClient::new(
         &ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: "https://user:password@example.invalid/v1?token=query-secret".into(),
             api_key: "sentinel-api-key".into(),
             protocol: crate::agent::ProviderProtocol::default(),
@@ -1227,11 +1276,65 @@ fn one_attempt_policy_preserves_default_deadlines_and_disables_replay() {
 }
 
 #[test]
+fn transport_regression_one_attempt_preserves_custom_policy() {
+    let mut policy = fast_policy();
+    policy.max_attempts = 2;
+    let client =
+        test_client("http://127.0.0.1:1/v1".into(), policy.clone()).with_one_attempt_policy();
+    assert_eq!(client.policy.max_attempts, 1);
+    assert_eq!(client.policy.connect_timeout, policy.connect_timeout);
+    assert_eq!(client.policy.headers_timeout, policy.headers_timeout);
+    assert_eq!(
+        client.policy.first_event_timeout,
+        policy.first_event_timeout
+    );
+    assert_eq!(
+        client.policy.no_progress_timeout,
+        policy.no_progress_timeout
+    );
+    assert_eq!(client.policy.retry_delay, policy.retry_delay);
+    assert_eq!(client.policy.max_retry_after, policy.max_retry_after);
+}
+
+#[tokio::test]
+async fn transport_regression_one_attempt_preserves_http_client() {
+    use tokio::io::AsyncWriteExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let request = read_http_request(&mut stream).await;
+        stream
+            .write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
+            .await
+            .unwrap();
+        request
+    });
+    let mut client = test_client(url, fast_policy());
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert("x-transport-sentinel", "preserved".parse().unwrap());
+    client.client = Client::builder().default_headers(headers).build().unwrap();
+    let error = client
+        .with_one_attempt_policy()
+        .chat_stream(&[], &[])
+        .await
+        .unwrap_err();
+    assert_eq!(error, ProviderError::http(400));
+    let request = String::from_utf8(server.await.unwrap()).unwrap();
+    assert!(
+        request.contains("x-transport-sentinel: preserved"),
+        "existing HTTP client was replaced"
+    );
+}
+
+#[test]
 fn responses_only_options_and_client_request_id_fail_closed() {
     fn client(protocol: crate::agent::ProviderProtocol, policy: ProviderCallPolicy) -> AgentClient {
         AgentClient::with_call_policy(
             "test",
             &ProviderConfig {
+                google: None,
+                tool_schema_policy: Default::default(),
                 base_url: "http://127.0.0.1:1/v1".into(),
                 api_key: String::new(),
                 protocol,
@@ -1295,6 +1398,8 @@ fn test_client_with_protocol(
     AgentClient::with_policy(
         "test",
         &ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url,
             api_key: String::new(),
             protocol,
@@ -1397,6 +1502,8 @@ async fn capture_reasoning_content_tool_loop(provider: &'static str) -> Vec<Vec<
     let client = AgentClient::with_policy(
         provider,
         &ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: url,
             api_key: String::new(),
             protocol: crate::agent::ProviderProtocol::ChatCompletions,
@@ -1488,6 +1595,194 @@ async fn deepseek_and_mimo_two_step_loopbacks_replay_exact_reasoning_content() {
 }
 
 #[tokio::test]
+async fn deepseek_replays_tool_and_final_reasoning_on_the_next_question() {
+    use tokio::io::AsyncWriteExt;
+
+    let tool_reasoning = "  inspect\nλ\\tool  ";
+    let final_reasoning = "  explain\n雪\\final  ";
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let mut requests = Vec::new();
+        let bodies = [
+            serde_json::json!({"choices": [{"delta": {
+                "reasoning_content": tool_reasoning,
+                "tool_calls": [{"index": 0, "id": "call-1", "function": {
+                    "name": "read_file", "arguments": r#"{"path":"input.txt"}"#
+                }}]
+            }, "finish_reason": "tool_calls"}]}),
+            serde_json::json!({"choices": [{"delta": {
+                "reasoning_content": final_reasoning, "content": "first answer"
+            }, "finish_reason": "stop"}]}),
+            serde_json::json!({"choices": [{"delta": {"content": "next answer"},
+                "finish_reason": "stop"}]}),
+        ];
+        for body in bodies {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            requests.push(read_http_request(&mut stream).await);
+            let body = format!("data: {body}\n\ndata: [DONE]\n\n");
+            stream
+                .write_all(
+                    format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            stream.write_all(body.as_bytes()).await.unwrap();
+        }
+        requests
+    });
+    let client = AgentClient::with_policy(
+        "deepseek",
+        &ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
+            base_url: endpoint.clone(),
+            api_key: String::new(),
+            protocol: crate::agent::ProviderProtocol::ChatCompletions,
+            prompt_cache_mode: crate::config::PromptCacheMode::Implicit,
+            models: vec!["deepseek-v4-pro".into()],
+            timeout: ProviderTimeoutConfig::default(),
+        },
+        "deepseek-v4-pro",
+        fast_policy(),
+        crate::request::RequestStore::default(),
+    )
+    .with_contract_for_test(official_contract(
+        "deepseek",
+        crate::agent::ProviderProtocol::ChatCompletions,
+        "deepseek-v4-pro",
+    ));
+    let tools = vec![ToolDef {
+        def_type: "function".into(),
+        function: ToolFunction {
+            name: "read_file".into(),
+            description: "Read a file".into(),
+            parameters: serde_json::json!({"type": "object"}),
+        },
+    }];
+    let mut history = vec![user("read input.txt")];
+    let mut last_request = None;
+    for index in 0..3 {
+        let request = crate::request::PreparedModelRequest::new(
+            if index == 1 {
+                crate::request::RequestKind::ToolContinuation
+            } else {
+                crate::request::RequestKind::MainTurn
+            },
+            "deepseek",
+            "deepseek-v4-pro",
+            AgentClient::build_messages(None, &history, None, &[]).unwrap(),
+            tools.clone(),
+            ChatRequestOptions::default(),
+        );
+        let mut stream = client.stream_prepared(&request).await.unwrap();
+        let turn = crate::agent::stream::consume_stream(&mut stream, |_| {})
+            .await
+            .unwrap();
+        let calls = turn
+            .tool_calls
+            .into_iter()
+            .map(|call| ToolCall {
+                id: call.id,
+                name: call.name,
+                arguments: call.arguments,
+                status: ToolStatus::Done,
+                output: Some("hello".into()),
+            })
+            .collect::<Vec<_>>();
+        history.push(Message {
+            role: Role::Assistant,
+            content: turn.content,
+            tool_calls: (!calls.is_empty()).then_some(calls),
+            thinking: turn.reasoning,
+            response_items: turn.response_items,
+            timestamp: fixed_time(),
+        });
+        if index == 1 {
+            history.push(user("explain another file"));
+        }
+        last_request = Some(request);
+    }
+    let requests = server.await.unwrap();
+    assert_eq!(requests.len(), 3);
+    let next: serde_json::Value = serde_json::from_slice(request_body(&requests[2])).unwrap();
+    assert_eq!(next["tools"][0]["function"]["name"], "read_file");
+    assert_eq!(next["messages"][1]["reasoning_content"], tool_reasoning);
+    assert_eq!(next["messages"][3]["reasoning_content"], final_reasoning);
+
+    let request = last_request.unwrap();
+    for provider in ["deepseek", "mimo", "custom"] {
+        let source = crate::agent::stream::ProviderStateSourceV1::from_route(
+            provider,
+            crate::agent::ProviderProtocol::ChatCompletions,
+            if provider == "deepseek" {
+                "https://other.invalid/v1"
+            } else {
+                &endpoint
+            },
+        )
+        .unwrap();
+        let contract = match provider {
+            "deepseek" => Some(official_contract(
+                provider,
+                crate::agent::ProviderProtocol::ChatCompletions,
+                "deepseek-v4-pro",
+            )),
+            "mimo" => Some(official_contract(
+                provider,
+                crate::agent::ProviderProtocol::ChatCompletions,
+                "mimo-v2.5-pro",
+            )),
+            _ => None,
+        };
+        let encoded = crate::agent::ProviderProtocol::ChatCompletions
+            .adapter()
+            .prepare(&request, &source, contract, None, None)
+            .unwrap()
+            .body;
+        let changed: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+        for index in [1, 3] {
+            assert!(changed["messages"][index]
+                .get("reasoning_content")
+                .is_none());
+        }
+    }
+}
+
+#[test]
+fn provider_error_excerpt_is_utf8_bounded_and_redacts_complete_credentials() {
+    let body = serde_json::json!({"error": {"message": format!("{}雪", "x".repeat(511))}});
+    let excerpt = excerpt_from_error_bytes(&serde_json::to_vec(&body).unwrap(), &[]).unwrap();
+    assert_eq!(excerpt, "x".repeat(511));
+    assert!(excerpt.len() <= ERROR_BODY_EXCERPT_BYTES);
+
+    let body = serde_json::json!({"error": {"message":
+        "bad \u{1b}[31mfield\u{1b}[0m Bearer unknown-token\napi_key=unknown-key\nsk-unknown-secret"}});
+    let excerpt = excerpt_from_error_bytes(&serde_json::to_vec(&body).unwrap(), &[]).unwrap();
+    for forbidden in [
+        "\u{1b}",
+        "[31m",
+        "unknown-token",
+        "unknown-key",
+        "unknown-secret",
+    ] {
+        assert!(!excerpt.contains(forbidden), "leaked {forbidden:?}");
+    }
+    assert!(excerpt.contains("bad field"));
+    let body = serde_json::json!({"error": {"message": "rejected fixture-runtime-credential"}});
+    let excerpt = excerpt_from_error_bytes(
+        &serde_json::to_vec(&body).unwrap(),
+        &["fixture-runtime-credential"],
+    )
+    .unwrap();
+    assert_eq!(excerpt, "rejected [REDACTED]");
+}
+
+#[tokio::test]
 async fn chat_reasoning_continuation_is_bound_to_the_exact_runtime_endpoint() {
     use tokio::io::AsyncWriteExt;
 
@@ -1521,6 +1816,8 @@ async fn chat_reasoning_continuation_is_bound_to_the_exact_runtime_endpoint() {
         AgentClient::with_policy(
             "deepseek",
             &ProviderConfig {
+                google: None,
+                tool_schema_policy: Default::default(),
                 base_url: endpoint,
                 api_key: String::new(),
                 protocol: crate::agent::ProviderProtocol::ChatCompletions,
@@ -1662,6 +1959,8 @@ async fn capture_chat_completions_request(api_key: &str) -> Vec<u8> {
     let client = AgentClient::with_policy(
         "test",
         &ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: url,
             api_key: api_key.into(),
             protocol: crate::agent::ProviderProtocol::default(),
@@ -1728,6 +2027,8 @@ async fn capture_openai_responses_request_with_account(
     let mut client = AgentClient::with_policy(
         "test",
         &ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: url,
             api_key: api_key.into(),
             protocol: crate::agent::ProviderProtocol::OpenAiResponses,
@@ -1909,6 +2210,8 @@ async fn capture_openai_responses_reasoning_tool_loop() -> (Vec<Vec<u8>>, String
     let client = AgentClient::with_policy(
         crate::config::OPENAI_PROVIDER_TEMPLATE_ID,
         &ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: url,
             api_key: String::new(),
             protocol: crate::agent::ProviderProtocol::OpenAiResponses,
@@ -2109,6 +2412,8 @@ async fn capture_first_party_responses_tool_loop(provider: &str, model: &str) ->
     let client = AgentClient::with_policy(
         provider,
         &ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: url,
             api_key: String::new(),
             protocol: crate::agent::ProviderProtocol::OpenAiResponses,
@@ -2222,6 +2527,8 @@ async fn capture_anthropic_messages_request(api_key: &str) -> Vec<u8> {
     let client = AgentClient::with_policy(
         "test",
         &ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: url,
             api_key: api_key.into(),
             protocol: crate::agent::ProviderProtocol::AnthropicMessages,
@@ -2406,6 +2713,8 @@ async fn openai_responses_non_text_input_fails_before_network_io() {
     let client = AgentClient::with_policy(
         "test",
         &ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: url,
             api_key: String::new(),
             protocol: crate::agent::ProviderProtocol::OpenAiResponses,
@@ -2469,7 +2778,7 @@ async fn openai_responses_timeout_remains_typed() {
 
     assert_eq!(
         receiver.recv().await.unwrap().unwrap_err(),
-        ProviderError::Transport(ProviderTransportFailure::Timeout)
+        ProviderError::Transport(ProviderTransportFailure::FirstTokenTimeout)
     );
     server.await.unwrap();
 }
@@ -2502,7 +2811,7 @@ async fn anthropic_messages_timeout_remains_typed() {
 
     assert_eq!(
         receiver.recv().await.unwrap().unwrap_err(),
-        ProviderError::Transport(ProviderTransportFailure::Timeout)
+        ProviderError::Transport(ProviderTransportFailure::FirstTokenTimeout)
     );
     server.await.unwrap();
 }
@@ -2555,6 +2864,11 @@ async fn repetition_guard_preserves_prior_unicode_output_cancels_and_never_repla
     });
 
     let mut policy = fast_policy();
+    // This case asserts cancellation/replay semantics, not scheduler latency.
+    policy.connect_timeout = Duration::from_secs(5);
+    policy.headers_timeout = Duration::from_secs(5);
+    policy.first_event_timeout = Duration::from_secs(5);
+    policy.no_progress_timeout = Duration::from_secs(5);
     policy.max_attempts = 2;
     let mut receiver = test_client(url, policy)
         .chat_stream(&[], &[])
@@ -2688,6 +3002,8 @@ async fn dsml_loopback(
     let mut client = AgentClient::with_policy(
         provider_id,
         &ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: url,
             api_key: String::new(),
             protocol: crate::agent::ProviderProtocol::ChatCompletions,
@@ -2875,6 +3191,8 @@ async fn http_failure_discards_response_body_and_keeps_snapshot_safe() {
     let client = AgentClient::with_policy(
         "safe-provider",
         &ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: url,
             api_key: "sentinel-runtime-key".into(),
             protocol: crate::agent::ProviderProtocol::default(),
@@ -2889,7 +3207,13 @@ async fn http_failure_discards_response_body_and_keeps_snapshot_safe() {
 
     let error = client.chat_stream(&[], &[]).await.unwrap_err();
 
-    assert_eq!(error, ProviderError::Http { status: 401 });
+    assert_eq!(
+        error,
+        ProviderError::Http {
+            status: 401,
+            body_excerpt: None
+        }
+    );
     let visible = format!(
         "{error}\n{client:?}\n{}",
         request_store.snapshot().unwrap().render_text()
@@ -2944,9 +3268,881 @@ async fn headers_and_first_event_deadlines_are_typed_timeouts() {
         .unwrap();
     assert_eq!(
         receiver.recv().await.unwrap().unwrap_err(),
-        ProviderError::Transport(ProviderTransportFailure::Timeout)
+        ProviderError::Transport(ProviderTransportFailure::FirstTokenTimeout)
     );
     event_server.await.unwrap();
+}
+
+#[tokio::test]
+async fn sse_keepalives_extend_no_progress_deadline() {
+    use tokio::io::AsyncWriteExt;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        read_request(&mut stream).await;
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 100000\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        // Keep-alives must count as liveness even though they decode to zero events.
+        // Window exceeds first_event_timeout so undecoded bytes must re-arm the deadline.
+        for _ in 0..10 {
+            stream.write_all(b": ping\n\n").await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        }
+        let body = b"data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+        let _ = stream.write_all(body).await;
+    });
+
+    let mut policy = fast_policy();
+    policy.first_event_timeout = std::time::Duration::from_millis(250);
+    policy.no_progress_timeout = std::time::Duration::from_millis(120);
+    policy.max_attempts = 1;
+    let mut receiver = test_client(url, policy)
+        .chat_stream(&[], &[])
+        .await
+        .unwrap();
+    let mut texts = Vec::new();
+    loop {
+        match receiver.recv().await {
+            Some(Ok(ProviderEvent::Text(text))) => texts.push(text),
+            Some(Ok(ProviderEvent::Done)) | None => break,
+            Some(Ok(_)) => {}
+            Some(Err(error)) => panic!("keep-alives must not time out: {error:?}"),
+        }
+    }
+    assert_eq!(texts, vec!["ok".to_string()]);
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn mid_stream_stall_trips_no_progress_timeout() {
+    use tokio::io::AsyncWriteExt;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        read_request(&mut stream).await;
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 100\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        let first =
+            b"data: {\"choices\":[{\"delta\":{\"content\":\"x\"},\"finish_reason\":null}]}\n\n";
+        stream.write_all(first).await.unwrap();
+        // Silence after a real event must trip no_progress_timeout.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    });
+
+    let mut policy = fast_policy();
+    policy.first_event_timeout = std::time::Duration::from_millis(200);
+    policy.no_progress_timeout = std::time::Duration::from_millis(40);
+    policy.max_attempts = 1;
+    let mut receiver = test_client(url, policy)
+        .chat_stream(&[], &[])
+        .await
+        .unwrap();
+    assert_eq!(
+        receiver.recv().await.unwrap().unwrap(),
+        ProviderEvent::Text("x".into())
+    );
+    assert_eq!(
+        receiver.recv().await.unwrap().unwrap_err(),
+        ProviderError::Transport(ProviderTransportFailure::Timeout)
+    );
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn reasoning_deltas_extend_deadline_even_without_profile() {
+    use tokio::io::AsyncWriteExt;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        read_request(&mut stream).await;
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 100000\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        // Long thinking preamble of reasoning_content deltas (no profile field
+        // configured on this generic test client). Bytes must keep the stream alive
+        // even when the decoder emits zero events. Window exceeds first_event_timeout.
+        for _ in 0..10 {
+            let event = b"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"think \"},\"finish_reason\":null}]}\n\n";
+            stream.write_all(event).await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        }
+        let body = b"data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+        let _ = stream.write_all(body).await;
+    });
+
+    let mut policy = fast_policy();
+    policy.first_event_timeout = std::time::Duration::from_millis(250);
+    policy.no_progress_timeout = std::time::Duration::from_millis(120);
+    policy.max_attempts = 1;
+    let mut receiver = test_client(url, policy)
+        .chat_stream(&[], &[])
+        .await
+        .unwrap();
+    let mut texts = Vec::new();
+    loop {
+        match receiver.recv().await {
+            Some(Ok(ProviderEvent::Text(text))) => texts.push(text),
+            Some(Ok(ProviderEvent::Done)) | None => break,
+            Some(Ok(_)) => {}
+            Some(Err(error)) => panic!("reasoning bytes must not time out: {error:?}"),
+        }
+    }
+    assert_eq!(texts, vec!["ok".to_string()]);
+    server.await.unwrap();
+}
+
+async fn stalled_error_server(
+    status: u16,
+    prefix: Vec<u8>,
+) -> (
+    String,
+    tokio::task::JoinHandle<bool>,
+    tokio::sync::oneshot::Receiver<()>,
+) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1", listener.local_addr().unwrap());
+    let (sent, ready) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        read_http_request(&mut stream).await;
+        stream
+            .write_all(
+                format!("HTTP/1.1 {status} Error\r\nContent-Length: 1000000000\r\n\r\n").as_bytes(),
+            )
+            .await
+            .unwrap();
+        stream.write_all(&prefix).await.unwrap();
+        let _ = sent.send(());
+        let mut byte = [0];
+        matches!(
+            tokio::time::timeout(Duration::from_secs(3), stream.read(&mut byte)).await,
+            Ok(Ok(0)) | Ok(Err(_))
+        )
+    });
+    (url, server, ready)
+}
+
+#[tokio::test]
+async fn transport_regression_stalled_400_keeps_http_type() {
+    let (url, server, _) = stalled_error_server(400, b"{\"error\":".to_vec()).await;
+    let mut policy = fast_policy();
+    policy.headers_timeout = Duration::from_millis(100);
+    let error = tokio::time::timeout(
+        Duration::from_millis(600),
+        test_client(url, policy).chat_stream(&[], &[]),
+    )
+    .await
+    .expect("error-body collection must respect headers_timeout")
+    .unwrap_err();
+    assert_eq!(error, ProviderError::http(400));
+    assert!(
+        server.await.unwrap(),
+        "bounded collection must close the HTTP body"
+    );
+}
+
+#[tokio::test]
+async fn transport_regression_error_body_has_absolute_one_second_cap() {
+    use tokio::io::AsyncWriteExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        read_http_request(&mut stream).await;
+        stream
+            .write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 1000000\r\n\r\n")
+            .await
+            .unwrap();
+        for _ in 0..12 {
+            if stream.write_all(b" ").await.is_err() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        }
+    });
+    let mut policy = fast_policy();
+    policy.headers_timeout = Duration::from_secs(3);
+    let error = tokio::time::timeout(
+        Duration::from_millis(1500),
+        test_client(url, policy).chat_stream(&[], &[]),
+    )
+    .await
+    .expect("trickled error bytes must not renew the absolute one-second deadline")
+    .unwrap_err();
+    assert_eq!(error, ProviderError::http(400));
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn transport_regression_error_body_stops_at_eight_kib() {
+    let mut prefix = br#"{"error":{"message":"bounded prefix"}}"#.to_vec();
+    prefix.resize(8 * 1024, b' ');
+    let (url, server, _) = stalled_error_server(400, prefix).await;
+    let mut policy = fast_policy();
+    policy.headers_timeout = Duration::from_secs(3);
+    let error = tokio::time::timeout(
+        Duration::from_millis(600),
+        test_client(url, policy).chat_stream(&[], &[]),
+    )
+    .await
+    .expect("must stop collecting at 8KiB, before EOF or the time cap")
+    .unwrap_err();
+    assert_eq!(
+        error,
+        ProviderError::http_with_excerpt(400, "bounded prefix".to_string())
+    );
+    assert!(
+        server.await.unwrap(),
+        "must drop the unbounded response body"
+    );
+}
+
+#[tokio::test]
+async fn error_body_response_rule_stops_without_echoing_the_match() {
+    use tokio::io::AsyncWriteExt;
+
+    async fn serve_error() -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/v1", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            read_http_request(&mut stream).await;
+            let body = br#"{"error":{"message":"blocked NEEDLE value"}}"#;
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            stream.write_all(body).await.unwrap();
+        });
+        (url, server)
+    }
+
+    let (url, server) = serve_error().await;
+    let filter = std::sync::Arc::new(
+        crate::provider_filter::ProviderFilter::compile(
+            &crate::provider_filter::ProviderFilterConfig {
+                enabled: true,
+                trip_file: None,
+                phrases: Vec::new(),
+                urls: Vec::new(),
+                rules: vec![crate::provider_filter::ProviderFilterRule {
+                    id: "phrase".into(),
+                    target: crate::provider_filter::ProviderFilterTarget::Response,
+                    kind: crate::provider_filter::ProviderFilterKind::Literal,
+                    pattern: "NEEDLE".into(),
+                }],
+                adjustments: Vec::new(),
+                obfuscate: false,
+                page_stand_in: crate::provider_filter::PageStandIn::Off,
+                page_stand_ins: Vec::new(),
+                placeholder_images: false,
+                obfuscation_patterns: Vec::new(),
+
+                stop: crate::provider_filter::FilterStop::default(),
+                hide: crate::provider_filter::FilterHide::default(),
+                pages: crate::provider_filter::PagesSetting::default(),
+            },
+        )
+        .expect("filter compiles"),
+    );
+    let error = test_client(url, fast_policy())
+        .with_filter_for_test(filter)
+        .chat_stream(&[], &[])
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error,
+        ProviderError::FilterStopped {
+            rule: "phrase".into()
+        }
+    );
+    assert!(!error.to_string().contains("NEEDLE"));
+    server.await.unwrap();
+
+    let (url, server) = serve_error().await;
+    let filter = std::sync::Arc::new(
+        crate::provider_filter::ProviderFilter::compile(
+            &crate::provider_filter::ProviderFilterConfig {
+                enabled: true,
+                trip_file: None,
+                phrases: Vec::new(),
+                urls: Vec::new(),
+                rules: vec![crate::provider_filter::ProviderFilterRule {
+                    id: "phrase".into(),
+                    target: crate::provider_filter::ProviderFilterTarget::Request,
+                    kind: crate::provider_filter::ProviderFilterKind::Literal,
+                    pattern: "NEEDLE".into(),
+                }],
+                adjustments: Vec::new(),
+                obfuscate: false,
+                page_stand_in: crate::provider_filter::PageStandIn::Off,
+                page_stand_ins: Vec::new(),
+                placeholder_images: false,
+                obfuscation_patterns: Vec::new(),
+
+                stop: crate::provider_filter::FilterStop::default(),
+                hide: crate::provider_filter::FilterHide::default(),
+                pages: crate::provider_filter::PagesSetting::default(),
+            },
+        )
+        .expect("filter compiles"),
+    );
+    let error = test_client(url, fast_policy())
+        .with_filter_for_test(filter)
+        .chat_stream(&[], &[])
+        .await
+        .unwrap_err();
+    match error {
+        ProviderError::Http {
+            status: 400,
+            body_excerpt,
+        } => assert_eq!(body_excerpt.as_deref(), Some("blocked NEEDLE value")),
+        other => panic!("request rule must leave the error body excerpt, got {other:?}"),
+    }
+    server.await.unwrap();
+}
+
+fn response_filter(pattern: &str) -> std::sync::Arc<crate::provider_filter::ProviderFilter> {
+    std::sync::Arc::new(
+        crate::provider_filter::ProviderFilter::compile(
+            &crate::provider_filter::ProviderFilterConfig {
+                enabled: true,
+                rules: vec![crate::provider_filter::ProviderFilterRule {
+                    id: "response-stop".into(),
+                    target: crate::provider_filter::ProviderFilterTarget::Response,
+                    kind: crate::provider_filter::ProviderFilterKind::Literal,
+                    pattern: pattern.into(),
+                }],
+                ..crate::provider_filter::ProviderFilterConfig::default()
+            },
+        )
+        .unwrap(),
+    )
+}
+
+async fn filtered_response_events(
+    body: &str,
+    pattern: &str,
+) -> (Vec<ProviderEvent>, Option<ProviderError>) {
+    filtered_response_events_with_filter(body, response_filter(pattern)).await
+}
+
+async fn filtered_response_events_with_filter(
+    body: &str,
+    filter: std::sync::Arc<crate::provider_filter::ProviderFilter>,
+) -> (Vec<ProviderEvent>, Option<ProviderError>) {
+    use tokio::io::AsyncWriteExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1", listener.local_addr().unwrap());
+    let body = body.to_owned();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        read_http_request(&mut stream).await;
+        stream
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+    });
+    let client = test_client(url, fast_policy()).with_filter_for_test(filter);
+    let mut receiver = client
+        .chat_stream_with_options(
+            &[],
+            &[],
+            &ChatRequestOptions {
+                reasoning_stream_field: Some("reasoning_content".into()),
+                ..ChatRequestOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    let mut events = Vec::new();
+    let mut failure = None;
+    while let Some(item) = receiver.recv().await {
+        match item {
+            Ok(event) => events.push(event),
+            Err(error) => {
+                failure = Some(error);
+                break;
+            }
+        }
+    }
+    server.await.unwrap();
+    (events, failure)
+}
+
+#[tokio::test]
+async fn filter_response_stops_decoded_text_across_frames_and_json_escapes() {
+    for body in [
+        "data: {\"choices\":[{\"delta\":{\"content\":\"sec\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"ret\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"sec\\u0072et\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+    ] {
+        let (events, error) = filtered_response_events(body, "secret").await;
+        assert_eq!(error, Some(ProviderError::FilterStopped { rule: "response-stop".into() }));
+        assert!(!events.contains(&ProviderEvent::Text("ret".into())));
+        assert!(!events.contains(&ProviderEvent::Text("secret".into())));
+        assert!(!events.contains(&ProviderEvent::Done));
+    }
+}
+
+#[tokio::test]
+async fn filter_response_stops_decoded_reasoning_and_tool_arguments_across_frames() {
+    for body in [
+        "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"sec\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"reasoning_content\":\"ret\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"sec\"}}]}}]}\n\ndata: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"ret\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n",
+    ] {
+        let (events, error) = filtered_response_events(body, "secret").await;
+        assert_eq!(error, Some(ProviderError::FilterStopped { rule: "response-stop".into() }));
+        assert!(!events.contains(&ProviderEvent::Done));
+    }
+}
+
+#[tokio::test]
+async fn filter_response_does_not_join_distinct_channels_or_tool_calls() {
+    for body in [
+        "data: {\"choices\":[{\"delta\":{\"content\":\"sec\",\"reasoning_content\":\"ret\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"function\":{\"name\":\"read_file\",\"arguments\":\"sec\"}},{\"index\":1,\"id\":\"call-2\",\"function\":{\"name\":\"read_file\",\"arguments\":\"ret\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n",
+    ] {
+        let (events, error) = filtered_response_events(body, "secret").await;
+        assert_eq!(error, None);
+        assert!(events.contains(&ProviderEvent::Done));
+    }
+}
+
+#[tokio::test]
+async fn filter_response_stops_escaped_tool_argument_values() {
+    let body = concat!(
+        r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"read_file","arguments":"{\"path\":\"sec\\u0072et\"}"}}]},"finish_reason":"tool_calls"}]}"#,
+        "\n\ndata: [DONE]\n\n"
+    );
+    let (events, error) = filtered_response_events(body, "secret").await;
+    assert_eq!(
+        error,
+        Some(ProviderError::FilterStopped {
+            rule: "response-stop".into()
+        })
+    );
+    assert!(!events.contains(&ProviderEvent::Done));
+}
+
+fn tool_argument_sse(arguments: &[String]) -> String {
+    let mut body = String::new();
+    for (index, argument) in arguments.iter().enumerate() {
+        let function = if index == 0 {
+            serde_json::json!({"name":"read_file","arguments":argument})
+        } else {
+            serde_json::json!({"arguments":argument})
+        };
+        let mut call = serde_json::json!({"index":0,"function":function});
+        if index == 0 {
+            call["id"] = serde_json::json!("call-1");
+        }
+        body.push_str(&format!(
+            "data: {}\n\n",
+            serde_json::json!({"choices":[{"delta":{"tool_calls":[call]}}]})
+        ));
+    }
+    body.push_str(
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n",
+    );
+    body
+}
+
+#[test]
+fn filter_response_argument_lexer_tracks_activation_without_validating_disabled_json() {
+    let idle = crate::provider_filter::ProviderFilter::compile(
+        &crate::provider_filter::ProviderFilterConfig::default(),
+    )
+    .unwrap();
+    for (prefix, suffix) in [
+        ("{\"path\":\"safe-prefix-", "sec\\u0072et\"}"),
+        ("{\"path\":\"\\uD8", "3D\\uDD12sec\\u0072et\"}"),
+        ("{\"path\":\"\\uD83D", "\\uDD12sec\\u0072et\"}"),
+        ("{\"path\":\"\\", "u0073ecret\"}"),
+    ] {
+        let mut arguments = FilteredToolArguments::default();
+        arguments.observe(&idle, prefix).unwrap();
+        assert_eq!(arguments.strings.fragment.capacity(), 0);
+        assert_eq!(arguments.strings.decoded.capacity(), 0);
+        assert!(matches!(
+            arguments.observe(&response_filter("secret"), suffix),
+            Err(ProviderError::FilterStopped { .. })
+        ));
+    }
+    let mut arguments = FilteredToolArguments::default();
+    arguments
+        .observe(&idle, "{\"path\":\"bad\\q-unfiltered\"}")
+        .unwrap();
+    arguments.finish(&idle).unwrap();
+    assert_eq!(arguments.strings.fragment.capacity(), 0);
+    assert_eq!(arguments.strings.decoded.capacity(), 0);
+}
+
+#[tokio::test]
+async fn filter_response_stops_long_escaped_tool_arguments_without_retaining_the_object() {
+    for arguments in [
+        vec![
+            format!("{{\"pad\":\"{}", "x".repeat(9000)),
+            "\",\"path\":\"sec\\u0072et\"}".into(),
+        ],
+        vec![
+            format!("{{\"path\":\"{}", "x".repeat(9000)),
+            "sec\\u0072et\"}".into(),
+        ],
+        vec![
+            "{\"path\":\"\\uD83D".into(),
+            "\\uDD12sec\\u00".into(),
+            "72et\"}".into(),
+        ],
+    ] {
+        let body = tool_argument_sse(&arguments);
+        let (events, error) = filtered_response_events(&body, "secret").await;
+        assert_eq!(
+            error,
+            Some(ProviderError::FilterStopped {
+                rule: "response-stop".into()
+            })
+        );
+        assert!(!events.contains(&ProviderEvent::Done));
+    }
+}
+
+#[tokio::test]
+async fn filter_response_does_not_join_distinct_json_strings_in_tool_arguments() {
+    let body = tool_argument_sse(&["{\"path\":\"sec\",\"other\":\"ret\"}".into()]);
+    let (events, error) = filtered_response_events(&body, "secret").await;
+    assert_eq!(error, None);
+    assert!(events.contains(&ProviderEvent::Done));
+}
+
+#[tokio::test]
+async fn filter_response_exact_url_split_across_frames_is_flushed_at_eof() {
+    for suffix in [".com", ".com/child"] {
+        let filter = std::sync::Arc::new(
+            crate::provider_filter::ProviderFilter::compile(
+                &crate::provider_filter::ProviderFilterConfig {
+                    enabled: true,
+                    urls: vec!["https://example.com".into()],
+                    ..crate::provider_filter::ProviderFilterConfig::default()
+                },
+            )
+            .unwrap(),
+        );
+        let body = format!(
+            "data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
+            serde_json::json!({"choices":[{"delta":{"content":"https://example"}}]}),
+            serde_json::json!({"choices":[{"delta":{"content":suffix},"finish_reason":"stop"}]}),
+        );
+        let (events, error) = filtered_response_events_with_filter(&body, filter).await;
+        if suffix == ".com" {
+            assert_eq!(
+                error,
+                Some(ProviderError::FilterStopped {
+                    rule: "url-1".into()
+                })
+            );
+            assert!(!events.contains(&ProviderEvent::Done));
+        } else {
+            assert_eq!(error, None);
+            assert!(events.contains(&ProviderEvent::Done));
+        }
+    }
+}
+
+async fn assert_arming_interrupts_silent_response(status: Option<u16>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let root = tempfile::tempdir().unwrap();
+    let trip_file = root.path().join("trip");
+    std::fs::write(&trip_file, "stop").unwrap();
+    let idle = std::sync::Arc::new(
+        crate::provider_filter::ProviderFilter::compile(
+            &crate::provider_filter::ProviderFilterConfig::default(),
+        )
+        .unwrap(),
+    );
+    let armed = std::sync::Arc::new(
+        crate::provider_filter::ProviderFilter::compile(
+            &crate::provider_filter::ProviderFilterConfig {
+                enabled: true,
+                trip_file: Some(trip_file),
+                ..crate::provider_filter::ProviderFilterConfig::default()
+            },
+        )
+        .unwrap(),
+    );
+    let slot = std::sync::Arc::new(std::sync::RwLock::new(idle));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1", listener.local_addr().unwrap());
+    let (sent, ready) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        read_http_request(&mut stream).await;
+        if let Some(status) = status {
+            stream.write_all(format!("HTTP/1.1 {status} Test\r\nContent-Type: text/event-stream\r\nContent-Length: 1000000\r\n\r\n").as_bytes()).await.unwrap();
+            if status == 200 {
+                stream
+                    .write_all(b"data: {\"choices\":[{\"delta\":{\"content\":\"ready\"}}]}\n\n")
+                    .await
+                    .unwrap();
+            }
+        }
+        let _ = sent.send(());
+        let mut byte = [0];
+        matches!(
+            tokio::time::timeout(Duration::from_secs(3), stream.read(&mut byte)).await,
+            Ok(Ok(0)) | Ok(Err(_))
+        )
+    });
+    let mut policy = fast_policy();
+    policy.headers_timeout = Duration::from_secs(3);
+    policy.first_event_timeout = Duration::from_secs(3);
+    policy.no_progress_timeout = Duration::from_secs(3);
+    let mut client = test_client(url, policy);
+    client.filter_override = Some(slot.clone());
+    let mut pending = Some(tokio::spawn(
+        async move { client.chat_stream(&[], &[]).await },
+    ));
+    ready.await.unwrap();
+    let mut receiver = if status == Some(200) {
+        let mut receiver = pending.take().unwrap().await.unwrap().unwrap();
+        assert_eq!(
+            receiver.recv().await.unwrap().unwrap(),
+            ProviderEvent::Text("ready".into())
+        );
+        Some(receiver)
+    } else {
+        None
+    };
+    *slot.write().unwrap() = armed.clone();
+    let error = if let Some(receiver) = receiver.as_mut() {
+        tokio::time::timeout(Duration::from_millis(700), receiver.recv())
+            .await
+            .expect("arming must stop a silent body")
+            .unwrap()
+            .unwrap_err()
+    } else {
+        tokio::time::timeout(Duration::from_millis(700), pending.take().unwrap())
+            .await
+            .expect("arming must stop pending headers and error bodies")
+            .unwrap()
+            .unwrap_err()
+    };
+    assert!(matches!(error, ProviderError::FilterStopped { .. }));
+    assert!(armed.is_tripped());
+    assert!(
+        server.await.unwrap(),
+        "stopping must close the provider socket"
+    );
+}
+
+#[tokio::test]
+async fn filter_arming_interrupts_in_flight_headers() {
+    assert_arming_interrupts_silent_response(None).await;
+}
+
+#[tokio::test]
+async fn filter_arming_interrupts_in_flight_stream() {
+    assert_arming_interrupts_silent_response(Some(200)).await;
+}
+
+#[tokio::test]
+async fn filter_arming_interrupts_in_flight_error_body() {
+    assert_arming_interrupts_silent_response(Some(400)).await;
+}
+
+#[tokio::test]
+async fn filter_arming_checks_the_next_in_flight_response_frame() {
+    use tokio::io::AsyncWriteExt;
+    let idle = std::sync::Arc::new(
+        crate::provider_filter::ProviderFilter::compile(
+            &crate::provider_filter::ProviderFilterConfig::default(),
+        )
+        .unwrap(),
+    );
+    let slot = std::sync::Arc::new(std::sync::RwLock::new(idle));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1", listener.local_addr().unwrap());
+    let (release, released) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        read_http_request(&mut stream).await;
+        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 1000000\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"ready\"}}]}\n\n").await.unwrap();
+        released.await.unwrap();
+        stream.write_all(b"data: {\"choices\":[{\"delta\":{\"content\":\"secret\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n").await.unwrap();
+    });
+    let mut client = test_client(url, fast_policy());
+    client.filter_override = Some(slot.clone());
+    let mut receiver = client.chat_stream(&[], &[]).await.unwrap();
+    assert_eq!(
+        receiver.recv().await.unwrap().unwrap(),
+        ProviderEvent::Text("ready".into())
+    );
+    *slot.write().unwrap() = response_filter("secret");
+    release.send(()).unwrap();
+    assert_eq!(
+        receiver.recv().await.unwrap().unwrap_err(),
+        ProviderError::FilterStopped {
+            rule: "response-stop".into()
+        }
+    );
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn transport_regression_stalled_503_retries_two_identical_posts() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let mut requests = Vec::new();
+        let (mut first, _) = listener.accept().await.unwrap();
+        requests.push(read_http_request(&mut first).await);
+        first
+            .write_all(b"HTTP/1.1 503 Unavailable\r\nContent-Length: 1000000\r\n\r\n{")
+            .await
+            .unwrap();
+        let (mut second, _) = listener.accept().await.unwrap();
+        requests.push(read_http_request(&mut second).await);
+        second
+            .write_all(b"HTTP/1.1 503 Unavailable\r\nContent-Length: 1000000\r\n\r\n{")
+            .await
+            .unwrap();
+        let mut byte = [0];
+        assert!(matches!(first.read(&mut byte).await, Ok(0) | Err(_)));
+        assert!(matches!(second.read(&mut byte).await, Ok(0) | Err(_)));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(150), listener.accept())
+                .await
+                .is_err()
+        );
+        requests
+    });
+    let mut policy = fast_policy();
+    policy.max_attempts = 2;
+    policy.headers_timeout = Duration::from_millis(100);
+    let error = tokio::time::timeout(
+        Duration::from_millis(800),
+        test_client(url, policy).chat_stream(&[], &[]),
+    )
+    .await
+    .expect("stalled 503 bodies must not block retry")
+    .unwrap_err();
+    assert_eq!(error, ProviderError::http(503));
+    let requests = server.await.unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(request_body(&requests[0]), request_body(&requests[1]));
+}
+
+#[tokio::test]
+async fn transport_regression_receiver_drop_cancels_retry_error_body() {
+    let (url, server, ready) = stalled_error_server(503, b"{".to_vec()).await;
+    let mut policy = fast_policy();
+    policy.headers_timeout = Duration::from_secs(3);
+    policy.max_attempts = 2;
+    let client = test_client(url.clone(), policy);
+    let (tx, rx) = mpsc::unbounded_channel();
+    let task = tokio::spawn(async move {
+        let mut attempt = 1;
+        open_provider_response(
+            &client,
+            client.protocol.adapter(),
+            &format!("{url}/chat/completions"),
+            b"{}",
+            &crate::provider_replay::ReplayBindings::default(),
+            &mut attempt,
+            2,
+            None,
+            Some(&tx),
+        )
+        .await
+    });
+    ready.await.unwrap();
+    // Let the already-sent headers reach the request task so cancellation is
+    // exercised during body collection rather than while awaiting headers.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!task.is_finished());
+    drop(rx);
+    let response = tokio::time::timeout(Duration::from_millis(300), task)
+        .await
+        .expect("receiver cancellation must interrupt retry error-body collection")
+        .unwrap()
+        .unwrap();
+    assert!(response.is_none());
+    assert!(
+        server.await.unwrap(),
+        "cancelled body must close its socket"
+    );
+}
+
+#[tokio::test]
+async fn http_failure_captures_json_error_message_without_raw_body() {
+    use tokio::io::AsyncWriteExt;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        read_http_request(&mut stream).await;
+        let body = br#"{"error":{"type":"invalid_request_error","message":"model context window exceeded"}}"#;
+        stream
+            .write_all(
+                format!(
+                    "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        stream.write_all(body).await.unwrap();
+    });
+    let client = test_client(url, fast_policy());
+    let error = client.chat_stream(&[], &[]).await.unwrap_err();
+    match &error {
+        ProviderError::Http {
+            status: 400,
+            body_excerpt,
+        } => {
+            assert_eq!(
+                body_excerpt.as_deref(),
+                Some("model context window exceeded")
+            );
+        }
+        other => panic!("expected HTTP 400, got {other:?}"),
+    }
+    let visible = error.to_string();
+    assert!(visible.contains("model context window exceeded"));
+    assert!(!visible.contains("invalid_request_error"));
+    server.await.unwrap();
 }
 
 #[tokio::test]
@@ -3261,7 +4457,10 @@ async fn http_400_is_not_replayed_by_two_attempt_policy() {
             .chat_stream(&[], &[])
             .await
             .unwrap_err(),
-        ProviderError::Http { status: 400 }
+        ProviderError::Http {
+            status: 400,
+            body_excerpt: None
+        }
     );
     let (request, replayed) = server.await.unwrap();
     assert!(!request_body(&request).is_empty());
@@ -3280,19 +4479,21 @@ async fn assert_pre_output_commit_event_suppresses_replay(
     let server = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
         read_http_request(&mut stream).await;
-        stream
-            .write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 1000\r\n\r\n",
-            )
-            .await
-            .unwrap();
-        stream.write_all(event_body).await.unwrap();
+        // Send headers and the committed event together, so the deliberately
+        // short post-event deadline does not measure TCP delayed acknowledgments.
+        let mut response =
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 1000\r\n\r\n"
+                .to_vec();
+        response.extend_from_slice(event_body);
+        stream.write_all(&response).await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         tokio::time::timeout(std::time::Duration::from_millis(100), listener.accept())
             .await
             .is_err()
     });
     let mut policy = fast_policy();
+    policy.connect_timeout = Duration::from_secs(5);
+    policy.headers_timeout = Duration::from_secs(5);
     policy.max_attempts = 2;
     let mut receiver = test_client(url, policy)
         .chat_stream_with_options(&[], &[], &options)
@@ -3490,7 +4691,10 @@ async fn one_attempt_policy_sends_exactly_one_physical_post() {
 
     assert_eq!(
         client.chat_stream(&[], &[]).await.unwrap_err(),
-        ProviderError::Http { status: 429 }
+        ProviderError::Http {
+            status: 429,
+            body_excerpt: None
+        }
     );
     assert!(server.await.unwrap(), "one-attempt policy must not replay");
 }
@@ -3524,6 +4728,8 @@ async fn responses_options_correlation_header_and_terminal_metadata_are_exact() 
     let client = AgentClient::with_call_policy(
         "openai",
         &ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: url,
             api_key: String::new(),
             protocol: crate::agent::ProviderProtocol::OpenAiResponses,
@@ -3656,6 +4862,8 @@ async fn provider_trace_captures_retries_frames_events_and_terminal_outcome() {
     let client = AgentClient::with_policy(
         "test",
         &ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: url,
             api_key: "trace-secret".into(),
             protocol: crate::agent::ProviderProtocol::ChatCompletions,
@@ -3730,9 +4938,21 @@ async fn provider_trace_captures_all_supported_protocols_at_the_common_boundary(
             panic!("first activation must create a trace");
         };
         let session_id = uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000117").unwrap();
+        // This fixture checks trace contents, not deadline enforcement. Leave
+        // room for a loaded verification host while keeping one bounded POST.
+        let policy = ProviderCallPolicy {
+            connect_timeout: Duration::from_secs(5),
+            headers_timeout: Duration::from_secs(5),
+            first_event_timeout: Duration::from_secs(5),
+            no_progress_timeout: Duration::from_secs(5),
+            max_attempts: 1,
+            ..fast_policy()
+        };
         let client = AgentClient::with_policy(
             "test",
             &ProviderConfig {
+                google: None,
+                tool_schema_policy: Default::default(),
                 base_url: url,
                 api_key: String::new(),
                 protocol,
@@ -3741,7 +4961,7 @@ async fn provider_trace_captures_all_supported_protocols_at_the_common_boundary(
                 timeout: ProviderTimeoutConfig::default(),
             },
             "model",
-            fast_policy(),
+            policy,
             crate::request::RequestStore::default(),
         )
         .with_trace_hub_for_test(hub.clone())
@@ -3752,16 +4972,10 @@ async fn provider_trace_captures_all_supported_protocols_at_the_common_boundary(
             .unwrap();
         server.await.unwrap();
         let path = hub.directory().join(format!("{id}.jsonl"));
-        let mut trace = String::new();
-        for _ in 0..100 {
-            trace = std::fs::read_to_string(&path).unwrap_or_default();
-            if trace.contains("\"outcome\":\"completed\"") {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-        hub.stop_and_flush(Duration::from_secs(1));
-        trace
+        // Stream closure queues the terminal record; flush the writer before
+        // reading instead of returning a snapshot captured before the barrier.
+        assert_eq!(hub.stop_and_flush(Duration::from_secs(1)), Some(id));
+        std::fs::read_to_string(path).unwrap()
     }
 
     let chat = capture(
@@ -3890,6 +5104,8 @@ async fn hrs253_input_body_cap_rejects_every_protocol_before_transport() {
     ] {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let provider = ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: format!("http://{}/v1", listener.local_addr().unwrap()),
             api_key: "synthetic-test-token".into(),
             protocol,
@@ -3942,6 +5158,8 @@ async fn hrs253_input_body_cap_rejects_every_protocol_before_transport() {
 #[tokio::test]
 async fn hrs253_prepared_requests_expose_the_actual_route_before_outcome_capture() {
     let provider = ProviderConfig {
+        google: None,
+        tool_schema_policy: Default::default(),
         base_url: "http://127.0.0.1:1/v1".into(),
         api_key: "synthetic".into(),
         protocol: crate::agent::provider::ProviderProtocol::ChatCompletions,
@@ -3973,4 +5191,152 @@ async fn hrs253_prepared_requests_expose_the_actual_route_before_outcome_capture
     .outcome_snapshot();
     assert_eq!(actual, explicit);
     assert_ne!(unresolved.model_route, actual.model_route);
+}
+
+#[tokio::test]
+async fn orc290_selective_pruning_crosses_all_three_actual_provider_transports() {
+    for protocol in [
+        crate::agent::ProviderProtocol::ChatCompletions,
+        crate::agent::ProviderProtocol::OpenAiResponses,
+        crate::agent::ProviderProtocol::AnthropicMessages,
+    ] {
+        let mut canonical = vec![];
+        for i in 0..5 {
+            canonical.push(user(&format!("turn{i}")));
+            let mut tool = call(
+                &format!("p{i}"),
+                ToolStatus::Done,
+                Some(&"PRUNABLE_EVIDENCE ".repeat(2500)),
+            );
+            tool.arguments = "{\"path\":\"evidence.txt\"}".into();
+            canonical.push(assistant_with_calls(vec![tool]));
+        }
+        let before = serde_json::to_vec(&canonical).unwrap();
+        let mut messages = AgentClient::build_messages(None, &canonical, None, &[]).unwrap();
+        let stats = crate::context_pruning::project(&mut messages, true, Some(8000));
+        assert!(stats.results > 0);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            use tokio::io::AsyncWriteExt;
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let bytes = read_http_request(&mut socket).await;
+            socket
+                .write_all(
+                    b"HTTP/1.1 400 Bad Request\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                )
+                .await
+                .unwrap();
+            serde_json::from_slice::<serde_json::Value>(request_body(&bytes)).unwrap()
+        });
+        let provider = ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
+            base_url: format!("http://{address}/v1"),
+            api_key: String::new(),
+            protocol,
+            prompt_cache_mode: crate::config::PromptCacheMode::Off,
+            models: vec!["fixture".into()],
+            timeout: ProviderTimeoutConfig::default(),
+        };
+        let client = AgentClient::with_call_policy(
+            "fixture",
+            &provider,
+            "fixture",
+            ProviderCallPolicy::one_attempt(),
+            Default::default(),
+        );
+        let request = crate::request::PreparedModelRequest::new(
+            crate::request::RequestKind::MainTurn,
+            "fixture",
+            "fixture",
+            messages,
+            vec![],
+            Default::default(),
+        );
+        let _expected_fixture_rejection = client.stream_prepared(&request).await;
+        let body = server.await.unwrap();
+        let encoded = serde_json::to_string(&body).unwrap();
+        assert!(encoded.contains("omitted from this request"));
+        assert!(encoded.contains("turn4"));
+        assert!(encoded.contains("p0"));
+        assert_eq!(serde_json::to_vec(&canonical).unwrap(), before);
+    }
+}
+
+#[tokio::test]
+async fn google_strict_schema_rejection_is_visible_before_any_post_without_schema_values() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let hub = crate::provider_trace::ProviderTraceHub::new(temp.path().join("traces"), true);
+    let crate::provider_trace::TraceStart::Started(id) = hub.start().unwrap() else {
+        panic!()
+    };
+    let store = crate::request::RequestStore::default();
+    let client = AgentClient::with_policy(
+        "google-fixture",
+        &ProviderConfig {
+            google: None,
+            tool_schema_policy: crate::tool_schema::Policy::RejectLossy,
+            base_url: format!("http://{address}/v1beta"),
+            api_key: "private-google-key".into(),
+            protocol: crate::agent::ProviderProtocol::GoogleGenerateContent,
+            prompt_cache_mode: Default::default(),
+            models: vec!["fixture-model".into()],
+            timeout: Default::default(),
+        },
+        "fixture-model",
+        fast_policy(),
+        store.clone(),
+    )
+    .with_trace_hub_for_test(hub.clone());
+    let tools = vec![ToolDef {
+        def_type: "function".into(),
+        function: ToolFunction {
+            name: "example".into(),
+            description: "private-schema-description".into(),
+            parameters: serde_json::json!({"type":"object","additionalProperties":false,"properties":{"value":{"type":"string","enum":["private-schema-value"]}}}),
+        },
+    }];
+    let request = crate::request::PreparedModelRequest::new(
+        crate::request::RequestKind::MainTurn,
+        "google-fixture",
+        "fixture-model",
+        vec![],
+        tools,
+        ChatRequestOptions::default(),
+    );
+    let error = client.stream_prepared(&request).await.unwrap_err();
+    assert!(error.to_string().contains("reject_lossy"));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(30), listener.accept())
+            .await
+            .is_err()
+    );
+    let snapshot = store.snapshot().unwrap();
+    assert!(snapshot.render_text().contains("Rejected tool example"));
+    assert!(snapshot
+        .adapter_diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.contains("constraint_dropped")
+            && diagnostic.contains("/additionalProperties")));
+    hub.stop_and_flush(Duration::from_secs(1));
+    let trace = std::fs::read_to_string(hub.directory().join(format!("{id}.jsonl"))).unwrap();
+    assert!(trace.contains("adapter_diagnostics"));
+    assert!(trace.contains("blocked_tool_schema"));
+    assert!(!trace.contains("attempt_started"));
+    for private in [
+        "private-schema-description",
+        "private-schema-value",
+        "private-google-key",
+    ] {
+        assert!(!trace.contains(private));
+    }
+    assert!(
+        crate::google_provider::rejected_schema_diagnostics(&ProviderError::Protocol(
+            "unrelated provider error".into()
+        ))
+        .is_none()
+    );
 }

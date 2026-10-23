@@ -73,7 +73,7 @@ mod tests {
         let home = root.path().canonicalize().unwrap();
         let owner = VmOwnership::acquire(&home).unwrap();
         assert!(VmOwnership::acquire(&home).is_err());
-        let mut command = tokio::process::Command::new("/usr/bin/python3");
+        let mut command = tokio::process::Command::new(crate::harness_vm::HOST_PYTHON);
         command
             .args([
                 "-I",

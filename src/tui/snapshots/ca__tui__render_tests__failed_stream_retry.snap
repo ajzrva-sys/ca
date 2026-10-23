@@ -2,8 +2,9 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca · agent · auto
-> Inspect the provider stream
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
+ › Inspect the provider stream
 
 I decoded part of the response before the connection failed.
 
@@ -27,14 +28,14 @@ I decoded part of the response before the connection failed.
 
 
 
-
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
 Authentication rejected for mimo (HTTP 401). Run /provider setup mimo, then /retry
 -- narrow --
- ca · agent · auto
-> Inspect the provider stream
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
+ › Inspect the provider stream
 
 I decoded part of the response before the connection failed.
 
@@ -52,8 +53,7 @@ I decoded part of the response before the connection failed.
 
 
 
-
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                           │
+╰──────────────────────────────────────────── agent · auto ╯
 Authentication rejected for mimo (HTTP 401). Run /provider …

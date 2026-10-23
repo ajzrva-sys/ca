@@ -840,6 +840,7 @@ mod tests {
             model_text: "bounded raw sentinel".into(),
             observation,
             success: true,
+            mutation: None,
         };
 
         assert_eq!(

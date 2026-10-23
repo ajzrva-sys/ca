@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
 
     Sessions                                                                                 Esc
@@ -12,7 +12,7 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
 
       No recent sessions
                      ┌────────────────────────────────────────────────────────┐
-    Enter open  ·  Ct│Delete saved session?                                   │
+    Enter open  ·  Ct│Purge saved session?                                    │
     Shift+P pin  ·  S│                                                        │
                      │Repository review · 11111111                            │
                      │This permanently removes exactly this saved session.    │
@@ -20,7 +20,7 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
                      │                                                        │
                      │Session deletion failed: permission denied              │
                      │                                                        │
-                     │ Cancel     Delete                                      │
+                     │ Cancel     Purge                                       │
                      │←/→ choose · Enter confirm · Esc cancel                 │
                      └────────────────────────────────────────────────────────┘
 
@@ -28,19 +28,19 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
 
 
 
-
- →
-
+╭─                                                                                                ─╮
+│›                                                                                                 │
+╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
 / commands
 -- narrow --
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
 
 
     Sessions                                         Esc
 
      Recent 0    Archived 0   Tab changes list
   ┌──────────────────────────────────────────────────────┐
-  │Delete saved session?                                 │
+  │Purge saved session?                                  │
   │                                                      │
   │Repository review · 11111111                          │
   │This permanently removes exactly this saved session.  │
@@ -48,12 +48,12 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
   │                                                      │
   │Session deletion failed: permission denied            │
   │                                                      │
-  │ Cancel     Delete                                    │
+  │ Cancel     Purge                                     │
   │←/→ choose · Enter confirm · Esc cancel               │
   └──────────────────────────────────────────────────────┘
 
 
-
- →
-
+╭─                                                        ─╮
+│›                                                         │
+╰──────────────────────────────────────────── agent · auto ╯
 / commands

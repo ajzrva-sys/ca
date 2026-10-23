@@ -2,8 +2,9 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&approval, 100, 34),\nrender_to_text(&approval, 60, 30))"
 ---
- ca · agent · auto
-> Apply the approved system change
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
+ › Apply the approved system change
 
 
   Approve tool [1/1] — run_privileged
@@ -31,14 +32,14 @@ expression: "wide_narrow(render_to_text(&approval, 100, 34),\nrender_to_text(&ap
 
 
 
-
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
 1 messages · / commands
 -- narrow --
- ca · agent · auto
-> Apply the approved system change
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
+ › Apply the approved system change
 
 
   Approve tool [1/1] — run_privileged
@@ -62,8 +63,7 @@ aaaa
 
 
 
-
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                           │
+╰──────────────────────────────────────────── agent · auto ╯
 1 messages · / commands

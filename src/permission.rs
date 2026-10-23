@@ -221,6 +221,52 @@ pub enum PermissionOutcome {
     NoMatch,
 }
 
+/// Value-free provenance captured by the same evaluation that chooses an outcome.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolicySource {
+    LegacyRule,
+    PermissionRule,
+    SessionGrant,
+    OutboundApprovalGate,
+    NoMatch,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatcherCategory {
+    Tool,
+    Path,
+    CommandPrefix,
+    ExactInvocation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PermissionEvaluation {
+    pub outcome: PermissionOutcome,
+    pub source: PolicySource,
+    /// Zero-based index in the source collection at evaluation time.
+    pub index: Option<usize>,
+    pub matcher: Option<MatcherCategory>,
+}
+
+fn matcher_category(matcher: &PermissionMatcher) -> MatcherCategory {
+    match matcher {
+        PermissionMatcher::Tool { .. } => MatcherCategory::Tool,
+        PermissionMatcher::Path { .. } => MatcherCategory::Path,
+        PermissionMatcher::CommandPrefix { .. } => MatcherCategory::CommandPrefix,
+        PermissionMatcher::Invocation { .. } => MatcherCategory::ExactInvocation,
+    }
+}
+
+fn legacy_category(rule: &crate::config::ApprovalRule) -> MatcherCategory {
+    match rule {
+        crate::config::ApprovalRule::AllowTool(_) | crate::config::ApprovalRule::DenyTool(_) => {
+            MatcherCategory::Tool
+        }
+        crate::config::ApprovalRule::AllowPath { .. }
+        | crate::config::ApprovalRule::DenyPath { .. } => MatcherCategory::Path,
+    }
+}
+
 pub fn evaluate(
     tool: &str,
     arguments: &serde_json::Value,
@@ -228,45 +274,101 @@ pub fn evaluate(
     rules: &[PermissionRule],
     session_grants: &[PermissionMatcher],
 ) -> PermissionOutcome {
-    if legacy_rules.iter().any(|rule| {
+    evaluate_explained(tool, arguments, legacy_rules, rules, session_grants).outcome
+}
+
+pub fn evaluate_explained(
+    tool: &str,
+    arguments: &serde_json::Value,
+    legacy_rules: &[crate::config::ApprovalRule],
+    rules: &[PermissionRule],
+    session_grants: &[PermissionMatcher],
+) -> PermissionEvaluation {
+    if let Some(index) = legacy_rules.iter().position(|rule| {
         legacy_decision(rule) == PermissionDecision::Deny && legacy_matches(rule, tool, arguments)
-    }) || rules.iter().any(|rule| {
+    }) {
+        return PermissionEvaluation {
+            outcome: PermissionOutcome::Deny,
+            source: PolicySource::LegacyRule,
+            index: Some(index),
+            matcher: Some(legacy_category(&legacy_rules[index])),
+        };
+    }
+    if let Some(index) = rules.iter().position(|rule| {
         rule.decision == PermissionDecision::Deny
             && rule.matcher.matches(tool, arguments) == MatchResult::Yes
     }) {
-        return PermissionOutcome::Deny;
+        return PermissionEvaluation {
+            outcome: PermissionOutcome::Deny,
+            source: PolicySource::PermissionRule,
+            index: Some(index),
+            matcher: Some(matcher_category(&rules[index].matcher)),
+        };
     }
 
     // External communication is never authorized by a generic tool matcher,
     // legacy allow rule, broad session grant, network grant, Yolo, or
     // AutoReview. The email manager consumes its own exact one-use approval.
     if crate::email::is_outbound_tool(tool) {
-        return PermissionOutcome::NoMatch;
+        return PermissionEvaluation {
+            outcome: PermissionOutcome::NoMatch,
+            source: PolicySource::OutboundApprovalGate,
+            index: None,
+            matcher: None,
+        };
     }
 
-    if rules.iter().any(|rule| {
+    if let Some(index) = rules.iter().position(|rule| {
         rule.decision == PermissionDecision::Ask
             && rule.matcher.matches(tool, arguments) == MatchResult::Yes
     }) {
-        return PermissionOutcome::Ask;
+        return PermissionEvaluation {
+            outcome: PermissionOutcome::Ask,
+            source: PolicySource::PermissionRule,
+            index: Some(index),
+            matcher: Some(matcher_category(&rules[index].matcher)),
+        };
     }
 
-    if session_grants
+    if let Some(index) = session_grants
         .iter()
-        .any(|grant| grant.matches(tool, arguments) == MatchResult::Yes)
+        .position(|grant| grant.matches(tool, arguments) == MatchResult::Yes)
     {
-        return PermissionOutcome::Allow;
+        return PermissionEvaluation {
+            outcome: PermissionOutcome::Allow,
+            source: PolicySource::SessionGrant,
+            index: Some(index),
+            matcher: Some(matcher_category(&session_grants[index])),
+        };
     }
 
-    if legacy_rules.iter().any(|rule| {
+    if let Some(index) = legacy_rules.iter().position(|rule| {
         legacy_decision(rule) == PermissionDecision::Allow && legacy_matches(rule, tool, arguments)
-    }) || rules.iter().any(|rule| {
+    }) {
+        return PermissionEvaluation {
+            outcome: PermissionOutcome::Allow,
+            source: PolicySource::LegacyRule,
+            index: Some(index),
+            matcher: Some(legacy_category(&legacy_rules[index])),
+        };
+    }
+    if let Some(index) = rules.iter().position(|rule| {
         rule.decision == PermissionDecision::Allow
             && rule.matcher.matches(tool, arguments) == MatchResult::Yes
     }) {
-        PermissionOutcome::Allow
+        PermissionEvaluation {
+            outcome: PermissionOutcome::Allow,
+            source: PolicySource::PermissionRule,
+            index: Some(index),
+            matcher: Some(matcher_category(&rules[index].matcher)),
+        }
     } else {
-        PermissionOutcome::NoMatch
+        PermissionEvaluation {
+            outcome: PermissionOutcome::NoMatch,
+            source: PolicySource::NoMatch,
+            index: None,
+            matcher: None,
+        }
     }
 }
 
@@ -754,6 +856,164 @@ mod tests {
 
     fn rule(decision: PermissionDecision, matcher: PermissionMatcher) -> PermissionRule {
         PermissionRule { decision, matcher }
+    }
+
+    #[test]
+    fn agy295_explanations_keep_original_precedence_and_source_indices() {
+        let arguments = serde_json::json!({"path":"/workspace/private/value"});
+        let legacy = [
+            crate::config::ApprovalRule::AllowTool("write_file".into()),
+            crate::config::ApprovalRule::DenyPath {
+                tool: "write_file".into(),
+                path_pattern: "/workspace/private/**".into(),
+            },
+        ];
+        let rules = [
+            rule(
+                PermissionDecision::Allow,
+                PermissionMatcher::Tool {
+                    tool: "write_file".into(),
+                },
+            ),
+            rule(
+                PermissionDecision::Ask,
+                PermissionMatcher::Tool {
+                    tool: "write_file".into(),
+                },
+            ),
+            rule(
+                PermissionDecision::Deny,
+                PermissionMatcher::Path {
+                    tool: "write_file".into(),
+                    path_pattern: "/workspace/private/**".into(),
+                },
+            ),
+        ];
+        let grants = [PermissionMatcher::Invocation {
+            tool: "write_file".into(),
+            arguments: arguments.clone(),
+        }];
+        let cases = [
+            (
+                &legacy[..],
+                &rules[..],
+                &grants[..],
+                PermissionOutcome::Deny,
+                PolicySource::LegacyRule,
+                Some(1),
+                Some(MatcherCategory::Path),
+            ),
+            (
+                &legacy[..1],
+                &rules[..],
+                &grants[..],
+                PermissionOutcome::Deny,
+                PolicySource::PermissionRule,
+                Some(2),
+                Some(MatcherCategory::Path),
+            ),
+            (
+                &legacy[..1],
+                &rules[..2],
+                &grants[..],
+                PermissionOutcome::Ask,
+                PolicySource::PermissionRule,
+                Some(1),
+                Some(MatcherCategory::Tool),
+            ),
+            (
+                &legacy[..1],
+                &rules[..1],
+                &grants[..],
+                PermissionOutcome::Allow,
+                PolicySource::SessionGrant,
+                Some(0),
+                Some(MatcherCategory::ExactInvocation),
+            ),
+            (
+                &legacy[..1],
+                &rules[..1],
+                &[][..],
+                PermissionOutcome::Allow,
+                PolicySource::LegacyRule,
+                Some(0),
+                Some(MatcherCategory::Tool),
+            ),
+            (
+                &[][..],
+                &rules[..1],
+                &[][..],
+                PermissionOutcome::Allow,
+                PolicySource::PermissionRule,
+                Some(0),
+                Some(MatcherCategory::Tool),
+            ),
+            (
+                &[][..],
+                &[][..],
+                &[][..],
+                PermissionOutcome::NoMatch,
+                PolicySource::NoMatch,
+                None,
+                None,
+            ),
+        ];
+        for (legacy, rules, grants, outcome, source, index, matcher) in cases {
+            let explained = evaluate_explained("write_file", &arguments, legacy, rules, grants);
+            assert_eq!(
+                explained,
+                PermissionEvaluation {
+                    outcome,
+                    source,
+                    index,
+                    matcher
+                }
+            );
+            assert_eq!(
+                evaluate("write_file", &arguments, legacy, rules, grants),
+                outcome
+            );
+            assert!(!format!("{explained:?}").contains("/workspace/private"));
+        }
+    }
+
+    #[test]
+    fn agy295_explanation_preserves_outbound_and_unsafe_command_gates() {
+        let allow = [rule(
+            PermissionDecision::Allow,
+            PermissionMatcher::Tool {
+                tool: "email_send".into(),
+            },
+        )];
+        let grants = [PermissionMatcher::Tool {
+            tool: "email_send".into(),
+        }];
+        let evaluation =
+            evaluate_explained("email_send", &serde_json::json!({}), &[], &allow, &grants);
+        assert_eq!(evaluation.outcome, PermissionOutcome::NoMatch);
+        assert_eq!(evaluation.source, PolicySource::OutboundApprovalGate);
+        assert_eq!(evaluation.matcher, None);
+
+        let command = [PermissionMatcher::CommandPrefix {
+            prefix: vec!["echo".into()],
+        }];
+        let safe = evaluate_explained(
+            "run_command",
+            &serde_json::json!({"command":"echo secret-value"}),
+            &[],
+            &[],
+            &command,
+        );
+        assert_eq!(safe.matcher, Some(MatcherCategory::CommandPrefix));
+        let unsafe_command = evaluate_explained(
+            "run_command",
+            &serde_json::json!({"command":"echo secret-value; cat private-value"}),
+            &[],
+            &[],
+            &command,
+        );
+        assert_eq!(unsafe_command.outcome, PermissionOutcome::NoMatch);
+        assert!(!format!("{safe:?} {unsafe_command:?}").contains("secret-value"));
     }
 
     #[test]

@@ -128,7 +128,16 @@ pub struct CaLearningCompletionRequestWireV1 {
     pub artifact: Option<CaLearningPublicationWireV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_proof: Option<LearningPublicationReviewProofV1>,
     pub digest: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct LearningPublicationReviewProofV1 {
+    pub objective_id: String,
+    pub candidate_id: String,
+    pub review_digest: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -229,6 +238,10 @@ pub struct LearningWorkflowStateV1 {
     pub judge_votes: Vec<JudgeVoteV1>,
     pub failure_counts: BTreeMap<String, u32>,
     pub cooldown_until: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_resume_stage: Option<LearningWorkflowStageV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_resets_at: Option<String>,
     pub attempt: u32,
     pub updated_at: String,
     pub revision: String,
@@ -249,6 +262,8 @@ impl LearningWorkflowStateV1 {
             judge_votes: Vec::new(),
             failure_counts: BTreeMap::new(),
             cooldown_until: None,
+            budget_resume_stage: None,
+            budget_resets_at: None,
             attempt: 0,
             updated_at: Utc::now().to_rfc3339(),
             revision: String::new(),
@@ -287,6 +302,8 @@ pub struct LearningWorkflowSummaryV1 {
     pub replay_completed: usize,
     pub replay_total: usize,
     pub cooldown_until: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_resets_at: Option<String>,
     pub judge_routes: Vec<String>,
     pub failure_fingerprint_count: usize,
     pub attempt: u32,
@@ -623,7 +640,7 @@ impl CaRoleRunLearningRunner {
         prompt: &str,
         schema: serde_json::Value,
     ) -> Result<T> {
-        use crate::ca::{CaProcessConfig, CaRoleAuthority, CaRunRequest, CaRunner, RealCaRunner};
+        use crate::ca::{CaProcessConfig, CaRoleAuthority, CaRunRequest};
         use crate::cancellation::CancellationToken;
         use crate::config::{RoleConfig, RoleProvider};
         use crate::paths::Paths;
@@ -644,6 +661,9 @@ impl CaRoleRunLearningRunner {
                 web_search: "disabled".to_string(),
                 timeout_seconds: 900,
             };
+            // Admission may fail at the daily cap. Do it before creating the
+            // foreground monitor so a paused tick cannot leave a detached thread.
+            let (ticket, price) = super::daily_budget::learning_call_reservation(&route.id())?;
             let cancellation = CancellationToken::default();
             let monitor_stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
             let monitor = {
@@ -660,7 +680,7 @@ impl CaRoleRunLearningRunner {
                     }
                 })
             };
-            let output = RealCaRunner.run_ca(
+            let output = crate::ca::run_ca_learning(
                 &paths,
                 CaProcessConfig {
                     bin: &self.binary,
@@ -680,7 +700,16 @@ impl CaRoleRunLearningRunner {
             monitor_stop.store(true, std::sync::atomic::Ordering::SeqCst);
             let _ = monitor.join();
             let output = output?;
-            serde_json::from_str(&output).context("parse structured ca learning output")
+            if let Some(usage) = output.usage {
+                super::daily_budget::learning_call_settled(
+                    &ticket,
+                    &price,
+                    usage.input_tokens,
+                    usage.output_tokens,
+                    usage.requests,
+                )?;
+            }
+            serde_json::from_str(&output.content).context("parse structured ca learning output")
         })();
         let cleanup = safe_remove_learning_workspace(&root);
         match (result, cleanup) {
@@ -893,6 +922,7 @@ pub fn workflow_summary(
         replay_completed: workflow.baseline_replay_ids.len() + workflow.candidate_replay_ids.len(),
         replay_total,
         cooldown_until: workflow.cooldown_until,
+        budget_resets_at: workflow.budget_resets_at,
         judge_routes: workflow
             .judge_votes
             .iter()
@@ -903,10 +933,102 @@ pub fn workflow_summary(
     }))
 }
 
+pub const MAX_PENDING_LEARNING_REVIEWS: usize = 8;
+/// Concrete immutable candidates await exact review independently of evaluation.
+pub fn pending_learning_reviews(vault: &LearningVault) -> Result<Vec<LearningWorkflowSummaryV1>> {
+    let mut reviews = Vec::new();
+    for objective in vault.list_immutable::<ImprovementObjectiveV1>("objectives")? {
+        if load_workflow(vault, &objective.objective_id)?
+            .is_some_and(|w| w.stage == LearningWorkflowStageV1::NeedsReview)
+        {
+            if let Some(summary) = workflow_summary(vault, Some(&objective.objective_id))? {
+                reviews.push(summary);
+            }
+        }
+    }
+    Ok(reviews)
+}
+
+/// Skip native scheduler admission when no evaluation can advance. Queued
+/// exports are supplied by the host after excluding already imported intents.
+pub fn learning_stage_ready(
+    vault: &LearningVault,
+    now: DateTime<Utc>,
+    new_ca_intent: bool,
+) -> Result<bool> {
+    let Some(state) = super::supervisor::load_state(vault)? else {
+        return Ok(false);
+    };
+    if !state.enrolled
+        || !state.continuous
+        || state.pause.is_some()
+        || !vault.health()?.healthy
+        || pending_learning_reviews(vault)?.len() >= MAX_PENDING_LEARNING_REVIEWS
+        || foreground_learning_active(vault)?
+    {
+        return Ok(false);
+    }
+    let ready = |workflow: &LearningWorkflowStateV1| -> Result<bool> {
+        match workflow.stage {
+            LearningWorkflowStageV1::NeedsReview
+            | LearningWorkflowStageV1::Promoted
+            | LearningWorkflowStageV1::Rejected => Ok(false),
+            LearningWorkflowStageV1::BudgetPaused | LearningWorkflowStageV1::CoolingDown => {
+                let timestamp = if workflow.stage == LearningWorkflowStageV1::BudgetPaused {
+                    workflow.budget_resets_at.as_deref()
+                } else {
+                    workflow.cooldown_until.as_deref()
+                };
+                Ok(timestamp
+                    .map(DateTime::parse_from_rfc3339)
+                    .transpose()?
+                    .is_none_or(|until| until.with_timezone(&Utc) <= now))
+            }
+            _ => Ok(true),
+        }
+    };
+    if let Some(id) = state.active_objective_id.as_ref() {
+        let workflow = load_workflow(vault, id)?;
+        if let Some(workflow) = workflow {
+            if workflow.stage != LearningWorkflowStageV1::NeedsReview {
+                return ready(&workflow);
+            }
+        } else {
+            return Ok(true);
+        }
+    }
+    for objective in vault.list_immutable::<ImprovementObjectiveV1>("objectives")? {
+        match load_workflow(vault, &objective.objective_id)? {
+            Some(workflow)
+                if !matches!(
+                    workflow.stage,
+                    LearningWorkflowStageV1::NeedsReview
+                        | LearningWorkflowStageV1::Promoted
+                        | LearningWorkflowStageV1::Rejected
+                ) =>
+            {
+                return ready(&workflow)
+            }
+            None => return Ok(true),
+            _ => {}
+        }
+    }
+    Ok(new_ca_intent || super::supervisor::trace_objective_pending(vault)?)
+}
+
 pub fn run_learning_stage<B: CaLearningBridgeClient, R: LearningExperimentRunner>(
     vault: &LearningVault,
     bridge: &B,
     runner: &R,
+) -> Result<String> {
+    run_learning_stage_at(vault, bridge, runner, Utc::now())
+}
+
+fn run_learning_stage_at<B: CaLearningBridgeClient, R: LearningExperimentRunner>(
+    vault: &LearningVault,
+    bridge: &B,
+    runner: &R,
+    now: DateTime<Utc>,
 ) -> Result<String> {
     let _worker_lock = vault.acquire_worker_lock()?;
     let mut state =
@@ -918,6 +1040,17 @@ pub fn run_learning_stage<B: CaLearningBridgeClient, R: LearningExperimentRunner
         return Ok(
             "deferred background learning while foreground model work is active".to_string(),
         );
+    }
+    if pending_learning_reviews(vault)?.len() >= MAX_PENDING_LEARNING_REVIEWS {
+        return Ok("learning review inbox is full (8); evaluation waits for review".into());
+    }
+    if let Some(id) = state.active_objective_id.clone() {
+        if load_workflow(vault, &id)?
+            .is_some_and(|w| w.stage == LearningWorkflowStageV1::NeedsReview)
+        {
+            clear_active_objective(vault, &id)?;
+            state = super::supervisor::load_state(vault)?.context("learning state disappeared")?;
+        }
     }
     if state.active_objective_id.is_none() {
         let _ = activate_unclaimed_objective(vault)?;
@@ -938,6 +1071,35 @@ pub fn run_learning_stage<B: CaLearningBridgeClient, R: LearningExperimentRunner
     let objective = vault.read_immutable::<ImprovementObjectiveV1>("objectives", &objective_id)?;
     let mut workflow = load_workflow(vault, &objective_id)?
         .unwrap_or(LearningWorkflowStateV1::new(objective_id.clone())?);
+    if workflow.stage == LearningWorkflowStageV1::BudgetPaused {
+        let reset = DateTime::parse_from_rfc3339(
+            workflow
+                .budget_resets_at
+                .as_deref()
+                .context("budget pause has no reset time")?,
+        )?
+        .with_timezone(&Utc);
+        if now < reset {
+            return Ok(format!(
+                "evaluation budget paused until {reset}; candidate and replay progress retained"
+            ));
+        }
+        let resume = workflow
+            .budget_resume_stage
+            .take()
+            .context("budget pause has no resume stage")?;
+        if resume == LearningWorkflowStageV1::BudgetPaused {
+            bail!("budget pause has an invalid resume stage");
+        }
+        workflow.budget_resets_at = None;
+        transition_workflow(
+            vault,
+            &mut workflow,
+            resume,
+            "Eastern daily allowance reset; resume the same evaluation checkpoint",
+            None,
+        )?;
+    }
     if matches!(workflow.stage, LearningWorkflowStageV1::CoolingDown) {
         let until = workflow
             .cooldown_until
@@ -957,7 +1119,7 @@ pub fn run_learning_stage<B: CaLearningBridgeClient, R: LearningExperimentRunner
         )?;
         return Ok("objective cooldown elapsed".to_string());
     }
-    match workflow.stage {
+    let result = match workflow.stage {
         LearningWorkflowStageV1::ObjectiveCreated | LearningWorkflowStageV1::WaitingForEvidence => {
             prepare_or_freeze_evaluation(vault, runner, &state, &objective, &mut workflow)
         }
@@ -982,7 +1144,20 @@ pub fn run_learning_stage<B: CaLearningBridgeClient, R: LearningExperimentRunner
         }
         LearningWorkflowStageV1::Quarantined => reset_quarantined_candidate(vault, &mut workflow),
         LearningWorkflowStageV1::CoolingDown => unreachable!(),
+        LearningWorkflowStageV1::BudgetPaused => unreachable!(),
+    };
+    if let Err(error) = &result {
+        if let Some(exhausted) = error.downcast_ref::<super::DailyLearningBudgetExhausted>() {
+            workflow.budget_resume_stage = Some(workflow.stage.clone());
+            workflow.budget_resets_at = Some(exhausted.resets_at.to_rfc3339());
+            transition_workflow(vault,&mut workflow,LearningWorkflowStageV1::BudgetPaused,"shared daily allowance exhausted; retain candidate, frozen plan, replay and judgment progress",None)?;
+            return Ok(format!(
+                "evaluation budget paused until {}",
+                exhausted.resets_at
+            ));
+        }
     }
+    result
 }
 
 pub fn begin_foreground_learning_lease_if_enrolled(
@@ -1082,7 +1257,9 @@ fn activate_unclaimed_objective(vault: &LearningVault) -> Result<bool> {
         let completed = load_workflow(vault, &objective.objective_id)?.is_some_and(|workflow| {
             matches!(
                 workflow.stage,
-                LearningWorkflowStageV1::Promoted | LearningWorkflowStageV1::Rejected
+                LearningWorkflowStageV1::Promoted
+                    | LearningWorkflowStageV1::Rejected
+                    | LearningWorkflowStageV1::NeedsReview
             )
         });
         if !completed {
@@ -1111,6 +1288,11 @@ fn import_one_ca_intent<B: CaLearningBridgeClient>(
     bridge: &B,
     state: &SelfImprovementStateV1,
 ) -> Result<bool> {
+    let imported_ids = vault
+        .list_immutable::<ImportedCaLearningIntentV1>("ca/intents")?
+        .into_iter()
+        .map(|intent| (intent.profile, intent.ca_intent_id))
+        .collect::<BTreeSet<_>>();
     for profile in &state.ca_evidence_profiles {
         let export = bridge.export(
             &profile.name,
@@ -1121,13 +1303,22 @@ fn import_one_ca_intent<B: CaLearningBridgeClient>(
                 .map(String::as_str),
         )?;
         validate_ca_export(&export, profile, &state.enrollment_digest)?;
-        let Some(intent) = export.intents.first() else {
+        let Some(intent) = export.intents.iter().find(|intent| {
+            !imported_ids.contains(&(profile.name.clone(), intent.intent_id.clone()))
+        }) else {
             if state.ca_bridge_cursors.get(&profile.name) != Some(&export.cursor) {
                 update_bridge_cursor(vault, &profile.name, &export.cursor)?;
             }
             continue;
         };
-        validate_ca_intent(intent, &state.enrollment_digest)?;
+        if intent.enrollment_digest != state.enrollment_digest
+            && !state
+                .previous_enrollment_digests
+                .contains(&intent.enrollment_digest)
+        {
+            bail!("ca intent belongs to an unrecognized enrollment");
+        }
+        validate_ca_intent(intent, &intent.enrollment_digest)?;
         let import_id = format!(
             "ca-{}-{}",
             &profile.profile_fingerprint[..16],
@@ -1816,6 +2007,7 @@ fn replay_one<R: LearningExperimentRunner>(
     let started_at = Utc::now();
     let started = std::time::Instant::now();
     let replay_result = runner.replay(&route, &input, learned_material.as_deref());
+    let replay_usage = super::daily_budget::learning_call_usage();
     record_experiment_trace(
         vault,
         &route,
@@ -1861,7 +2053,7 @@ fn replay_one<R: LearningExperimentRunner>(
         acceptance_properties: properties,
         output_equivalence_digest: format!("{:x}", Sha256::digest(bounded_output.as_bytes())),
         elapsed_millis: started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
-        estimated_microusd: 0,
+        estimated_microusd: replay_usage.map(|usage| usage.estimated_microusd),
     };
     let mut receipt = ReplayReceiptV1 {
         schema: REPLAY_RECEIPT_SCHEMA.to_string(),
@@ -2044,6 +2236,7 @@ fn judge_or_promote<B: CaLearningBridgeClient, R: LearningExperimentRunner>(
         "replay evaluation passed; exact candidate, evaluation and current baseline require review",
         None,
     )?;
+    clear_active_objective(vault, &objective.objective_id)?;
     Ok("evaluated immutable artifact needs review".to_string())
 }
 
@@ -2084,9 +2277,7 @@ pub fn preview_learning_promotion(
     let state =
         super::supervisor::load_state(vault)?.context("self-improvement is not enrolled")?;
     let workflow = load_workflow(vault, objective_id)?.context("learning workflow missing")?;
-    if workflow.stage != LearningWorkflowStageV1::NeedsReview
-        || state.active_objective_id.as_deref() != Some(objective_id)
-    {
+    if workflow.stage != LearningWorkflowStageV1::NeedsReview {
         bail!("learning candidate is not awaiting promotion review");
     }
     let candidate = vault.read_immutable::<ArtifactCandidateV1>(
@@ -2150,13 +2341,14 @@ pub fn promote_learning_candidate<B: CaLearningBridgeClient>(
             review.digest
         );
     }
-    // The immutable authorization precedes publication and survives a crash.
-    vault.write_immutable(&mut review)?;
     let state =
         super::supervisor::load_state(vault)?.context("self-improvement is not enrolled")?;
     if !state.enrolled || state.pause.is_some() || !vault.health()?.healthy {
         bail!("learning promotion unavailable while disabled, paused or unhealthy");
     }
+    // Authorization is persisted only after current operator and health gates;
+    // it still precedes publication so an interrupted adoption can reconcile.
+    vault.write_immutable(&mut review)?;
     let objective = vault.read_immutable::<ImprovementObjectiveV1>("objectives", objective_id)?;
     let mut workflow = load_workflow(vault, objective_id)?.context("learning workflow missing")?;
     let candidate = vault.read_immutable::<ArtifactCandidateV1>(
@@ -2432,6 +2624,20 @@ fn complete_ca_intent<B: CaLearningBridgeClient>(
         outcome: outcome.clone(),
         artifact,
         reason,
+        review_proof: match candidate {
+            Some(candidate) => {
+                let review = vault.read_immutable::<LearningPromotionReviewV1>(
+                    "evaluations/reviews",
+                    &objective.objective_id,
+                )?;
+                Some(LearningPublicationReviewProofV1 {
+                    objective_id: objective.objective_id.clone(),
+                    candidate_id: candidate.candidate_id.clone(),
+                    review_digest: review.digest,
+                })
+            }
+            None => None,
+        },
         digest: String::new(),
     };
     request.digest = canonical_digest(&request)?;
@@ -2818,7 +3024,12 @@ fn configured_routes(state: &SelfImprovementStateV1) -> Result<Vec<LearningRoute
         .ca_execution_profile
         .as_ref()
         .context("self-improvement enrollment has no ca execution profile")?;
-    flatten_routes(profile)
+    let mut routes = flatten_routes(profile)?;
+    routes.retain(|r| super::daily_budget::eligible_learning_route(&r.id()));
+    if routes.len() < 2 {
+        bail!("learning requires two currently eligible enrolled routes");
+    }
+    Ok(routes)
 }
 
 fn flatten_routes(profile: &CaExecutionProfileEnrollmentV1) -> Result<Vec<LearningRouteV1>> {
@@ -2938,8 +3149,14 @@ fn record_provider_call(vault: &LearningVault, experiment: bool) -> Result<()> {
     let _lock = vault.acquire_lock()?;
     let mut state = super::supervisor::load_state(vault)?
         .context("self-improvement state disappeared while recording provider usage")?;
-    state.usage.provider_calls = state.usage.provider_calls.saturating_add(1);
-    if experiment {
+    let physical_calls = super::daily_budget::physical_learning_call_count();
+    if let Some(calls) = physical_calls {
+        state.usage.provider_calls = state.usage.provider_calls.saturating_add(calls);
+    } else {
+        state.usage.provider_calls_unavailable =
+            state.usage.provider_calls_unavailable.saturating_add(1);
+    }
+    if experiment && physical_calls != Some(0) {
         state.usage.experiments = state.usage.experiments.saturating_add(1);
     }
     state.state_sequence = state.state_sequence.saturating_add(1);
@@ -2998,11 +3215,7 @@ fn record_experiment_trace<T: Serialize>(
             finished_at: finished_at.to_rfc3339(),
             elapsed_millis: elapsed.as_millis().try_into().unwrap_or(u64::MAX),
         },
-        usage: super::UsageV1 {
-            input_tokens: 0,
-            output_tokens: 0,
-            estimated_microusd: 0,
-        },
+        usage: super::daily_budget::take_learning_call_usage(),
         outcome: if result.is_ok() {
             "learning_call_succeeded".to_string()
         } else {
@@ -3020,6 +3233,23 @@ fn record_experiment_trace<T: Serialize>(
         digest: String::new(),
     };
     vault.write_immutable(&mut trace)?;
+    let _lock = vault.acquire_lock()?;
+    let mut state = super::supervisor::load_state(vault)?
+        .context("learning state disappeared during usage settlement")?;
+    if let Some(usage) = trace.usage {
+        state.usage.input_tokens = state.usage.input_tokens.saturating_add(usage.input_tokens);
+        state.usage.output_tokens = state
+            .usage
+            .output_tokens
+            .saturating_add(usage.output_tokens);
+        state.usage.estimated_microusd = state
+            .usage
+            .estimated_microusd
+            .saturating_add(usage.estimated_microusd);
+    }
+    state.state_sequence = state.state_sequence.saturating_add(1);
+    state.refresh_revision()?;
+    super::supervisor::save_state(vault, &state)?;
     Ok(())
 }
 
@@ -3114,6 +3344,7 @@ fn workflow_stage_name(stage: &LearningWorkflowStageV1) -> &'static str {
         LearningWorkflowStageV1::Quarantined => "quarantined",
         LearningWorkflowStageV1::CoolingDown => "cooling_down",
         LearningWorkflowStageV1::WaitingForEvidence => "waiting_for_evidence",
+        LearningWorkflowStageV1::BudgetPaused => "budget_paused",
     }
 }
 
@@ -3134,6 +3365,133 @@ fn is_uuid(value: &str) -> bool {
             8 | 13 | 18 | 23 => byte == b'-',
             _ => byte.is_ascii_hexdigit(),
         })
+}
+
+/// The bridge checks the same immutable approval, intent and exact bytes again
+/// immediately before a memory or skill becomes effective.
+pub fn validate_reviewed_learning_publication(
+    vault: &LearningVault,
+    proof: &LearningPublicationReviewProofV1,
+    intent_id: &str,
+    intent_digest: &str,
+    evaluation_digest: &str,
+    text: &str,
+    path: &str,
+) -> Result<()> {
+    let state =
+        super::supervisor::load_state(vault)?.context("self-improvement is not enrolled")?;
+    if !state.enrolled || state.pause.is_some() || !vault.health()?.healthy {
+        bail!("learning adoption unavailable while disabled, paused or unhealthy");
+    }
+    let approved = vault
+        .read_immutable::<LearningPromotionReviewV1>("evaluations/reviews", &proof.objective_id)?;
+    let current = preview_learning_promotion(vault, &proof.objective_id)?;
+    if approved != current
+        || approved.digest != proof.review_digest
+        || approved.evaluation_digest != evaluation_digest
+    {
+        bail!("learning adoption review is stale or does not authorize this evaluation");
+    }
+    let candidate =
+        vault.read_immutable::<ArtifactCandidateV1>("candidates", &proof.candidate_id)?;
+    if candidate.digest != approved.candidate_digest || candidate.objective_id != proof.objective_id
+    {
+        bail!("learning review does not authorize this candidate");
+    }
+    let objective =
+        vault.read_immutable::<ImprovementObjectiveV1>("objectives", &proof.objective_id)?;
+    let imported = ca_imported_intent(vault, &objective)?
+        .context("reviewed publication has no imported ca intent")?;
+    if imported.ca_intent_id != intent_id || imported.ca_intent_digest != intent_digest {
+        bail!("learning review does not authorize this intent");
+    }
+    let content = vault
+        .read_immutable::<ArtifactContentV1>("artifacts/content", &candidate.content_tree_sha256)?;
+    let class = if path == "MEMORY.md" {
+        "memories"
+    } else {
+        "skills"
+    };
+    let expected_path = format!(
+        "{class}/{}/{}",
+        &format!("{:x}", Sha256::digest(proof.objective_id.as_bytes()))[..20],
+        path
+    );
+    if !content.files.iter().any(|file| {
+        file.path == expected_path
+            && file.content == text
+            && file.encoding == ArtifactEncodingV1::Utf8
+            && !file.executable
+            && file.inject_into_prompt
+    }) {
+        bail!("publication bytes differ from the reviewed candidate");
+    }
+    Ok(())
+}
+
+pub fn learning_candidate_packet(vault: &LearningVault, id: &str) -> Result<serde_json::Value> {
+    let workflow = load_workflow(vault, id)?.context("learning candidate missing")?;
+    let candidate = workflow_candidate(vault, &workflow)?;
+    let content = vault
+        .read_immutable::<ArtifactContentV1>("artifacts/content", &candidate.content_tree_sha256)?;
+    let review = preview_learning_promotion(vault, id)
+        .map(|r| serde_json::json!(r))
+        .unwrap_or_else(|e| serde_json::json!({"blocked":e.to_string()}));
+    Ok(
+        serde_json::json!({"objective_id":id,"stage":workflow.stage,"candidate":candidate,"files":content.files,"adoption_review":review,"rejection_digest":learning_rejection_digest(vault,id)?}),
+    )
+}
+pub fn learning_rejection_digest(vault: &LearningVault, id: &str) -> Result<String> {
+    let workflow = load_workflow(vault, id)?.context("learning candidate missing")?;
+    if workflow.stage != LearningWorkflowStageV1::NeedsReview {
+        bail!("learning candidate is not awaiting review");
+    }
+    let candidate = workflow_candidate(vault, &workflow)?;
+    canonical_digest(&(
+        "reject-learning-candidate",
+        id,
+        &workflow.revision,
+        &candidate.digest,
+    ))
+}
+pub fn reject_learning_candidate<B: CaLearningBridgeClient>(
+    vault: &LearningVault,
+    bridge: &B,
+    id: &str,
+    expected: &str,
+) -> Result<String> {
+    let _worker = vault.acquire_worker_lock()?;
+    if learning_rejection_digest(vault, id)? != expected {
+        bail!("exact learning rejection digest required");
+    }
+    let state = super::supervisor::load_state(vault)?.context("learning state missing")?;
+    let objective = vault.read_immutable::<ImprovementObjectiveV1>("objectives", id)?;
+    let mut workflow = load_workflow(vault, id)?.context("learning workflow missing")?;
+    let candidate = workflow_candidate(vault, &workflow)?;
+    let evaluation = vault.read_immutable::<EvaluationReceiptV1>(
+        "evaluations/receipts",
+        &format!("evaluation-{}", &candidate.candidate_id[10..]),
+    )?;
+    if ca_imported_intent(vault, &objective)?.is_some() {
+        complete_ca_intent(
+            vault,
+            bridge,
+            &state,
+            &objective,
+            None,
+            &evaluation,
+            Some("user rejected the evaluated candidate"),
+        )?;
+    }
+    transition_workflow(
+        vault,
+        &mut workflow,
+        LearningWorkflowStageV1::Rejected,
+        "exact user review rejected this candidate",
+        None,
+    )?;
+    clear_active_objective(vault, id)?;
+    Ok("rejected one exact learning candidate without adoption".into())
 }
 
 #[cfg(test)]
@@ -3217,6 +3575,7 @@ mod tests {
     #[derive(Debug, Default)]
     struct FakeRunner {
         calls: Mutex<Vec<String>>,
+        pause_next_replay: Mutex<Option<DateTime<Utc>>>,
     }
 
     impl LearningExperimentRunner for FakeRunner {
@@ -3246,7 +3605,7 @@ mod tests {
         fn generate_candidate(
             &self,
             route: &LearningRouteV1,
-            _objective: &ImprovementObjectiveV1,
+            objective: &ImprovementObjectiveV1,
             _plan: &EvaluationPlanV1,
             _evidence: &[ReplayCaseInputV1],
         ) -> Result<GeneratedArtifactCandidateV1> {
@@ -3259,7 +3618,7 @@ mod tests {
                     path: "SKILL.md".to_string(),
                     encoding: super::super::ArtifactEncodingV1::Utf8,
                     content: "---\nname: deterministic-evidence\ndescription: Preserve bounded evidence and safety properties\nmetadata:\n  ca_origin: auto_distill\n  ca_run_id: 123e4567-e89b-12d3-a456-426614174000\n---\n\nUse deterministic evidence and preserve every safety property.\n"
-                        .to_string(),
+                        .replace("123e4567-e89b-12d3-a456-426614174000", objective.evidence_ids.first().and_then(|id| id.strip_prefix("ca-")).and_then(|id| id.split_once('-')).map(|(_, intent)| intent).unwrap_or("123e4567-e89b-12d3-a456-426614174000")),
                     inject_into_prompt: true,
                     executable: false,
                 }],
@@ -3273,6 +3632,9 @@ mod tests {
             _input: &ReplayCaseInputV1,
             learned_material: Option<&str>,
         ) -> Result<ReplayModelOutputV1> {
+            if let Some(resets_at) = self.pause_next_replay.lock().unwrap().take() {
+                return Err(super::super::DailyLearningBudgetExhausted { resets_at }.into());
+            }
             self.calls.lock().unwrap().push(format!(
                 "replay:{}:{}",
                 route.id(),
@@ -3354,7 +3716,7 @@ mod tests {
         crate::verification::isolation::enable_test_isolation_backend();
         let root = temp_root("fixture");
         fs::create_dir_all(&root)?;
-        let vault = LearningVault::open_at(root.join("vault"))?;
+        let vault = super::super::vault::fixture_vault(root.join("vault"))?;
         let ca_repo = root.join("ca");
         let orchestrator_repo = root.join("orchestrator");
         git_repo(&ca_repo)?;
@@ -3487,6 +3849,185 @@ printf '%s\n' '{"schema":"ca.headless.v2","sequence":1,"run_id":"fake-learning-r
         Ok(intent)
     }
 
+    fn bridge_fixture(digest: &str) -> Result<FakeBridge> {
+        Ok(FakeBridge {
+            export: Mutex::new(CaLearningExportWireV1 {
+                schema: "ca.learning_export.v1".into(),
+                profile: "learned".into(),
+                profile_fingerprint: format!("{:x}", Sha256::digest(b"learned")),
+                enrollment_digest: digest.into(),
+                cursor: "b".repeat(64),
+                unchanged: false,
+                intents: vec![distill_intent(digest)?],
+            }),
+            acknowledgements: Mutex::new(0),
+            completions: Mutex::new(0),
+        })
+    }
+    fn drive_to_review(
+        vault: &LearningVault,
+        bridge: &FakeBridge,
+        runner: &FakeRunner,
+    ) -> Result<String> {
+        for _ in 0..96 {
+            run_learning_stage(vault, bridge, runner)?;
+            if let Some(review) = pending_learning_reviews(vault)?.first() {
+                return Ok(review.objective_id.clone());
+            }
+        }
+        bail!("fixture did not reach review")
+    }
+    #[test]
+    fn idle_and_review_only_work_skip_admission_while_a_second_retained_intent_advances(
+    ) -> Result<()> {
+        let (root, vault, digest) = fixture()?;
+        let bridge = bridge_fixture(&digest)?;
+        let runner = FakeRunner::default();
+        assert!(!learning_stage_ready(&vault, Utc::now(), false)?);
+        assert!(learning_stage_ready(&vault, Utc::now(), true)?);
+        drive_to_review(&vault, &bridge, &runner)?;
+        assert!(!learning_stage_ready(&vault, Utc::now(), false)?);
+        assert_eq!(
+            run_learning_stage(&vault, &bridge, &runner)?,
+            "no eligible learning objective"
+        );
+        let mut intent = distill_intent(&digest)?;
+        intent.intent_id = "123e4567-e89b-12d3-a456-426614174002".into();
+        intent.digest.clear();
+        intent.digest = canonical_digest(&intent)?;
+        bridge.export.lock().unwrap().intents.push(intent);
+        for _ in 0..96 {
+            run_learning_stage(&vault, &bridge, &runner)?;
+            if pending_learning_reviews(&vault)?.len() == 2 {
+                break;
+            }
+        }
+        assert_eq!(pending_learning_reviews(&vault)?.len(), 2);
+        assert_eq!(
+            vault
+                .list_immutable::<ImportedCaLearningIntentV1>("ca/intents")?
+                .len(),
+            2
+        );
+        assert!(!learning_stage_ready(&vault, Utc::now(), false)?);
+        assert_eq!(*bridge.completions.lock().unwrap(), 0);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+    #[test]
+    fn exact_rejection_clears_inbox_without_adoption_and_full_inbox_stops_evaluation() -> Result<()>
+    {
+        let (root, vault, digest) = fixture()?;
+        let bridge = bridge_fixture(&digest)?;
+        let runner = FakeRunner::default();
+        let id = drive_to_review(&vault, &bridge, &runner)?;
+        assert!(super::super::supervisor::load_state(&vault)?
+            .unwrap()
+            .active_objective_id
+            .is_none());
+        let packet = learning_candidate_packet(&vault, &id)?;
+        assert!(!packet["files"].as_array().unwrap().is_empty());
+        assert!(reject_learning_candidate(&vault, &bridge, &id, &"0".repeat(64)).is_err());
+        assert_eq!(*bridge.completions.lock().unwrap(), 0);
+        let reject = learning_rejection_digest(&vault, &id)?;
+        reject_learning_candidate(&vault, &bridge, &id, &reject)?;
+        assert!(pending_learning_reviews(&vault)?.is_empty());
+        assert_eq!(*bridge.completions.lock().unwrap(), 1);
+        assert!(super::super::supervisor::load_state(&vault)?
+            .unwrap()
+            .shared_core_revision
+            .is_none());
+        assert_eq!(
+            load_workflow(&vault, &id)?.unwrap().stage,
+            LearningWorkflowStageV1::Rejected
+        );
+        let objective = vault.read_immutable::<ImprovementObjectiveV1>("objectives", &id)?;
+        for index in 0..8 {
+            let mut objective = objective.clone();
+            objective.objective_id = format!("inbox-fixture-{index}");
+            objective.digest.clear();
+            vault.write_immutable(&mut objective)?;
+            let mut workflow = LearningWorkflowStateV1::new(objective.objective_id)?;
+            workflow.stage = LearningWorkflowStageV1::NeedsReview;
+            save_workflow(&vault, &mut workflow)?;
+        }
+        let calls = runner.calls.lock().unwrap().len();
+        assert!(run_learning_stage(&vault, &bridge, &runner)?.contains("inbox is full"));
+        assert_eq!(runner.calls.lock().unwrap().len(), calls);
+        assert_eq!(pending_learning_reviews(&vault)?.len(), 8);
+        assert!(!learning_stage_ready(&vault, Utc::now(), true)?);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+    #[test]
+    fn budget_pause_survives_reload_and_resumes_same_candidate_and_replay_checkpoint() -> Result<()>
+    {
+        let (root, vault, digest) = fixture()?;
+        let bridge = bridge_fixture(&digest)?;
+        let runner = FakeRunner::default();
+        run_learning_stage(&vault, &bridge, &runner)?;
+        let id = super::super::supervisor::load_state(&vault)?
+            .unwrap()
+            .active_objective_id
+            .unwrap();
+        for _ in 0..16 {
+            run_learning_stage(&vault, &bridge, &runner)?;
+            if load_workflow(&vault, &id)?.is_some_and(|w| !w.baseline_replay_ids.is_empty()) {
+                break;
+            }
+        }
+        let before = load_workflow(&vault, &id)?.unwrap();
+        assert_eq!(before.stage, LearningWorkflowStageV1::ReplayingBaseline);
+        let now = Utc::now();
+        let resets_at = now + ChronoDuration::hours(2);
+        *runner.pause_next_replay.lock().unwrap() = Some(resets_at);
+        assert!(run_learning_stage_at(&vault, &bridge, &runner, now)?.contains("budget paused"));
+        let paused = load_workflow(&vault, &id)?.unwrap();
+        assert_eq!(paused.stage, LearningWorkflowStageV1::BudgetPaused);
+        assert_eq!(paused.candidate_id, before.candidate_id);
+        assert_eq!(paused.evaluation_plan_id, before.evaluation_plan_id);
+        assert_eq!(paused.baseline_replay_ids, before.baseline_replay_ids);
+        assert!(paused.failure_counts.is_empty());
+        assert_eq!(paused.attempt, before.attempt);
+        assert!(!learning_stage_ready(&vault, now, true)?);
+        assert!(learning_stage_ready(
+            &vault,
+            resets_at + ChronoDuration::seconds(1),
+            false
+        )?);
+        let reopened = LearningVault::existing_at(vault.root().into())?
+            .unwrap()
+            .with_filesystem_space_probe(super::super::vault::fixture_filesystem_space);
+        let calls = runner.calls.lock().unwrap().len();
+        assert!(run_learning_stage_at(
+            &reopened,
+            &bridge,
+            &runner,
+            now + ChronoDuration::minutes(10)
+        )?
+        .contains("budget paused"));
+        assert_eq!(runner.calls.lock().unwrap().len(), calls);
+        run_learning_stage_at(
+            &reopened,
+            &bridge,
+            &runner,
+            resets_at + ChronoDuration::seconds(1),
+        )?;
+        let resumed = load_workflow(&vault, &id)?.unwrap();
+        assert_eq!(resumed.candidate_id, before.candidate_id);
+        assert_eq!(resumed.evaluation_plan_id, before.evaluation_plan_id);
+        assert_eq!(
+            resumed.baseline_replay_ids.len(),
+            before.baseline_replay_ids.len() + 1
+        );
+        assert!(resumed.budget_resume_stage.is_none());
+        super::super::supervisor::pause(&vault, "fixture operator pause")?;
+        assert!(run_learning_stage(&vault, &bridge, &runner).is_err());
+        assert_eq!(load_workflow(&vault, &id)?.unwrap(), resumed);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
     #[test]
     fn enrolled_ca_intent_reaches_cross_provider_replay_promotion_without_source_or_deployment(
     ) -> Result<()> {
@@ -3524,7 +4065,8 @@ printf '%s\n' '{"schema":"ca.headless.v2","sequence":1,"run_id":"fake-learning-r
         for _ in 0..96 {
             run_learning_stage(&vault, &bridge, &runner)?;
             let state = super::super::supervisor::load_state(&vault)?.unwrap();
-            if let Some(id) = state.active_objective_id.as_deref() {
+            let reviews = pending_learning_reviews(&vault)?;
+            if let Some(id) = reviews.first().map(|r| r.objective_id.as_str()) {
                 if load_workflow(&vault, id)?
                     .is_some_and(|workflow| workflow.stage == LearningWorkflowStageV1::NeedsReview)
                 {
@@ -3533,6 +4075,18 @@ printf '%s\n' '{"schema":"ca.headless.v2","sequence":1,"run_id":"fake-learning-r
                     assert!(
                         promote_learning_candidate(&vault, &bridge, id, &"0".repeat(64)).is_err()
                     );
+                    super::super::supervisor::pause(&vault, "pause before exact approval")?;
+                    assert!(
+                        promote_learning_candidate(&vault, &bridge, id, &review.digest).is_err()
+                    );
+                    assert!(vault
+                        .read_optional_immutable::<LearningPromotionReviewV1>(
+                            "evaluations/reviews",
+                            id
+                        )?
+                        .is_none());
+                    let paused = super::super::supervisor::load_state(&vault)?.unwrap();
+                    super::super::supervisor::resume(&vault, &paused.revision)?;
                     // Simulate publication completion followed by a crash
                     // before the workflow's final promotion checkpoint.
                     vault.write_immutable(&mut review)?;
@@ -3548,6 +4102,66 @@ printf '%s\n' '{"schema":"ca.headless.v2","sequence":1,"run_id":"fake-learning-r
                         "evaluations/receipts",
                         &evaluation_id,
                     )?;
+                    let imported = ca_imported_intent(&vault, &objective)?.unwrap();
+                    let content = vault.read_immutable::<ArtifactContentV1>(
+                        "artifacts/content",
+                        &candidate.content_tree_sha256,
+                    )?;
+                    let skill = content
+                        .files
+                        .iter()
+                        .find(|f| f.path.ends_with("/SKILL.md"))
+                        .unwrap();
+                    let proof = LearningPublicationReviewProofV1 {
+                        objective_id: id.into(),
+                        candidate_id: candidate.candidate_id.clone(),
+                        review_digest: review.digest.clone(),
+                    };
+                    super::super::supervisor::pause(
+                        &vault,
+                        "pause after approval before bridge adoption",
+                    )?;
+                    assert!(validate_reviewed_learning_publication(
+                        &vault,
+                        &proof,
+                        &imported.ca_intent_id,
+                        &imported.ca_intent_digest,
+                        &evaluation.digest,
+                        &skill.content,
+                        "SKILL.md"
+                    )
+                    .is_err());
+                    let paused = super::super::supervisor::load_state(&vault)?.unwrap();
+                    super::super::supervisor::resume(&vault, &paused.revision)?;
+                    validate_reviewed_learning_publication(
+                        &vault,
+                        &proof,
+                        &imported.ca_intent_id,
+                        &imported.ca_intent_digest,
+                        &evaluation.digest,
+                        &skill.content,
+                        "SKILL.md",
+                    )?;
+                    assert!(validate_reviewed_learning_publication(
+                        &vault,
+                        &proof,
+                        &imported.ca_intent_id,
+                        &imported.ca_intent_digest,
+                        &evaluation.digest,
+                        "tampered content",
+                        "SKILL.md"
+                    )
+                    .is_err());
+                    assert!(validate_reviewed_learning_publication(
+                        &vault,
+                        &proof,
+                        &imported.ca_intent_id,
+                        &imported.ca_intent_digest,
+                        &"0".repeat(64),
+                        &skill.content,
+                        "SKILL.md"
+                    )
+                    .is_err());
                     complete_ca_intent(
                         &vault,
                         &bridge,
@@ -3662,7 +4276,31 @@ printf '%s\n' '{"schema":"ca.headless.v2","sequence":1,"run_id":"fake-learning-r
         };
 
         for _ in 0..128 {
-            if let Err(error) = run_learning_stage(&vault, &bridge, &runner) {
+            let routes = flatten_routes(
+                super::super::supervisor::load_state(&vault)?
+                    .unwrap()
+                    .ca_execution_profile
+                    .as_ref()
+                    .unwrap(),
+            )?;
+            let budget = super::super::LearningCallBudget {
+                root: root.join("fixture-budget"),
+                routes: routes
+                    .into_iter()
+                    .map(|r| {
+                        (
+                            r.id(),
+                            super::super::LearningRoutePrice {
+                                input_microusd_per_million: 1,
+                                output_microusd_per_million: 1,
+                            },
+                        )
+                    })
+                    .collect(),
+            };
+            if let Err(error) = super::super::with_learning_call_budget(budget, || {
+                run_learning_stage(&vault, &bridge, &runner)
+            }) {
                 let health = super::super::supervisor::doctor(&vault)?;
                 bail!(
                     "process pilot stage failed: {error:#}; doctor={:?}",
@@ -3670,7 +4308,8 @@ printf '%s\n' '{"schema":"ca.headless.v2","sequence":1,"run_id":"fake-learning-r
                 );
             }
             let state = super::super::supervisor::load_state(&vault)?.unwrap();
-            if let Some(id) = state.active_objective_id.as_deref() {
+            let reviews = pending_learning_reviews(&vault)?;
+            if let Some(id) = reviews.first().map(|r| r.objective_id.as_str()) {
                 if load_workflow(&vault, id)?
                     .is_some_and(|workflow| workflow.stage == LearningWorkflowStageV1::NeedsReview)
                 {
@@ -3776,7 +4415,7 @@ printf '%s\n' '{"schema":"ca.headless.v2","sequence":1,"run_id":"fake-learning-r
     fn one_worker_lock_and_two_identical_failures_enforce_serial_cooldown() -> Result<()> {
         let root = temp_root("worker-lock");
         fs::create_dir_all(&root)?;
-        let vault = LearningVault::open_at(root.join("vault"))?;
+        let vault = super::super::vault::fixture_vault(root.join("vault"))?;
         let worker_lock = vault.acquire_worker_lock()?;
         assert!(vault.acquire_worker_lock().is_err());
 

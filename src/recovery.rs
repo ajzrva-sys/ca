@@ -1412,12 +1412,29 @@ impl RecoveryStore {
 
     fn write_journal(&self, journal: &mut Journal) -> io::Result<()> {
         journal.revision = next_revision(journal.revision)?;
+        // A journal with no turns and no undo carries nothing to recover. Drop
+        // the directory instead of leaving an empty husk behind for every
+        // session that ever touched recovery.
+        if journal.groups.is_empty() && journal.undo.is_none() {
+            return self.remove_journal_dir(journal.session_id);
+        }
         private_dir(&self.root())?;
         private_dir(&self.directory(journal.session_id))?;
         atomic_write(
             &self.directory(journal.session_id).join("journal.json"),
             &encode_journal(journal)?,
         )
+    }
+
+    /// Remove one session's recovery state. Used when a journal becomes empty
+    /// and when its session is deleted.
+    fn remove_journal_dir(&self, session_id: Uuid) -> io::Result<()> {
+        let dir = self.directory(session_id);
+        match std::fs::remove_dir_all(&dir) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
     }
 
     fn load_state(&self, id: Uuid, state: &StoredState) -> io::Result<FileState> {
@@ -2502,6 +2519,22 @@ mod tests {
             .groups;
         assert_eq!(groups.iter().filter(|g| g.completed).count(), 20);
         assert!(groups.iter().any(|g| g.turn_id == pending));
+    }
+
+    #[test]
+    fn empty_journal_leaves_no_directory_behind() {
+        let f = fixture(DEFAULT_RECOVERY_BYTES);
+        // finish_turn with nothing captured would previously materialize a
+        // journal directory holding only `{"groups": []}`.
+        f.context.store.finish_turn(&f.context).unwrap();
+        assert!(
+            !f.context.store.directory(f.context.session_id).exists(),
+            "an empty journal must not leave a recovery directory behind"
+        );
+
+        // Real captures still persist normally.
+        capture_without_undo(&f.context, &f.root.join("keep.txt"), "kept".into());
+        assert!(f.context.store.directory(f.context.session_id).exists());
     }
 
     #[test]

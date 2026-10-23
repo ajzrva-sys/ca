@@ -1,5 +1,79 @@
 # Testing and Validation
 
+## Current completion gate and native platforms (2026-10-23)
+
+Run the unchanged completion entry point from the repository root:
+
+```sh
+cargo fetch --locked
+./scripts/verify.sh --output scratch/verify/my-change
+```
+
+The fetch prepares the dependency cache; the gate itself uses locked offline
+Rust commands and disposable application state. Use Python 3, the pinned Rust
+toolchain with rustfmt/Clippy, Git, loopback sockets, PTYs and subprocess support.
+Native FreeBSD required-isolation checks additionally need the configured shared
+jail service; see [FreeBSD setup](docs/FREEBSD.md).
+
+Read `report.json`, `evaluation.json` and actual failing logs. A timeout,
+unavailable prerequisite or incomplete report is not a pass. Required stages
+include verifier contracts, formatting, strict lint, full default and all-feature
+workspace tests, release build, native CLI/terminal fixtures and independent
+evaluation. No historical VAL-288 count is an acceptance baseline for new source.
+See [the verification workflow](docs/VERIFICATION.md).
+
+For verifier-infrastructure changes, also retain the intentional-defect receipt:
+
+```sh
+./scripts/verify.sh --self-test
+```
+
+Current native/publication inventory: `c4ca6055a1f8967fef89a0c676fb19dbd5172143d89bf16fb6ead840f492d155`
+(1,169 files). Combined macOS gate inventory: `69d36efaca22361e14d0281afe7b4f47e483a79dd93c51fc11917e289c01a3d1`
+(1,168 files). The public notice generator and FreeBSD-only `cfg(test)` MCP
+helper account for the differences. The release runtime prefix is byte-identical;
+artifacts retain distinct source identities, including source in build identity.
+
+The final native 22-case MCP module, 62-case filter run and formatting pass.
+Native v8 passes all eight stages/evaluator, with source unchanged before/after:
+default 4,297 passed, zero failed, 43 ignored over 29 targets; all features
+4,451 passed, zero failed, 44 ignored over 30; zero filtered. Release/runtime
+stages pass. The copied/stripped native candidate passes metadata/`$HOME`, real automatic
+verification for plain/internal-document-symlink source, and native jail fixtures.
+Native ca `0.1.41` also passes a real installed required-jail provider/tool loop
+(printf exit0, final `FREEBSD_OK`), distinct from fixture proof. Its earlier
+symlinked-auth setup failure is retained. It is installed once with recovery
+and ordinary-user PATH, hash,
+mode/ownership and version/help readbacks; installed SHA-256
+`60563263dde655bcb16fa949189c9c09eda425b43dc324a56a19cce3de0aa074`. Preceding
+native v7 did not pass: two MCP environment fixtures encountered `sysctl`
+`ENOMEM` before cleanup assertions, followed by controlled interruption and
+`infrastructure_failed`. Bounded diagnostics did not reproduce those failures. Selecting
+native `/bin/sh` for POSIX test fixtures preserves assertions/runtime behavior
+and is not a proven Bash/kernel causal repair. The final unchanged full gate passes; the original failure and its causal
+uncertainty remain retained.
+
+The final combined macOS full gate passes all eight stages and evaluator:
+4,328 default tests passed, zero failed, 43 ignored across 29 targets; 4,484
+all-feature tests passed, zero failed, 44 ignored across 30; zero filtered.
+All nine native terminal cases pass. Signed ca `0.1.41` was installed exactly
+once, with recovery/hash/signature/mode/ownership/version/help readbacks and a
+successful live DeepSeek no-session prompt through the normal PATH entry point.
+
+Codex's immutable release and installed entry point pass ten native workflows,
+47 jail checks, 174 code-mode units and installed direct/Sol-default jail paths.
+A live installed supported-model loop also executes a real sandboxed printf
+command and returns `FREEBSD_OK`; an earlier unsupported-model HTTP 400 is
+retained. This is bounded live proof, not a coding benchmark. Its broader scoped
+core still records 1,263 passed, 17 failed and 11 ignored.
+These are distinct from a clean complete Codex suite.
+
+Current evidence, prior macOS terminal failure and installation readbacks belong
+in [publication validation](docs/PUBLICATION_VALIDATION.md). Loopback fixtures,
+installed readbacks and live provider requests are distinct proof levels.
+The coding benchmark was canceled before scored native attempts; usage-export
+qualifiers remain fixture proof only. Everything below is historical.
+
 ## 2026-10-06 initial public source publication
 
 Built the complete all-feature release and prepared the public `ajzrva-sys/ca`

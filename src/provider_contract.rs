@@ -28,8 +28,10 @@ pub struct FirstPartyContract {
 enum FirstPartyModel {
     OpenAi56,
     OpenAi6Astra,
+    OpenAi61Sol,
     Mimo25,
     Mimo25Pro,
+    Mimo26Pro,
     DeepSeekV4,
 }
 
@@ -153,7 +155,10 @@ impl FirstPartyContract {
     pub const fn supports_images(self) -> bool {
         matches!(
             self.model,
-            FirstPartyModel::OpenAi56 | FirstPartyModel::OpenAi6Astra | FirstPartyModel::Mimo25
+            FirstPartyModel::OpenAi56
+                | FirstPartyModel::OpenAi6Astra
+                | FirstPartyModel::OpenAi61Sol
+                | FirstPartyModel::Mimo25
         )
     }
 
@@ -253,23 +258,36 @@ impl FirstPartyContract {
                 ),
                 _ => (0, Vec::new(), None),
             };
-        // Astra requires reasoning; keep its supported efforts distinct from GPT-5.6.
-        let (context_window_tokens, reasoning_efforts) =
-            if self.model == FirstPartyModel::OpenAi6Astra {
-                (
-                    if self.family == FirstPartyProvider::OpenAiCodex {
-                        272_000
-                    } else {
-                        context_window_tokens
-                    },
-                    reasoning_efforts
-                        .into_iter()
-                        .filter(|effort| *effort != ReasoningEffort::None)
-                        .collect(),
-                )
-            } else {
-                (context_window_tokens, reasoning_efforts)
-            };
+        // Astra and Sol 6.1 require reasoning; keep their efforts distinct from GPT-5.6.
+        let (context_window_tokens, reasoning_efforts, default_reasoning_effort) = if matches!(
+            self.model,
+            FirstPartyModel::OpenAi6Astra | FirstPartyModel::OpenAi61Sol
+        ) {
+            (
+                if self.family == FirstPartyProvider::OpenAiCodex {
+                    272_000
+                } else {
+                    context_window_tokens
+                },
+                reasoning_efforts
+                    .into_iter()
+                    .filter(|effort| *effort != ReasoningEffort::None)
+                    .collect(),
+                if self.model == FirstPartyModel::OpenAi61Sol
+                    && self.family == FirstPartyProvider::OpenAiCodex
+                {
+                    Some(ReasoningEffort::Low)
+                } else {
+                    default_reasoning_effort
+                },
+            )
+        } else {
+            (
+                context_window_tokens,
+                reasoning_efforts,
+                default_reasoning_effort,
+            )
+        };
         ModelProfile {
             context_window_tokens: (context_window_tokens > 0).then_some(context_window_tokens),
             compact_at_tokens: None,
@@ -437,8 +455,14 @@ pub fn resolve(
         {
             FirstPartyModel::OpenAi6Astra
         }
+        FirstPartyProvider::OpenAiDirect | FirstPartyProvider::OpenAiCodex
+            if model == "gpt-6.1-sol" =>
+        {
+            FirstPartyModel::OpenAi61Sol
+        }
         FirstPartyProvider::Mimo if model == "mimo-v2.5" => FirstPartyModel::Mimo25,
         FirstPartyProvider::Mimo if model == "mimo-v2.5-pro" => FirstPartyModel::Mimo25Pro,
+        FirstPartyProvider::Mimo if model == "mimo-v2.6-pro" => FirstPartyModel::Mimo26Pro,
         FirstPartyProvider::DeepSeek
             if matches!(model, "deepseek-v4-flash" | "deepseek-v4-pro") =>
         {
@@ -482,6 +506,9 @@ pub fn built_in_model_profile(
     provider: &ProviderConfig,
     model: &str,
 ) -> Option<ModelProfile> {
+    if provider.protocol == ProviderProtocol::GoogleGenerateContent {
+        return crate::google_provider::model_profile(model);
+    }
     resolve(provider_id, provider, model).map(FirstPartyContract::model_profile)
 }
 
@@ -543,6 +570,8 @@ mod tests {
 
     fn provider(base_url: &str, protocol: ProviderProtocol) -> ProviderConfig {
         ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: base_url.into(),
             api_key: "secret-never-debugged".into(),
             protocol,
@@ -670,6 +699,78 @@ mod tests {
     }
 
     #[test]
+    fn sol_61_reasoning_contract_is_exact_and_profile_overrides_win() {
+        for (id, endpoint, context, default_effort) in [
+            (
+                "openai",
+                "https://api.openai.com/v1",
+                1_050_000,
+                ReasoningEffort::Medium,
+            ),
+            (
+                "openai-codex",
+                "https://chatgpt.com/backend-api/codex",
+                272_000,
+                ReasoningEffort::Low,
+            ),
+        ] {
+            let provider = provider(endpoint, ProviderProtocol::OpenAiResponses);
+            let contract = resolve(id, &provider, "gpt-6.1-sol").unwrap();
+            let profile = contract.model_profile();
+            assert_eq!(profile.context_window_tokens, Some(context));
+            assert_eq!(profile.supports_tools, Some(true));
+            assert_eq!(profile.image_input_support(), Some(true));
+            assert_eq!(
+                profile.reasoning_efforts,
+                vec![
+                    ReasoningEffort::Low,
+                    ReasoningEffort::Medium,
+                    ReasoningEffort::High,
+                    ReasoningEffort::XHigh,
+                    ReasoningEffort::Max
+                ]
+            );
+            assert_eq!(profile.default_reasoning_effort, Some(default_effort));
+            assert_eq!(
+                profile.reasoning_request_format,
+                Some(ReasoningRequestFormat::ReasoningObject)
+            );
+            assert!(contract.includes_encrypted_reasoning());
+            assert!(resolve(id, &provider, "gpt-6.1-sol-unknown").is_none());
+
+            let mut config = CaConfig::default();
+            config.providers.insert(id.into(), provider);
+            config
+                .model_profiles
+                .insert(format!("{id}/gpt-6.1-sol"), ModelProfile::default());
+            assert!(config
+                .effective_model_profile(id, "gpt-6.1-sol")
+                .unwrap()
+                .reasoning_efforts
+                .is_empty());
+        }
+        for (id, endpoint, protocol) in [
+            (
+                "openai-codex",
+                "https://proxy.example/v1",
+                ProviderProtocol::OpenAiResponses,
+            ),
+            (
+                "openai",
+                "https://api.openai.com/v1",
+                ProviderProtocol::ChatCompletions,
+            ),
+            (
+                "custom",
+                "https://api.openai.com/v1",
+                ProviderProtocol::OpenAiResponses,
+            ),
+        ] {
+            assert!(resolve(id, &provider(endpoint, protocol), "gpt-6.1-sol").is_none());
+        }
+    }
+
+    #[test]
     fn built_in_capabilities_are_model_and_protocol_truthful() {
         let openai = resolve(
             "openai",
@@ -758,6 +859,33 @@ mod tests {
                 enabled: true,
                 effort: Some(ReasoningEffort::Max)
             }
+        );
+    }
+
+    #[test]
+    fn mimo_v26_pro_contract_replays_reasoning_and_enables_thinking() {
+        let contract = resolve(
+            "mimo",
+            &provider(
+                "https://token-plan-sgp.xiaomimimo.com/v1",
+                ProviderProtocol::ChatCompletions,
+            ),
+            "mimo-v2.6-pro",
+        )
+        .expect("mimo-v2.6-pro must resolve on official token-plan endpoints");
+        assert!(contract.replays_chat_reasoning());
+        assert_eq!(
+            contract.chat_reasoning_wire(None),
+            ChatReasoningWire::Mimo { enabled: true }
+        );
+        let profile = contract.model_profile();
+        assert_eq!(
+            profile.reasoning_stream_field.as_deref(),
+            Some("reasoning_content")
+        );
+        assert_eq!(
+            profile.reasoning_efforts,
+            vec![ReasoningEffort::None, ReasoningEffort::High]
         );
     }
 

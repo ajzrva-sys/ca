@@ -2,8 +2,9 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca · agent · auto
-> Run the test suite
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
+ › Run the test suite
 
 
   Approve command [1/1] — run_command
@@ -27,14 +28,14 @@ exact path  [x] always deny  [a] yolo
 
 
 
-
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
 1 messages · / commands
 -- narrow --
- ca · agent · auto
-> Run the test suite
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
+ › Run the test suite
 
 
   Approve command [1/1] — run_command
@@ -52,8 +53,7 @@ always deny  [a] yolo
 
 
 
-
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                           │
+╰──────────────────────────────────────────── agent · auto ╯
 1 messages · / commands

@@ -194,6 +194,10 @@ pub enum ScheduleTargetV2 {
     HarnessCycle {
         vault_root: PathBuf,
     },
+    KnowledgeLearning {
+        vault_root: PathBuf,
+        enrollment_digest: String,
+    },
     Monitor {
         request: ca_watch::WatchRequestV1,
     },
@@ -209,6 +213,7 @@ impl ScheduleTargetV2 {
                 | Self::HarnessDiscovery { .. }
                 | Self::HarnessEvaluation { .. }
                 | Self::HarnessCycle { .. }
+                | Self::KnowledgeLearning { .. }
                 | Self::Monitor { .. }
         )
     }
@@ -586,6 +591,22 @@ fn validate_target_and_policy(
                     "harness cycle requires an absolute vault and authorized exact provider route"
                         .into(),
                 ));
+            }
+        }
+        ScheduleTargetV2::KnowledgeLearning {
+            vault_root,
+            enrollment_digest,
+        } => {
+            if !vault_root.is_absolute()
+                || !is_lower_sha256(enrollment_digest)
+                || definition.provider.is_some()
+                || definition.model.is_some()
+                || !definition.allow_network
+                || !definition.tools.is_empty()
+                || !definition.grants.is_empty()
+                || !definition.skills.is_empty()
+            {
+                return Err(ScheduleV2Error::InvalidDefinition("knowledge learning requires exact enrollment, an absolute vault and no ambient grants".into()));
             }
         }
         ScheduleTargetV2::Monitor { request } => {

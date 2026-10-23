@@ -2144,6 +2144,9 @@ impl McpManager {
         for content in result.contents {
             match content {
                 ResourceContents::TextResourceContents { text, .. } => {
+                    if let Err(error) = crate::provider_filter::scan_outbound(text.as_bytes()) {
+                        return Ok(crate::provider_filter::withheld_message(&error));
+                    }
                     append_bounded(&mut output, &text, MAX_OUTPUT_BYTES)?;
                 }
                 ResourceContents::BlobResourceContents { .. } => {
@@ -3688,7 +3691,12 @@ fn bounded_tool_text(
     let mut output = String::new();
     for block in content {
         match block {
-            ContentBlock::Text(text) => append_bounded(&mut output, &text.text, MAX_OUTPUT_BYTES)?,
+            ContentBlock::Text(text) => {
+                if let Err(error) = crate::provider_filter::scan_outbound(text.text.as_bytes()) {
+                    return Ok(crate::provider_filter::withheld_message(&error));
+                }
+                append_bounded(&mut output, &text.text, MAX_OUTPUT_BYTES)?
+            }
             _ => return Err(McpError::BinaryContent),
         }
     }
@@ -3698,6 +3706,9 @@ fn bounded_tool_text(
                 server: "unknown".into(),
                 detail: error.to_string(),
             })?;
+            if let Err(error) = crate::provider_filter::scan_outbound(value.as_bytes()) {
+                return Ok(crate::provider_filter::withheld_message(&error));
+            }
             append_bounded(&mut output, &value, MAX_OUTPUT_BYTES)?;
         }
     }

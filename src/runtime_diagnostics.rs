@@ -124,6 +124,7 @@ pub enum RuntimeErrorClass {
     ProviderProtocol,
     ProviderIncomplete,
     ProviderRefused,
+    ProviderFilter,
 }
 
 impl RuntimeErrorClass {
@@ -143,6 +144,7 @@ impl RuntimeErrorClass {
             Self::ProviderProtocol => "provider_protocol",
             Self::ProviderIncomplete => "provider_incomplete",
             Self::ProviderRefused => "provider_refused",
+            Self::ProviderFilter => "provider_filter",
         }
     }
 }
@@ -1369,7 +1371,7 @@ impl RuntimeDiagnostics {
             self.hub.run_id(),
         );
         entry.error_class = Some(match category {
-            Category::Timeout => RuntimeErrorClass::ProviderTimeout,
+            Category::Timeout | Category::FirstTokenTimeout => RuntimeErrorClass::ProviderTimeout,
             Category::Connect => RuntimeErrorClass::ProviderConnect,
             Category::Transport => RuntimeErrorClass::ProviderTransport,
             Category::Http(status) => {
@@ -1381,6 +1383,7 @@ impl RuntimeDiagnostics {
             Category::Protocol => RuntimeErrorClass::ProviderProtocol,
             Category::Incomplete => RuntimeErrorClass::ProviderIncomplete,
             Category::Refused => RuntimeErrorClass::ProviderRefused,
+            Category::FilterStopped => RuntimeErrorClass::ProviderFilter,
         });
         self.hub.record(entry);
     }

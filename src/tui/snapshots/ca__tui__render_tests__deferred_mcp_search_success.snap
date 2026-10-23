@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&success, 100, 30),\nrender_to_text(&success, 60, 24))"
 ---
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 I found the relevant MCP tools. Their exact schemas will be available on the next turn.
 
   ✓ search_mcp_tools {"query":"issues","server":"linear","limit":2}
@@ -28,12 +28,12 @@ I found the relevant MCP tools. Their exact schemas will be available on the nex
 
 
 
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
 1 messages · / commands
 -- narrow --
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
 I found the relevant MCP tools. Their exact schemas will be
 available on the next turn.
 
@@ -53,7 +53,7 @@ available on the next turn.
 
 
 
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                           │
+╰──────────────────────────────────────────── agent · auto ╯
 1 messages · / commands

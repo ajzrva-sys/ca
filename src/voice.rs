@@ -600,6 +600,8 @@ mod tests {
 
     fn provider(base_url: String, key: &str) -> ProviderConfig {
         ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url,
             api_key: key.into(),
             protocol: crate::agent::ProviderProtocol::ChatCompletions,

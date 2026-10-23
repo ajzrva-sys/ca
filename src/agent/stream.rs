@@ -10,6 +10,8 @@ pub struct ProviderStateSourceV1 {
     pub provider: String,
     pub protocol: crate::agent::provider::ProviderProtocol,
     pub endpoint_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_sha256: Option<String>,
 }
 
 impl ProviderStateSourceV1 {
@@ -26,6 +28,7 @@ impl ProviderStateSourceV1 {
             provider: provider.into(),
             protocol,
             endpoint_sha256: format!("{:x}", hasher.finalize()),
+            credential_sha256: None,
         })
     }
 
@@ -82,6 +85,12 @@ impl std::fmt::Debug for ProviderStateSourceV1 {
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ProviderResponseItem {
+    NativeContent {
+        source: ProviderStateSourceV1,
+        model: String,
+        prefix_sha256: String,
+        content: Vec<Value>,
+    },
     ResponsesOutput {
         source: ProviderStateSourceV1,
         output_index: usize,
@@ -96,6 +105,12 @@ pub enum ProviderResponseItem {
 impl std::fmt::Debug for ProviderResponseItem {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::NativeContent { source, model, .. } => formatter
+                .debug_struct("NativeContent")
+                .field("source", source)
+                .field("model", model)
+                .field("content", &"[REDACTED]")
+                .finish(),
             Self::ResponsesOutput {
                 source,
                 output_index,
@@ -427,7 +442,10 @@ pub(crate) fn provider_event_has_usable_output(event: &ProviderEvent) -> bool {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderTransportFailure {
+    /// Stall after the response body started (no received bytes within the window).
     Timeout,
+    /// No body bytes arrived within the first-event window after headers.
+    FirstTokenTimeout,
     Connect,
     Request,
 }
@@ -435,7 +453,8 @@ pub enum ProviderTransportFailure {
 impl std::fmt::Display for ProviderTransportFailure {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
-            Self::Timeout => "request timed out",
+            Self::Timeout => "stream stalled",
+            Self::FirstTokenTimeout => "first token timed out",
             Self::Connect => "could not connect",
             Self::Request => "request failed",
         })
@@ -444,8 +463,13 @@ impl std::fmt::Display for ProviderTransportFailure {
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum ProviderError {
-    #[error("provider HTTP {status}")]
-    Http { status: u16 },
+    #[error("provider HTTP {status}{}", body_excerpt.as_ref().map(|body| format!(": {body}")).unwrap_or_default())]
+    Http {
+        status: u16,
+        /// Sanitized provider error body excerpt for triage. Never contains
+        /// credentials; may be `None` when the body was empty or unreadable.
+        body_excerpt: Option<String>,
+    },
     #[error("provider transport failed: {0}")]
     Transport(ProviderTransportFailure),
     #[error("provider API key environment variable {0} is not set")]
@@ -474,6 +498,25 @@ pub enum ProviderError {
     Protocol(String),
     #[error("provider stream anomaly: {0}")]
     StreamAnomaly(StreamAnomalyKind),
+    /// The user-owned provider filter tripped. The rule id is not the matched text.
+    #[error("provider filter stopped the session ({rule})")]
+    FilterStopped { rule: String },
+}
+
+impl ProviderError {
+    pub(crate) fn http(status: u16) -> Self {
+        Self::Http {
+            status,
+            body_excerpt: None,
+        }
+    }
+
+    pub(crate) fn http_with_excerpt(status: u16, body_excerpt: impl Into<Option<String>>) -> Self {
+        Self::Http {
+            status,
+            body_excerpt: body_excerpt.into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -584,8 +627,12 @@ impl AssistantTurnAssembler {
         }
         self.enforce_limits(event)?;
         match event {
-            ProviderEvent::Text(text) => self.content.push_str(text),
-            ProviderEvent::Reasoning(text) => self.reasoning.push_str(text),
+            ProviderEvent::Text(text) => {
+                self.content.push_str(text);
+            }
+            ProviderEvent::Reasoning(text) => {
+                self.reasoning.push_str(text);
+            }
             ProviderEvent::ResponseItem(item) => self.response_items.push(item.clone()),
             ProviderEvent::ToolCallStart { index, id, name } => {
                 let call = self.tool_calls.entry(*index).or_default();
@@ -603,11 +650,8 @@ impl AssistantTurnAssembler {
                 call.name = Some(name.clone());
             }
             ProviderEvent::ToolCallArg { index, arg } => {
-                self.tool_calls
-                    .entry(*index)
-                    .or_default()
-                    .arguments
-                    .push_str(arg);
+                let arguments = &mut self.tool_calls.entry(*index).or_default().arguments;
+                arguments.push_str(arg);
             }
             ProviderEvent::Finish { reason, usage } => {
                 if self.finish_reason.replace(reason.clone()).is_some() {
@@ -675,7 +719,7 @@ impl AssistantTurnAssembler {
         Ok(())
     }
 
-    pub fn finish(self) -> Result<AssembledAssistantTurn, ProviderError> {
+    pub fn finish(mut self) -> Result<AssembledAssistantTurn, ProviderError> {
         if !self.done {
             return Err(ProviderError::PrematureEof);
         }
@@ -710,19 +754,22 @@ impl AssistantTurnAssembler {
                     detail: "missing name".into(),
                 }
             })?;
-            serde_json::from_str::<Value>(&call.arguments).map_err(|error| {
+            let arguments = normalized_tool_arguments(&call.arguments).map_err(|error| {
                 ProviderError::UnresolvedToolCall {
                     index,
                     detail: format!("invalid arguments JSON: {error}"),
                 }
             })?;
+            let arguments = restored_tool_arguments(&arguments);
             tool_calls.push(AssembledToolCall {
                 index,
                 id,
                 name,
-                arguments: call.arguments,
+                arguments,
             });
         }
+        crate::provider_filter::restore_view_in_place(&mut self.content);
+        crate::provider_filter::restore_view_in_place(&mut self.reasoning);
         Ok(AssembledAssistantTurn {
             content: self.content,
             reasoning: (!self.reasoning.is_empty()).then_some(self.reasoning),
@@ -732,6 +779,58 @@ impl AssistantTurnAssembler {
             finish_reason: reason,
         })
     }
+}
+
+/// Restore complete tool JSON as values so quoted or escaped originals remain
+/// valid JSON. Incomplete streaming fragments stay raw until they can be parsed.
+pub(crate) fn restored_tool_arguments(raw: &str) -> String {
+    if !crate::provider_filter::rewrites_outbound() {
+        return raw.to_string();
+    }
+    let Ok(value) = serde_json::from_str::<Value>(raw) else {
+        return raw.to_string();
+    };
+    let restored = crate::provider_filter::restore_local_value(&value);
+    if restored == value {
+        raw.to_string()
+    } else {
+        serde_json::to_string(&restored).expect("JSON values remain serializable after restoration")
+    }
+}
+
+/// Tool arguments must be one JSON object. Some models close that object and
+/// then keep writing in the same argument stream. Keep the first object when
+/// the suffix is commentary or an exact duplicate. A different JSON value, or
+/// a suffix that starts another object or array, stays unresolved.
+fn normalized_tool_arguments(raw: &str) -> Result<String, String> {
+    if serde_json::from_str::<Value>(raw).is_ok() {
+        return Ok(raw.to_string());
+    }
+    let mut streamed = serde_json::Deserializer::from_str(raw).into_iter::<Value>();
+    let Some(Ok(value)) = streamed.next() else {
+        return Err(serde_json::from_str::<Value>(raw)
+            .expect_err("invalid JSON remains invalid")
+            .to_string());
+    };
+    let offset = streamed.byte_offset();
+    if value.is_object() {
+        if let Some(prefix) = raw.get(..offset) {
+            let suffix = raw[offset..].trim();
+            let duplicate = serde_json::from_str::<Value>(suffix)
+                .ok()
+                .filter(|second| second == &value);
+            let commentary =
+                !suffix.is_empty() && !suffix.starts_with('{') && !suffix.starts_with('[');
+            if (suffix.is_empty() || duplicate.is_some() || commentary)
+                && serde_json::from_str::<Value>(prefix).is_ok()
+            {
+                return Ok(prefix.to_string());
+            }
+        }
+    }
+    Err(serde_json::from_str::<Value>(raw)
+        .expect_err("trailing or invalid JSON still fails from_str")
+        .to_string())
 }
 
 fn bounded_sum(current: usize, increment: usize, maximum: usize) -> Result<usize, ProviderError> {
@@ -1193,6 +1292,91 @@ mod tests {
     }
 
     #[test]
+    fn filter_restoration_is_independent_of_stream_chunk_boundaries() {
+        let config = crate::provider_filter::ProviderFilterConfig {
+            enabled: true,
+            adjustments: vec![crate::provider_filter::ContentAdjustment {
+                from: "hide secret".into(),
+                to: "hide".into(),
+            }],
+            ..Default::default()
+        };
+        crate::provider_filter::with_test_filter(&config, || {
+            for chunks in [vec!["hide."], vec!["hide", "."], vec!["hi", "de", "."]] {
+                let mut assembler = AssistantTurnAssembler::new();
+                for chunk in chunks {
+                    assembler.push(&ProviderEvent::Text(chunk.into())).unwrap();
+                    assembler
+                        .push(&ProviderEvent::Reasoning(chunk.into()))
+                        .unwrap();
+                }
+                assembler
+                    .push(&ProviderEvent::Finish {
+                        reason: FinishReason::Stop,
+                        usage: None,
+                    })
+                    .unwrap();
+                assembler.push(&ProviderEvent::Done).unwrap();
+                let turn = assembler.finish().unwrap();
+                assert_eq!(turn.content, "hide secret.");
+                assert_eq!(turn.reasoning.as_deref(), Some("hide secret."));
+            }
+        });
+    }
+
+    #[test]
+    fn filter_restores_tool_arguments_as_json_values_once() {
+        for original in ["hide secret", "hidden \"quoted\" \\ path"] {
+            let config = crate::provider_filter::ProviderFilterConfig {
+                enabled: true,
+                adjustments: vec![
+                    crate::provider_filter::ContentAdjustment {
+                        from: original.into(),
+                        to: "hide".into(),
+                    },
+                    crate::provider_filter::ContentAdjustment {
+                        from: "hidden tool".into(),
+                        to: "read_file".into(),
+                    },
+                ],
+                ..Default::default()
+            };
+            crate::provider_filter::with_test_filter(&config, || {
+                let mut assembler = AssistantTurnAssembler::new();
+                assembler
+                    .push(&ProviderEvent::ToolCallStart {
+                        index: 0,
+                        id: "call-1".into(),
+                        name: "read_file".into(),
+                    })
+                    .unwrap();
+                for chunk in ["{\"path\":\"hide", ".txt\"}"] {
+                    assembler
+                        .push(&ProviderEvent::ToolCallArg {
+                            index: 0,
+                            arg: chunk.into(),
+                        })
+                        .unwrap();
+                }
+                assembler
+                    .push(&ProviderEvent::Finish {
+                        reason: FinishReason::ToolCalls,
+                        usage: None,
+                    })
+                    .unwrap();
+                assembler.push(&ProviderEvent::Done).unwrap();
+                let turn = assembler.finish().unwrap();
+                assert_eq!(turn.tool_calls[0].name, "read_file");
+                let arguments: Value = serde_json::from_str(&turn.tool_calls[0].arguments).unwrap();
+                assert_eq!(
+                    arguments,
+                    serde_json::json!({"path": format!("{original}.txt")})
+                );
+            });
+        }
+    }
+
+    #[test]
     fn assembler_validates_tool_identity_arguments_and_finish_reason() {
         let mut assembler = AssistantTurnAssembler::new();
         assembler
@@ -1238,6 +1422,47 @@ mod tests {
             unresolved.finish(),
             Err(ProviderError::UnresolvedToolCall { index: 3, .. })
         ));
+    }
+
+    #[test]
+    fn assembler_keeps_one_tool_object_when_trailing_text_is_not_another_call() {
+        let assemble = |arguments: &str| {
+            let mut assembler = AssistantTurnAssembler::new();
+            assembler
+                .push(&ProviderEvent::ToolCallStart {
+                    index: 0,
+                    id: "call-1".into(),
+                    name: "submit_learning_pass".into(),
+                })
+                .unwrap();
+            assembler
+                .push(&ProviderEvent::ToolCallArg {
+                    index: 0,
+                    arg: arguments.into(),
+                })
+                .unwrap();
+            assembler
+                .push(&ProviderEvent::Finish {
+                    reason: FinishReason::ToolCalls,
+                    usage: None,
+                })
+                .unwrap();
+            assembler.push(&ProviderEvent::Done).unwrap();
+            assembler.finish()
+        };
+
+        let object = "{\"path\":\"src/main.rs\"}";
+        let trailing = assemble(&format!("{object} trailing note")).unwrap();
+        assert_eq!(trailing.tool_calls[0].arguments, object);
+
+        let duplicate = assemble(&format!("{object}{object}")).unwrap();
+        assert_eq!(duplicate.tool_calls[0].arguments, object);
+
+        let conflict = assemble(&format!("{object}{{\"path\":\"other\"}}")).unwrap_err();
+        assert!(conflict.to_string().contains("trailing characters"));
+
+        let truncated = assemble(&format!("{object}{{\"path\":")).unwrap_err();
+        assert!(truncated.to_string().contains("trailing characters"));
     }
 
     #[test]

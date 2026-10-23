@@ -1,9 +1,8 @@
 ---
 source: src/tui/render_tests.rs
-assertion_line: 135
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24),)"
 ---
- ca · plan · auto
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
   ╭────────────────────────────────────────────────────────────────────────────────────────────────╮
   │ Plan · Blocked                                                                                 │
@@ -19,8 +18,8 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
   │ 5. Install the verified release [blocked]                                                      │
   │ 6. Report the final result                                                                     │
   │                                                                                                │
-  │ Enter Execute · Ctrl+O View plan                                                               │
-  │ Type to Revise · Esc Dismiss                                                                   │
+  │ Enter Execute · Ctrl+O View plan · /plan graph                                                 │
+  │ Type to Revise · Esc Dismiss · /plan send                                                      │
   ╰────────────────────────────────────────────────────────────────────────────────────────────────╯
 
 
@@ -29,12 +28,12 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
 
 
 
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                                                                   │
+╰───────────────────────────────────────────────────────────────────────────────────── plan · auto ╯
 / commands
 -- narrow --
- ca · plan · auto
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
   │ clear.                                                 │
   │                                                        │
   │ 1. Inspect repository history, processing symbols,     │
@@ -50,11 +49,11 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
   │ 5. Install the verified release [blocked]              │
   │ 6. Report the final result                             │
   │                                                        │
-  │ Enter Execute · Ctrl+O View plan                       │
-  │ Type to Revise · Esc Dismiss                           │
+  │ Enter Execute · Ctrl+O View plan · /plan graph         │
+  │ Type to Revise · Esc Dismiss · /plan send              │
   ╰────────────────────────────────────────────────────────╯
 
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                           │
+╰───────────────────────────────────────────── plan · auto ╯
 / commands

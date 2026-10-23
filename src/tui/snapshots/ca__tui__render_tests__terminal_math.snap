@@ -1,9 +1,8 @@
 ---
 source: src/tui/render_tests.rs
-assertion_line: 9234
 expression: "wide_narrow(render_to_text(&state, 100, 38), render_to_text(&state, 60, 34))"
 ---
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 The inline result is x₂ + α ≤ ∞, while $5.00$ remains currency.
 
   ∑ᵢ₌₁ⁿ i = n⁄2
@@ -37,12 +36,12 @@ The inline result is x₂ + α ≤ ∞, while $5.00$ remains currency.
 
 
 
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
 1 messages · / commands
 -- narrow --
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
 The inline result is x₂ + α ≤ ∞, while $5.00$ remains
 currency.
 
@@ -72,7 +71,7 @@ currency.
 
 
 
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                           │
+╰──────────────────────────────────────────── agent · auto ╯
 1 messages · / commands

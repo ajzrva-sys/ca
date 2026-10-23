@@ -25,10 +25,13 @@ const TARGETED_FULL_COVERAGE_REPAIR_MESSAGES: usize = 1_533;
 const DIRECT_PUBLICATION_JOURNAL_VERSION: u32 = 5;
 const MAX_SOURCES: usize = 16;
 const MAX_FILES: usize = 10_000;
-// Source discovery is local and streaming. Keep enough aggregate headroom for
-// a real 30-day multi-client archive while bounding every retained record and
-// every provider-facing retrieval separately.
-const MAX_SCAN_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+// One enrolled root, measured as raw file bytes. Retained messages are bounded
+// separately. A Codex session tree can grow past 4 GiB; one runaway root still
+// stops.
+const MAX_SOURCE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+// All enrolled roots together. Each root is checked on its own, and several
+// legal roots can sum past 4 GiB, so the total is not one root's budget.
+const MAX_SCAN_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 // Codex rollouts can legitimately exceed the native CA 64 MiB history bound
 // when they contain large tool records. The scanner is streaming and bounds
 // each retained line/message independently. A separate 1 GiB per-file ceiling
@@ -45,6 +48,7 @@ const MAX_STATE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_EXCERPT_CHARS: usize = 240;
 const UNSTABLE_ARCHIVE_FILE: &str = "archive file changed during scan";
 const SANITIZER_REVISION: u32 = 2;
+const AUTONOMOUS_HARVEST_INTERVAL_MINUTES: i64 = 15;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -60,6 +64,11 @@ pub struct LearnCliArgs {
 
 #[derive(Debug, Subcommand)]
 enum LearnCommand {
+    /// Review evaluated background candidates before any adoption.
+    Candidate {
+        #[command(subcommand)]
+        command: CandidateCommand,
+    },
     Source {
         #[command(subcommand)]
         command: SourceCommand,
@@ -76,6 +85,8 @@ enum LearnCommand {
     },
     /// Run one due harvest and one supervised learning step.
     Run,
+    #[command(hide = true, name = "__tick")]
+    Tick,
     /// Pause the autonomous learning supervisor.
     Pause {
         #[arg(long, default_value = "paused from ca learn")]
@@ -163,8 +174,30 @@ enum ProposalCommand {
 }
 
 #[derive(Debug, Subcommand)]
+enum CandidateCommand {
+    List,
+    Show {
+        id: String,
+    },
+    Approve {
+        id: String,
+        #[arg(long)]
+        confirm: Option<String>,
+    },
+    Reject {
+        id: String,
+        #[arg(long)]
+        confirm: Option<String>,
+    },
+}
+#[derive(Debug, Subcommand)]
 enum ServiceCommand {
     Preview,
+    /// Preview or apply a recoverable refresh of existing enrollment and routes.
+    Refresh {
+        #[arg(long)]
+        confirm: Option<String>,
+    },
     Install {
         #[arg(long)]
         confirm: Option<String>,
@@ -566,7 +599,7 @@ async fn materialize_direct_supplement(
     focus: &str,
     current_conversation: &[TuiLearningContextMessage],
     current_workspace: &Path,
-) -> Result<Option<crate::learning::ArchiveCorpusSession>, String> {
+) -> Result<Vec<crate::learning::ArchiveCorpusSession>, String> {
     let focus = focus.trim();
     let mut projected = current_conversation
         .iter()
@@ -701,31 +734,67 @@ async fn materialize_direct_supplement(
         });
     }
     if projected.is_empty() {
-        return Ok(None);
+        return Ok(Vec::new());
     }
-    let digest = digest_json(&Value::Array(
-        projected
-            .iter()
-            .map(|message| {
-                serde_json::json!({
+    bounded_direct_supplement_sessions(
+        projected,
+        source_label,
+        explicit_procedure,
+        current_workspace,
+    )
+}
+
+fn bounded_direct_supplement_sessions(
+    projected: Vec<crate::learning::ArchiveCorpusMessage>,
+    source_label: Option<String>,
+    explicit_procedure: bool,
+    current_workspace: &Path,
+) -> Result<Vec<crate::learning::ArchiveCorpusSession>, String> {
+    let title = source_label.unwrap_or_else(|| "current conversation".into());
+    let workspace_digest = digest_text(&current_workspace.to_string_lossy());
+    let mut chunks = Vec::new();
+    let mut chunk = Vec::new();
+    let mut chunk_bytes = 0usize;
+    for message in projected {
+        if !chunk.is_empty()
+            && (chunk.len() >= crate::learning::MAX_CORPUS_MESSAGES_PER_SESSION
+                || chunk_bytes.saturating_add(message.text.len()) > 128 * 1024)
+        {
+            chunks.push(std::mem::take(&mut chunk));
+            chunk_bytes = 0;
+        }
+        chunk_bytes = chunk_bytes.saturating_add(message.text.len());
+        chunk.push(message);
+    }
+    if !chunk.is_empty() {
+        chunks.push(chunk);
+    }
+    let mut sessions = Vec::with_capacity(chunks.len());
+    for (index, messages) in chunks.into_iter().enumerate() {
+        let digest = digest_json(&serde_json::json!({
+            "schema": "ca.direct-learning-supplement.v1",
+            "part": index,
+            "messages": messages
+                .iter()
+                .map(|message| serde_json::json!({
                     "role": format!("{:?}", message.role),
-                    "text": message.text
-                })
-            })
-            .collect::<Vec<_>>(),
-    ))?;
-    let id = Uuid::new_v5(&Uuid::NAMESPACE_OID, digest.as_bytes());
-    Ok(Some(crate::learning::ArchiveCorpusSession {
-        id,
-        source_session_key: format!("direct:{digest}"),
-        title: Some(source_label.unwrap_or_else(|| "current conversation".into())),
-        latest_timestamp: Some(Utc::now().timestamp_millis()),
-        workspace_digest: digest_text(&current_workspace.to_string_lossy()),
-        current_workspace: true,
-        explicit_global_user_statement: explicit_procedure,
-        source_message_ids: Vec::new(),
-        messages: projected,
-    }))
+                    "text": message.text,
+                }))
+                .collect::<Vec<_>>(),
+        }))?;
+        sessions.push(crate::learning::ArchiveCorpusSession {
+            id: Uuid::new_v5(&Uuid::NAMESPACE_OID, digest.as_bytes()),
+            source_session_key: format!("direct:{digest}"),
+            title: Some(title.clone()),
+            latest_timestamp: Some(Utc::now().timestamp_millis()),
+            workspace_digest: workspace_digest.clone(),
+            current_workspace: true,
+            explicit_global_user_statement: explicit_procedure,
+            source_message_ids: Vec::new(),
+            messages,
+        });
+    }
+    Ok(sessions)
 }
 
 fn append_untrusted_source_messages(
@@ -861,26 +930,8 @@ where
         .pending_proposal
         .filter(|proposal| proposal.evidence_digest == digest)
         .map(|proposal| proposal.digest);
-    let receipt = if let Some(proposal_digest) = pending_proposal {
-        on_progress(TuiLearningProgress {
-            completed_calls: 0,
-            total_calls: 8,
-            operation: "Resuming recoverable publication journal".into(),
-            model: preferred_route.map(|(provider, model)| format!("{provider}/{model}")),
-            activities: vec![
-                "Recovery · validated artifacts are being republished atomically".into(),
-            ],
-        });
-        store
-            .apply_proposal_with_cancel(
-                &proposal_digest,
-                &[],
-                &[],
-                allow_memory,
-                true,
-                Some(cancellation),
-            )
-            .map_err(|error| format!("publication: {error}"))?
+    let receipt = if pending_proposal.is_some() {
+        store.render_proposal()?
     } else {
         match store
             .process_review_with_progress(
@@ -890,7 +941,7 @@ where
                     allow_memory,
                     cancellation: Some(cancellation),
                     current_workspace: Some(current_workspace),
-                    supplemental: supplemental.as_ref(),
+                    supplemental: supplemental.as_slice(),
                 },
                 on_progress,
             )
@@ -928,7 +979,7 @@ where
                             allow_memory,
                             cancellation: Some(cancellation),
                             current_workspace: Some(current_workspace),
-                            supplemental: supplemental.as_ref(),
+                            supplemental: supplemental.as_slice(),
                         },
                         on_progress,
                     )
@@ -945,16 +996,17 @@ where
         }
     };
     let notice = if migration_notice {
-        "`/learn review` and `/learn approve` now start the direct learning run. Learning completed and published."
+        "`/learn review` and `/learn approve` now start the direct learning run. Learning evaluation completed; review the proposal before adoption."
     } else {
-        "Learning completed and published"
+        "Learning evaluation completed; review the proposal before adoption"
     };
     Ok(TuiLearningTaskResult {
-        view: TuiLearningView {
-            kind: TuiLearningViewKind::Receipt,
-            content: receipt,
-            evidence: None,
-            proposal: None,
+        view: {
+            let mut view = tui_current_review_view(store, &store.paths, &store.profile)?;
+            if view.kind != TuiLearningViewKind::Proposal {
+                view.content = receipt;
+            }
+            view
         },
         notice: notice.into(),
         refreshed_after_drift,
@@ -989,19 +1041,20 @@ where
                 allow_memory: true,
                 cancellation: None,
                 current_workspace: None,
-                supplemental: None,
+                supplemental: &[],
             },
             on_progress,
         )
         .await
     {
         Ok(receipt) => {
-            let mut view = tui_status_view(store, paths, profile)?;
-            view.kind = TuiLearningViewKind::Receipt;
-            view.content = receipt.clone();
+            let mut view = tui_current_review_view(store, paths, profile)?;
+            if view.kind != TuiLearningViewKind::Proposal {
+                view.content = receipt;
+            }
             Ok(TuiLearningTaskResult {
                 view,
-                notice: "Learning pass completed and published".into(),
+                notice: "Learning evaluation completed; review the proposal before adoption".into(),
                 refreshed_after_drift: false,
             })
         }
@@ -1112,10 +1165,7 @@ fn tui_current_review_view(
             .sum();
         return Ok(TuiLearningView {
             kind: TuiLearningViewKind::Proposal,
-            content: store.render_proposal()?.replace(
-                "Apply only after review with:",
-                "Enter opens in-app actions.\nDrag copies selected text; C copies the full page.\nCLI fallback:",
-            ),
+            content: learning_proposal_page(store.render_proposal()?),
             evidence: None,
             proposal: Some(TuiProposalBinding {
                 digest: proposal.digest.clone(),
@@ -1147,6 +1197,20 @@ fn tui_current_review_view(
         });
     }
     tui_status_view(store, paths, profile)
+}
+
+fn learning_proposal_page(rendered: String) -> String {
+    let mut lines = rendered
+        .lines()
+        .filter(|line| !line.starts_with("Apply only after review with:"))
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    while lines.last().is_some_and(String::is_empty) {
+        lines.pop();
+    }
+    lines.push(String::new());
+    lines.push("y applies these changes. n leaves them pending.".to_string());
+    lines.join("\n")
 }
 
 fn run_unified_status(
@@ -1182,34 +1246,37 @@ fn unified_status_text(
         Ok(status) => sections.push(status),
         Err(error) => sections.push(format!("Autonomous learning service\nUnavailable: {error}")),
     }
+    sections.push(crate::learning_automation::status(paths).map_err(|e| e.to_string())?);
     Ok(sections.join("\n\n"))
 }
 
-fn run_unified_once(
+async fn run_unified_once(
     paths: &crate::runtime::RuntimePaths,
     profile: &crate::runtime::ActiveProfile,
 ) -> Result<(), String> {
-    let harvested = autonomous_harvest(paths, profile, Utc::now())?;
-    let supervisor = paths
-        .home
-        .join(".codex-team/self-improvement/supervisor/bin/codex-team-supervisor");
-    if !supervisor.is_file() {
-        return Err("autonomous learning service is not installed".into());
-    }
-    let vault = paths.home.join(".codex-team/self-improvement");
-    let output = Command::new(&supervisor)
-        .args(["run", "--vault", vault.to_string_lossy().as_ref(), "--once"])
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|_| "autonomous learning supervisor could not be launched".to_string())?;
-    if !output.status.success() {
-        return Err(format!(
-            "autonomous learning supervisor failed: {}",
-            bounded_failure(&String::from_utf8_lossy(&output.stderr))
-        ));
-    }
+    let harvested =
+        native_queue_then_harvest(crate::schedule::run_learning_quiet(paths, profile), || {
+            autonomous_harvest(paths, profile, Utc::now())
+        })
+        .await?;
     println!("{}", harvested.render());
     Ok(())
+}
+
+async fn native_queue_then_harvest<T>(
+    native: impl std::future::Future<Output = Result<(), String>>,
+    harvest: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let native_result = native.await;
+    let harvested = harvest();
+    match (native_result, harvested) {
+        (Ok(()), Ok(summary)) => Ok(summary),
+        (Err(native), Ok(_)) => Err(format!("native learning queue: {native}")),
+        (Ok(()), Err(archive)) => Err(format!("archive harvest: {archive}")),
+        (Err(native), Err(archive)) => Err(format!(
+            "native learning queue: {native}; archive harvest: {archive}"
+        )),
+    }
 }
 
 fn run_supervisor_pause(paths: &crate::runtime::RuntimePaths, reason: &str) -> Result<(), String> {
@@ -1262,11 +1329,15 @@ pub(crate) struct AutonomousHarvestSummary {
     pub queued_dream: bool,
     pub queued_distill: bool,
     pub queued_intents: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skipped_missing_roots: Vec<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub archive_failure: Option<String>,
 }
 
 impl AutonomousHarvestSummary {
     fn render(&self) -> String {
-        format!(
+        let mut summary = format!(
             "Learning harvest\nArchive scan: {}\nSources: {}\nIndexed files/messages: {}/{}\nQueued Dream: {}\nQueued Distill: {}\nQueue depth: {}",
             if self.scanned { "completed" } else { "not due" },
             self.registered_sources,
@@ -1275,7 +1346,17 @@ impl AutonomousHarvestSummary {
             if self.queued_dream { "yes" } else { "no" },
             if self.queued_distill { "yes" } else { "no" },
             self.queued_intents,
-        )
+        );
+        if !self.skipped_missing_roots.is_empty() {
+            summary.push_str("\nSkipped missing source roots:");
+            for root in &self.skipped_missing_roots {
+                summary.push_str(&format!("\n- {}", root.display()));
+            }
+        }
+        if let Some(failure) = &self.archive_failure {
+            summary.push_str(&format!("\nArchive harvest unavailable: {failure}"));
+        }
+        summary
     }
 }
 
@@ -1288,6 +1369,52 @@ pub(crate) fn autonomous_harvest(
         return Err("autonomous learning requires a persistent profile".into());
     }
     let archive = ArchiveLearningStore::new(paths, profile)?;
+    if !archive.claim_autonomous_harvest(now)? {
+        let state = archive.load_state()?;
+        let learning = crate::learning::LearningStore::for_profile(paths, profile, true)?;
+        return Ok(AutonomousHarvestSummary {
+            scanned: false,
+            registered_sources: state.sources.len(),
+            indexed_files: state.files.len(),
+            indexed_messages: state.files.values().map(|file| file.messages.len()).sum(),
+            queued_dream: false,
+            queued_distill: false,
+            queued_intents: learning.bridge_preflight()?.queued_intents,
+            skipped_missing_roots: missing_source_roots(&state),
+            archive_failure: state.last_failure.map(|failure| failure.message),
+        });
+    }
+    let result = autonomous_harvest_claimed(paths, profile, now, &archive);
+    if let Err(error) = &result {
+        let _lock = archive.lock()?;
+        let mut state = archive.load_state()?;
+        state.last_failure = Some(FailureRecord {
+            at: now,
+            message: bounded_failure(error),
+        });
+        archive.write_state(&state)?;
+    }
+    result
+}
+
+fn autonomous_harvest_claimed(
+    paths: &crate::runtime::RuntimePaths,
+    profile: &crate::runtime::ActiveProfile,
+    now: DateTime<Utc>,
+    archive: &ArchiveLearningStore,
+) -> Result<AutonomousHarvestSummary, String> {
+    // Validate enrolled roots that are still present before reading any
+    // transcript or database. Session files removed inside a present root are
+    // omitted by the scanner, and that root stays enrolled. A root that is
+    // not on disk stays enrolled and is skipped so the remaining sources can
+    // still be harvested.
+    let existing = archive.load_state()?;
+    for source in &existing.sources {
+        if source_root_missing(&source.canonical_root) {
+            continue;
+        }
+        validate_source_root(&source.canonical_root)?;
+    }
     let desired_roots = [
         paths.home.join(".codex/sessions"),
         paths.home.join(".codex/archived_sessions"),
@@ -1297,7 +1424,6 @@ pub(crate) fn autonomous_harvest(
     .into_iter()
     .filter(|path| path.is_dir() || (path.is_file() && is_learning_database_path(path)))
     .collect::<Vec<_>>();
-    let existing = archive.load_state()?;
     let registered = existing
         .sources
         .iter()
@@ -1425,6 +1551,8 @@ pub(crate) fn autonomous_harvest(
         queued_dream,
         queued_distill,
         queued_intents,
+        skipped_missing_roots: missing_source_roots(&archive_state),
+        archive_failure: archive_state.last_failure.map(|failure| failure.message),
     })
 }
 
@@ -1499,7 +1627,27 @@ async fn run(cli: LearnCliArgs) -> Result<(), String> {
                 run_unified_status(&store, &paths, &profile)
             }
         }
-        LearnCommand::Run => run_unified_once(&paths, &profile),
+        LearnCommand::Candidate { command } => run_candidate_command(&paths, command),
+        LearnCommand::Run => run_unified_once(&paths, &profile).await,
+        LearnCommand::Tick => {
+            let outcomes = crate::learning_automation::harvest_outcomes(&paths, &profile)
+                .map_err(|e| e.to_string());
+            native_queue_then_harvest(
+                async {
+                    let queue = crate::schedule::run_learning_quiet(&paths, &profile).await;
+                    match (outcomes, queue) {
+                        (Ok(_), result) => result,
+                        (Err(import), Ok(())) => Err(format!("native outcome import: {import}")),
+                        (Err(import), Err(queue)) => Err(format!(
+                            "native outcome import: {import}; queue admission: {queue}"
+                        )),
+                    }
+                },
+                || autonomous_harvest(&paths, &profile, Utc::now()),
+            )
+            .await
+            .map(|_| ())
+        }
         LearnCommand::Pause { reason } => run_supervisor_pause(&paths, &reason),
         LearnCommand::Resume => run_supervisor_resume(&paths),
         LearnCommand::Harvest => {
@@ -1523,7 +1671,7 @@ fn run_background_sandboxed(
     #[cfg(not(target_os = "macos"))]
     {
         let _ = (store, profile);
-        return Err("background archive scanning requires the macOS sandbox".into());
+        Err("background archive scanning requires the macOS sandbox".into())
     }
     #[cfg(target_os = "macos")]
     {
@@ -1693,18 +1841,32 @@ fn run_proposal_command(
 }
 
 fn run_service_command(
-    _store: &ArchiveLearningStore,
+    store: &ArchiveLearningStore,
     profile: &crate::runtime::ActiveProfile,
     command: ServiceCommand,
 ) -> Result<(), String> {
     let paths = crate::runtime::RuntimePaths::discover().map_err(|error| error.to_string())?;
+    if matches!(command, ServiceCommand::Status) {
+        let plist = paths
+            .home
+            .join("Library/LaunchAgents")
+            .join(format!("{AUTONOMOUS_SERVICE_LABEL}.plist"));
+        println!(
+            "Autonomous learning service\nInstalled: {}\nLoaded: {}\n{}\n{}",
+            plist.is_file(),
+            launchctl_loaded(AUTONOMOUS_SERVICE_LABEL),
+            crate::learning_automation::status(&paths).map_err(|e| e.to_string())?,
+            store.autonomous_harvest_health()?
+        );
+        return Ok(());
+    }
     let preview = unified_service_preview(&paths, profile)?;
     match command {
         ServiceCommand::Preview => {
             println!("{}", preview.render());
             Ok(())
         }
-        ServiceCommand::Install { confirm } => {
+        ServiceCommand::Install { confirm } | ServiceCommand::Refresh { confirm } => {
             if confirm.as_deref() != Some(preview.digest.as_str()) {
                 println!("{}", preview.render());
                 return Err(format!(
@@ -1760,6 +1922,8 @@ struct ArchiveLearningState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     last_scan: Option<ScanRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_autonomous_harvest_attempt: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     last_failure: Option<FailureRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     last_receipt: Option<LearningReceiptRecord>,
@@ -1780,10 +1944,20 @@ impl Default for ArchiveLearningState {
             pending_proposal: None,
             direct_run: None,
             last_scan: None,
+            last_autonomous_harvest_attempt: None,
             last_failure: None,
             last_receipt: None,
             reopened_legacy_run_ids: BTreeSet::new(),
         }
+    }
+}
+
+impl ArchiveLearningState {
+    fn last_autonomous_harvest_admission(&self) -> Option<DateTime<Utc>> {
+        self.last_autonomous_harvest_attempt
+            .into_iter()
+            .chain(self.last_scan.as_ref().map(|scan| scan.finished_at))
+            .max()
     }
 }
 
@@ -2235,10 +2409,53 @@ struct ReviewProcessingContext<'a> {
     allow_memory: bool,
     cancellation: Option<&'a std::sync::atomic::AtomicBool>,
     current_workspace: Option<&'a Path>,
-    supplemental: Option<&'a crate::learning::ArchiveCorpusSession>,
+    supplemental: &'a [crate::learning::ArchiveCorpusSession],
 }
 
 impl ArchiveLearningStore {
+    /// Persist the claim before releasing the shared store lock. A failed or
+    /// interrupted process consumes the same cadence as a successful harvest.
+    fn claim_autonomous_harvest(&self, now: DateTime<Utc>) -> Result<bool, String> {
+        let _lock = self.lock()?;
+        let mut state = self.load_state()?;
+        let last = state.last_autonomous_harvest_admission();
+        if last.is_some_and(|last| {
+            now.signed_duration_since(last)
+                < chrono::Duration::minutes(AUTONOMOUS_HARVEST_INTERVAL_MINUTES)
+        }) {
+            return Ok(false);
+        }
+        state.last_autonomous_harvest_attempt = Some(now);
+        self.write_state(&state)?;
+        Ok(true)
+    }
+
+    fn autonomous_harvest_health(&self) -> Result<String, String> {
+        let state = self.load_state()?;
+        let mut lines = Vec::new();
+        if let Some(attempt) = state.last_autonomous_harvest_attempt {
+            lines.push(format!(
+                "Last archive harvest attempt: {}",
+                attempt.to_rfc3339()
+            ));
+        }
+        if let Some(last) = state.last_autonomous_harvest_admission() {
+            lines.push(format!(
+                "Next archive harvest attempt: {}",
+                (last + chrono::Duration::minutes(AUTONOMOUS_HARVEST_INTERVAL_MINUTES))
+                    .to_rfc3339()
+            ));
+        }
+        if let Some(failure) = state.last_failure {
+            lines.push(format!(
+                "Archive harvest blocked: {} · {}",
+                failure.at.to_rfc3339(),
+                failure.message
+            ));
+        }
+        Ok(lines.join("\n"))
+    }
+
     fn new(
         paths: &crate::runtime::RuntimePaths,
         profile: &crate::runtime::ActiveProfile,
@@ -3045,11 +3262,12 @@ impl ArchiveLearningStore {
         if state.sources.len() + preview.roots.len() > MAX_SOURCES {
             return Err(format!("at most {MAX_SOURCES} sources may be registered"));
         }
-        let mut scans = scan_registered_sources(&state)?;
+        let registered = scan_registered_sources(&state)?;
+        let mut scans = registered.scans;
         scans.extend(preview.scans);
         let combined_files = scans.iter().map(|scan| scan.files.len()).sum::<usize>();
         let combined_bytes = scans.iter().map(|scan| scan.bytes).sum::<u64>();
-        if combined_files > MAX_FILES || combined_bytes > MAX_SCAN_BYTES {
+        if archive_scan_exceeds_budget(combined_files, combined_bytes) {
             return Err(format!(
                 "archive scan exceeds {MAX_FILES} files or {MAX_SCAN_BYTES} bytes"
             ));
@@ -3062,7 +3280,7 @@ impl ArchiveLearningStore {
                 registered_at: now,
             });
         }
-        self.sync_state(&mut state, scans, now)
+        self.sync_state(&mut state, scans, registered.skipped_missing, now)
     }
 
     fn remove_source(&self, source_id: Uuid) -> Result<(), String> {
@@ -3089,7 +3307,12 @@ impl ArchiveLearningStore {
         }
         let now = Utc::now();
         match scan_registered_sources(&state) {
-            Ok(scans) => self.sync_state(&mut state, scans, now),
+            Ok(registered) => self.sync_state(
+                &mut state,
+                registered.scans,
+                registered.skipped_missing,
+                now,
+            ),
             Err(error) => {
                 state.last_failure = Some(FailureRecord {
                     at: now,
@@ -3107,6 +3330,7 @@ impl ArchiveLearningStore {
         &self,
         state: &mut ArchiveLearningState,
         scans: Vec<RootScan>,
+        skipped_missing: Vec<PathBuf>,
         now: DateTime<Utc>,
     ) -> Result<ScanSummary, String> {
         let source_ids = state
@@ -3176,6 +3400,7 @@ impl ArchiveLearningStore {
                 .pending_review
                 .as_ref()
                 .map(|review| review.digest.clone()),
+            skipped_roots: skipped_missing,
         })
     }
 
@@ -3206,6 +3431,7 @@ impl ArchiveLearningStore {
         let indexed_source_counts = coverage_source_counts(&state, &indexed_message_ids);
         let searchable_source_counts =
             coverage_source_counts(&state, &last_coverage.searchable_message_ids);
+        let missing_sources = missing_source_roots(&state);
         Ok(LearningStatus {
             source_count: state.sources.len(),
             file_count: state.files.len(),
@@ -3225,6 +3451,7 @@ impl ArchiveLearningStore {
             last_scan: state.last_scan,
             last_failure: state.last_failure,
             last_receipt: state.last_receipt,
+            missing_sources,
             skipped: skip_counts(state.files.values()),
         })
     }
@@ -3238,6 +3465,9 @@ impl ArchiveLearningStore {
         let selected = review.message_ids.iter().cloned().collect::<BTreeSet<_>>();
         let mut excerpts = Vec::new();
         for source in &state.sources {
+            if source_root_missing(&source.canonical_root) {
+                continue;
+            }
             let scan = scan_root(&source.canonical_root)?;
             for file in scan.files {
                 for message in file.materialized_messages {
@@ -3402,7 +3632,7 @@ impl ArchiveLearningStore {
                     allow_memory: true,
                     cancellation: None,
                     current_workspace: None,
-                    supplemental: None,
+                    supplemental: &[],
                 },
                 &mut |progress| {
                     eprintln!("{}", progress.status_line());
@@ -3499,7 +3729,7 @@ impl ArchiveLearningStore {
             }
         }
         let mut corpora = compact_review_corpora(&state, &review, current_workspace)?;
-        if let Some(supplemental) = supplemental {
+        if !supplemental.is_empty() {
             let workspace_path = current_workspace
                 .map(Path::to_path_buf)
                 .or_else(|| corpora.first().and_then(|work| work.workspace_path.clone()))
@@ -3509,12 +3739,12 @@ impl ArchiveLearningStore {
                 .iter_mut()
                 .find(|work| work.workspace_path.as_deref() == Some(workspace_path.as_path()))
             {
-                work.sessions.push(supplemental.clone());
+                work.sessions.extend(supplemental.iter().cloned());
             } else {
                 corpora.push(ArchiveCorpusWork {
                     workspace_digest,
                     workspace_path: Some(workspace_path),
-                    sessions: vec![supplemental.clone()],
+                    sessions: supplemental.to_vec(),
                 });
             }
         }
@@ -3933,8 +4163,10 @@ impl ArchiveLearningStore {
         self.write_state(&state)?;
         self.remove_progress()?;
         drop(lock);
-        self.apply_proposal_with_cancel(&proposal.digest, &[], &[], true, true, cancellation)
-            .map_err(|error| format!("publication: {error}"))
+        if let Some(cancellation) = cancellation {
+            check_direct_learning_cancel(cancellation)?;
+        }
+        self.render_proposal()
     }
 
     fn render_proposal(&self) -> Result<String, String> {
@@ -5404,6 +5636,14 @@ fn scan_recall_root(root: &Path) -> Result<RootScan, String> {
     }
 }
 
+fn source_byte_budget_exceeded(bytes: u64) -> bool {
+    bytes > MAX_SOURCE_BYTES
+}
+
+fn archive_scan_exceeds_budget(files: usize, bytes: u64) -> bool {
+    files > MAX_FILES || bytes > MAX_SCAN_BYTES
+}
+
 fn scan_roots(roots: &[PathBuf]) -> Result<Vec<RootScan>, String> {
     let mut scans = Vec::with_capacity(roots.len());
     let mut files = 0usize;
@@ -5416,7 +5656,7 @@ fn scan_roots(roots: &[PathBuf]) -> Result<Vec<RootScan>, String> {
         bytes = bytes
             .checked_add(scan.bytes)
             .ok_or_else(|| "source size overflowed".to_string())?;
-        if files > MAX_FILES || bytes > MAX_SCAN_BYTES {
+        if archive_scan_exceeds_budget(files, bytes) {
             return Err(format!(
                 "archive scan exceeds {MAX_FILES} files or {MAX_SCAN_BYTES} bytes"
             ));
@@ -5426,22 +5666,35 @@ fn scan_roots(roots: &[PathBuf]) -> Result<Vec<RootScan>, String> {
     Ok(scans)
 }
 
-fn scan_registered_sources(state: &ArchiveLearningState) -> Result<Vec<RootScan>, String> {
+struct RegisteredSourceScans {
+    scans: Vec<RootScan>,
+    skipped_missing: Vec<PathBuf>,
+}
+
+fn scan_registered_sources(state: &ArchiveLearningState) -> Result<RegisteredSourceScans, String> {
     let mut scans = Vec::with_capacity(state.sources.len());
+    let mut skipped_missing = Vec::new();
     let mut total_files = 0usize;
     let mut total_bytes = 0u64;
     for source in &state.sources {
+        if source_root_missing(&source.canonical_root) {
+            skipped_missing.push(source.canonical_root.clone());
+            continue;
+        }
         let scan = scan_root_cached(&source.canonical_root, Some((source.id, &state.files)))?;
         total_files = total_files.saturating_add(scan.files.len());
         total_bytes = total_bytes.saturating_add(scan.bytes);
-        if total_files > MAX_FILES || total_bytes > MAX_SCAN_BYTES {
+        if archive_scan_exceeds_budget(total_files, total_bytes) {
             return Err(format!(
                 "archive scan exceeds {MAX_FILES} files or {MAX_SCAN_BYTES} bytes"
             ));
         }
         scans.push(scan);
     }
-    Ok(scans)
+    Ok(RegisteredSourceScans {
+        scans,
+        skipped_missing,
+    })
 }
 
 fn scan_root(root: &Path) -> Result<RootScan, String> {
@@ -5477,15 +5730,24 @@ fn scan_jsonl_directory_canonical(
         if depth > MAX_DEPTH {
             return Err(format!("archive source exceeds depth {MAX_DEPTH}"));
         }
-        let mut entries = fs::read_dir(&directory)
+        let mut entries = Vec::new();
+        for entry in fs::read_dir(&directory)
             .map_err(|_| "archive source directory could not be read".to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| "archive source entry could not be read".to_string())?;
+        {
+            match entry {
+                Ok(entry) => entries.push(entry),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(_) => return Err("archive source entry could not be read".into()),
+            }
+        }
         entries.sort_by_key(|entry| entry.file_name());
         for entry in entries {
             let path = entry.path();
-            let metadata = fs::symlink_metadata(&path)
-                .map_err(|_| "archive source entry could not be inspected".to_string())?;
+            let metadata = match fs::symlink_metadata(&path) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(_) => return Err("archive source entry could not be inspected".into()),
+            };
             if metadata.file_type().is_symlink() {
                 continue;
             }
@@ -5517,8 +5779,8 @@ fn scan_jsonl_directory_canonical(
         bytes = bytes
             .checked_add(metadata.len())
             .ok_or_else(|| "archive source size overflowed".to_string())?;
-        if !complete_history && bytes > MAX_SCAN_BYTES {
-            return Err(format!("archive source exceeds {MAX_SCAN_BYTES} bytes"));
+        if !complete_history && source_byte_budget_exceeded(bytes) {
+            return Err(format!("archive source exceeds {MAX_SOURCE_BYTES} bytes"));
         }
         let relative = path
             .strip_prefix(&canonical_root)
@@ -5568,9 +5830,9 @@ fn scan_mimocode_database_canonical(
         return Err("MiMoCode source is not a regular database".into());
     }
     validate_owner_controlled(&metadata, "MiMoCode database")?;
-    if !complete_history && metadata.len() > MAX_SCAN_BYTES {
+    if !complete_history && source_byte_budget_exceeded(metadata.len()) {
         return Err(format!(
-            "MiMoCode database exceeds the {MAX_SCAN_BYTES}-byte source bound"
+            "MiMoCode database exceeds the {MAX_SOURCE_BYTES}-byte source bound"
         ));
     }
     let mut bytes = metadata.len();
@@ -5583,9 +5845,9 @@ fn scan_mimocode_database_canonical(
         bytes = bytes
             .checked_add(wal.len())
             .ok_or_else(|| "MiMoCode source size overflowed".to_string())?;
-        if !complete_history && bytes > MAX_SCAN_BYTES {
+        if !complete_history && source_byte_budget_exceeded(bytes) {
             return Err(format!(
-                "MiMoCode database and WAL exceed the {MAX_SCAN_BYTES}-byte source bound"
+                "MiMoCode database and WAL exceed the {MAX_SOURCE_BYTES}-byte source bound"
             ));
         }
     }
@@ -5768,9 +6030,9 @@ fn scan_hermes_database_canonical(
         return Err("Hermes source is not a regular database".into());
     }
     validate_owner_controlled(&metadata, "Hermes database")?;
-    if !complete_history && metadata.len() > MAX_SCAN_BYTES {
+    if !complete_history && source_byte_budget_exceeded(metadata.len()) {
         return Err(format!(
-            "Hermes database exceeds the {MAX_SCAN_BYTES}-byte source bound"
+            "Hermes database exceeds the {MAX_SOURCE_BYTES}-byte source bound"
         ));
     }
     let mut bytes = metadata.len();
@@ -5783,9 +6045,9 @@ fn scan_hermes_database_canonical(
         bytes = bytes
             .checked_add(wal.len())
             .ok_or_else(|| "Hermes source size overflowed".to_string())?;
-        if !complete_history && bytes > MAX_SCAN_BYTES {
+        if !complete_history && source_byte_budget_exceeded(bytes) {
             return Err(format!(
-                "Hermes database and WAL exceed the {MAX_SCAN_BYTES}-byte source bound"
+                "Hermes database and WAL exceed the {MAX_SOURCE_BYTES}-byte source bound"
             ));
         }
     }
@@ -6368,8 +6630,8 @@ fn scan_native_session_root_with_mode(
         bytes = bytes
             .checked_add(size)
             .ok_or_else(|| "native CA source size overflowed".to_string())?;
-        if !complete_history && bytes > MAX_SCAN_BYTES {
-            return Err(format!("archive source exceeds {MAX_SCAN_BYTES} bytes"));
+        if !complete_history && source_byte_budget_exceeded(bytes) {
+            return Err(format!("archive source exceeds {MAX_SOURCE_BYTES} bytes"));
         }
         let file = scan_native_loaded_session(
             loaded,
@@ -7579,7 +7841,7 @@ fn verify_review_revisions(
             .map(|source| (source.canonical_root.clone(), source.id))
             .collect::<BTreeMap<_, _>>();
         let mut current_files = BTreeMap::new();
-        for scan in scan_registered_sources(state)? {
+        for scan in scan_registered_sources(state)?.scans {
             let source_id = source_ids
                 .get(&scan.canonical_root)
                 .copied()
@@ -7603,6 +7865,9 @@ fn verify_review_revisions(
     // direct workflow, but accepting an exact legacy match keeps persisted state readable.
     let mut current_revisions = BTreeMap::new();
     for source in &state.sources {
+        if source_root_missing(&source.canonical_root) {
+            continue;
+        }
         let scan = scan_root(&source.canonical_root)?;
         for file in scan.files {
             let key = file_key(source.id, &file.relative_path);
@@ -7890,6 +8155,9 @@ fn materialize_review_corpora(
     let mut raw =
         BTreeMap::<(String, PathBuf, String, Option<String>), Vec<MaterializedMessage>>::new();
     for source in &state.sources {
+        if source_root_missing(&source.canonical_root) {
+            continue;
+        }
         let scan = scan_root(&source.canonical_root)?;
         for file in scan.files {
             let key = (
@@ -8198,6 +8466,7 @@ struct ScanSummary {
     unique_messages: usize,
     pending_messages: usize,
     review_digest: Option<String>,
+    skipped_roots: Vec<PathBuf>,
 }
 
 impl ScanSummary {
@@ -8215,8 +8484,30 @@ impl ScanSummary {
             lines.push(format!("Evidence review digest: {digest}"));
             lines.push("Run `ca learn review show` before authorizing it.".into());
         }
+        if !self.skipped_roots.is_empty() {
+            lines.push("Skipped missing source roots:".into());
+            for root in &self.skipped_roots {
+                lines.push(format!("- {}", root.display()));
+            }
+        }
         lines.join("\n")
     }
+}
+
+fn source_root_missing(path: &Path) -> bool {
+    matches!(
+        fs::symlink_metadata(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    )
+}
+
+fn missing_source_roots(state: &ArchiveLearningState) -> Vec<PathBuf> {
+    state
+        .sources
+        .iter()
+        .filter(|source| source_root_missing(&source.canonical_root))
+        .map(|source| source.canonical_root.clone())
+        .collect()
 }
 
 #[derive(Debug, Default)]
@@ -8316,6 +8607,7 @@ struct LearningStatus {
     last_scan: Option<ScanRecord>,
     last_failure: Option<FailureRecord>,
     last_receipt: Option<LearningReceiptRecord>,
+    missing_sources: Vec<PathBuf>,
     skipped: SkipCounts,
 }
 
@@ -8384,6 +8676,15 @@ impl LearningStatus {
             lines.push(
                 "Open `/learn review` or run `ca learn proposal show` before applying.".into(),
             );
+        }
+        if !self.missing_sources.is_empty() {
+            lines.push(format!(
+                "Missing source roots: {}",
+                self.missing_sources.len()
+            ));
+            for root in &self.missing_sources {
+                lines.push(format!("- {}", root.display()));
+            }
         }
         if let Some(failure) = &self.last_failure {
             lines.push(format!(
@@ -8459,9 +8760,9 @@ fn validate_source_root(path: &Path) -> Result<PathBuf, String> {
             path.display()
         ));
     }
-    if metadata.file_type().is_file() && metadata.len() > MAX_SCAN_BYTES {
+    if metadata.file_type().is_file() && source_byte_budget_exceeded(metadata.len()) {
         return Err(format!(
-            "learning database exceeds the {MAX_SCAN_BYTES}-byte source bound"
+            "learning database exceeds the {MAX_SOURCE_BYTES}-byte source bound"
         ));
     }
     validate_owner_controlled(&metadata, "source root")?;
@@ -8819,6 +9120,8 @@ struct UnifiedServicePreview {
     plist_path: PathBuf,
     execution_profile_path: PathBuf,
     execution_profile_digest: String,
+    previous_execution_profile_digest: Option<String>,
+    previous_enrollment_digest: Option<String>,
     evidence_profile_state_digest: String,
     evidence_roots: Vec<(String, PathBuf)>,
     binaries: LearningBinaries,
@@ -8834,7 +9137,7 @@ impl UnifiedServicePreview {
             .collect::<Vec<_>>()
             .join("\n");
         format!(
-            "Autonomous learning service preview\nLabel: {}\nPath: {}\nEvidence profile: default (state {})\nExecution profile: {} (digest {})\nEvidence roots:\n{}\nCadence: archive scan every 15 minutes; Dream every 7 days; Distill every 30 days; first run due now\nPromotion: replay-approved memory and inert skills only\nForbidden: source, binary, permission, provider-setting, routing, role-prompt, executable, plugin, and dependency changes\nProvider budget: unbounded, metered, and visible\nApprovals after activation: none\nConfirmation digest: {}",
+            "Autonomous learning service preview\nLabel: {}\nPath: {}\nEvidence profile: default (state {})\nExecution profile: {} (digest {})\nEvidence roots:\n{}\nCadence: archive scan and evaluation stage every 15 minutes; Dream every 7 days; Distill every 30 days; first run due now\nKnowledge candidates: memory, inert skills, and evidence-based steering\nCode candidates: evaluated by the existing harness; protected promotion requires its exact review\nAdoption: memory, skills, steering, and code require exact review\nProvider budget: $2 per Eastern calendar day shared with harness learning; unknown usage retains reservation\nLegacy migration: known today charges are imported; unavailable prior usage reserves the remaining daily allowance until Eastern reset\nRoutine evaluation approvals: none; every adoption requires review\nConfirmation digest: {}",
             self.label,
             self.plist_path.display(),
             short_digest(&self.evidence_profile_state_digest),
@@ -8882,8 +9185,24 @@ fn unified_service_preview(
         .join("profiles")
         .join(format!("{LEARNING_EXECUTION_PROFILE}.toml"));
     let execution_plan =
-        crate::config::plan_learning_execution_profile(&paths.config_file, &execution_profile_path)
-            .map_err(|error| error.to_string())?;
+        crate::learning_automation::plan_execution_refresh(paths).map_err(|e| e.to_string())?;
+    let previous_execution_profile_digest =
+        crate::learning_automation::existing_profile_digest(&execution_profile_path)
+            .map_err(|e| e.to_string())?;
+    let previous_enrollment_digest = codex_team::self_improvement::LearningVault::existing_at(
+        paths.home.join(".codex-team/self-improvement"),
+    )
+    .map_err(|e| e.to_string())?
+    .map(|vault| codex_team::self_improvement::load_state(&vault))
+    .transpose()
+    .map_err(|e| e.to_string())?
+    .flatten()
+    .map(|state| state.enrollment_digest);
+    let eligible_route_price_bindings = previous_enrollment_digest
+        .as_ref()
+        .map(|_| crate::learning_automation::price_bindings(paths, profile))
+        .transpose()
+        .map_err(|e| e.to_string())?;
     let mut evidence_roots = vec![
         ("ca-active".to_string(), paths.sessions_dir.clone()),
         (
@@ -8935,14 +9254,17 @@ fn unified_service_preview(
         "profile_state_digest": evidence_profile_state_digest,
         "execution_profile": LEARNING_EXECUTION_PROFILE,
         "execution_profile_digest": execution_plan.digest,
+        "previous_execution_profile_digest":previous_execution_profile_digest,
+        "previous_enrollment_digest":previous_enrollment_digest,
         "routes": execution_plan.providers,
+        "eligible_route_price_bindings":eligible_route_price_bindings,
         "evidence_roots": root_bindings,
         "binary_digests": binary_digests,
         "archive_scan_seconds": 900,
         "dream_days": 7,
         "distill_days": 30,
-        "budget": "unbounded_metered",
-        "promotion": ["memory", "inert_skill"],
+        "budget": "shared_2usd_daily_america_new_york",
+        "promotion": "exact_review_every_adoption",
         "routine_approval": "never",
     }))?;
     Ok(UnifiedServicePreview {
@@ -8950,6 +9272,8 @@ fn unified_service_preview(
         plist_path,
         execution_profile_path,
         execution_profile_digest: execution_plan.digest,
+        previous_execution_profile_digest,
+        previous_enrollment_digest,
         evidence_profile_state_digest,
         evidence_roots,
         binaries,
@@ -9061,20 +9385,54 @@ fn install_unified_service(
             ));
         }
     }
-    let execution_plan = crate::config::plan_learning_execution_profile(
-        &paths.config_file,
-        &preview.execution_profile_path,
-    )
-    .map_err(|error| error.to_string())?;
+    let execution_plan =
+        crate::learning_automation::plan_execution_refresh(paths).map_err(|e| e.to_string())?;
     if execution_plan.digest != preview.execution_profile_digest {
-        return Err("learning execution profile changed after activation preview".into());
+        return Err("learning execution profile changed after preview".into());
     }
-    let created_profile = crate::config::install_learning_execution_profile(
+    let created_profile = crate::learning_automation::install_execution_refresh(
         &preview.execution_profile_path,
         &execution_plan,
+        preview.previous_execution_profile_digest.as_deref(),
     )
-    .map_err(|error| error.to_string())?;
+    .map_err(|e| e.to_string())?
+        && preview.previous_execution_profile_digest.is_none();
     let result = (|| {
+        if let Some(previous) = preview.previous_enrollment_digest.as_deref() {
+            crate::learning_automation::bootstrap_legacy_budget(paths, previous)
+                .map_err(|e| e.to_string())?;
+            use codex_team::self_improvement as learning;
+            let vault = learning::LearningVault::existing_at(
+                paths.home.join(".codex-team/self-improvement"),
+            )
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "learning vault disappeared".to_string())?;
+            let inputs = learning::KnowledgeEnrollmentInputs {
+                install_login_service: true,
+                supervisor_binary: preview.binaries.supervisor.clone(),
+                ca_binary: preview.binaries.ca.clone(),
+                codex_team_binary: preview.binaries.codex_team.clone(),
+                ca_evidence_profiles: vec![profile.label().into()],
+                ca_execution_profile: LEARNING_EXECUTION_PROFILE.into(),
+                evidence_roots: preview.evidence_roots.clone(),
+            };
+            let contract =
+                learning::knowledge_enrollment_contract(&inputs).map_err(|e| e.to_string())?;
+            let next = learning::canonical_digest(&contract).map_err(|e| e.to_string())?;
+            let store = crate::learning::LearningStore::for_profile(paths, profile, true)?;
+            store.refresh_supervisor_enrollment(
+                previous,
+                &next,
+                &preview.evidence_profile_state_digest,
+                Utc::now(),
+            )?;
+            learning::refresh_knowledge_enrollment(&vault, &inputs, previous, &next)
+                .map_err(|e| e.to_string())?;
+            migrate_scanner_services(paths)?;
+            crate::learning_automation::refresh_registration(paths, profile)
+                .map_err(|e| e.to_string())?;
+            return Ok(());
+        }
         let mut common = vec![
             "self-improve".to_string(),
             "knowledge-preview".to_string(),
@@ -9441,6 +9799,42 @@ fn read_bounded_regular(path: &Path, maximum: usize) -> Result<Vec<u8>, String> 
     Ok(bytes)
 }
 
+fn run_candidate_command(
+    paths: &crate::runtime::RuntimePaths,
+    command: CandidateCommand,
+) -> Result<(), String> {
+    use codex_team::self_improvement as learning;
+    let vault =
+        learning::LearningVault::existing_at(paths.home.join(".codex-team/self-improvement"))
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "learning service is not enrolled".to_string())?;
+    let result=(||->anyhow::Result<Value> {
+        match command {
+            CandidateCommand::List=>Ok(serde_json::to_value(learning::pending_learning_reviews(&vault)?)?),
+            CandidateCommand::Show {id}=>learning::learning_candidate_packet(&vault,&id),
+            CandidateCommand::Approve {id,confirm}=>{
+                let review=learning::preview_learning_promotion(&vault,&id)?;
+                let Some(confirm)=confirm else {return learning::learning_candidate_packet(&vault,&id)};
+                if confirm!=review.digest {anyhow::bail!("exact adoption review digest required: {}",review.digest);}
+                let bridge=learning::ProcessCaLearningBridgeClient {binary:learning::active_component_binary(&vault,"ca")?};
+                Ok(serde_json::json!({"result":learning::promote_learning_candidate(&vault,&bridge,&id,&confirm)?}))
+            },
+            CandidateCommand::Reject {id,confirm}=>{
+                let digest=learning::learning_rejection_digest(&vault,&id)?;
+                let Some(confirm)=confirm else {return learning::learning_candidate_packet(&vault,&id)};
+                if confirm!=digest {anyhow::bail!("exact rejection digest required: {digest}");}
+                let bridge=learning::ProcessCaLearningBridgeClient {binary:learning::active_component_binary(&vault,"ca")?};
+                Ok(serde_json::json!({"result":learning::reject_learning_candidate(&vault,&bridge,&id,&confirm)?}))
+            },
+        }
+    })().map_err(|e|e.to_string())?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&result).map_err(|e| e.to_string())?
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -9449,6 +9843,19 @@ mod tests {
     use rusqlite::Connection;
     use std::sync::Mutex;
     use tokio::sync::mpsc;
+
+    #[test]
+    fn combined_archive_budget_accepts_several_roots_past_four_gibibytes() {
+        let four_gib = 4 * 1024 * 1024 * 1024;
+        let root_a = four_gib + 1;
+        let root_b = four_gib - 1;
+        assert!(!source_byte_budget_exceeded(root_a));
+        assert!(!source_byte_budget_exceeded(root_b));
+        assert!(!archive_scan_exceeds_budget(2, root_a + root_b));
+        assert!(source_byte_budget_exceeded(MAX_SOURCE_BYTES + 1));
+        assert!(archive_scan_exceeds_budget(MAX_FILES + 1, 0));
+        assert!(archive_scan_exceeds_budget(1, MAX_SCAN_BYTES + 1));
+    }
 
     #[test]
     fn unified_learn_cli_exposes_status_control_and_one_service_surface() {
@@ -10091,6 +10498,13 @@ mod tests {
                 None,
             )
             .unwrap();
+        assert!(receipt.contains("inert"));
+        let staged = store.load_state().unwrap();
+        let proposal = staged.pending_proposal.as_ref().unwrap();
+        assert!(staged.last_receipt.is_none());
+        let receipt = store
+            .apply_proposal(&proposal.digest, &[], &[], true, true)
+            .unwrap();
         assert!(receipt.contains("Nothing new"));
         assert!(receipt.contains("Existing assets: 1 — 1 commands · 0 skills · 0 subagents"));
         assert!(receipt.contains("/Users/test/.mimocode/command/check-rsync.md"));
@@ -10233,15 +10647,16 @@ mod tests {
             role: crate::app::Role::User,
             text: "Learn this recurring workflow and produce a status report.".into(),
         }];
-        let session = materialize_direct_supplement(
+        let sessions = materialize_direct_supplement(
             temp.path(),
             source.to_str().unwrap(),
             &context,
             temp.path(),
         )
         .await
-        .unwrap()
         .unwrap();
+        assert_eq!(sessions.len(), 1);
+        let session = &sessions[0];
         assert!(session.current_workspace);
         assert!(!session.explicit_global_user_statement);
         assert!(session.messages.iter().any(|message| {
@@ -10264,6 +10679,64 @@ mod tests {
             "password=do-not-project-this-secret",
         );
         assert!(rejected.is_empty());
+    }
+
+    #[tokio::test]
+    async fn direct_supplement_over_the_session_message_bound_stays_in_the_archive_corpus() {
+        let temp = tempfile::tempdir().unwrap();
+        let count = crate::learning::MAX_CORPUS_MESSAGES_PER_SESSION + 17;
+        let context = (0..count)
+            .map(|index| TuiLearningContextMessage {
+                role: if index % 2 == 0 {
+                    crate::app::Role::User
+                } else {
+                    crate::app::Role::Assistant
+                },
+                text: format!("recurring bounded workflow note {index}"),
+            })
+            .collect::<Vec<_>>();
+        let sessions = materialize_direct_supplement(temp.path(), "", &context, temp.path())
+            .await
+            .unwrap();
+        assert!(sessions.len() > 1);
+        assert!(sessions.iter().all(|session| {
+            !session.messages.is_empty()
+                && session.messages.len() <= crate::learning::MAX_CORPUS_MESSAGES_PER_SESSION
+                && session
+                    .messages
+                    .iter()
+                    .map(|message| message.text.len())
+                    .sum::<usize>()
+                    <= 128 * 1024
+        }));
+        assert_eq!(
+            sessions
+                .iter()
+                .map(|session| session.messages.len())
+                .sum::<usize>(),
+            count
+        );
+        let ids = sessions
+            .iter()
+            .map(|session| session.id)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(ids.len(), sessions.len());
+        let again = materialize_direct_supplement(temp.path(), "", &context, temp.path())
+            .await
+            .unwrap();
+        assert_eq!(
+            again.iter().map(|session| session.id).collect::<Vec<_>>(),
+            sessions
+                .iter()
+                .map(|session| session.id)
+                .collect::<Vec<_>>()
+        );
+        let corpus = crate::learning::LearningCorpus::from_archive(
+            crate::learning::MaintenanceKind::Distill,
+            sessions,
+        )
+        .expect("split supplement fits the adaptive corpus");
+        assert_eq!(corpus.total_messages, count);
     }
 
     #[test]
@@ -10406,6 +10879,13 @@ mod tests {
                 vec![run],
                 None,
             )
+            .unwrap();
+        assert!(receipt.contains("inert"));
+        let staged = store.load_state().unwrap();
+        let proposal = staged.pending_proposal.as_ref().unwrap();
+        assert!(staged.last_receipt.is_none());
+        let receipt = store
+            .apply_proposal(&proposal.digest, &[], &[], true, true)
             .unwrap();
         assert!(receipt.contains("Skill `repeated-review`"));
         assert!(receipt.contains("Shortlist"));
@@ -11353,6 +11833,132 @@ models = ["gpt-5.6-terra"]
     }
 
     #[test]
+    fn deleted_native_sessions_do_not_stop_evidence_planning() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = crate::runtime::RuntimePaths::from_home(temp.path());
+        let session_store = crate::session::SessionStore::new(&paths.sessions_dir);
+        let now = Utc::now();
+        let mut kept = crate::session::SessionV2::new(
+            "kept session",
+            temp.path().to_string_lossy(),
+            "test",
+            "test",
+            vec![
+                crate::app::Message {
+                    role: crate::app::Role::User,
+                    content: "keep this session".into(),
+                    tool_calls: None,
+                    thinking: None,
+                    response_items: Vec::new(),
+                    timestamp: now,
+                },
+                crate::app::Message {
+                    role: crate::app::Role::Assistant,
+                    content: "kept session complete".into(),
+                    tool_calls: None,
+                    thinking: None,
+                    response_items: Vec::new(),
+                    timestamp: now,
+                },
+            ],
+        );
+        let mut removed = crate::session::SessionV2::new(
+            "removed session",
+            temp.path().to_string_lossy(),
+            "test",
+            "test",
+            vec![
+                crate::app::Message {
+                    role: crate::app::Role::User,
+                    content: "delete this session".into(),
+                    tool_calls: None,
+                    thinking: None,
+                    response_items: Vec::new(),
+                    timestamp: now,
+                },
+                crate::app::Message {
+                    role: crate::app::Role::Assistant,
+                    content: "removed session complete".into(),
+                    tool_calls: None,
+                    thinking: None,
+                    response_items: Vec::new(),
+                    timestamp: now,
+                },
+            ],
+        );
+        session_store.save(&mut kept).unwrap();
+        session_store.save(&mut removed).unwrap();
+        fs::create_dir_all(&paths.config_root).unwrap();
+        fs::write(
+            &paths.config_file,
+            r#"
+[defaults]
+provider = "openai"
+model = "gpt-5.6-terra"
+
+[providers.openai]
+base_url = "https://api.openai.com/v1"
+api_key = "test-only-not-a-secret"
+models = ["gpt-5.6-terra"]
+"#,
+        )
+        .unwrap();
+        let store =
+            ArchiveLearningStore::new(&paths, &crate::runtime::ActiveProfile::Default).unwrap();
+        assert!(store.ensure_standard_sources().unwrap());
+        session_store
+            .delete(&removed.id.to_string(), removed.id)
+            .unwrap();
+        assert!(paths.sessions_dir.is_dir());
+
+        let preferred = ("openai".to_string(), "gpt-5.6-terra".to_string());
+        let digest = store
+            .prepare_direct_run("", true, Some(&preferred), temp.path(), false)
+            .unwrap();
+        let state = store.load_state().unwrap();
+        let review = state.pending_review.unwrap();
+        assert_eq!(review.digest, digest);
+        assert_eq!(review.message_ids.len(), 2);
+        assert!(state
+            .sources
+            .iter()
+            .any(|source| source.canonical_root == paths.sessions_dir.canonicalize().unwrap()));
+        assert!(state
+            .files
+            .keys()
+            .all(|key| !key.contains(&removed.id.to_string())));
+        assert!(state
+            .files
+            .keys()
+            .any(|key| key.contains(&kept.id.to_string())));
+        let status = store.status().unwrap().render();
+        assert!(!status.contains("could not be inspected"));
+        assert!(!status.contains(&paths.sessions_dir.display().to_string()));
+    }
+
+    #[test]
+    fn removed_codex_session_file_does_not_fail_the_enrolled_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("sessions");
+        write_source(
+            &source,
+            "kept.jsonl",
+            &fixture(temp.path(), "kept evidence"),
+        );
+        write_source(
+            &source,
+            "removed.jsonl",
+            &fixture(temp.path(), "removed evidence"),
+        );
+        fs::remove_file(source.join("removed.jsonl")).unwrap();
+
+        let scan = scan_root(&source).unwrap();
+
+        assert_eq!(scan.files.len(), 1);
+        assert_eq!(scan.files[0].messages.len(), 2);
+    }
+
+    #[test]
     fn native_ca_email_and_incomplete_turns_never_enter_learning_evidence() {
         let temp = tempfile::tempdir().unwrap();
         let paths = crate::runtime::RuntimePaths::from_home(temp.path());
@@ -12052,6 +12658,285 @@ models = ["gpt-5.6-terra"]
         assert!(store.sync(true).is_ok());
     }
 
+    fn unavailable_archive_fixture(
+        now: DateTime<Utc>,
+    ) -> (tempfile::TempDir, crate::runtime::RuntimePaths, PathBuf) {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = crate::runtime::RuntimePaths::from_home(temp.path());
+        fs::create_dir_all(&paths.config_root).unwrap();
+        fs::create_dir_all(&paths.data_dir).unwrap();
+        fs::write(&paths.config_file, "").unwrap();
+        let profile = crate::runtime::ActiveProfile::Default;
+        let learning = crate::learning::LearningStore::for_profile(&paths, &profile, true).unwrap();
+        let preflight = learning.bridge_preflight().unwrap();
+        learning
+            .enroll_supervisor(&"a".repeat(64), &preflight.state_digest, now)
+            .unwrap();
+        let source = temp.path().join("preserved-source");
+        write_source(
+            &source,
+            "one.jsonl",
+            &fixture(temp.path(), "preserved evidence"),
+        );
+        let archive = ArchiveLearningStore::new(&paths, &profile).unwrap();
+        let preview = archive
+            .preview_sources(std::slice::from_ref(&source))
+            .unwrap();
+        archive.add_sources(preview).unwrap();
+        let missing = temp.path().join(".hermes/state.db");
+        let mut state = archive.load_state().unwrap();
+        state.sources.push(LearningSource {
+            id: Uuid::new_v4(),
+            canonical_root: missing.clone(),
+            registered_at: now,
+        });
+        state.last_scan.as_mut().unwrap().finished_at = now - chrono::Duration::minutes(16);
+        archive.write_state(&state).unwrap();
+        (temp, paths, missing)
+    }
+
+    #[tokio::test]
+    async fn automatic_tick_admits_native_queue_before_real_archive_failure() {
+        let now = Utc::now();
+        let (temp, paths, missing) = unavailable_archive_fixture(now);
+        OpenOptions::new()
+            .write(true)
+            .open(temp.path().join("preserved-source/one.jsonl"))
+            .unwrap()
+            .set_len(MAX_FILE_BYTES + 1)
+            .unwrap();
+        let admitted = std::cell::Cell::new(false);
+        let result = native_queue_then_harvest(
+            async {
+                admitted.set(true);
+                Ok(())
+            },
+            || {
+                let harvested =
+                    autonomous_harvest(&paths, &crate::runtime::ActiveProfile::Default, now);
+                assert!(
+                    admitted.get(),
+                    "native queue must advance before archive scanning"
+                );
+                harvested
+            },
+        )
+        .await;
+        assert!(admitted.get());
+        let error = result.err().unwrap();
+        assert!(
+            error.contains("exceeds"),
+            "a present source that cannot be read must still fail after admission: {error}"
+        );
+        assert!(
+            !error.contains(&missing.to_string_lossy().to_string()),
+            "a deleted session archive must not be the failure: {error}"
+        );
+    }
+
+    #[test]
+    fn automatic_harvest_failure_cadence_survives_duplicate_wake_and_reopen() {
+        let now = Utc::now();
+        let (temp, paths, missing) = unavailable_archive_fixture(now);
+        OpenOptions::new()
+            .write(true)
+            .open(temp.path().join("preserved-source/one.jsonl"))
+            .unwrap()
+            .set_len(MAX_FILE_BYTES + 1)
+            .unwrap();
+        let profile = crate::runtime::ActiveProfile::Default;
+        let archive = ArchiveLearningStore::new(&paths, &profile).unwrap();
+        let before = archive.load_state().unwrap();
+        let files = serde_json::to_value(&before.files).unwrap();
+        let review = serde_json::to_value(&before.pending_review).unwrap();
+        let sources = serde_json::to_value(&before.sources).unwrap();
+        let first = autonomous_harvest(&paths, &profile, now).err().unwrap();
+        assert!(
+            first.contains("exceeds"),
+            "cadence must follow a real scan failure, not a deleted archive: {first}"
+        );
+        assert!(!first.contains(&missing.to_string_lossy().to_string()));
+        let failed = ArchiveLearningStore::new(&paths, &profile)
+            .unwrap()
+            .load_state()
+            .unwrap();
+        let failed_at = failed.last_failure.as_ref().unwrap().at;
+        let deferred = autonomous_harvest(&paths, &profile, now + chrono::Duration::seconds(30))
+            .expect("a repeated failed wake must wait for the 15-minute archive cadence");
+        assert!(!deferred.scanned);
+        let deferred_state = ArchiveLearningStore::new(&paths, &profile)
+            .unwrap()
+            .load_state()
+            .unwrap();
+        assert_eq!(deferred_state.last_failure.as_ref().unwrap().at, failed_at);
+        assert_eq!(serde_json::to_value(&deferred_state.files).unwrap(), files);
+        assert_eq!(
+            serde_json::to_value(&deferred_state.pending_review).unwrap(),
+            review
+        );
+        assert_eq!(
+            serde_json::to_value(&deferred_state.sources).unwrap(),
+            sources
+        );
+        assert!(autonomous_harvest(&paths, &profile, now + chrono::Duration::minutes(15)).is_err());
+        assert!(archive.load_state().unwrap().last_failure.unwrap().at > failed_at);
+    }
+
+    #[tokio::test]
+    async fn automatic_tick_reports_native_and_archive_failures_independently() {
+        let calls = std::cell::RefCell::new(Vec::new());
+        let error = native_queue_then_harvest(
+            async {
+                calls.borrow_mut().push("native");
+                Err("native admission denied".into())
+            },
+            || -> Result<(), String> {
+                calls.borrow_mut().push("archive");
+                Err("archive unavailable".into())
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(*calls.borrow(), ["native", "archive"]);
+        assert!(error.contains("native admission denied"));
+        assert!(error.contains("archive unavailable"));
+    }
+
+    #[tokio::test]
+    async fn automatic_harvest_busy_claim_keeps_native_queue_responsive() {
+        let now = Utc::now();
+        let (_temp, paths, _missing) = unavailable_archive_fixture(now);
+        let profile = crate::runtime::ActiveProfile::Default;
+        let archive = ArchiveLearningStore::new(&paths, &profile).unwrap();
+        let held = archive.lock().unwrap();
+        let admitted = std::cell::Cell::new(false);
+        let error = native_queue_then_harvest(
+            async {
+                admitted.set(true);
+                Ok(())
+            },
+            || autonomous_harvest(&paths, &profile, now),
+        )
+        .await
+        .err()
+        .unwrap();
+        assert!(admitted.get());
+        assert!(error.contains("archive learning sync is already running"));
+        assert!(archive
+            .load_state()
+            .unwrap()
+            .last_autonomous_harvest_attempt
+            .is_none());
+        drop(held);
+        assert!(archive.claim_autonomous_harvest(now).unwrap());
+        // Model a process interruption after the persisted claim and before any
+        // scan/failure is recorded. Reopening must not grant another attempt.
+        let reopened = ArchiveLearningStore::new(&paths, &profile).unwrap();
+        assert!(!reopened
+            .claim_autonomous_harvest(now + chrono::Duration::seconds(30))
+            .unwrap());
+        assert!(reopened
+            .claim_autonomous_harvest(now + chrono::Duration::minutes(15))
+            .unwrap());
+    }
+
+    #[test]
+    fn automatic_harvest_status_matches_later_manual_scan_and_legacy_cadence() {
+        let now = Utc::now();
+        let (_temp, paths, _missing) = unavailable_archive_fixture(now);
+        let archive =
+            ArchiveLearningStore::new(&paths, &crate::runtime::ActiveProfile::Default).unwrap();
+        assert!(archive.claim_autonomous_harvest(now).unwrap());
+        let manual = now + chrono::Duration::minutes(5);
+        let next = manual + chrono::Duration::minutes(AUTONOMOUS_HARVEST_INTERVAL_MINUTES);
+        let mut state = archive.load_state().unwrap();
+        state.last_scan.as_mut().unwrap().finished_at = manual;
+        archive.write_state(&state).unwrap();
+        assert!(archive
+            .autonomous_harvest_health()
+            .unwrap()
+            .contains(&next.to_rfc3339()));
+        assert!(!archive
+            .claim_autonomous_harvest(now + chrono::Duration::minutes(15))
+            .unwrap());
+        // Legacy states have no automatic attempt field but their successful
+        // scan must still drive both admission and the displayed next attempt.
+        state.last_autonomous_harvest_attempt = None;
+        archive.write_state(&state).unwrap();
+        let reopened =
+            ArchiveLearningStore::new(&paths, &crate::runtime::ActiveProfile::Default).unwrap();
+        assert!(reopened
+            .autonomous_harvest_health()
+            .unwrap()
+            .contains(&next.to_rfc3339()));
+        assert!(!reopened
+            .claim_autonomous_harvest(now + chrono::Duration::minutes(15))
+            .unwrap());
+        assert!(reopened.claim_autonomous_harvest(next).unwrap());
+    }
+
+    #[test]
+    fn automatic_harvest_preflights_all_roots_before_reading_source_contents() {
+        let now = Utc::now();
+        let (temp, paths, missing) = unavailable_archive_fixture(now);
+        OpenOptions::new()
+            .write(true)
+            .open(temp.path().join("preserved-source/one.jsonl"))
+            .unwrap()
+            .set_len(MAX_FILE_BYTES + 1)
+            .unwrap();
+        let link = temp.path().join("linked-source");
+        std::os::unix::fs::symlink(temp.path().join("preserved-source"), &link).unwrap();
+        let archive =
+            ArchiveLearningStore::new(&paths, &crate::runtime::ActiveProfile::Default).unwrap();
+        let mut state = archive.load_state().unwrap();
+        state.sources.push(LearningSource {
+            id: Uuid::new_v4(),
+            canonical_root: link.clone(),
+            registered_at: now,
+        });
+        archive.write_state(&state).unwrap();
+        let error = autonomous_harvest(&paths, &crate::runtime::ActiveProfile::Default, now)
+            .err()
+            .unwrap();
+        assert!(
+            error.contains("symbolic"),
+            "an enrolled root that exists but is unsafe must fail before content is read: {error}"
+        );
+        assert!(
+            !error.contains(&format!("{MAX_FILE_BYTES}")),
+            "oversized contents must not be read after an unsafe root fails preflight: {error}"
+        );
+        assert!(
+            !error.contains(&missing.to_string_lossy().to_string()),
+            "a deleted session archive is skipped, not a preflight failure: {error}"
+        );
+    }
+
+    #[test]
+    fn deleted_session_archive_does_not_block_harvest_of_remaining_sources() {
+        let now = Utc::now();
+        let (_temp, paths, missing) = unavailable_archive_fixture(now);
+        let summary =
+            autonomous_harvest(&paths, &crate::runtime::ActiveProfile::Default, now).unwrap();
+        assert!(summary.scanned);
+        assert!(summary.indexed_files >= 1);
+        assert!(summary
+            .skipped_missing_roots
+            .iter()
+            .any(|root| root == &missing));
+        assert!(!summary.render().contains("could not be inspected"));
+        let state = ArchiveLearningStore::new(&paths, &crate::runtime::ActiveProfile::Default)
+            .unwrap()
+            .load_state()
+            .unwrap();
+        assert!(state
+            .sources
+            .iter()
+            .any(|source| source.canonical_root == missing));
+        assert!(state.last_failure.is_none());
+    }
+
     #[test]
     fn autonomous_harvest_combines_native_codex_and_mimo_history_and_acknowledges_terminally() {
         let temp = tempfile::tempdir().unwrap();
@@ -12144,6 +13029,7 @@ models = ["gpt-5.6-terra"]
                 intent_id: intent.intent_id,
                 intent_digest: intent.digest,
                 evaluation_receipt_digest: "b".repeat(64),
+                review_proof: None,
                 outcome: crate::learning::LearningCompletionOutcomeV1::Rejected,
                 artifact: None,
                 reason: Some("terminal fake-provider rejection".into()),
@@ -12607,6 +13493,11 @@ models = ["gpt-5.6-terra"]
 
         let view = tui_current_review_view(&store, &paths, &profile).unwrap();
         assert_eq!(view.kind, TuiLearningViewKind::Proposal);
+        assert!(view
+            .content
+            .contains("y applies these changes. n leaves them pending."));
+        assert!(!view.content.contains("Apply only after review with:"));
+        assert!(!view.content.contains("ca learn proposal apply"));
         let binding = view.proposal.unwrap();
         assert_eq!(binding.digest, proposal.digest);
         assert_eq!(binding.memory_items, 2);
@@ -13055,6 +13946,13 @@ models = ["gpt-5.6-terra"]
                 None,
             )
             .unwrap();
+        assert!(receipt.contains("inert"));
+        let staged = store.load_state().unwrap();
+        let proposal = staged.pending_proposal.as_ref().unwrap();
+        assert!(staged.last_receipt.is_none());
+        let receipt = store
+            .apply_proposal(&proposal.digest, &[], &[], true, true)
+            .unwrap();
 
         for section in [
             "## Inventory",
@@ -13344,6 +14242,13 @@ models = ["gpt-5.6-terra"]
                 runs,
                 None,
             )
+            .unwrap();
+        assert!(receipt.contains("inert"));
+        let staged = store.load_state().unwrap();
+        let proposal = staged.pending_proposal.as_ref().unwrap();
+        assert!(staged.last_receipt.is_none());
+        let receipt = store
+            .apply_proposal(&proposal.digest, &[], &[], true, true)
             .unwrap();
         assert!(receipt.contains("Indexed 1515 message(s) · Searchable 1515 message(s)"));
         assert!(receipt.contains("Searchable sessions 184"));

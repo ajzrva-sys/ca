@@ -25,6 +25,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "freebsd")]
+pub(crate) const HOST_PYTHON: &str = "/usr/local/bin/python3";
+#[cfg(not(target_os = "freebsd"))]
+pub(crate) const HOST_PYTHON: &str = "/usr/bin/python3";
+
 fn file_path(profile: &HarnessVmProfile, name: &str) -> PathBuf {
     if name == "tart" {
         profile.tart.clone()

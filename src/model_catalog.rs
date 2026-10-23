@@ -10,7 +10,7 @@ const MAX_MODEL_COUNT: usize = 2048;
 const MAX_CONCURRENT_PROVIDERS: usize = 8;
 const CATALOG_TIMEOUT: Duration = Duration::from_secs(10);
 // Wire compatibility, not CA's version or a dependency on an installed Codex.
-const CODEX_CATALOG_CLIENT_VERSION: &str = "0.153.0";
+const CODEX_CATALOG_CLIENT_VERSION: &str = "0.162.1";
 
 #[derive(Debug, Default)]
 pub struct CatalogRefresh {
@@ -72,6 +72,7 @@ enum CatalogAuthentication {
     Codex { account_id: Option<String> },
     Anthropic,
     Public,
+    Google,
 }
 
 pub async fn discover_provider_models(
@@ -116,6 +117,11 @@ pub async fn discover_provider_models(
                     Err(_) => return (name, Err("could not resolve catalog account".into())),
                 };
                 CatalogAuthentication::Codex { account_id }
+            } else if provider.protocol == crate::agent::ProviderProtocol::GoogleGenerateContent {
+                if provider.google.as_ref().is_some_and(|settings| settings.mode == crate::google_auth::Mode::Vertex) {
+                    return (name, Err("Vertex uses configured model IDs; no authoritative model catalog is available".into()));
+                }
+                CatalogAuthentication::Google
             } else if public_model_catalog(&provider) {
                 CatalogAuthentication::Public
             } else if provider.protocol == crate::agent::ProviderProtocol::AnthropicMessages {
@@ -154,12 +160,17 @@ pub(crate) fn documented_chat_models(name: &str, provider: &ProviderConfig) -> V
             crate::provider_contract::FirstPartyProvider::OpenAiDirect
             | crate::provider_contract::FirstPartyProvider::OpenAiCodex,
         ) => vec![
+            "gpt-6.1-sol".into(),
             "gpt-5.6-sol".into(),
             "gpt-5.6-terra".into(),
             "gpt-5.6-luna".into(),
         ],
         Some(crate::provider_contract::FirstPartyProvider::Mimo) => {
-            vec!["mimo-v2.5".into(), "mimo-v2.5-pro".into()]
+            vec![
+                "mimo-v2.5".into(),
+                "mimo-v2.5-pro".into(),
+                "mimo-v2.6-pro".into(),
+            ]
         }
         Some(crate::provider_contract::FirstPartyProvider::DeepSeek) => {
             vec!["deepseek-v4-flash".into(), "deepseek-v4-pro".into()]
@@ -197,6 +208,9 @@ async fn fetch_provider_models(
     {
         return Err("API key environment variable is not set".into());
     }
+    if authentication == CatalogAuthentication::Google {
+        return fetch_google_models(client, provider).await;
+    }
     let url = format!("{}/models", provider.base_url.trim_end_matches('/'));
     let mut request = client.get(url);
     match &authentication {
@@ -225,6 +239,7 @@ async fn fetch_provider_models(
             }
         }
         CatalogAuthentication::Bearer | CatalogAuthentication::Public => {}
+        CatalogAuthentication::Google => unreachable!("handled above"),
     }
     let response = request.send().await.map_err(|error| {
         if error.is_timeout() {
@@ -290,6 +305,80 @@ async fn fetch_provider_models(
     Ok(models)
 }
 
+async fn fetch_google_models(
+    client: &reqwest::Client,
+    provider: &ProviderConfig,
+) -> Result<Vec<String>, String> {
+    let mut models = Vec::new();
+    let mut token = String::new();
+    let mut total = 0usize;
+    for _ in 0..8 {
+        let mut request = client
+            .get(format!(
+                "{}/models",
+                provider.base_url.trim_end_matches('/')
+            ))
+            .query(&[("pageSize", "1000")]);
+        if !provider.api_key.is_empty() {
+            request = request.header("x-goog-api-key", &provider.api_key);
+        }
+        if !token.is_empty() {
+            request = request.query(&[("pageToken", &token)]);
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(|_| "Google model catalog request failed".to_string())?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "Google model catalog returned HTTP {}",
+                response.status().as_u16()
+            ));
+        }
+        let mut body = Vec::new();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|_| "Google model response failed".to_string())?;
+            total = total.saturating_add(chunk.len());
+            if total > MAX_CATALOG_BYTES {
+                return Err("model catalog exceeded 1 MiB".into());
+            }
+            body.extend_from_slice(&chunk);
+        }
+        let decoded: serde_json::Value = serde_json::from_slice(&body)
+            .map_err(|_| "Google returned an invalid model catalog".to_string())?;
+        let entries = decoded["models"]
+            .as_array()
+            .ok_or_else(|| "Google returned an invalid model catalog".to_string())?;
+        for model in entries {
+            if model["supportedGenerationMethods"]
+                .as_array()
+                .is_some_and(|methods| methods.iter().any(|method| method == "generateContent"))
+            {
+                if let Some(name) = model["name"].as_str() {
+                    let id = name.strip_prefix("models/").unwrap_or(name);
+                    if valid_model_id(id) && models.len() < MAX_MODEL_COUNT {
+                        models.push(id.to_owned());
+                    }
+                }
+            }
+        }
+        token = decoded["nextPageToken"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        if token.is_empty() {
+            models.sort();
+            models.dedup();
+            return Ok(models);
+        }
+        if token.len() > 4096 {
+            return Err("Google model catalog page token exceeded its limit".into());
+        }
+    }
+    Err("Google model catalog exceeded its page limit".into())
+}
+
 fn valid_model_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= MAX_MODEL_ID_BYTES
@@ -319,6 +408,41 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[tokio::test]
+    async fn native_codex_catalog_requests_current_sol_compatibility() {
+        let (url, request) = one_shot_server(
+            "200 OK",
+            br#"{"models":[{"slug":"gpt-6.1-sol","visibility":"list"},{"slug":"hidden","visibility":"hide"}]}"#.to_vec(),
+        )
+        .await;
+        let models = fetch_provider_models(
+            &reqwest::Client::new(),
+            &provider(url, "test-token"),
+            CatalogAuthentication::Codex { account_id: None },
+        )
+        .await
+        .unwrap();
+        assert_eq!(models, ["gpt-6.1-sol"]);
+        assert!(request
+            .await
+            .unwrap()
+            .starts_with("GET /v1/models?client_version=0.162.1 HTTP/1.1"));
+    }
+
+    #[test]
+    fn official_fallback_includes_sol_61_without_widening_custom_routes() {
+        for (name, url) in [
+            ("openai", "https://api.openai.com/v1"),
+            ("openai-codex", "https://chatgpt.com/backend-api/codex"),
+        ] {
+            let mut config = provider(url.into(), "");
+            config.protocol = crate::agent::ProviderProtocol::OpenAiResponses;
+            assert!(documented_chat_models(name, &config).contains(&"gpt-6.1-sol".into()));
+            config.base_url = "https://proxy.invalid/v1".into();
+            assert!(documented_chat_models(name, &config).is_empty());
+        }
+    }
+
+    #[tokio::test]
     async fn native_codex_catalog_includes_seven_visible_models() {
         let (url, request) = one_shot_server(
             "200 OK",
@@ -334,7 +458,7 @@ mod tests {
         )
         .await;
         let request = request.await.unwrap().to_ascii_lowercase();
-        assert!(request.starts_with("get /v1/models?client_version=0.153.0 http/1.1"));
+        assert!(request.starts_with("get /v1/models?client_version=0.162.1 http/1.1"));
         assert!(request.contains("authorization: bearer test-token\r\n"));
         assert!(request.contains("chatgpt-account-id: test-account\r\n"));
         assert!(request.contains(concat!(
@@ -576,6 +700,8 @@ mod tests {
 
     fn provider(base_url: String, api_key: &str) -> ProviderConfig {
         ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url,
             api_key: api_key.into(),
             protocol: crate::agent::ProviderProtocol::default(),
@@ -689,7 +815,10 @@ mod tests {
 
         let refresh = discover_provider_models(providers).await;
 
-        assert_eq!(refresh.documented["mimo"], ["mimo-v2.5", "mimo-v2.5-pro"]);
+        assert_eq!(
+            refresh.documented["mimo"],
+            ["mimo-v2.5", "mimo-v2.5-pro", "mimo-v2.6-pro"]
+        );
         assert!(refresh.catalogs.is_empty());
         assert_eq!(refresh.failures[0].0, "mimo");
     }
@@ -720,7 +849,12 @@ mod tests {
         direct.protocol = crate::agent::ProviderProtocol::OpenAiResponses;
         assert_eq!(
             documented_chat_models("openai", &direct),
-            ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
+            [
+                "gpt-6.1-sol",
+                "gpt-5.6-sol",
+                "gpt-5.6-terra",
+                "gpt-5.6-luna"
+            ]
         );
         direct.base_url = "https://proxy.example/v1".into();
         assert!(documented_chat_models("openai", &direct).is_empty());
@@ -735,7 +869,12 @@ mod tests {
         codex.protocol = crate::agent::ProviderProtocol::OpenAiResponses;
         assert_eq!(
             documented_chat_models("openai-codex", &codex),
-            ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
+            [
+                "gpt-6.1-sol",
+                "gpt-5.6-sol",
+                "gpt-5.6-terra",
+                "gpt-5.6-luna"
+            ]
         );
 
         codex.base_url = "https://proxy.example/backend-api/codex".into();
@@ -805,5 +944,34 @@ mod tests {
         assert_eq!(error, "could not connect");
         assert!(!error.contains("do-not-display"));
         assert!(!error.contains("secret-key"));
+    }
+    #[tokio::test]
+    async fn google_native_catalog_uses_key_header_and_only_generation_models() {
+        let (url,captured)=one_shot_server("200 OK",br#"{"models":[{"name":"models/gemini-b","supportedGenerationMethods":["generateContent"]},{"name":"models/embedding","supportedGenerationMethods":["embedContent"]},{"name":"models/gemini-a","supportedGenerationMethods":["generateContent"]}]}"#.to_vec()).await;
+        let mut provider = provider(url, "fixture-google-key");
+        provider.protocol = crate::agent::ProviderProtocol::GoogleGenerateContent;
+        let result =
+            discover_provider_models(HashMap::from([("google-fixture".into(), provider)])).await;
+        assert_eq!(result.catalogs["google-fixture"], ["gemini-a", "gemini-b"]);
+        assert!(result.failures.is_empty());
+        let captured = captured.await.unwrap().to_ascii_lowercase();
+        assert!(captured.contains("x-goog-api-key: fixture-google-key"));
+        assert!(!captured.contains("authorization:"));
+        assert!(captured.starts_with("get /v1/models?pagesize=1000 "));
+    }
+    #[tokio::test]
+    async fn google_vertex_catalog_preserves_explicit_ids_without_network() {
+        let mut provider = provider("http://127.0.0.1:1/v1".into(), "");
+        provider.protocol = crate::agent::ProviderProtocol::GoogleGenerateContent;
+        provider.google = Some(crate::google_auth::Config {
+            mode: crate::google_auth::Mode::Vertex,
+            project_id: Some("project".into()),
+            location: Some("global".into()),
+            quota_project_id: None,
+        });
+        let result = discover_provider_models(HashMap::from([("vertex".into(), provider)])).await;
+        assert!(result.catalogs.is_empty());
+        assert!(result.failures[0].1.contains("configured model IDs"));
+        assert!(result.documented.is_empty());
     }
 }

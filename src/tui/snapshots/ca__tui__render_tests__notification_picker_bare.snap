@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "render_to_text(&bare, 80, 24)"
 ---
- ca · agent · auto · profile bare
+ ca v0.0.0 │ /workspace/ca                                          [Dashboard]
 
 
 
@@ -22,7 +22,7 @@ expression: "render_to_text(&bare, 80, 24)"
              └────────────────────────────────────────────────────┘
 
 
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                                               │
+╰───────────────────────────────────────────────── agent · auto · profile bare ╯
 / commands

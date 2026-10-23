@@ -19,6 +19,8 @@ pub enum KeyAction {
     ToggleExpand,
     HistorySearch,
     StashDraft,
+    ComposerUndo,
+    ComposerRedo,
     FocusAgentActivity,
     RemoveLastAttachment,
     EditLastQueued,
@@ -33,7 +35,7 @@ pub enum KeyAction {
 }
 
 impl KeyAction {
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 24] = [
         Self::ModelPicker,
         Self::OpenEditor,
         Self::CycleModel,
@@ -45,6 +47,8 @@ impl KeyAction {
         Self::ToggleExpand,
         Self::HistorySearch,
         Self::StashDraft,
+        Self::ComposerUndo,
+        Self::ComposerRedo,
         Self::FocusAgentActivity,
         Self::RemoveLastAttachment,
         Self::EditLastQueued,
@@ -71,6 +75,8 @@ impl KeyAction {
             Self::ToggleExpand => "toggle_expand",
             Self::HistorySearch => "history_search",
             Self::StashDraft => "stash_draft",
+            Self::ComposerUndo => "composer_undo",
+            Self::ComposerRedo => "composer_redo",
             Self::FocusAgentActivity => "focus_agent_activity",
             Self::RemoveLastAttachment => "remove_last_attachment",
             Self::EditLastQueued => "edit_last_queued",
@@ -98,6 +104,8 @@ impl KeyAction {
             Self::ToggleExpand => "Expand latest response",
             Self::HistorySearch => "Search input history",
             Self::StashDraft => "Stash composer draft",
+            Self::ComposerUndo => "Undo composer edit",
+            Self::ComposerRedo => "Redo composer edit",
             Self::FocusAgentActivity => "Focus agent activity",
             Self::RemoveLastAttachment => "Remove last attachment",
             Self::EditLastQueued => "Edit last queued input",
@@ -125,7 +133,12 @@ impl KeyAction {
             Self::ToggleExpand => &["ctrl+o"],
             Self::HistorySearch => &["ctrl+x ctrl+r"],
             Self::StashDraft => &["ctrl+x s"],
-            Self::FocusAgentActivity => &["ctrl+x down"],
+            Self::ComposerUndo => &["ctrl+x u"],
+            Self::ComposerRedo => &["ctrl+x y"],
+            // J is first because macOS takes Control+Down for App Exposé before
+            // the terminal can deliver it. Down still works once Control is released,
+            // and a held Control on J or Down is accepted in `resolve`.
+            Self::FocusAgentActivity => &["ctrl+x j", "ctrl+x down"],
             Self::RemoveLastAttachment => &["ctrl+x a"],
             Self::EditLastQueued => &["alt+up"],
             Self::TranscriptTop => &["ctrl+home"],
@@ -262,6 +275,18 @@ impl KeyStroke {
 
     fn is_unmodified_character(self) -> bool {
         self.modifiers.is_empty() && matches!(self.code, KeyCode::Char(_))
+    }
+
+    /// Drop a Control key that is still held from the chord prefix.
+    /// Shift and Alt stay, so Ctrl+Shift+Down does not match plain Down.
+    fn without_held_control(self) -> Option<Self> {
+        if !self.modifiers.contains(KeyModifiers::CONTROL) {
+            return None;
+        }
+        Some(Self {
+            code: self.code,
+            modifiers: self.modifiers.difference(KeyModifiers::CONTROL),
+        })
     }
 
     fn parse_unvalidated(raw: &str) -> Result<Self, anyhow::Error> {
@@ -491,7 +516,18 @@ impl Keymap {
             .join(" / ")
     }
 
+    /// First configured chord. Compact hints use this so a narrow footer does
+    /// not clip the binding that works while Control is still held.
+    pub fn primary_binding(&self, action: KeyAction) -> String {
+        self.bindings(action)
+            .first()
+            .map(ToString::to_string)
+            .unwrap_or_default()
+    }
+
     pub fn resolve(&self, first: KeyStroke, second: Option<KeyStroke>) -> KeyResolution {
+        let mut prefix = false;
+        let mut held_control = None;
         for (action, chords) in &self.bindings {
             for chord in chords {
                 if chord.first() != first {
@@ -499,15 +535,33 @@ impl Keymap {
                 }
                 match (chord.is_two_stroke(), second) {
                     (false, None) => return KeyResolution::Action(*action),
-                    (true, None) => return KeyResolution::Prefix,
-                    (true, Some(second)) if chord.0[1] == second => {
-                        return KeyResolution::Action(*action)
+                    (true, None) => prefix = true,
+                    (true, Some(stroke)) if chord.0[1] == stroke => {
+                        return KeyResolution::Action(*action);
+                    }
+                    // An unmatched Ctrl+R remains the fixed Diff shortcut;
+                    // only an explicit Ctrl+R second stroke may consume it.
+                    (true, Some(stroke))
+                        if held_control.is_none()
+                            && !stroke.is_ctrl_char('r')
+                            && stroke
+                                .without_held_control()
+                                .is_some_and(|plain| chord.0[1] == plain) =>
+                    {
+                        held_control = Some(*action);
                     }
                     _ => {}
                 }
             }
         }
-        KeyResolution::NoMatch
+        if let Some(action) = held_control {
+            return KeyResolution::Action(action);
+        }
+        if prefix && second.is_none() {
+            KeyResolution::Prefix
+        } else {
+            KeyResolution::NoMatch
+        }
     }
 
     fn validate(&self) -> anyhow::Result<()> {
@@ -558,7 +612,11 @@ mod tests {
         );
         assert_eq!(
             map.display_binding(KeyAction::FocusAgentActivity),
-            "Ctrl+X Down"
+            "Ctrl+X J / Ctrl+X Down"
+        );
+        assert_eq!(
+            map.primary_binding(KeyAction::FocusAgentActivity),
+            "Ctrl+X J"
         );
         assert_eq!(
             map.display_binding(KeyAction::RemoveLastAttachment),
@@ -602,12 +660,60 @@ mod tests {
         );
 
         let map = Keymap::default();
+        let ctrl_x = KeyStroke::from_event(KeyCode::Char('x'), KeyModifiers::CONTROL);
         assert_eq!(
             map.resolve(
-                KeyStroke::from_event(KeyCode::Char('x'), KeyModifiers::CONTROL),
+                ctrl_x,
                 Some(KeyStroke::from_event(KeyCode::Down, KeyModifiers::NONE)),
             ),
             KeyResolution::Action(KeyAction::FocusAgentActivity)
+        );
+        assert_eq!(
+            map.resolve(
+                ctrl_x,
+                Some(KeyStroke::from_event(KeyCode::Down, KeyModifiers::CONTROL)),
+            ),
+            KeyResolution::Action(KeyAction::FocusAgentActivity)
+        );
+        assert_eq!(
+            map.resolve(
+                ctrl_x,
+                Some(KeyStroke::from_event(
+                    KeyCode::Char('j'),
+                    KeyModifiers::NONE
+                )),
+            ),
+            KeyResolution::Action(KeyAction::FocusAgentActivity)
+        );
+        assert_eq!(
+            map.resolve(
+                ctrl_x,
+                Some(KeyStroke::from_event(
+                    KeyCode::Char('j'),
+                    KeyModifiers::CONTROL
+                )),
+            ),
+            KeyResolution::Action(KeyAction::FocusAgentActivity)
+        );
+        assert_eq!(
+            map.resolve(
+                ctrl_x,
+                Some(KeyStroke::from_event(
+                    KeyCode::Down,
+                    KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+                )),
+            ),
+            KeyResolution::NoMatch
+        );
+        assert_eq!(
+            map.resolve(
+                ctrl_x,
+                Some(KeyStroke::from_event(
+                    KeyCode::Char('r'),
+                    KeyModifiers::CONTROL
+                )),
+            ),
+            KeyResolution::Action(KeyAction::HistorySearch)
         );
     }
 
@@ -622,6 +728,36 @@ mod tests {
         assert_eq!(
             map.resolve(first, Some(second)),
             KeyResolution::Action(KeyAction::HistorySearch)
+        );
+    }
+
+    #[test]
+    fn unmatched_ctrl_r_does_not_alias_a_plain_r_second_stroke() {
+        let config = KeymapConfig::from([(
+            "history_search".into(),
+            KeyBindingConfig::One("ctrl+x ctrl+h".into()),
+        )]);
+        let map = Keymap::from_config(&config).unwrap();
+        let first = KeyStroke::from_event(KeyCode::Char('x'), KeyModifiers::CONTROL);
+        assert_eq!(
+            map.resolve(
+                first,
+                Some(KeyStroke::from_event(
+                    KeyCode::Char('r'),
+                    KeyModifiers::CONTROL,
+                )),
+            ),
+            KeyResolution::NoMatch
+        );
+        assert_eq!(
+            map.resolve(
+                first,
+                Some(KeyStroke::from_event(
+                    KeyCode::Char('r'),
+                    KeyModifiers::NONE
+                )),
+            ),
+            KeyResolution::Action(KeyAction::CycleRecentModel)
         );
     }
 

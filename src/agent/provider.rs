@@ -23,6 +23,7 @@ pub enum ProviderProtocol {
     #[serde(rename = "openai_responses")]
     OpenAiResponses,
     AnthropicMessages,
+    GoogleGenerateContent,
 }
 
 impl ProviderProtocol {
@@ -31,6 +32,7 @@ impl ProviderProtocol {
             Self::ChatCompletions => "chat_completions",
             Self::OpenAiResponses => "openai_responses",
             Self::AnthropicMessages => "anthropic_messages",
+            Self::GoogleGenerateContent => "google_generate_content",
         }
     }
 
@@ -51,8 +53,10 @@ pub(crate) struct ProviderAdapter {
 }
 
 pub(crate) struct AdapterRequest {
-    pub path: &'static str,
+    pub path: String,
     pub body: Vec<u8>,
+    pub diagnostics: Vec<String>,
+    pub replay: crate::provider_replay::ReplayBindings,
 }
 
 #[derive(Clone)]
@@ -90,13 +94,40 @@ impl ProviderAdapter {
         responses_options: Option<&OpenAiResponsesRequestOptions>,
         prompt_cache: Option<&OpenAiPromptCacheRequest>,
     ) -> Result<AdapterRequest, ProviderError> {
+        // Existing protocols require identity translation; keep their canonical history borrowed.
+        for tool in &request.tools {
+            let _ = crate::tool_schema::translate(
+                &tool.function.name,
+                &tool.function.parameters,
+                crate::tool_schema::Profile::Identity,
+                request.tool_schema_policy,
+            )
+            .map_err(ProviderError::Protocol)?;
+        }
         match self.protocol {
+            ProviderProtocol::GoogleGenerateContent => {
+                let (body, diagnostics, parts) =
+                    crate::google_provider::body(request, source, request.tool_schema_policy)?;
+                Ok(AdapterRequest {
+                    path: crate::google_provider::model_path(&request.model)?,
+                    body,
+                    diagnostics,
+                    replay: crate::provider_replay::ReplayBindings {
+                        google_parts: parts,
+                        ..Default::default()
+                    },
+                })
+            }
             ProviderProtocol::ChatCompletions => Ok(AdapterRequest {
-                path: "chat/completions",
+                replay: Default::default(),
+                diagnostics: Vec::new(),
+                path: "chat/completions".into(),
                 body: serialize_chat_completions(request, source, contract)?,
             }),
             ProviderProtocol::OpenAiResponses => Ok(AdapterRequest {
-                path: "responses",
+                replay: Default::default(),
+                diagnostics: Vec::new(),
+                path: "responses".into(),
                 body: serialize_openai_responses(
                     request,
                     source,
@@ -105,10 +136,26 @@ impl ProviderAdapter {
                     prompt_cache,
                 )?,
             }),
-            ProviderProtocol::AnthropicMessages => Ok(AdapterRequest {
-                path: "messages",
-                body: serialize_anthropic_messages(request)?,
-            }),
+            ProviderProtocol::AnthropicMessages => {
+                let native = anthropic_messages_request(request, Some(source))?;
+                let diagnostics = if native.replay_invalidated {
+                    vec!["Native thinking replay omitted: route, credentials, model, or request prefix changed.".into()]
+                } else {
+                    Vec::new()
+                };
+                Ok(AdapterRequest {
+                    path: "messages".into(),
+                    body: serde_json::to_vec(&native).map_err(|_| {
+                        ProviderError::Protocol("native serialization failed".into())
+                    })?,
+                    diagnostics,
+                    replay: crate::provider_replay::ReplayBindings {
+                        google_parts: Vec::new(),
+                        messages: native.replay_bindings,
+                        request_sequence: 0,
+                    },
+                })
+            }
         }
     }
 
@@ -118,6 +165,10 @@ impl ProviderAdapter {
         credential: &str,
     ) -> reqwest::RequestBuilder {
         match self.protocol {
+            ProviderProtocol::GoogleGenerateContent if !credential.is_empty() => {
+                request.header("x-goog-api-key", credential)
+            }
+            ProviderProtocol::GoogleGenerateContent => request,
             ProviderProtocol::ChatCompletions | ProviderProtocol::OpenAiResponses
                 if !credential.is_empty() =>
             {
@@ -153,6 +204,9 @@ impl ProviderAdapter {
         cache_usage_format: Option<PromptCacheUsageFormat>,
     ) -> ProviderStreamDecoder {
         match self.protocol {
+            ProviderProtocol::GoogleGenerateContent => ProviderStreamDecoder::Google(
+                crate::google_provider::Decoder::for_request(request, source.clone()),
+            ),
             ProviderProtocol::ChatCompletions => ProviderStreamDecoder::ChatCompletions(
                 ChatCompletionsDecoder::with_reasoning_provider_and_cache_usage(
                     chat_reasoning_field(request, contract),
@@ -160,6 +214,9 @@ impl ProviderAdapter {
                         .is_some_and(|contract| contract.replays_chat_reasoning())
                         .then(|| source.clone()),
                     cache_usage_format,
+                    contract.is_some_and(|contract| {
+                        contract.family() == crate::provider_contract::FirstPartyProvider::DeepSeek
+                    }),
                 ),
             ),
             ProviderProtocol::OpenAiResponses => ProviderStreamDecoder::OpenAiResponses(
@@ -170,7 +227,7 @@ impl ProviderAdapter {
                 ),
             ),
             ProviderProtocol::AnthropicMessages => ProviderStreamDecoder::AnthropicMessages(
-                AnthropicMessagesDecoder::new_with_cache_usage(cache_usage_format),
+                AnthropicMessagesDecoder::for_request(cache_usage_format, request, source),
             ),
         }
     }
@@ -188,9 +245,23 @@ fn chat_reasoning_field(
 }
 
 pub(crate) enum ProviderStreamDecoder {
+    Google(crate::google_provider::Decoder),
     ChatCompletions(ChatCompletionsDecoder),
     OpenAiResponses(OpenAiResponsesDecoder),
     AnthropicMessages(AnthropicMessagesDecoder),
+}
+
+impl ProviderStreamDecoder {
+    pub(crate) fn bind_sent_prefix(&mut self, prefix: &crate::provider_replay::SentPrefix) {
+        if let Self::Google(decoder) = self {
+            decoder.bind_sent_prefix(&prefix.0);
+        }
+        if let Self::AnthropicMessages(decoder) = self {
+            if let Some(capture) = &mut decoder.capture {
+                capture.bind_sent_prefix(&prefix.0);
+            }
+        }
+    }
 }
 
 const DEFAULT_SSE_EVENT_LIMIT: usize = 256 * 1024;
@@ -237,7 +308,8 @@ pub(crate) struct ChatCompletionsDecoder {
     reasoning_field: Option<String>,
     reasoning_source: Option<ProviderStateSourceV1>,
     reasoning_content: String,
-    tool_call_finished: bool,
+    replayable_finish: bool,
+    retain_final_reasoning: bool,
     reasoning_item_emitted: bool,
     cache_usage_format: Option<PromptCacheUsageFormat>,
 }
@@ -253,13 +325,19 @@ impl ChatCompletionsDecoder {
         reasoning_field: Option<String>,
         reasoning_source: Option<ProviderStateSourceV1>,
     ) -> Self {
-        Self::with_reasoning_provider_and_cache_usage(reasoning_field, reasoning_source, None)
+        Self::with_reasoning_provider_and_cache_usage(
+            reasoning_field,
+            reasoning_source,
+            None,
+            false,
+        )
     }
 
     fn with_reasoning_provider_and_cache_usage(
         reasoning_field: Option<String>,
         reasoning_source: Option<ProviderStateSourceV1>,
         cache_usage_format: Option<PromptCacheUsageFormat>,
+        retain_final_reasoning: bool,
     ) -> Self {
         Self {
             buffer: Vec::new(),
@@ -269,7 +347,8 @@ impl ChatCompletionsDecoder {
             reasoning_field,
             reasoning_source,
             reasoning_content: String::new(),
-            tool_call_finished: false,
+            replayable_finish: false,
+            retain_final_reasoning,
             reasoning_item_emitted: false,
             cache_usage_format,
         }
@@ -387,7 +466,7 @@ impl ChatCompletionsDecoder {
         let data = String::from_utf8(data).map_err(|_| ProviderError::InvalidUtf8)?;
         if data.trim() == "[DONE]" {
             let mut events = Vec::new();
-            if self.tool_call_finished && !self.reasoning_item_emitted {
+            if self.replayable_finish && !self.reasoning_item_emitted {
                 if let Some(source) = self.reasoning_source.clone() {
                     if !self.reasoning_content.is_empty() {
                         events.push(ProviderEvent::ResponseItem(
@@ -413,10 +492,10 @@ impl ChatCompletionsDecoder {
         for event in &events {
             match event {
                 ProviderEvent::Reasoning(reasoning) => self.append_reasoning_content(reasoning)?,
-                ProviderEvent::Finish {
-                    reason: FinishReason::ToolCalls,
-                    ..
-                } => self.tool_call_finished = true,
+                ProviderEvent::Finish { reason, .. } => {
+                    self.replayable_finish = *reason == FinishReason::ToolCalls
+                        || self.retain_final_reasoning && *reason == FinishReason::Stop;
+                }
                 _ => {}
             }
         }
@@ -1068,6 +1147,9 @@ impl OpenAiResponsesDecoder {
             | "response.content_part.done"
             | "response.reasoning_summary_part.added"
             | "response.reasoning_summary_part.done" => {}
+            // Codex emits advisory metadata between output and completion. It is
+            // neither assistant output nor the terminal response metadata.
+            "response.metadata" => {}
             "response.completed" => {
                 let response = value.get("response").ok_or_else(|| {
                     ProviderError::MalformedData("missing completed response".into())
@@ -1806,9 +1888,26 @@ pub(crate) struct AnthropicMessagesDecoder {
     finished: bool,
     completed: bool,
     cache_usage_format: Option<PromptCacheUsageFormat>,
+    capture: Option<crate::provider_replay::AnthropicCapture>,
 }
 
 impl AnthropicMessagesDecoder {
+    fn for_request(
+        cache: Option<PromptCacheUsageFormat>,
+        request: &crate::request::PreparedModelRequest,
+        source: &ProviderStateSourceV1,
+    ) -> Self {
+        let mut decoder = Self::new_with_cache_usage(cache);
+        if let Ok(body) = serialize_anthropic_messages_on_route(request, Some(source)) {
+            decoder.capture = Some(crate::provider_replay::AnthropicCapture::new(
+                source.clone(),
+                request.model.clone(),
+                &body,
+            ));
+        }
+        decoder
+    }
+
     #[cfg(test)]
     pub(crate) fn new() -> Self {
         Self::new_with_cache_usage(None)
@@ -1826,6 +1925,7 @@ impl AnthropicMessagesDecoder {
             finished: false,
             completed: false,
             cache_usage_format,
+            capture: None,
         }
     }
 
@@ -2151,6 +2251,15 @@ impl AnthropicMessagesDecoder {
             "ping" => {}
             _ => {}
         }
+        if let Some(capture) = &mut self.capture {
+            if let Some(item) = capture.accept(value)? {
+                let index = events
+                    .iter()
+                    .position(|event| matches!(event, ProviderEvent::Done))
+                    .unwrap_or(events.len());
+                events.insert(index, ProviderEvent::ResponseItem(item));
+            }
+        }
         Ok(events)
     }
 
@@ -2194,6 +2303,7 @@ impl ProviderStreamDecoder {
             Self::ChatCompletions(decoder) => decoder.push(chunk),
             Self::OpenAiResponses(decoder) => decoder.push(chunk),
             Self::AnthropicMessages(decoder) => decoder.push(chunk),
+            Self::Google(decoder) => decoder.push(chunk),
         }
     }
 
@@ -2202,6 +2312,7 @@ impl ProviderStreamDecoder {
             Self::ChatCompletions(decoder) => decoder.finish(),
             Self::OpenAiResponses(decoder) => decoder.finish(),
             Self::AnthropicMessages(decoder) => decoder.finish(),
+            Self::Google(decoder) => decoder.finish(),
         }
     }
 }
@@ -2348,9 +2459,11 @@ fn chat_completions_message(
         )
     };
     let reasoning_content = if message.role == "assistant"
-        && message.tool_calls.is_some()
-        && contract.is_some_and(|contract| contract.replays_chat_reasoning())
-    {
+        && contract.is_some_and(|contract| {
+            contract.replays_chat_reasoning()
+                && (message.tool_calls.is_some()
+                    || contract.family() == crate::provider_contract::FirstPartyProvider::DeepSeek)
+        }) {
         let mut matches = message.response_items.iter().filter_map(|item| match item {
             ProviderResponseItem::ChatReasoning {
                 source: item_source,
@@ -2771,6 +2884,10 @@ const ANTHROPIC_MAX_TOKENS: u32 = 16_384;
 
 #[derive(Debug, Clone, Serialize)]
 struct AnthropicMessagesRequest {
+    #[serde(skip)]
+    replay_invalidated: bool,
+    #[serde(skip)]
+    replay_bindings: Vec<(usize, String)>,
     model: String,
     max_tokens: u32,
     messages: Vec<AnthropicMessage>,
@@ -2786,7 +2903,7 @@ struct AnthropicMessagesRequest {
 #[derive(Debug, Clone, Serialize)]
 struct AnthropicMessage {
     role: String,
-    content: Vec<AnthropicContent>,
+    content: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2838,6 +2955,7 @@ struct AnthropicOutputConfig {
 
 fn anthropic_messages_request(
     request: &crate::request::PreparedModelRequest,
+    source: Option<&ProviderStateSourceV1>,
 ) -> Result<AnthropicMessagesRequest, ProviderError> {
     let mut system = Vec::new();
     let mut cursor = 0usize;
@@ -2858,6 +2976,8 @@ fn anthropic_messages_request(
     }
 
     let mut messages = Vec::new();
+    let mut replay_valid = true;
+    let mut replay_bindings = Vec::new();
     while let Some(message) = request.messages.get(cursor) {
         match message.role.as_str() {
             "system" | "developer" => {
@@ -2879,6 +2999,37 @@ fn anthropic_messages_request(
                     return Err(ProviderError::Protocol(
                         "invalid tool result identifier on Anthropic assistant message".into(),
                     ));
+                }
+                if let Some(source) = source {
+                    if let Some(content) = crate::provider_replay::anthropic_replay(
+                        message,
+                        source,
+                        &request.model,
+                        None,
+                        &mut replay_valid,
+                    )? {
+                        if let Some(expected) =
+                            message.response_items.iter().find_map(|item| match item {
+                                ProviderResponseItem::NativeContent {
+                                    source: origin,
+                                    model,
+                                    prefix_sha256,
+                                    ..
+                                } if origin == source && model == &request.model => {
+                                    Some(prefix_sha256.clone())
+                                }
+                                _ => None,
+                            })
+                        {
+                            replay_bindings.push((messages.len(), expected));
+                        }
+                        messages.push(AnthropicMessage {
+                            role: "assistant".into(),
+                            content,
+                        });
+                        cursor += 1;
+                        continue;
+                    }
                 }
                 let text = anthropic_text_content(message)?;
                 let calls = message.tool_calls.as_deref().unwrap_or_default();
@@ -2979,6 +3130,8 @@ fn anthropic_messages_request(
             },
         });
     Ok(AnthropicMessagesRequest {
+        replay_invalidated: !replay_valid,
+        replay_bindings,
         model: request.model.clone(),
         max_tokens: ANTHROPIC_MAX_TOKENS,
         messages,
@@ -3023,8 +3176,12 @@ fn anthropic_text_content(message: &ChatMessage) -> Result<&str, ProviderError> 
 fn push_anthropic_message(
     messages: &mut Vec<AnthropicMessage>,
     role: &str,
-    mut content: Vec<AnthropicContent>,
+    content: Vec<AnthropicContent>,
 ) {
+    let mut content = content
+        .into_iter()
+        .map(|block| serde_json::to_value(block).expect("typed Anthropic content serializes"))
+        .collect::<Vec<_>>();
     if let Some(last) = messages.last_mut().filter(|message| message.role == role) {
         last.content.append(&mut content);
     } else {
@@ -3035,12 +3192,31 @@ fn push_anthropic_message(
     }
 }
 
+#[cfg(test)]
 fn serialize_anthropic_messages(
     request: &crate::request::PreparedModelRequest,
 ) -> Result<Vec<u8>, ProviderError> {
-    serde_json::to_vec(&anthropic_messages_request(request)?).map_err(|_| {
-        ProviderError::Protocol("could not serialize the prepared provider request".into())
-    })
+    serialize_anthropic_messages_on_route(request, request.runtime_source.as_ref())
+}
+
+fn serialize_anthropic_messages_on_route(
+    request: &crate::request::PreparedModelRequest,
+    source: Option<&ProviderStateSourceV1>,
+) -> Result<Vec<u8>, ProviderError> {
+    let native = anthropic_messages_request(request, source)?;
+    let bytes = serde_json::to_vec(&native)
+        .map_err(|_| ProviderError::Protocol("native serialization failed".into()))?;
+    let filter = crate::provider_filter::current();
+    crate::provider_replay::prepare_outbound(
+        &bytes,
+        &crate::provider_replay::ReplayBindings {
+            google_parts: Vec::new(),
+            messages: native.replay_bindings,
+            request_sequence: 0,
+        },
+        &filter,
+    )
+    .map(|(bytes, _)| bytes)
 }
 
 #[cfg(test)]
@@ -3092,6 +3268,8 @@ fn test_contract_for_request(
         _ => return None,
     };
     let provider = crate::config::ProviderConfig {
+        google: None,
+        tool_schema_policy: Default::default(),
         base_url: base_url.into(),
         api_key: String::new(),
         protocol,
@@ -3962,6 +4140,7 @@ mod tests {
             "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":2,\"delta\":\"{\\\"path\\\":\"}\n\n",
             "data: {\"type\":\"response.function_call_arguments.done\",\"output_index\":2,\"arguments\":\"{\\\"path\\\":\\\"input.txt\\\"}\"}\n\n",
             "data: {\"type\":\"response.output_item.done\",\"output_index\":2,\"item\":{\"id\":\"fc_1\",\"type\":\"function_call\",\"call_id\":\"call-1\",\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"input.txt\\\"}\",\"status\":\"completed\"}}\n\n",
+            "event: response.metadata\ndata: {\"type\":\"response.metadata\",\"response_id\":\"resp-secret\",\"sequence_number\":137,\"metadata\":{\"openai_chatgpt_moderation_metadata\":{\"generation\":{},\"prompt\":{},\"tool_call\":{},\"tool_response\":{}}}}\n\n",
             "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-secret\",\"model\":\"gpt-5.6-sol\",\"service_tier\":\"default\",\"status\":\"completed\",\"output\":[{\"id\":\"rs_1\",\"type\":\"reasoning\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"why\"}],\"encrypted_content\":\"encrypted-state\",\"status\":\"completed\"},{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"answer\",\"annotations\":[]}],\"status\":\"completed\"},{\"id\":\"fc_1\",\"type\":\"function_call\",\"call_id\":\"call-1\",\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"input.txt\\\"}\",\"status\":\"completed\"}],\"usage\":{\"input_tokens\":30,\"output_tokens\":20,\"total_tokens\":50,\"input_tokens_details\":{\"cached_tokens\":12,\"cache_write_tokens\":4},\"output_tokens_details\":{\"reasoning_tokens\":7}}}}\n\n"
         );
         let mut decoder = OpenAiResponsesDecoder::with_request_id_for_test("req-secret");
@@ -4058,6 +4237,39 @@ mod tests {
                 crate::agent::stream::CacheCount::Reported(4),
                 crate::agent::stream::CacheCount::Derived(18),
             )
+        );
+    }
+
+    #[test]
+    fn responses_decoder_metadata_keeps_terminal_unknown_and_size_checks() {
+        let metadata = b"data: {\"type\":\"response.metadata\",\"response_id\":\"resp-a\",\"sequence_number\":1,\"metadata\":{\"openai_chatgpt_moderation_metadata\":{}}}\n\n";
+        let mut decoder = OpenAiResponsesDecoder::new();
+        let mut assembler = crate::agent::stream::AssistantTurnAssembler::new();
+        for event in decoder.push(metadata).unwrap() {
+            assembler.push(&event).unwrap();
+        }
+        for event in decoder.finish().unwrap() {
+            assembler.push(&event).unwrap();
+        }
+        assert_eq!(assembler.finish().unwrap_err(), ProviderError::PrematureEof);
+        assert!(matches!(
+            decoder.push(b"data: {\"type\":\"response.metadata.updated\"}\n\n"),
+            Err(ProviderError::Protocol(_))
+        ));
+
+        let mut completed = OpenAiResponsesDecoder::new();
+        completed
+            .push(b"data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n")
+            .unwrap();
+        assert!(matches!(
+            completed.push(metadata),
+            Err(ProviderError::Protocol(_))
+        ));
+
+        let mut oversized = OpenAiResponsesDecoder::with_event_limit(64);
+        assert_eq!(
+            oversized.push(metadata),
+            Err(ProviderError::EventTooLarge { limit: 64 })
         );
     }
 
@@ -4470,6 +4682,7 @@ mod tests {
                 None,
                 None,
                 Some(PromptCacheUsageFormat::Auto),
+                false,
             );
             let mut events = Vec::new();
             for byte in input.as_bytes() {
@@ -4525,6 +4738,7 @@ mod tests {
                 None,
                 None,
                 Some(PromptCacheUsageFormat::HitMiss),
+                false,
             );
             let mut events = Vec::new();
             for byte in input.as_bytes() {
@@ -4634,6 +4848,8 @@ mod tests {
         use crate::agent::stream::{CacheCount, CacheUsage};
 
         let provider = crate::config::ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: "https://api.deepseek.com/v1".into(),
             api_key: "${DEEPSEEK_API_KEY}".into(),
             protocol: ProviderProtocol::OpenAiResponses,
@@ -4718,12 +4934,11 @@ mod tests {
             "data: [DONE]\n\n"
         );
 
-        for provider in ["deepseek", "mimo"] {
-            let model = if provider == "deepseek" {
-                "deepseek-v4-pro"
-            } else {
-                "mimo-v2.5-pro"
-            };
+        for (provider, model) in [
+            ("deepseek", "deepseek-v4-pro"),
+            ("mimo", "mimo-v2.5-pro"),
+            ("mimo", "mimo-v2.6-pro"),
+        ] {
             let request = crate::request::PreparedModelRequest::new(
                 crate::request::RequestKind::MainTurn,
                 provider,
@@ -4762,6 +4977,64 @@ mod tests {
                     content: "  why\nλ  ".into(),
                 }]
             );
+        }
+    }
+
+    #[test]
+    fn deepseek_final_reasoning_requires_complete_stop_and_preserves_mimo_behavior() {
+        for (provider, model, finish, done, expected) in [
+            ("deepseek", "deepseek-v4-pro", "stop", true, true),
+            ("deepseek", "deepseek-v4-pro", "length", true, false),
+            ("deepseek", "deepseek-v4-pro", "stop", false, false),
+            ("mimo", "mimo-v2.5-pro", "stop", true, false),
+        ] {
+            let request = crate::request::PreparedModelRequest::new(
+                crate::request::RequestKind::MainTurn,
+                provider,
+                model,
+                Vec::new(),
+                Vec::new(),
+                crate::agent::client::ChatRequestOptions::default(),
+            );
+            let mut decoder = ProviderProtocol::ChatCompletions.adapter().decoder(
+                &request,
+                &ProviderStateSourceV1::for_test(provider, ProviderProtocol::ChatCompletions),
+                test_contract_for_request(&request, ProviderProtocol::ChatCompletions),
+                None,
+            );
+            let value = serde_json::json!({"choices": [{"delta": {
+                "reasoning_content": "  final\n雪  ", "content": "answer"
+            }, "finish_reason": finish}]});
+            let mut input = format!("data: {value}\n\n");
+            if done {
+                input.push_str("data: [DONE]\n\n");
+            }
+            let mut events = decoder.push(input.as_bytes()).unwrap();
+            events.extend(decoder.finish().unwrap());
+            let items = events
+                .iter()
+                .filter_map(|event| match event {
+                    ProviderEvent::ResponseItem(item) => Some(item),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                items.len(),
+                usize::from(expected),
+                "{provider}/{finish}/{done}"
+            );
+            if expected {
+                assert_eq!(
+                    items[0],
+                    &ProviderResponseItem::ChatReasoning {
+                        source: ProviderStateSourceV1::for_test(
+                            provider,
+                            ProviderProtocol::ChatCompletions
+                        ),
+                        content: "  final\n雪  ".into(),
+                    }
+                );
+            }
         }
     }
 
@@ -4841,6 +5114,30 @@ mod tests {
                 let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
                 assert_eq!(body["model"], "gpt-6-astra");
                 assert_eq!(body["reasoning"]["effort"], effort.to_string());
+            }
+        }
+    }
+
+    #[test]
+    fn sol_61_reasoning_serializes_supported_efforts_on_responses() {
+        for provider in ["openai", "openai-codex"] {
+            for effort in [
+                ReasoningEffort::Low,
+                ReasoningEffort::Medium,
+                ReasoningEffort::High,
+                ReasoningEffort::XHigh,
+                ReasoningEffort::Max,
+            ] {
+                let request = first_party_request(provider, "gpt-6.1-sol", Some(effort));
+                let bytes = openai_responses_bytes_for_test(&request).unwrap();
+                let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(body["model"], "gpt-6.1-sol");
+                assert_eq!(body["reasoning"]["effort"], effort.to_string());
+                assert_eq!(
+                    body["include"],
+                    serde_json::json!(["reasoning.encrypted_content"])
+                );
+                assert_eq!(body["store"], false);
             }
         }
     }
@@ -5006,5 +5303,148 @@ mod tests {
         assert!(off.get("prompt_cache_key").is_none());
         assert_eq!(off["prompt_cache_options"]["mode"], "explicit");
         assert!(off.to_string().find("prompt_cache_breakpoint").is_none());
+    }
+}
+
+#[cfg(test)]
+mod native_replay_tests {
+    use super::*;
+    use crate::agent::stream::AssistantTurnAssembler;
+    use serde_json::json;
+
+    fn request() -> crate::request::PreparedModelRequest {
+        crate::request::PreparedModelRequest::new(
+            crate::request::RequestKind::Compatibility,
+            "anthropic",
+            "claude-test",
+            vec![ChatMessage {
+                role: "user".into(),
+                content: crate::image_content::ModelContent::text("read input"),
+                tool_calls: None,
+                tool_call_id: None,
+                response_items: vec![],
+            }],
+            vec![],
+            Default::default(),
+        )
+    }
+
+    #[test]
+    fn native_anthropic_decoder_and_serializer_preserve_signed_tool_continuation() {
+        let mut request = request();
+        let mut source =
+            ProviderStateSourceV1::for_test("anthropic", ProviderProtocol::AnthropicMessages);
+        source.credential_sha256 = Some("credential-identity".into());
+        let mut decoder = AnthropicMessagesDecoder::for_request(None, &request, &source);
+        let frames = [
+            json!({"type":"message_start","message":{"content":[],"usage":{"input_tokens":5,"output_tokens":0}}}),
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}),
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"opaque-signature"}}),
+            json!({"type":"content_block_stop","index":0}),
+            json!({"type":"content_block_start","index":1,"content_block":{"type":"redacted_thinking","data":"opaque-redacted"}}),
+            json!({"type":"content_block_stop","index":1}),
+            json!({"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"toolu-1","name":"read_file","input":{}}}),
+            json!({"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"input.txt\"}"}}),
+            json!({"type":"content_block_stop","index":2}),
+            json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":5}}),
+            json!({"type":"message_stop"}),
+        ];
+        let mut assembler = AssistantTurnAssembler::new();
+        for frame in frames {
+            let data = format!("data: {frame}\n\n");
+            for event in decoder.push(data.as_bytes()).unwrap() {
+                assembler.push(&event).unwrap();
+            }
+        }
+        let turn = assembler.finish().unwrap();
+        assert_eq!(turn.response_items.len(), 1);
+        let restored: Vec<ProviderResponseItem> =
+            serde_json::from_slice(&serde_json::to_vec(&turn.response_items).unwrap()).unwrap();
+        request.messages.push(ChatMessage {
+            role: "assistant".into(),
+            content: crate::image_content::ModelContent::text(turn.content),
+            tool_calls: Some(
+                turn.tool_calls
+                    .into_iter()
+                    .map(|call| crate::agent::client::ToolCallMsg {
+                        id: call.id,
+                        call_type: "function".into(),
+                        function: crate::agent::client::FunctionCall {
+                            name: call.name,
+                            arguments: call.arguments,
+                        },
+                    })
+                    .collect(),
+            ),
+            tool_call_id: None,
+            response_items: restored,
+        });
+        request.messages.push(ChatMessage {
+            role: "tool".into(),
+            content: crate::image_content::ModelContent::text("file bytes"),
+            tool_calls: None,
+            tool_call_id: Some("toolu-1".into()),
+            response_items: vec![],
+        });
+        let wire: serde_json::Value = serde_json::from_slice(
+            &serialize_anthropic_messages_on_route(&request, Some(&source)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            wire["messages"][1]["content"][0],
+            json!({"type":"thinking","thinking":"","signature":"opaque-signature"})
+        );
+        assert_eq!(
+            wire["messages"][1]["content"][1],
+            json!({"type":"redacted_thinking","data":"opaque-redacted"})
+        );
+        assert_eq!(
+            wire["messages"][1]["content"][2]["input"],
+            json!({"path":"input.txt"})
+        );
+        let canonical = serde_json::to_vec(&request.messages).unwrap();
+        request.messages[0].content = crate::image_content::ModelContent::text("changed prefix");
+        let prepared = ProviderProtocol::AnthropicMessages
+            .adapter()
+            .prepare(&request, &source, None, None, None)
+            .unwrap();
+        let (wire, diagnostics) = crate::provider_replay::prepare_outbound(
+            &prepared.body,
+            &prepared.replay,
+            &crate::provider_filter::current(),
+        )
+        .unwrap();
+        assert_eq!(diagnostics.len(), 1);
+        assert!(!String::from_utf8(wire)
+            .unwrap()
+            .contains("opaque-signature"));
+        request.messages[0].content = crate::image_content::ModelContent::text("read input");
+        assert_eq!(serde_json::to_vec(&request.messages).unwrap(), canonical);
+        source.credential_sha256 = Some("other-account".into());
+        let prepared = ProviderProtocol::AnthropicMessages
+            .adapter()
+            .prepare(&request, &source, None, None, None)
+            .unwrap();
+        assert_eq!(prepared.diagnostics.len(), 1);
+        assert!(!String::from_utf8(prepared.body)
+            .unwrap()
+            .contains("opaque-redacted"));
+    }
+
+    #[test]
+    fn native_anthropic_never_publishes_replay_on_incomplete_stream() {
+        let request = request();
+        let source =
+            ProviderStateSourceV1::for_test("anthropic", ProviderProtocol::AnthropicMessages);
+        let mut decoder = AnthropicMessagesDecoder::for_request(None, &request, &source);
+        let events=decoder.push(b"data: {\"type\":\"message_start\",\"message\":{\"content\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"partial\"}}\n\n").unwrap();
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, ProviderEvent::ResponseItem(_))));
+        assert!(!decoder
+            .finish()
+            .unwrap()
+            .iter()
+            .any(|event| matches!(event, ProviderEvent::ResponseItem(_))));
     }
 }

@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&unconfigured, 100, 30),\nrender_to_text(&unconfigured, 60, 24))"
 ---
- ca · agent
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
            ┌ Statusline ────────────────────────────────────────────────────────────────┐
            │Custom status: not configured · refresh 5s                                  │
@@ -28,12 +28,12 @@ expression: "wide_narrow(render_to_text(&unconfigured, 100, 30),\nrender_to_text
            │Shift+T test · Enter save · Esc cancel                                      │
            │                                                                            │
            │                                                                            │
-           └────────────────────────────────────────────────────────────────────────────┘
- → ▌Ask anything…
-
+╭──────────└────────────────────────────────────────────────────────────────────────────┘──────────╮
+│› ▌Ask anything…                                                                                   │
+╰─────────────────────────────────────────────────────────────────────────────────────────── agent ╯
 model mimo-v2.5-pro · / commands
 -- narrow --
- ca · agent
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
  ┌ Statusline ────────────────────────────────────────────┐
  │Custom status: not configured · refresh 5s              │
  │not run                                                 │
@@ -53,7 +53,7 @@ model mimo-v2.5-pro · / commands
  │ [ 4] Commands hint                                     │
  │Space toggle · ⇧↑↓ reorder · e custom                   │
  │⇧T test · Enter save · Esc cancel                       │
- │                                                        │
- │                                                        │
- └────────────────────────────────────────────────────────┘
+╭│                                                        │╮
+││                                                        ││
+╰└────────────────────────────────────────────────────────┘╯
 model mimo-v2.5-pro · / commands

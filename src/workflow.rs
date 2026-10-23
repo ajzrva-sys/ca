@@ -790,6 +790,8 @@ fn template_route_config() -> crate::config::CaConfig {
     config.providers.insert(
         "juror".into(),
         crate::config::ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
             base_url: "http://127.0.0.1:1/v1".into(),
             api_key: String::new(),
             protocol: crate::agent::ProviderProtocol::ChatCompletions,
@@ -2873,6 +2875,8 @@ mod tests {
         config.providers.insert(
             "juror".into(),
             crate::config::ProviderConfig {
+                google: None,
+                tool_schema_policy: Default::default(),
                 base_url: "http://127.0.0.1:1/v1".into(),
                 api_key: String::new(),
                 protocol: crate::agent::ProviderProtocol::ChatCompletions,

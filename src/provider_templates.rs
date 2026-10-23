@@ -14,6 +14,7 @@ pub enum AdapterCompatibility {
     ChatCompletionsBearerOrNone,
     OpenAiResponsesBearerOrNone,
     AnthropicMessagesApiKey,
+    GoogleNative,
 }
 
 impl AdapterCompatibility {
@@ -23,6 +24,7 @@ impl AdapterCompatibility {
             Self::ChatCompletionsBearerOrNone => ProviderProtocol::ChatCompletions,
             Self::OpenAiResponsesBearerOrNone => ProviderProtocol::OpenAiResponses,
             Self::AnthropicMessagesApiKey => ProviderProtocol::AnthropicMessages,
+            Self::GoogleNative => ProviderProtocol::GoogleGenerateContent,
         }
     }
 
@@ -31,6 +33,7 @@ impl AdapterCompatibility {
             Self::ChatCompletionsBearerOrNone => "ready · chat",
             Self::OpenAiResponsesBearerOrNone => "ready · responses",
             Self::AnthropicMessagesApiKey => "ready · messages",
+            Self::GoogleNative => "ready · Google",
         }
     }
 }
@@ -40,7 +43,6 @@ pub enum Availability {
     Ready(AdapterCompatibility),
     RequiresOAuth,
     RequiresAwsSdk,
-    RequiresVertexAuth,
     RequiresExternalProcess,
     RequiresCustomTransport,
 }
@@ -52,7 +54,6 @@ impl Availability {
             Self::Ready(adapter) => Some(adapter),
             Self::RequiresOAuth
             | Self::RequiresAwsSdk
-            | Self::RequiresVertexAuth
             | Self::RequiresExternalProcess
             | Self::RequiresCustomTransport => None,
         }
@@ -67,7 +68,6 @@ impl Availability {
             Self::Ready(adapter) => adapter.label(),
             Self::RequiresOAuth => "needs OAuth",
             Self::RequiresAwsSdk => "needs AWS SDK",
-            Self::RequiresVertexAuth => "needs Vertex auth",
             Self::RequiresExternalProcess => "needs subprocess",
             Self::RequiresCustomTransport => "needs adapter",
         }
@@ -84,9 +84,11 @@ impl Availability {
             Self::Ready(AdapterCompatibility::AnthropicMessagesApiKey) => {
                 "compatible with ca's Anthropic Messages x-api-key adapter"
             }
+            Self::Ready(AdapterCompatibility::GoogleNative) => {
+                "Native Gemini using an API key or Vertex Application Default Credentials"
+            }
             Self::RequiresOAuth => "Needs OAuth login and refreshable credential storage",
             Self::RequiresAwsSdk => "Needs AWS credentials and signed Bedrock requests",
-            Self::RequiresVertexAuth => "Needs Google ADC/service-account token refresh",
             Self::RequiresExternalProcess => "Needs the local Copilot ACP subprocess",
             Self::RequiresCustomTransport => "Needs provider-specific auth or protocol routing",
         }
@@ -469,22 +471,22 @@ pub const ALL: &[ProviderTemplate] = &[
         "Google / Gemini",
         ["google ai studio", "google", "gemini api"],
         "gemini",
-        Some("https://generativelanguage.googleapis.com/v1beta/openai"),
+        Some("https://generativelanguage.googleapis.com/v1beta"),
         Some("GOOGLE_API_KEY"),
         Some("gemini-3.6-flash"),
-        Some(ProviderProtocol::ChatCompletions),
-        Availability::RequiresCustomTransport
+        Some(ProviderProtocol::GoogleGenerateContent),
+        Availability::Ready(AdapterCompatibility::GoogleNative)
     ),
     template!(
         "vertex",
         "Google Vertex AI",
         ["google cloud", "gcp", "adc", "service account"],
         "vertex",
+        Some("https://aiplatform.googleapis.com/v1"),
         None,
-        None,
-        Some("google/gemini-3.1-pro-preview"),
-        None,
-        Availability::RequiresVertexAuth
+        Some("gemini-3.1-pro-preview"),
+        Some(ProviderProtocol::GoogleGenerateContent),
+        Availability::Ready(AdapterCompatibility::GoogleNative)
     ),
     template!(
         "openai-api",
@@ -685,8 +687,8 @@ mod tests {
             .iter()
             .filter(|template| template.is_installable())
             .collect();
-        assert_eq!(ready.len(), 15);
-        assert_eq!(installable.len(), 15);
+        assert_eq!(ready.len(), 17);
+        assert_eq!(installable.len(), 17);
         assert_eq!(
             installable
                 .iter()
@@ -779,8 +781,8 @@ mod tests {
         }
         assert_eq!(
             get("gemini").unwrap().availability,
-            Availability::RequiresCustomTransport,
-            "Gemini 3 thought signatures must survive tool-call replay"
+            Availability::Ready(AdapterCompatibility::GoogleNative),
+            "Gemini 3 thought signatures survive native tool-call replay"
         );
         assert_eq!(get("deepseek").unwrap().availability, CHAT);
         assert_eq!(get("xiaomi").unwrap().availability, RESPONSES);

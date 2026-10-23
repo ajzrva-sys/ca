@@ -2,8 +2,9 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca · agent · auto
-> Inspect the selected files
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
+ › Inspect the selected files
 
 
 
@@ -27,14 +28,14 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
 
 
 
-
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
 Tool selection failed: unknown tool: missing_tool
 -- narrow --
- ca · agent · auto
-> Inspect the selected files
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
+ › Inspect the selected files
 
 
 
@@ -52,8 +53,7 @@ Tool selection failed: unknown tool: missing_tool
 
 
 
-
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                           │
+╰──────────────────────────────────────────── agent · auto ╯
 Tool selection failed: unknown tool: missing_tool

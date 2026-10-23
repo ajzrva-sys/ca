@@ -936,6 +936,10 @@ async fn run_rsync_arguments(
     stdin_bytes: Option<Vec<u8>>,
 ) -> Result<Vec<u8>> {
     let mut command = if profile.controller == "local" {
+        #[cfg(target_os = "freebsd")]
+        let executable =
+            fixed_executable(&["/usr/local/bin/rsync", "/usr/bin/rsync", "/bin/rsync"])?;
+        #[cfg(not(target_os = "freebsd"))]
         let executable = fixed_executable(&["/usr/bin/rsync", "/bin/rsync"])?;
         let mut command = Command::new(executable);
         command.args(&args);

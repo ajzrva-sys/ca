@@ -473,7 +473,7 @@ mod tests {
             ("exit", 1, "exit disagrees"),
             ("hang", 0, "deadline exhausted"),
         ] {
-            let mut command = tokio::process::Command::new("/usr/bin/python3");
+            let mut command = tokio::process::Command::new(crate::harness_vm::HOST_PYTHON);
             command.args([
                 "-I",
                 "-c",

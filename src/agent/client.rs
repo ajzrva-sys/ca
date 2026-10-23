@@ -103,6 +103,9 @@ impl OpenAiResponsesRequestOptions {
 
 #[derive(Clone)]
 pub struct AgentClient {
+    google: Option<crate::google_auth::Config>,
+    google_auth: Option<crate::google_auth::Auth>,
+    tool_schema_policy: crate::tool_schema::Policy,
     provider_id: String,
     base_url: String,
     api_key: String,
@@ -120,6 +123,9 @@ pub struct AgentClient {
     request_store: crate::request::RequestStore,
     trace_hub: Option<crate::provider_trace::ProviderTraceHub>,
     trace_session_id: Option<uuid::Uuid>,
+    filter_override: Option<
+        std::sync::Arc<std::sync::RwLock<std::sync::Arc<crate::provider_filter::ProviderFilter>>>,
+    >,
 }
 
 impl std::fmt::Debug for AgentClient {
@@ -260,6 +266,17 @@ impl AgentClient {
         request_store: crate::request::RequestStore,
     ) -> Self {
         let provider_id = provider_id.into();
+        let google = (provider.protocol == crate::agent::ProviderProtocol::GoogleGenerateContent)
+            .then(|| provider.google.clone().unwrap_or_default());
+        let base_url = google
+            .as_ref()
+            .and_then(|settings| settings.endpoint(&provider.base_url).ok())
+            .unwrap_or_else(|| provider.base_url.trim_end_matches('/').to_string());
+        let google_auth = google
+            .as_ref()
+            .filter(|settings| settings.mode == crate::google_auth::Mode::Vertex)
+            .cloned()
+            .map(crate::google_auth::Auth::new);
         let codex_provider = provider_id == "openai-codex";
         let contract = crate::provider_contract::resolve(&provider_id, provider, model);
         let prompt_cache_contract =
@@ -269,11 +286,14 @@ impl AgentClient {
             .build()
             .expect("static provider HTTP client configuration is valid");
         Self {
+            google,
+            google_auth,
+            tool_schema_policy: provider.tool_schema_policy,
             codex_account_id: codex_provider
                 .then(|| crate::codex_auth::account_id_for_access_token(&provider.api_key))
                 .flatten(),
             provider_id,
-            base_url: provider.base_url.trim_end_matches('/').to_string(),
+            base_url,
             api_key: provider.api_key.clone(),
             model: model.to_string(),
             protocol: provider.protocol,
@@ -290,6 +310,7 @@ impl AgentClient {
             request_store,
             trace_hub: crate::provider_trace::process_hub(),
             trace_session_id: None,
+            filter_override: None,
         }
     }
 
@@ -330,6 +351,39 @@ impl AgentClient {
         self
     }
 
+    fn active_filter(&self) -> std::sync::Arc<crate::provider_filter::ProviderFilter> {
+        self.filter_override
+            .as_ref()
+            .map(|slot| {
+                slot.read()
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .clone()
+            })
+            .unwrap_or_else(crate::provider_filter::current)
+    }
+
+    /// An idle process may be armed while a request is waiting for bytes.
+    /// Re-read the process slot so that wait cannot keep an unarmed snapshot.
+    async fn until_filter_tripped(&self) -> ProviderError {
+        loop {
+            let filter = self.active_filter();
+            tokio::select! {
+                biased;
+                _ = filter.until_tripped() => return filter.stopped_error(),
+                _ = tokio::time::sleep(std::time::Duration::from_millis(200)) => {}
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_filter_for_test(
+        mut self,
+        filter: std::sync::Arc<crate::provider_filter::ProviderFilter>,
+    ) -> Self {
+        self.filter_override = Some(std::sync::Arc::new(std::sync::RwLock::new(filter)));
+        self
+    }
+
     pub(crate) fn with_prompt_cache_contract(
         mut self,
         contract: crate::provider_contract::ResolvedPromptCacheContract,
@@ -347,11 +401,7 @@ impl AgentClient {
     /// Disable transport retries for a caller that reserves every physical
     /// provider attempt in a host-owned autonomy budget.
     pub(crate) fn with_one_attempt_policy(mut self) -> Self {
-        self.policy = ProviderCallPolicy::one_attempt();
-        self.client = Client::builder()
-            .connect_timeout(self.policy.connect_timeout)
-            .build()
-            .expect("static provider HTTP client configuration is valid");
+        self.policy.max_attempts = 1;
         self
     }
 
@@ -383,6 +433,15 @@ impl AgentClient {
         &self,
         request: crate::request::PreparedModelRequest,
     ) -> crate::request::PreparedModelRequest {
+        if self
+            .google
+            .as_ref()
+            .is_some_and(|settings| settings.validate().is_ok())
+        {
+            if let Some(auth) = &self.google_auth {
+                let _ = auth.identity().await;
+            }
+        }
         match self.route_identity() {
             Ok(source) => {
                 let mut request = request;
@@ -393,14 +452,52 @@ impl AgentClient {
         }
     }
 
+    fn cooldown_key(&self) -> Option<crate::provider_cooldown::RouteKey> {
+        let credential = self
+            .google_auth
+            .as_ref()
+            .map(|auth| auth.cached_identity())
+            .unwrap_or_else(|| Some(self.api_key.clone()))?;
+        crate::provider_cooldown::RouteKey::new(
+            &self.provider_id,
+            &self.model,
+            self.protocol,
+            &self.base_url,
+            &credential,
+        )
+    }
+
+    pub(crate) fn cooldown(&self) -> Option<crate::provider_cooldown::Cooldown> {
+        self.cooldown_key()
+            .and_then(|key| crate::provider_cooldown::get(&key))
+    }
+
     pub(crate) fn route_identity(
         &self,
     ) -> Result<crate::agent::stream::ProviderStateSourceV1, ProviderError> {
-        crate::agent::stream::ProviderStateSourceV1::from_route(
+        let mut source = crate::agent::stream::ProviderStateSourceV1::from_route(
             self.provider_id.clone(),
             self.protocol,
             &self.base_url,
-        )
+        )?;
+        if matches!(
+            self.protocol,
+            crate::agent::ProviderProtocol::AnthropicMessages
+                | crate::agent::ProviderProtocol::GoogleGenerateContent
+        ) {
+            let credential = if let Some(auth) = &self.google_auth {
+                auth.cached_identity().ok_or_else(|| {
+                    ProviderError::Protocol("Vertex ADC credential identity is not resolved".into())
+                })?
+            } else {
+                self.api_key.clone()
+            };
+            source.credential_sha256 = Some(format!(
+                "{:x}",
+                Sha256::digest(format!("ca-native-credential-v1\0{credential}").as_bytes())
+            ));
+        }
+        Ok(source)
     }
 
     #[cfg(any(test, feature = "planner-executor-experiment"))]
@@ -480,7 +577,14 @@ impl AgentClient {
         &self,
         request: &crate::request::PreparedModelRequest,
     ) -> Result<mpsc::UnboundedReceiver<ChatStreamItem>, ProviderError> {
-        let effective = self.prepare_harness_request(request.clone()).await;
+        if let Some(settings) = &self.google {
+            settings.endpoint(&self.base_url)?;
+        }
+        if let Some(auth) = &self.google_auth {
+            auth.identity().await?;
+        }
+        let mut effective = self.prepare_harness_request(request.clone()).await;
+        effective.tool_schema_policy = self.tool_schema_policy;
         let request = &effective;
         if request.model != self.model {
             return Err(ProviderError::Protocol(
@@ -493,28 +597,51 @@ impl AgentClient {
             ));
         }
         let adapter = self.protocol.adapter();
-        let state_source = crate::agent::stream::ProviderStateSourceV1::from_route(
-            request.provider.clone(),
-            self.protocol,
-            &self.base_url,
-        )?;
-        self.request_store.record_on_route(
+        let state_source = self.route_identity()?;
+        let snapshot_sequence = self.request_store.record_on_route(
             request,
             adapter.protocol().label(),
             &[self.api_key.as_str()],
             Some(&state_source),
         );
-        if let Some(environment) = unresolved_environment_reference(&self.api_key) {
-            return Err(ProviderError::MissingEnvironment(environment.to_string()));
+        if self.google_auth.is_none() {
+            if let Some(environment) = unresolved_environment_reference(&self.api_key) {
+                return Err(ProviderError::MissingEnvironment(environment.to_string()));
+            }
         }
         let prompt_cache = self.prompt_cache_for_request(request, &state_source)?;
-        let mut prepared_http = adapter.prepare(
+        let mut prepared_http = match adapter.prepare(
             request,
             &state_source,
             self.contract,
             self.responses_options.as_ref(),
             prompt_cache.as_ref(),
-        )?;
+        ) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                if let Some(diagnostics) =
+                    crate::google_provider::rejected_schema_diagnostics(&error)
+                {
+                    self.request_store
+                        .adapter_diagnostics(snapshot_sequence, &diagnostics);
+                    if let Some(trace) = self.trace_hub.as_ref().and_then(|hub| {
+                        hub.begin_request_with_session(
+                            request,
+                            adapter.protocol().label(),
+                            &[self.api_key.as_str()],
+                            self.trace_session_id,
+                        )
+                    }) {
+                        trace.diagnostics(&diagnostics);
+                        trace.outcome(0, "blocked_tool_schema", None);
+                    }
+                }
+                return Err(error);
+            }
+        };
+        self.request_store
+            .adapter_diagnostics(snapshot_sequence, &prepared_http.diagnostics);
+        prepared_http.replay.request_sequence = snapshot_sequence;
         if let Some(maximum) = self.output_token_cap {
             apply_output_token_cap(
                 &mut prepared_http.body,
@@ -540,6 +667,9 @@ impl AgentClient {
                 self.trace_session_id,
             )
         });
+        if let Some(trace) = &trace {
+            trace.diagnostics(&prepared_http.diagnostics);
+        }
         self.stream_adapter_request(adapter, prepared_http, request, &state_source, trace)
             .await
     }
@@ -637,7 +767,9 @@ impl AgentClient {
         self.stream_adapter_request(
             self.protocol.adapter(),
             crate::agent::provider::AdapterRequest {
-                path: "responses",
+                replay: Default::default(),
+                diagnostics: Vec::new(),
+                path: "responses".into(),
                 body,
             },
             &request,
@@ -695,6 +827,7 @@ impl AgentClient {
             request.tools.iter().map(|tool| tool.function.name.as_str()),
         )?;
 
+        let replay = std::sync::Arc::new(prepared_http.replay);
         let max_attempts = self.policy.max_attempts.clamp(1, 2);
         let mut attempt = 0usize;
         let opened = open_provider_response(
@@ -702,6 +835,7 @@ impl AgentClient {
             adapter,
             &url,
             &prepared_http.body,
+            &replay,
             &mut attempt,
             max_attempts,
             trace.as_ref(),
@@ -720,7 +854,7 @@ impl AgentClient {
             let mut opened = opened;
             loop {
                 let attempt_started = std::time::Instant::now();
-                match consume_provider_body_attempt(
+                let body_outcome = consume_provider_body_attempt(
                     opened.response,
                     opened.request_id_sha256,
                     adapter,
@@ -734,9 +868,19 @@ impl AgentClient {
                     attempt,
                     stream_trace.as_ref(),
                     &tx,
+                    &retry_client,
                 )
-                .await
+                .await;
+                if let BodyAttemptOutcome::Failed {
+                    error: ProviderError::Transport(failure),
+                    ..
+                } = &body_outcome
                 {
+                    if let Some(key) = retry_client.cooldown_key() {
+                        crate::provider_cooldown::record_transport(key, *failure);
+                    }
+                }
+                match body_outcome {
                     BodyAttemptOutcome::Completed => {
                         if let Some(trace) = &stream_trace {
                             trace.outcome(attempt, "completed", None);
@@ -774,6 +918,7 @@ impl AgentClient {
                             adapter,
                             &url,
                             &frozen_body,
+                            &replay,
                             &mut attempt,
                             max_attempts,
                             stream_trace.as_ref(),
@@ -1118,6 +1263,7 @@ async fn open_provider_response(
     adapter: crate::agent::provider::ProviderAdapter,
     url: &str,
     body: &[u8],
+    replay: &crate::provider_replay::ReplayBindings,
     attempt: &mut usize,
     max_attempts: usize,
     trace: Option<&crate::provider_trace::ProviderTraceRequest>,
@@ -1129,12 +1275,23 @@ async fn open_provider_response(
         }
         *attempt += 1;
         let attempt_started = std::time::Instant::now();
-        let response =
-            execute_provider_request(client, adapter, url, body, *attempt, trace, cancellation)
-                .await;
+        let response = execute_provider_request(
+            client,
+            adapter,
+            url,
+            body,
+            replay,
+            *attempt,
+            trace,
+            cancellation,
+        )
+        .await;
         match response {
             Ok(None) => return Ok(None),
             Ok(Some(response)) if response.status().is_success() => {
+                if let Some(key) = client.cooldown_key() {
+                    crate::provider_cooldown::clear_success(&key, attempt_started);
+                }
                 if let Some(trace) = trace {
                     trace.attempt_response(
                         *attempt,
@@ -1161,22 +1318,40 @@ async fn open_provider_response(
                 }));
             }
             Ok(Some(response)) => {
-                let retry = *attempt < max_attempts && retryable_status(response.status().as_u16());
+                let status = response.status().as_u16();
+                let retry = *attempt < max_attempts && retryable_status(status);
                 let delay = retry.then(|| retry_delay(&response, &client.policy));
                 if let Some(trace) = trace {
                     trace.attempt_response(
                         *attempt,
-                        response.status().as_u16(),
+                        status,
                         response.headers(),
                         retry,
                         delay,
                         attempt_started.elapsed(),
                     );
                 }
-                let error = ProviderError::Http {
-                    status: response.status().as_u16(),
+                let body_excerpt = match read_error_body(
+                    response,
+                    client.policy.headers_timeout,
+                    cancellation,
+                    client,
+                )
+                .await
+                {
+                    ErrorBodyRead::Cancelled => return Ok(None),
+                    ErrorBodyRead::Stopped(error) => {
+                        if let Some(trace) = trace {
+                            trace.outcome(*attempt, "failed", Some(&error.to_string()));
+                        }
+                        return Err(error);
+                    }
+                    ErrorBodyRead::Excerpt(excerpt) => excerpt,
                 };
-                drop(response);
+                let error = match body_excerpt {
+                    Some(excerpt) => ProviderError::http_with_excerpt(status, excerpt),
+                    None => ProviderError::http(status),
+                };
                 if let Some(delay) = delay {
                     if retry_wait_cancelled(delay, cancellation).await {
                         return Ok(None);
@@ -1189,6 +1364,11 @@ async fn open_provider_response(
                 }
             }
             Err(error) => {
+                if let ProviderError::Transport(failure) = &error {
+                    if let Some(key) = client.cooldown_key() {
+                        crate::provider_cooldown::record_transport(key, *failure);
+                    }
+                }
                 let retry = *attempt < max_attempts && matches!(error, ProviderError::Transport(_));
                 let delay = retry.then_some(client.policy.retry_delay);
                 if let Some(trace) = trace {
@@ -1215,11 +1395,13 @@ async fn open_provider_response(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn execute_provider_request(
     client: &AgentClient,
     adapter: crate::agent::provider::ProviderAdapter,
     url: &str,
     body: &[u8],
+    replay: &crate::provider_replay::ReplayBindings,
     attempt: usize,
     trace: Option<&crate::provider_trace::ProviderTraceRequest>,
     cancellation: Option<&mpsc::UnboundedSender<ChatStreamItem>>,
@@ -1228,7 +1410,14 @@ async fn execute_provider_request(
         .client
         .post(url)
         .header("Content-Type", "application/json");
-    let request = adapter.apply_auth(request, &client.api_key);
+    let request = adapter.apply_auth(
+        request,
+        if client.google_auth.is_some() {
+            ""
+        } else {
+            &client.api_key
+        },
+    );
     let request = if let Some(account_id) = &client.codex_account_id {
         request.header("ChatGPT-Account-ID", account_id)
     } else {
@@ -1239,8 +1428,55 @@ async fn execute_provider_request(
     } else {
         request
     };
+    let filter = client.active_filter();
+    let (body, diagnostics) = crate::provider_replay::prepare_outbound(body, replay, &filter)?;
+    client
+        .request_store
+        .adapter_diagnostics(replay.request_sequence, &diagnostics);
+    if let Some(trace) = trace {
+        trace.diagnostics(&diagnostics);
+    }
+    let sent_prefix = if adapter.protocol() == crate::agent::ProviderProtocol::GoogleGenerateContent
+    {
+        Some(crate::provider_replay::SentPrefix(
+            crate::google_provider::sent_prefix(&body)?,
+        ))
+    } else if adapter.protocol() == crate::agent::ProviderProtocol::AnthropicMessages {
+        Some(crate::provider_replay::SentPrefix(
+            crate::provider_replay::prefix_digest(&crate::provider_replay::prefix_from_body(&body)),
+        ))
+    } else {
+        None
+    };
+    if filter.shows_banner() {
+        if matches!(
+            adapter.protocol(),
+            crate::agent::ProviderProtocol::AnthropicMessages
+                | crate::agent::ProviderProtocol::GoogleGenerateContent
+        ) {
+            crate::provider_filter::publish_outbound_body(
+                &crate::provider_trace::native_diagnostic_body(&body, &[client.api_key.as_str()]),
+            );
+        } else {
+            crate::provider_filter::publish_outbound_body(&body);
+        }
+    }
+    let headers_deadline = tokio::time::Instant::now() + client.policy.headers_timeout;
+    let request = if let Some(auth) = &client.google_auth {
+        let authentication = tokio::time::timeout_at(headers_deadline, auth.headers());
+        let result = if let Some(cancellation) = cancellation {
+            tokio::select! { biased; _=cancellation.closed()=>return Ok(None), error=client.until_filter_tripped()=>return Err(error), result=authentication=>result }
+        } else {
+            tokio::select! { biased; error=client.until_filter_tripped()=>return Err(error), result=authentication=>result }
+        };
+        let headers =
+            result.map_err(|_| ProviderError::Transport(ProviderTransportFailure::Timeout))??;
+        request.headers(headers)
+    } else {
+        request
+    };
     let request = request
-        .body(body.to_vec())
+        .body(body.clone())
         .build()
         .map_err(|error| ProviderError::Transport(classify_transport_error(&error)))?;
     if let Some(trace) = trace {
@@ -1249,26 +1485,267 @@ async fn execute_provider_request(
             request.method().as_str(),
             request.url().as_str(),
             request.headers(),
-            body,
+            &body,
         );
     }
-    let execution = tokio::time::timeout(
-        client.policy.headers_timeout,
-        client.client.execute(request),
-    );
+    let execution = tokio::time::timeout_at(headers_deadline, client.client.execute(request));
     let response = if let Some(cancellation) = cancellation {
         tokio::select! {
             biased;
             _ = cancellation.closed() => return Ok(None),
+            error = client.until_filter_tripped() => return Err(error),
             response = execution => response,
         }
     } else {
-        execution.await
+        tokio::select! {
+            biased;
+            error = client.until_filter_tripped() => return Err(error),
+            response = execution => response,
+        }
     };
     match response {
         Err(_) => Err(ProviderError::Transport(ProviderTransportFailure::Timeout)),
         Ok(Err(error)) => Err(ProviderError::Transport(classify_transport_error(&error))),
-        Ok(Ok(response)) => Ok(Some(response)),
+        Ok(Ok(mut response)) => {
+            if let Some(prefix) = sent_prefix {
+                response.extensions_mut().insert(prefix);
+            }
+            Ok(Some(response))
+        }
+    }
+}
+
+/// Semantic content needs its own carry: SSE framing separates two deltas of
+/// one word. Content, reasoning, and distinct calls must never form one match.
+#[derive(Default)]
+struct ResponseFilterChannels {
+    text: Vec<u8>,
+    reasoning: Vec<u8>,
+    tool_arguments: std::collections::BTreeMap<usize, FilteredToolArguments>,
+}
+
+#[derive(Default)]
+struct FilteredToolArguments {
+    raw: Vec<u8>,
+    strings: JsonArgumentStringFilter,
+}
+
+impl FilteredToolArguments {
+    fn observe(
+        &mut self,
+        filter: &crate::provider_filter::ProviderFilter,
+        argument: &str,
+    ) -> Result<(), ProviderError> {
+        filter.observe_response(&mut self.raw, argument.as_bytes())?;
+        self.strings.observe(filter, argument)?;
+        Ok(())
+    }
+
+    fn finish(
+        &mut self,
+        filter: &crate::provider_filter::ProviderFilter,
+    ) -> Result<(), ProviderError> {
+        filter.observe_response(&mut self.raw, &[])?;
+        if filter.watches() {
+            self.strings.flush_fragment(filter, true)?;
+            filter.observe_response(&mut self.strings.decoded, &[])?;
+        }
+        Ok(())
+    }
+}
+
+/// Decode JSON strings incrementally so an argument object may exceed the
+/// rolling scan window. Each quoted key/value gets a separate decoded carry.
+#[derive(Default)]
+struct JsonArgumentStringFilter {
+    in_string: bool,
+    escaped: bool,
+    fragment: String,
+    decoded: Vec<u8>,
+    inactive_escape: [u8; 12],
+    inactive_escape_len: usize,
+    inactive_unicode_digits: u8,
+    inactive_high_surrogate: bool,
+}
+
+impl JsonArgumentStringFilter {
+    const FRAGMENT_BYTES: usize = 512;
+    // A split Unicode surrogate pair needs at most two six-byte escapes.
+    const ESCAPE_SLACK: usize = 12;
+
+    fn observe(
+        &mut self,
+        filter: &crate::provider_filter::ProviderFilter,
+        argument: &str,
+    ) -> Result<(), ProviderError> {
+        if !filter.watches() {
+            self.observe_inactive(argument);
+            return Ok(());
+        }
+        if self.inactive_escape_len > 0 {
+            if let Ok(escape) =
+                std::str::from_utf8(&self.inactive_escape[..self.inactive_escape_len])
+            {
+                self.fragment.push_str(escape);
+            }
+            self.inactive_escape_len = 0;
+            self.inactive_unicode_digits = 0;
+            self.inactive_high_surrogate = false;
+        }
+        for ch in argument.chars() {
+            if !self.in_string {
+                if ch == '"' {
+                    self.in_string = true;
+                    self.escaped = false;
+                    self.fragment.clear();
+                    self.decoded.clear();
+                }
+                continue;
+            }
+            if ch == '"' && !self.escaped {
+                self.flush_fragment(filter, true)?;
+                filter.observe_response(&mut self.decoded, &[])?;
+                self.in_string = false;
+                self.decoded.clear();
+                continue;
+            }
+            self.fragment.push(ch);
+            self.escaped = ch == '\\' && !self.escaped;
+            if self.fragment.len() >= Self::FRAGMENT_BYTES && !self.escaped {
+                self.flush_fragment(filter, false)?;
+            }
+        }
+        self.flush_fragment(filter, false)
+    }
+
+    /// While off, retain only quote/escape state and a fixed pending escape.
+    /// This neither allocates content buffers nor validates unfiltered JSON.
+    fn observe_inactive(&mut self, argument: &str) {
+        self.fragment.clear();
+        self.decoded.clear();
+        for ch in argument.chars() {
+            if !self.in_string {
+                if ch == '"' {
+                    self.in_string = true;
+                    self.escaped = false;
+                    self.inactive_escape_len = 0;
+                }
+            } else if self.escaped {
+                self.push_inactive_escape(ch);
+                self.escaped = false;
+                if ch == 'u' {
+                    self.inactive_unicode_digits = 4;
+                } else {
+                    self.inactive_escape_len = 0;
+                }
+            } else if self.inactive_unicode_digits > 0 {
+                self.push_inactive_escape(ch);
+                self.inactive_unicode_digits -= 1;
+                if self.inactive_unicode_digits == 0 {
+                    self.inactive_high_surrogate = self.inactive_escape_len >= 4
+                        && std::str::from_utf8(
+                            &self.inactive_escape
+                                [self.inactive_escape_len - 4..self.inactive_escape_len],
+                        )
+                        .ok()
+                        .and_then(|digits| u16::from_str_radix(digits, 16).ok())
+                        .is_some_and(|value| (0xD800..=0xDBFF).contains(&value));
+                    if !self.inactive_high_surrogate {
+                        self.inactive_escape_len = 0;
+                    }
+                }
+            } else if ch == '\\' {
+                if !self.inactive_high_surrogate {
+                    self.inactive_escape_len = 0;
+                }
+                self.inactive_high_surrogate = false;
+                self.push_inactive_escape(ch);
+                self.escaped = true;
+            } else {
+                self.inactive_escape_len = 0;
+                self.inactive_high_surrogate = false;
+                if ch == '"' {
+                    self.in_string = false;
+                }
+            }
+        }
+    }
+
+    fn push_inactive_escape(&mut self, ch: char) {
+        if ch.is_ascii() && self.inactive_escape_len < self.inactive_escape.len() {
+            self.inactive_escape[self.inactive_escape_len] = ch as u8;
+            self.inactive_escape_len += 1;
+        } else {
+            self.inactive_escape_len = 0;
+        }
+    }
+
+    fn flush_fragment(
+        &mut self,
+        filter: &crate::provider_filter::ProviderFilter,
+        complete: bool,
+    ) -> Result<(), ProviderError> {
+        if self.fragment.is_empty() {
+            return Ok(());
+        }
+        match serde_json::from_str::<String>(&format!("\"{}\"", self.fragment)) {
+            Ok(decoded) => {
+                filter.observe_response(&mut self.decoded, decoded.as_bytes())?;
+                self.fragment.clear();
+            }
+            Err(_)
+                if !complete
+                    && self.fragment.len() <= Self::FRAGMENT_BYTES + Self::ESCAPE_SLACK => {}
+            Err(_) => {
+                return Err(ProviderError::MalformedData(
+                    "invalid JSON string escape in filtered tool arguments".into(),
+                ))
+            }
+        }
+        Ok(())
+    }
+}
+
+impl ResponseFilterChannels {
+    fn observe(
+        &mut self,
+        filter: &crate::provider_filter::ProviderFilter,
+        events: &[ProviderEvent],
+    ) -> Result<(), ProviderError> {
+        for event in events {
+            match event {
+                ProviderEvent::Text(text) => {
+                    filter.observe_response(&mut self.text, text.as_bytes())?;
+                }
+                ProviderEvent::Reasoning(text) => {
+                    filter.observe_response(&mut self.reasoning, text.as_bytes())?;
+                }
+                ProviderEvent::ToolCallStart { name, .. } => {
+                    filter.observe_response(&mut Vec::new(), name.as_bytes())?;
+                }
+                ProviderEvent::ToolCallArg { index, arg } => {
+                    self.tool_arguments
+                        .entry(*index)
+                        .or_default()
+                        .observe(filter, arg)?;
+                }
+                ProviderEvent::Done => self.finish(filter)?,
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn finish(
+        &mut self,
+        filter: &crate::provider_filter::ProviderFilter,
+    ) -> Result<(), ProviderError> {
+        filter.observe_response(&mut self.text, &[])?;
+        filter.observe_response(&mut self.reasoning, &[])?;
+        for arguments in self.tool_arguments.values_mut() {
+            arguments.finish(filter)?;
+        }
+        Ok(())
     }
 }
 
@@ -1287,8 +1764,8 @@ async fn consume_provider_body_attempt(
     attempt: usize,
     trace: Option<&crate::provider_trace::ProviderTraceRequest>,
     tx: &mpsc::UnboundedSender<ChatStreamItem>,
+    client: &AgentClient,
 ) -> BodyAttemptOutcome {
-    let mut stream = response.bytes_stream();
     let mut decoder = adapter.decoder_with_cache_usage(
         request,
         state_source,
@@ -1296,6 +1773,14 @@ async fn consume_provider_body_attempt(
         request_id_sha256,
         cache_usage_format,
     );
+
+    if let Some(prefix) = response
+        .extensions()
+        .get::<crate::provider_replay::SentPrefix>()
+    {
+        decoder.bind_sent_prefix(prefix);
+    }
+    let mut stream = response.bytes_stream();
     let mut anomaly_guard = match crate::agent::stream_anomaly::StreamAnomalyGuard::new(
         request.tools.iter().map(|tool| tool.function.name.as_str()),
     ) {
@@ -1311,12 +1796,21 @@ async fn consume_provider_body_attempt(
     let mut trace_frames = crate::provider_trace::RawTraceFrameBuffer::default();
     let mut buffered = Vec::new();
     let mut committed = false;
+    let mut response_carry = Vec::new();
+    let mut response_channels = ResponseFilterChannels::default();
     let mut deadline = tokio::time::Instant::now() + first_event_timeout;
+    let mut received_bytes = false;
 
     loop {
         let next = tokio::select! {
             biased;
             _ = tx.closed() => return BodyAttemptOutcome::ConsumerCancelled,
+            error = client.until_filter_tripped() => {
+                return BodyAttemptOutcome::Failed {
+                    error,
+                    committed,
+                };
+            }
             next = tokio::time::timeout_at(deadline, stream.next()) => next,
         };
         let chunk = match next {
@@ -1324,7 +1818,11 @@ async fn consume_provider_body_attempt(
             Ok(None) => break,
             Err(_) => {
                 return BodyAttemptOutcome::Failed {
-                    error: ProviderError::Transport(ProviderTransportFailure::Timeout),
+                    error: ProviderError::Transport(if received_bytes {
+                        ProviderTransportFailure::Timeout
+                    } else {
+                        ProviderTransportFailure::FirstTokenTimeout
+                    }),
                     committed,
                 };
             }
@@ -1338,6 +1836,17 @@ async fn consume_provider_body_attempt(
                 };
             }
         };
+        // Any received body bytes prove the stream is alive. Keep-alive SSE
+        // comments and partial lines decode to zero events; without this reset
+        // a live thinking/prefill stream still trips no_progress_timeout.
+        if !bytes.is_empty() {
+            received_bytes = true;
+            deadline = tokio::time::Instant::now() + no_progress_timeout;
+        }
+        let filter = client.active_filter();
+        if let Err(error) = filter.observe_response(&mut response_carry, &bytes) {
+            return BodyAttemptOutcome::Failed { error, committed };
+        }
         if let Some(trace) = trace {
             match trace_frames.push(&bytes) {
                 Ok(frames) => {
@@ -1354,6 +1863,9 @@ async fn consume_provider_body_attempt(
         };
         if !events.is_empty() {
             deadline = tokio::time::Instant::now() + no_progress_timeout;
+        }
+        if let Err(error) = response_channels.observe(filter.as_ref(), &events) {
+            return BodyAttemptOutcome::Failed { error, committed };
         }
         if let Err(abort) = process_provider_events(
             events,
@@ -1380,6 +1892,14 @@ async fn consume_provider_body_attempt(
         Ok(events) => events,
         Err(error) => return BodyAttemptOutcome::Failed { error, committed },
     };
+    let filter = client.active_filter();
+    if let Err(error) = filter
+        .observe_response(&mut response_carry, &[])
+        .and_then(|()| response_channels.observe(filter.as_ref(), &events))
+        .and_then(|()| response_channels.finish(filter.as_ref()))
+    {
+        return BodyAttemptOutcome::Failed { error, committed };
+    }
     if let Err(abort) = process_provider_events(
         events,
         &mut dsml_normalizer,
@@ -1475,6 +1995,131 @@ fn classify_transport_error(error: &reqwest::Error) -> ProviderTransportFailure 
     }
 }
 
+const ERROR_BODY_EXCERPT_BYTES: usize = 512;
+const ERROR_BODY_READ_LIMIT: usize = 8 * 1024;
+const ERROR_BODY_ABSOLUTE_CAP: std::time::Duration = std::time::Duration::from_secs(1);
+
+enum ErrorBodyRead {
+    Excerpt(Option<String>),
+    Cancelled,
+    Stopped(ProviderError),
+}
+
+/// Read a provider error body without hanging the retry loop.
+///
+/// A stall uses `headers_timeout`. Arriving bytes do not extend the one-second
+/// cap. Reading stops at 8 KiB and drops the socket. Only a JSON error message
+/// is kept. Response-filter matches become a stop and are not copied out.
+async fn read_error_body(
+    response: reqwest::Response,
+    headers_timeout: std::time::Duration,
+    cancellation: Option<&mpsc::UnboundedSender<ChatStreamItem>>,
+    client: &AgentClient,
+) -> ErrorBodyRead {
+    let status = response.status().as_u16();
+    let headers = response.headers().clone();
+    let recorded = client
+        .cooldown_key()
+        .and_then(|key| crate::provider_cooldown::record_http(key, status, &headers));
+    let absolute = tokio::time::Instant::now() + ERROR_BODY_ABSOLUTE_CAP;
+    let mut stream = response.bytes_stream();
+    let mut collected = Vec::new();
+    let mut carry = Vec::new();
+    let mut reached_eof = false;
+    loop {
+        if collected.len() >= ERROR_BODY_READ_LIMIT || tokio::time::Instant::now() >= absolute {
+            break;
+        }
+        let wait_until = (tokio::time::Instant::now() + headers_timeout).min(absolute);
+        let next = if let Some(cancellation) = cancellation {
+            tokio::select! {
+                biased;
+                _ = cancellation.closed() => return ErrorBodyRead::Cancelled,
+                error = client.until_filter_tripped() => return ErrorBodyRead::Stopped(error),
+                next = tokio::time::timeout_at(wait_until, stream.next()) => next,
+            }
+        } else {
+            tokio::select! {
+                biased;
+                error = client.until_filter_tripped() => return ErrorBodyRead::Stopped(error),
+                next = tokio::time::timeout_at(wait_until, stream.next()) => next,
+            }
+        };
+        match next {
+            Ok(Some(Ok(chunk))) if !chunk.is_empty() => {
+                if let Err(error) = client.active_filter().observe_response(&mut carry, &chunk) {
+                    return ErrorBodyRead::Stopped(error);
+                }
+                let room = ERROR_BODY_READ_LIMIT - collected.len();
+                let take = room.min(chunk.len());
+                collected.extend_from_slice(&chunk[..take]);
+            }
+            Ok(Some(Ok(_))) => {}
+            Ok(None) => {
+                reached_eof = true;
+                break;
+            }
+            Ok(Some(Err(_))) | Err(_) => break,
+        }
+    }
+    drop(stream);
+    if let Err(error) = client
+        .active_filter()
+        .observe_response(&mut Vec::new(), &collected)
+    {
+        return ErrorBodyRead::Stopped(error);
+    }
+    if reached_eof {
+        if let Err(error) = client.active_filter().observe_response(&mut carry, &[]) {
+            return ErrorBodyRead::Stopped(error);
+        }
+    }
+    if let Some(key) = client.cooldown_key() {
+        crate::provider_cooldown::record_structured(key, status, &headers, &collected, recorded);
+    }
+    ErrorBodyRead::Excerpt(excerpt_from_error_bytes(
+        &collected,
+        &[client.api_key.as_str()],
+    ))
+}
+
+fn excerpt_from_error_bytes(bytes: &[u8], secrets: &[&str]) -> Option<String> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let raw = String::from_utf8_lossy(&bytes[..bytes.len().min(ERROR_BODY_READ_LIMIT)]);
+    let message = extract_json_error_message(&raw)?;
+    let safe = crate::request::safe_text(&message, secrets);
+    static CREDENTIAL_TOKEN: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let credentials = CREDENTIAL_TOKEN.get_or_init(|| {
+        regex::Regex::new(r#"(?i)\bbearer\s+[^\s\"'`,;<>]+|sk-[^\s\"'`,;<>]+"#)
+            .expect("static credential-token pattern")
+    });
+    let redacted = credentials.replace_all(&safe, "[REDACTED]");
+    let mut excerpt: String = redacted
+        .chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect();
+    let mut end = ERROR_BODY_EXCERPT_BYTES.min(excerpt.len());
+    while !excerpt.is_char_boundary(end) {
+        end -= 1;
+    }
+    excerpt.truncate(end);
+    let excerpt = excerpt.trim().to_string();
+    (!excerpt.is_empty()).then_some(excerpt)
+}
+
+fn extract_json_error_message(raw: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(raw.trim()).ok()?;
+    let message = value
+        .get("error")
+        .and_then(|error| error.get("message"))
+        .or_else(|| value.get("message"))
+        .or_else(|| value.get("error"))
+        .and_then(|message| message.as_str())?;
+    Some(message.to_string())
+}
+
 /// Append provider messages for a single application message.
 ///
 /// For `Role::Assistant`, emits the assistant message followed by one
@@ -1523,7 +2168,11 @@ pub(crate) fn append_provider_messages(
                     if let Some(output) = &call.output {
                         result.push(ChatMessage {
                             role: "tool".into(),
-                            content: crate::image_content::ModelContent::text(output.clone()),
+                            content: crate::image_content::ModelContent::text(output.clone())
+                                .with_prunable_tool_result(crate::context_pruning::qualified(call))
+                                .with_tool_result_status(
+                                    call.status == crate::app::ToolStatus::Done,
+                                ),
                             tool_calls: None,
                             tool_call_id: Some(call.id.clone()),
                             response_items: Vec::new(),
@@ -1539,7 +2188,9 @@ pub(crate) fn append_provider_messages(
                     let output = call.output.as_ref().expect("validated tool result");
                     result.push(ChatMessage {
                         role: "tool".into(),
-                        content: crate::image_content::ModelContent::text(output.clone()),
+                        content: crate::image_content::ModelContent::text(output.clone())
+                            .with_prunable_tool_result(crate::context_pruning::qualified(call))
+                            .with_tool_result_status(call.status == crate::app::ToolStatus::Done),
                         tool_calls: None,
                         tool_call_id: Some(call.id.clone()),
                         response_items: Vec::new(),
@@ -1677,7 +2328,27 @@ fn apply_output_token_cap(
     let object = value
         .as_object_mut()
         .ok_or_else(|| ProviderError::Protocol("invalid capped request object".into()))?;
+    if protocol == ProviderProtocol::GoogleGenerateContent {
+        let generation = object
+            .entry("generationConfig")
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+            .ok_or_else(|| ProviderError::Protocol("invalid Google generation settings".into()))?;
+        let previous = generation
+            .get("maxOutputTokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(u64::MAX);
+        generation.insert(
+            "maxOutputTokens".into(),
+            Value::from(previous.min(u64::from(maximum))),
+        );
+        *body = serde_json::to_vec(&value).map_err(|_| {
+            ProviderError::Protocol("cannot serialize capped Google request".into())
+        })?;
+        return Ok(());
+    }
     let field = match protocol {
+        ProviderProtocol::GoogleGenerateContent => unreachable!("handled above"),
         ProviderProtocol::OpenAiResponses => "max_output_tokens",
         ProviderProtocol::AnthropicMessages => "max_tokens",
         ProviderProtocol::ChatCompletions if direct_openai => "max_completion_tokens",

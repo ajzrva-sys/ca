@@ -2280,12 +2280,49 @@ pub fn explicit_skill_selectors(input: &str) -> Vec<String> {
                 )
             })
         })
-        .filter(|word| !word.is_empty())
+        .filter(|word| is_explicit_skill_selector(word))
         .map(str::to_string)
         .collect::<Vec<_>>();
     selectors.sort();
     selectors.dedup();
     selectors
+}
+
+fn is_explicit_skill_selector(selector: &str) -> bool {
+    // Skill identities are lowercase. Shell variables and expansion/path
+    // expressions such as $HOME, ${HOME}, or $review/path are ordinary text.
+    if validate_identity(selector).is_ok() {
+        return true;
+    }
+    let mut components = selector.split("::");
+    let (Some(scope), Some(locator), Some(name), None) = (
+        components.next(),
+        components.next(),
+        components.next(),
+        components.next(),
+    ) else {
+        return false;
+    };
+    if validate_identity(scope).is_err() || validate_identity(name).is_err() {
+        return false;
+    }
+    // Qualified selectors retain the percent-encoded locator emitted by
+    // load_portable_skill_tree, including uppercase hexadecimal escapes.
+    let mut locator = locator.bytes();
+    while let Some(byte) = locator.next() {
+        match byte {
+            b'a'..=b'z' | b'0'..=b'9' | b'-' => {}
+            b'%' => {
+                if !locator.next().is_some_and(|byte| byte.is_ascii_hexdigit())
+                    || !locator.next().is_some_and(|byte| byte.is_ascii_hexdigit())
+                {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+    true
 }
 
 pub fn resolve_pinned_instance<'a>(
@@ -4736,6 +4773,35 @@ mod tests {
     }
 
     #[test]
+    fn explicit_skill_selectors_leave_shell_variable_text_in_the_prompt() {
+        let benchmark_prompt = r#"Fix Unix user-dirs.dirs parsing so double-quoted directory paths preserve literal backslashes before ordinary characters. For example XDG_DOCUMENTS_DIR="/data/a\q" must resolve to a path containing the literal backslash before q rather than /data/aq. Continue handling shell-special escapes correctly, and retain both absolute paths and $HOME-prefixed paths, as well as existing bare-value behavior. Add appropriate regression coverage and run the local relevant tests."#;
+        assert!(explicit_skill_selectors(benchmark_prompt).is_empty());
+        assert!(explicit_skill_selectors(
+            r#"Preserve $HOME $PATH $TMPDIR $XDG_CONFIG_HOME ${HOME} $HOME/config $review/path $(pwd) $((1+2)) and $?."#
+        )
+        .is_empty());
+        assert_eq!(
+            explicit_skill_selectors("Preserve $HOME and use $review, then $review."),
+            ["review"]
+        );
+    }
+
+    #[test]
+    fn explicit_skill_selectors_preserve_supported_identity_syntax() {
+        let input = r#"Use $review $legacy_review $workspace::ancestor-0::review $user::team%2Frepo::release and $0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef. Leave \$escaped `$code` https://example.test/$url and ${braced} alone."#;
+        assert_eq!(
+            explicit_skill_selectors(input),
+            [
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "legacy_review",
+                "review",
+                "user::team%2Frepo::release",
+                "workspace::ancestor-0::review",
+            ]
+        );
+    }
+
+    #[test]
     fn explicit_task_loads_are_local_pinned_and_implicit_policy_fails_closed() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("skills");
@@ -4765,6 +4831,19 @@ mod tests {
             explicit_skill_selectors("please use $review, then $review"),
             ["review"]
         );
+        let instance = registry.instances().next().unwrap();
+        for selector in [&instance.qualified_name, &instance.instance_id] {
+            let parsed = explicit_skill_selectors(&format!("Use ${selector}."));
+            assert_eq!(parsed, [selector.as_str()]);
+            registry
+                .load_for_task(&parsed[0], true, &mut first)
+                .unwrap();
+            assert_eq!(first.len(), 1);
+        }
+        assert!(matches!(
+            registry.load_for_task("missing", true, &mut first),
+            Err(SkillError::Unknown(_))
+        ));
 
         let mut persistent = registry.clone();
         let qualified = persistent

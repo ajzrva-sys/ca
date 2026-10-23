@@ -6,6 +6,7 @@ pub struct OwnedToolContext {
     pub discovery: crate::tool_discovery::ToolDiscoverySession,
     pub recovery: Option<crate::recovery::RecoveryContext>,
     pub automation: Option<crate::automation_ui::AutomationToolScope>,
+    pub plan_workflow_source: Option<crate::plan_workflow::WorkflowRequestSource>,
 }
 
 tokio::task_local! {
@@ -26,6 +27,13 @@ pub fn current_discovery() -> Option<crate::tool_discovery::ToolDiscoverySession
 pub fn current_automation() -> Option<crate::automation_ui::AutomationToolScope> {
     OWNED
         .try_with(|context| context.automation.clone())
+        .ok()
+        .flatten()
+}
+
+pub fn current_plan_workflow_source() -> Option<crate::plan_workflow::WorkflowRequestSource> {
+    OWNED
+        .try_with(|context| context.plan_workflow_source.clone())
         .ok()
         .flatten()
 }

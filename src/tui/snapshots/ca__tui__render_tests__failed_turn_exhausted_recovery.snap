@@ -2,8 +2,9 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(wide, narrow)"
 ---
- ca · agent · auto
-> Inspect the provider stream
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
+ › Inspect the provider stream
 
 
 
@@ -27,14 +28,14 @@ expression: "wide_narrow(wide, narrow)"
 
 
 
-
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
 No reply (test · transport failed). /errors · /retry
 -- narrow --
- ca · agent · auto
-> Inspect the provider stream
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
+ › Inspect the provider stream
 
 
 
@@ -52,8 +53,7 @@ No reply (test · transport failed). /errors · /retry
 
 
 
-
-
- → ▌Ask anything…
-
+╭──────────────────────────────────────────────────────────╮
+│› ▌Ask anything…                                           │
+╰──────────────────────────────────────────── agent · auto ╯
 No reply (test · transport failed). /errors · /retry

@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&ready, 100, 30), render_to_text(&ready, 60, 24))"
 ---
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
   ┌ Tasks and agent graph ───────────────────────────────────────────────────────────────────────┐
   │Release graph · plan Approved · graph Running · revision 3                                    │
   │>                                                                                             │
@@ -28,12 +28,12 @@ expression: "wide_narrow(render_to_text(&ready, 100, 30), render_to_text(&ready,
   │                                                                                              │
   │                                                                                              │
   │                                                                                              │
-  │                                                                                              │
- →│                                                                                              │
-  └──────────────────────────────────────────────────────────────────────────────────────────────┘
+╭─│                                                                                              │─╮
+│›│                                                                                              │ │
+╰─└──────────────────────────────────────────────────────────────────────────────────────────────┘ ╯
 / commands
 -- narrow --
- ca · agent · auto
+ ca v0.0.0 │ /workspace/ca                      [Dashboard]
  ┌ Tasks and agent graph ─────────────────────────────────┐
  │Release graph · plan Approved · graph Running · revision│
  │3                                                       │
@@ -53,7 +53,7 @@ expression: "wide_narrow(render_to_text(&ready, 100, 30), render_to_text(&ready,
  │Shift+S start/resume · Shift+P pause · Shift+R retry ·  │
  │Shift+C cancel · Esc close                              │
  │                                                        │
- │                                                        │
- │                                                        │
- └────────────────────────────────────────────────────────┘
+╭│                                                        │╮
+││                                                        ││
+╰└────────────────────────────────────────────────────────┘╯
 / commands

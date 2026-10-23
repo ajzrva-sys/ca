@@ -9,8 +9,16 @@ use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+#[path = "composer_history.rs"]
+mod history;
+pub use history::{ComposerHistory, EditKind};
+
 pub const MAX_COMPOSER_ROWS: usize = 7;
 pub const LARGE_PASTE_THRESHOLD: usize = 1_000;
+/// Visible body rows of the large-paste preview strip above the draft.
+pub const PASTE_PREVIEW_ROWS: usize = 4;
+/// Cap for a sent user-prompt card body before local wheel scroll.
+pub const USER_PROMPT_CARD_ROWS: usize = 6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RowBreak {
@@ -26,7 +34,7 @@ pub struct ComposerRow {
     pub width: usize,
     pub capacity: usize,
     pub break_kind: RowBreak,
-    boundaries: Vec<(usize, usize)>,
+    pub boundaries: Vec<(usize, usize)>,
 }
 
 impl ComposerRow {
@@ -248,7 +256,7 @@ pub enum AtomicKind {
     Reference,
     File,
     Folder { outside_workspace: bool },
-    LargePaste { payload: String },
+    LargePaste { payload: std::sync::Arc<str> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -292,6 +300,79 @@ pub struct PathCompletionState {
     pub error: Option<String>,
 }
 
+/// Screen-space map of the composer text area captured during the last render.
+///
+/// Clicks use this map to place `AppState::input_cursor` at the nearest
+/// grapheme boundary under the pointer, matching the drawn prompt/indent.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ComposerHitMap {
+    /// Composer text rows as `(x, y, width, height)` after queue/attachment rows.
+    pub text_area: Option<(u16, u16, u16, u16)>,
+    /// Visible text rows with their grapheme column boundaries.
+    pub rows: Vec<ComposerRowHit>,
+    /// True when the empty-input placeholder occupies `text_area`.
+    pub empty_placeholder: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComposerRowHit {
+    pub y: u16,
+    /// Prompt / indent / scroll-marker cells before row content.
+    pub prefix_width: u16,
+    /// `(byte_offset, display_column)` for each grapheme start plus the row end.
+    pub boundaries: Vec<(usize, usize)>,
+}
+
+impl ComposerHitMap {
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    /// Map a screen cell to a byte offset in `input`, if the point is text.
+    pub fn cursor_for_click(&self, input: &str, x: u16, y: u16) -> Option<usize> {
+        let (area_x, area_y, width, height) = self.text_area?;
+        if width == 0 || height == 0 || x < area_x || y < area_y {
+            return None;
+        }
+        if x >= area_x.saturating_add(width) || y >= area_y.saturating_add(height) {
+            return None;
+        }
+        if self.empty_placeholder || input.is_empty() {
+            return Some(0);
+        }
+        let row = self.rows.iter().find(|row| row.y == y)?;
+        let content_x = u32::from(area_x) + u32::from(row.prefix_width);
+        let desired = u32::from(x).saturating_sub(content_x) as usize;
+        Some(
+            row.boundaries
+                .iter()
+                .min_by_key(|(_, column)| column.abs_diff(desired))
+                .map(|(byte, _)| *byte)
+                .unwrap_or(0),
+        )
+    }
+}
+
+/// Screen rectangle of the large-paste preview strip captured at render.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PastePreviewHit {
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+}
+
+impl PastePreviewHit {
+    pub fn contains(self, column: u16, row: u16) -> bool {
+        self.width > 0
+            && self.height > 0
+            && column >= self.x
+            && row >= self.y
+            && column < self.x.saturating_add(self.width)
+            && row < self.y.saturating_add(self.height)
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ComposerUiState {
     pub preferred_column: Option<usize>,
@@ -300,6 +381,12 @@ pub struct ComposerUiState {
     pub atomic_elements: Vec<AtomicElement>,
     pub dismissed_completion_token: Option<String>,
     pub path_completion: PathCompletionState,
+    pub hit_map: std::cell::RefCell<ComposerHitMap>,
+    /// Left-button gesture began on the composer text area.
+    pub mouse_capture_active: bool,
+    /// First visible payload line for each large-paste element index.
+    pub paste_preview_scroll: std::collections::HashMap<usize, usize>,
+    pub paste_preview_hit: std::cell::RefCell<PastePreviewHit>,
 }
 
 impl ComposerUiState {
@@ -311,8 +398,64 @@ impl ComposerUiState {
     pub fn register_large_paste(&mut self, range: Range<usize>, payload: String) {
         self.register_atomic(AtomicElement {
             range,
-            kind: AtomicKind::LargePaste { payload },
+            kind: AtomicKind::LargePaste {
+                payload: payload.into(),
+            },
         });
+    }
+
+    /// Index of the large-paste element nearest the caret (or the first).
+    pub fn active_large_paste_index(&self, cursor: usize) -> Option<usize> {
+        let mut best: Option<(usize, usize)> = None;
+        for (index, element) in self.atomic_elements.iter().enumerate() {
+            if !matches!(element.kind, AtomicKind::LargePaste { .. }) {
+                continue;
+            }
+            let distance = if cursor < element.range.start {
+                element.range.start - cursor
+            } else {
+                cursor.saturating_sub(element.range.end)
+            };
+            if best.is_none_or(|(best_distance, _)| distance < best_distance) {
+                best = Some((distance, index));
+            }
+        }
+        best.map(|(_, index)| index)
+    }
+
+    pub fn large_paste_payload(&self, index: usize) -> Option<&str> {
+        match self.atomic_elements.get(index)?.kind {
+            AtomicKind::LargePaste { ref payload } => Some(payload.as_ref()),
+            _ => None,
+        }
+    }
+
+    /// Scroll the large-paste preview nearest `cursor` (usually `input_cursor`).
+    pub fn scroll_paste_preview(
+        &mut self,
+        cursor: usize,
+        direction: crate::tui::event::ScrollDirection,
+        rows: usize,
+    ) {
+        let Some(index) = self.active_large_paste_index(cursor) else {
+            return;
+        };
+        let payload = match self.large_paste_payload(index) {
+            Some(payload) => payload,
+            None => return,
+        };
+        let line_count = payload.lines().count().max(1);
+        let window = PASTE_PREVIEW_ROWS.max(1);
+        let maximum = line_count.saturating_sub(window);
+        let offset = self.paste_preview_scroll.entry(index).or_insert(0);
+        match direction {
+            crate::tui::event::ScrollDirection::Up => {
+                *offset = offset.saturating_sub(rows.max(1));
+            }
+            crate::tui::event::ScrollDirection::Down => {
+                *offset = (*offset + rows.max(1)).min(maximum);
+            }
+        }
     }
 
     pub fn element_adjacent_to_backspace(&self, cursor: usize) -> Option<Range<usize>> {
@@ -407,6 +550,42 @@ impl ComposerUiState {
         self.atomic_elements.clear();
         self.dismissed_completion_token = None;
         self.path_completion = PathCompletionState::default();
+        self.mouse_capture_active = false;
+        self.hit_map.borrow_mut().clear();
+        self.paste_preview_scroll.clear();
+        *self.paste_preview_hit.borrow_mut() = PastePreviewHit::default();
+    }
+
+    /// Scroll the draft viewport without moving the caret. Returns true if moved.
+    pub fn scroll_composer_viewport(
+        &mut self,
+        input: &str,
+        interior_width: usize,
+        direction: crate::tui::event::ScrollDirection,
+        rows: usize,
+    ) -> bool {
+        let layout = ComposerLayout::new(input, input.len(), interior_width, 2);
+        let maximum_top = layout.rows.len().saturating_sub(MAX_COMPOSER_ROWS);
+        let previous = self.viewport_top.min(maximum_top);
+        let next = match direction {
+            crate::tui::event::ScrollDirection::Up => previous.saturating_sub(rows.max(1)),
+            crate::tui::event::ScrollDirection::Down => (previous + rows.max(1)).min(maximum_top),
+        };
+        self.viewport_top = next;
+        next != previous
+    }
+
+    /// Snap a click-placed cursor out of an atomic element interior to its nearer edge.
+    pub fn snap_click_cursor(&self, cursor: usize) -> usize {
+        if let Some(range) = self.element_containing(cursor) {
+            if cursor.saturating_sub(range.start) <= range.end.saturating_sub(cursor) {
+                range.start
+            } else {
+                range.end
+            }
+        } else {
+            cursor
+        }
     }
 
     fn sort_elements(&mut self) {
@@ -773,5 +952,46 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["src/", "spec.md"]
         );
+    }
+
+    #[test]
+    fn hit_map_maps_empty_placeholder_and_nearest_grapheme() {
+        let empty = ComposerHitMap {
+            text_area: Some((2, 10, 20, 2)),
+            rows: Vec::new(),
+            empty_placeholder: true,
+        };
+        assert_eq!(empty.cursor_for_click("", 2, 10), Some(0));
+        assert_eq!(empty.cursor_for_click("", 22, 10), None);
+        assert_eq!(empty.cursor_for_click("", 2, 12), None);
+
+        let input = "a你b";
+        // "a" width 1, "你" width 2, "b" width 1 → boundaries columns 0,1,3,4
+        let map = ComposerHitMap {
+            text_area: Some((2, 10, 20, 2)),
+            rows: vec![ComposerRowHit {
+                y: 10,
+                prefix_width: 2,
+                boundaries: vec![(0, 0), (1, 1), (4, 3), (5, 4)],
+            }],
+            empty_placeholder: false,
+        };
+        assert_eq!(map.cursor_for_click(input, 4, 10), Some(0));
+        assert_eq!(map.cursor_for_click(input, 5, 10), Some(1));
+        // Mid-wide-glyph column snaps to its start byte
+        assert_eq!(map.cursor_for_click(input, 6, 10), Some(1));
+        assert_eq!(map.cursor_for_click(input, 8, 10), Some(5));
+    }
+
+    #[test]
+    fn snap_click_cursor_chooses_nearer_atomic_edge() {
+        let mut state = ComposerUiState::default();
+        state.atomic_elements.push(AtomicElement {
+            range: 2..9,
+            kind: AtomicKind::File,
+        });
+        assert_eq!(state.snap_click_cursor(3), 2);
+        assert_eq!(state.snap_click_cursor(8), 9);
+        assert_eq!(state.snap_click_cursor(1), 1);
     }
 }
