@@ -1677,10 +1677,12 @@ mod tests {
     #[test]
     fn controller_turn_keeps_openai_output_items_only_in_the_ipc_payload() {
         let turn = AssembledAssistantTurn {
+            retrieved_spans: Vec::new(),
             content: "done".into(),
             reasoning: None,
             response_items: vec![
                 crate::agent::stream::ProviderResponseItem::ResponsesOutput {
+                    privacy_prefix_sha256: None,
                     source: crate::agent::stream::ProviderStateSourceV1::for_test(
                         "openai",
                         ProviderProtocol::OpenAiResponses,

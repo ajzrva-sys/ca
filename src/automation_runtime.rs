@@ -220,6 +220,8 @@ pub struct NativeWorkerSpec {
     pub definition: AutomationDefinitionV1,
     pub history: Vec<crate::app::Message>,
     pub(crate) sandbox_binding: NativeSandboxBinding,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) privacy_binding: Option<crate::privacy::tasks::Binding>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -331,6 +333,9 @@ fn execution_context_with_mode(
         resources.push(format!("workspace:{}", workspace.display()));
         resources.push(format!("repository:{}", workspace.display()));
     }
+    if let Some(binding) = crate::privacy::tasks::active_binding()? {
+        resources.push(binding.resource());
+    }
     resources.sort();
     resources.dedup();
     let binding = match target {
@@ -430,6 +435,7 @@ pub async fn execute(
         budget: definition.per_run_budget.clone(),
         definition: definition.clone(),
         sandbox_binding: sandbox_binding(definition, mode)?,
+        privacy_binding: crate::privacy::tasks::active_binding()?,
         history,
         workflow_config: if matches!(
             definition.schedule.target,
@@ -463,6 +469,10 @@ pub async fn execute(
         paths.home.join(".codex"),
         executable.clone(),
     ];
+    if let Some(binding) = &spec.privacy_binding {
+        read_roots.push(binding.directory().to_path_buf());
+        write_roots.push(binding.directory().to_path_buf());
+    }
     if let Some(c) = &spec.workflow_config {
         read_roots.push(c.clone());
         if definition.schedule.allow_network {
@@ -794,6 +804,26 @@ pub async fn run_stdio(paths: &RuntimePaths, profile: &ActiveProfile) -> Result<
         return Err("native worker definition or policy changed".into());
     }
     activate_sandbox_binding(&spec.context, &spec.sandbox_binding)?;
+    let private_resources = spec
+        .context
+        .resources
+        .iter()
+        .filter(|r| r.starts_with("privacy-context:"))
+        .collect::<Vec<_>>();
+    match &spec.privacy_binding {
+        Some(binding) if private_resources == vec![&binding.resource()] => {
+            crate::privacy::tasks::activate(binding.clone())?;
+            crate::provider_filter::force_structural_filter();
+            if binding.trace {
+                crate::provider_trace::install_process_hub(
+                    crate::initialize_provider_trace(profile, true)
+                        .map_err(|_| "private worker tracing could not start")?,
+                );
+            }
+        }
+        None if private_resources.is_empty() => {}
+        _ => return Err("native worker lost its admitted private context".into()),
+    }
     let mut cfg = crate::config::ConfigStore::for_profile(
         paths.clone().for_profile(profile).config_file,
         profile.clone(),
@@ -1311,6 +1341,7 @@ mod worker_failure_tests {
                 .unwrap(),
             definition,
             history: Vec::new(),
+            privacy_binding: None,
         };
         std::fs::write(&paths.config_file, "[agent]\nsandbox_mode = \"off\"\n").unwrap();
         let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());

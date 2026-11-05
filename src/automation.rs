@@ -2148,6 +2148,7 @@ fn save_standalone_session(
     let now = claim.occurrence.at;
     let messages = vec![
         crate::app::Message {
+            retrieved_spans: Some(Vec::new()),
             role: crate::app::Role::User,
             content: format!(
                 "[Automation: {} · occurrence {}]\n\n{}",
@@ -2159,6 +2160,7 @@ fn save_standalone_session(
             timestamp: now,
         },
         crate::app::Message {
+            retrieved_spans: Some(Vec::new()),
             role: crate::app::Role::Assistant,
             content: result.into(),
             tool_calls: None,
@@ -5094,6 +5096,7 @@ mod tests {
                 "fixture",
                 (0..18)
                     .map(|_| crate::app::Message {
+                        retrieved_spans: Some(Vec::new()),
                         role: crate::app::Role::User,
                         content: "x".repeat(512 * 1024),
                         tool_calls: None,

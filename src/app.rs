@@ -60,7 +60,15 @@ impl UiToast {
     }
 
     pub fn is_visible(&self) -> bool {
+        // Error toasts stay until dismissed or replaced; they are too easy to miss on a timer.
+        if self.kind == ToastKind::Error {
+            return true;
+        }
         std::time::Instant::now() < self.expires_at
+    }
+
+    pub fn is_sticky(&self) -> bool {
+        self.kind == ToastKind::Error
     }
 }
 
@@ -94,6 +102,9 @@ pub enum ToolStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Message {
+    /// Host-owned origins in canonical text. None is legacy, unknown origin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retrieved_spans: Option<Vec<crate::retrieved_content::RetrievedSpan>>,
     pub role: Role,
     pub content: String,
     pub tool_calls: Option<Vec<ToolCall>>,
@@ -160,11 +171,19 @@ pub struct AgentActivityFocusState {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolCall {
+    /// Host-issued receipt for this exact completed source read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_source: Option<String>,
     pub id: String,
     pub name: String,
     pub arguments: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub arguments_retrieved_spans: Vec<crate::retrieved_content::RetrievedSpan>,
     pub status: ToolStatus,
     pub output: Option<String>,
+    /// Set when the tool enters Running; used for live elapsed display.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -744,6 +763,7 @@ pub struct StreamingState {
 /// rather than repeatedly rewriting already restored conversation text.
 #[derive(Debug, Clone, Default)]
 pub struct StreamingProviderText {
+    pub retrieved_spans: Vec<crate::retrieved_content::RetrievedSpan>,
     pub content: Option<String>,
     pub thinking: Option<String>,
     pub tool_arguments: std::collections::BTreeMap<usize, String>,
@@ -753,6 +773,7 @@ pub struct StreamingProviderText {
 pub struct ActiveTurnPromptState {
     pub stable_system: String,
     pub logical_turn_system: String,
+    pub logical_turn_retrieved_spans: Vec<crate::retrieved_content::RetrievedSpan>,
     pub skill_prompt: String,
     pub transient_user_prompts: Vec<String>,
     pub pasted_images: Vec<crate::image_content::ModelImage>,
@@ -850,6 +871,7 @@ pub enum ResolvedToolStatus {
 /// A pre-resolved tool result carrying its classification.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedToolResult {
+    pub output_source: Option<String>,
     pub tool_id: String,
     pub output: String,
     pub status: ResolvedToolStatus,
@@ -1962,6 +1984,14 @@ pub struct AppState {
     pub(crate) personality_editor: Option<crate::tui::personality::Editor>,
     pub(crate) personality_editor_generation: u64,
     pub(crate) personality_operation: Option<crate::personality_questionnaire::Operation>,
+    pub(crate) privacy_editor: Option<crate::tui::privacy::Editor>,
+    pub(crate) privacy_editor_generation: u64,
+    pub(crate) privacy_binding_generation: u64,
+    pub(crate) privacy_binding_in_flight: bool,
+    pub(crate) privacy_turn_resume: bool,
+    pub(crate) privacy_binding_error: Option<String>,
+    pub(crate) privacy_attachment_sources:
+        Vec<std::sync::Arc<crate::attachments::AttachmentSource>>,
     pub user_memory_store: Option<crate::memory::MemoryStore>,
     pub workspace_memory_store: Option<crate::memory::MemoryStore>,
     pub maintenance_request: Option<crate::learning::MaintenanceRequest>,
@@ -2124,6 +2154,7 @@ pub struct AppState {
     pub retry_boundary: Option<RetryBoundary>,
     pub(crate) turn_recovery: crate::turn_recovery::State,
     pub retry_requested: bool,
+    pub(crate) privacy_retry_pending: bool,
     pub active_turn_route: Option<crate::fallback::TurnProviderRoute>,
     pub fallback_provenance: Vec<crate::fallback::TurnProviderProvenance>,
     pub external_editor_pending: Option<String>,
@@ -2301,6 +2332,7 @@ pub struct AppState {
     pub attachment_frecency_generation: u64,
     pub composer_attachments: Vec<crate::attachments::ComposerAttachment>,
     pub pending_attachment_context: Option<String>,
+    pub pending_input_provenance: Option<(String, Vec<crate::retrieved_content::RetrievedSpan>)>,
     pub active_attachment_context: Option<String>,
     pub attachment_resolution_generation: u64,
     pub attachment_resolution_busy: bool,
@@ -2342,10 +2374,8 @@ pub struct AppState {
     pub worktree_setup_confirmation: Option<crate::worktree_setup::SetupConfirmation>,
     /// Tracks user session outcomes for harness improvement telemetry.
     pub outcome_tracker: crate::session_outcome::OutcomeTracker,
-    /// Full-width classification-style banner while the provider filter is active.
-    pub filter_banner: std::sync::atomic::AtomicBool,
-    /// Second banner row. The tick copies it from the installed filter.
-    pub filter_summary: std::sync::Mutex<String>,
+    /// One coherent presentation snapshot copied from the installed filter on refresh.
+    pub filter_presentation: std::sync::Mutex<crate::provider_filter::FilterPresentation>,
     /// Side pane holding the latest request body after the filter rewrites it.
     pub provider_pane: crate::tui::provider_pane::ProviderPane,
 }
@@ -2818,6 +2848,7 @@ impl AppState {
             retry_boundary: None,
             turn_recovery: crate::turn_recovery::State::default(),
             retry_requested: false,
+            privacy_retry_pending: false,
             active_turn_route: None,
             fallback_provenance: Vec::new(),
             external_editor_pending: None,
@@ -2993,6 +3024,7 @@ impl AppState {
             attachment_frecency_generation: 0,
             composer_attachments: Vec::new(),
             pending_attachment_context: None,
+            pending_input_provenance: None,
             active_attachment_context: None,
             attachment_resolution_generation: 0,
             attachment_resolution_busy: false,
@@ -3040,6 +3072,13 @@ impl AppState {
             personality_editor: None,
             personality_editor_generation: 0,
             personality_operation: None,
+            privacy_editor: None,
+            privacy_editor_generation: 0,
+            privacy_binding_generation: 0,
+            privacy_binding_in_flight: false,
+            privacy_turn_resume: false,
+            privacy_binding_error: None,
+            privacy_attachment_sources: Vec::new(),
             user_memory_store: None,
             workspace_memory_store: None,
             maintenance_request: None,
@@ -3054,8 +3093,7 @@ impl AppState {
             hook_blocked: false,
             hook_blocked_event: None,
             outcome_tracker: crate::session_outcome::OutcomeTracker::new(String::new(), ""),
-            filter_banner: std::sync::atomic::AtomicBool::new(false),
-            filter_summary: std::sync::Mutex::new(String::new()),
+            filter_presentation: std::sync::Mutex::new(Default::default()),
             provider_pane: crate::tui::provider_pane::ProviderPane::default(),
         }
     }

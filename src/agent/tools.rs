@@ -306,6 +306,55 @@ pub async fn execute_prepared_tool_in_workspace_policy_owned_with_skills(
     job_owner: crate::jobs::JobOwner,
     skills: &std::sync::Arc<std::sync::Mutex<crate::skills::SkillRegistry>>,
 ) -> ToolExecutionResult {
+    if let Some(privacy) = crate::privacy::for_owner(job_owner) {
+        if let Err(error) = privacy.check_filename_tool(name) {
+            return ToolExecutionResult::Failure(error);
+        }
+    }
+    if name == "skill_search" {
+        let registry = ToolRegistry::builtins();
+        if let Err(error) = registry.validate(name, prepared_args) {
+            return ToolExecutionResult::Failure(error.to_string());
+        }
+        let request = match serde_json::from_value::<crate::skills::SkillSearchRequest>(
+            prepared_args.clone(),
+        ) {
+            Ok(request) => request,
+            Err(error) => return ToolExecutionResult::Failure(error.to_string()),
+        };
+        let skills = std::sync::Arc::clone(skills);
+        return match tokio::task::spawn_blocking(move || {
+            let mut skills = skills.lock().unwrap_or_else(|poison| poison.into_inner());
+            skills.refresh_for_search();
+            skills.search_for_model(request)
+        })
+        .await
+        {
+            Ok(Ok(output)) => ToolExecutionResult::Success(output),
+            Ok(Err(error)) => ToolExecutionResult::Failure(error.to_string()),
+            Err(error) => ToolExecutionResult::Failure(format!("Skill search failed: {error}")),
+        };
+    }
+    if name == "memory_search" {
+        let registry = ToolRegistry::builtins();
+        if let Err(error) = registry.validate(name, prepared_args) {
+            return ToolExecutionResult::Failure(error.to_string());
+        }
+        let request = match serde_json::from_value::<crate::memory::MemorySearchRequest>(
+            prepared_args.clone(),
+        ) {
+            Ok(request) => request,
+            Err(error) => return ToolExecutionResult::Failure(error.to_string()),
+        };
+        let project = workspace
+            .primary()
+            .map(|root| root.path.as_path())
+            .unwrap_or_else(|| workspace.cwd());
+        return match crate::memory::execute_search_process(request, project).await {
+            Ok(output) => ToolExecutionResult::Success(output),
+            Err(error) => ToolExecutionResult::Failure(error),
+        };
+    }
     if name == "session_search" {
         let registry = ToolRegistry::builtins();
         if let Err(error) = registry.validate(name, prepared_args) {
@@ -393,6 +442,63 @@ pub async fn execute_tool_with_context(
     args: &Value,
     context: &ToolContext,
 ) -> ToolExecutionResult {
+    let mut private_context;
+    let context = if let Some(privacy) =
+        crate::privacy::for_owner(context.job_owner).filter(|privacy| privacy.filenames_enabled())
+    {
+        private_context = context.clone();
+        private_context
+            .workspace_roots
+            .extend(privacy.command_artifact_roots());
+        &private_context
+    } else {
+        context
+    };
+    if let Some(privacy) = crate::privacy::for_owner(context.job_owner) {
+        if let Err(error) = privacy.check_filename_tool(name) {
+            return ToolExecutionResult::Failure(error);
+        }
+    }
+    let private_args;
+    let args = if let Some(privacy) =
+        crate::privacy::for_owner(context.job_owner).filter(|privacy| {
+            privacy.filenames_enabled()
+                && crate::privacy::tool_contract::needs_preparation(name, args)
+        }) {
+        let name_owned = name.to_owned();
+        let args_owned = args.clone();
+        let context = context.clone();
+        let prepared = tokio::task::spawn_blocking(move || {
+            let workspace = crate::workspace::WorkspaceContext::from_roots(
+                &context.cwd,
+                &context.workspace_roots,
+            )
+            .map_err(|error| error.to_string())?;
+            privacy.authorize_tool_roots(&workspace)?;
+            let args = privacy.prepare_edit_ticket(&name_owned, &args_owned)?;
+            crate::workspace::prepare_tool_invocation(
+                &workspace,
+                &name_owned,
+                &args,
+                crate::agent::registry::ToolOrigin::BuiltIn,
+            )
+            .map(|prepared| prepared.arguments)
+            .map_err(|error| error.to_string())
+        })
+        .await;
+        private_args = match prepared {
+            Ok(Ok(args)) => args,
+            Ok(Err(error)) => return ToolExecutionResult::Failure(error),
+            Err(_) => {
+                return ToolExecutionResult::Failure(
+                    "Native privacy preparation worker stopped".into(),
+                )
+            }
+        };
+        &private_args
+    } else {
+        args
+    };
     let registry = ToolRegistry::builtins();
     let Some(spec) = registry.get(name) else {
         return ToolExecutionResult::Failure(format!("Unknown tool: {name}"));
@@ -405,6 +511,43 @@ pub async fn execute_tool_with_context(
     }
     if let Err(error) = registry.validate(name, &crate::formatting::plain_arguments(args)) {
         return ToolExecutionResult::Failure(error.to_string());
+    }
+    if spec.handler == ToolHandler::ReadFile {
+        if let Some(binding) = crate::privacy::tasks::remote_binding() {
+            let args = args.clone();
+            return match tokio::task::spawn_blocking(move || {
+                crate::privacy::tasks::rpc(&binding, "read_file", args)
+            })
+            .await
+            {
+                Ok(Ok(v)) => ToolExecutionResult::SourceSuccess {
+                    text: v["text"].as_str().unwrap_or_default().into(),
+                    source: v["source"].as_str().unwrap_or_default().into(),
+                },
+                _ => {
+                    ToolExecutionResult::Failure("Error: shared private source read failed".into())
+                }
+            };
+        }
+        if let Some(privacy) =
+            crate::privacy::for_owner(context.job_owner).filter(|privacy| !privacy.filename_only())
+        {
+            let path = args["path"].as_str().unwrap_or("");
+            let resolved = resolve_path(path, &context.cwd.to_string_lossy());
+            return match read_private_file_range(
+                privacy,
+                &resolved,
+                path,
+                args["start_line"].as_u64().map(|value| value as usize),
+                args["end_line"].as_u64().map(|value| value as usize),
+                args["include_line_hashes"].as_bool().unwrap_or(false),
+            )
+            .await
+            {
+                Ok((text, source)) => ToolExecutionResult::SourceSuccess { text, source },
+                Err(error) => ToolExecutionResult::Failure(error),
+            };
+        }
     }
     if matches!(
         spec.handler,
@@ -424,6 +567,52 @@ pub async fn execute_tool_with_context(
             "network": false,
         });
         return execute_job_tool(ToolHandler::RunCommand, &lint_args, context).await;
+    }
+    if spec.handler == ToolHandler::UpdateTodos {
+        if let Some(privacy) =
+            crate::privacy::for_owner(context.job_owner).filter(|privacy| privacy.enabled())
+        {
+            let args = args.clone();
+            let prepared = tokio::task::spawn_blocking(move || {
+                let path = args["path"].as_str().ok_or("TODO edit has no path")?;
+                let source =
+                    std::fs::read_to_string(path).map_err(|_| "TODO source cannot be read")?;
+                let mut lines = source.lines().map(str::to_owned).collect::<Vec<_>>();
+                let line = args["line_number"].as_u64().unwrap_or(0) as usize;
+                match args["action"].as_str().unwrap_or_default() {
+                    "complete"
+                        if line > 0
+                            && line <= lines.len()
+                            && TODO_RE.is_match(&lines[line - 1]) =>
+                    {
+                        lines[line - 1] = TODO_RE.replace(&lines[line - 1], "DONE").into_owned();
+                    }
+                    "add" => {
+                        let text =
+                            format!("// TODO: {}", args["text"].as_str().unwrap_or_default());
+                        if line > 0 && line <= lines.len() {
+                            lines.insert(line - 1, text);
+                        } else {
+                            lines.push(text);
+                        }
+                    }
+                    _ => return Err("Invalid TODO action or line".to_string()),
+                }
+                let reference = privacy.project_filename_path(std::path::Path::new(path))?;
+                privacy.prepare_edit_ticket(
+                    "write_file",
+                    &serde_json::json!({"path":reference,"content":lines.join("\n")}),
+                )
+            })
+            .await;
+            return match prepared {
+                Ok(Ok(args)) => execute_file_mutation(ToolHandler::WriteFile, &args, context).await,
+                Ok(Err(error)) => ToolExecutionResult::Failure(error),
+                Err(_) => {
+                    ToolExecutionResult::Failure("TODO privacy preparation worker stopped".into())
+                }
+            };
+        }
     }
     if matches!(spec.handler, ToolHandler::ViewImage) {
         return execute_view_image(args, context).await;
@@ -477,6 +666,49 @@ pub async fn execute_tool_with_context(
     }
     if matches!(spec.handler, ToolHandler::InstallBinary) {
         return execute_install_binary(args, context).await;
+    }
+    if matches!(
+        spec.handler,
+        ToolHandler::SelectFiles | ToolHandler::MoveFiles
+    ) {
+        let operation = if spec.handler == ToolHandler::SelectFiles {
+            "select"
+        } else {
+            "move"
+        };
+        let mut arguments = args.clone();
+        if spec.handler == ToolHandler::MoveFiles && args.get("_ca_private_batch").is_none() {
+            return ToolExecutionResult::Failure(
+                "Error: private batch lacks workspace preparation and approval".into(),
+            );
+        }
+        if let Some(object) = arguments.as_object_mut() {
+            object.remove("_ca_private_batch");
+        }
+        let mut move_guard =
+            (spec.handler == ToolHandler::MoveFiles).then(crate::privacy::tasks::MoveGuard::new);
+        if let Some(guard) = &move_guard {
+            arguments = serde_json::json!({"args":arguments,"cancel_token":guard.token});
+        }
+        let privacy = crate::privacy::current().filter(|c| c.enabled());
+        let result = tokio::task::spawn_blocking(move || {
+            if let Some(context) = privacy {
+                crate::privacy::tasks::call_for(&context, operation, arguments)
+            } else {
+                crate::privacy::tasks::call(operation, arguments)
+            }
+        })
+        .await;
+        if let Some(guard) = &mut move_guard {
+            guard.disarm();
+        }
+        return match result {
+            Ok(Ok(value)) => ToolExecutionResult::Success(value.to_string()),
+            Ok(Err(error)) => ToolExecutionResult::Failure(format!("Error: {error}")),
+            Err(_) => ToolExecutionResult::Failure(
+                "Error: private task worker stopped; its journal is recoverable".into(),
+            ),
+        };
     }
     if matches!(
         spec.handler,
@@ -564,7 +796,7 @@ fn line_spans(content: &str) -> Vec<LineSpan> {
     spans
 }
 
-fn line_anchor(line: &str) -> String {
+pub(crate) fn line_anchor(line: &str) -> String {
     let digest = Sha256::digest(line.as_bytes());
     format!(
         "{:02x}{:02x}{:02x}{:02x}",
@@ -654,6 +886,52 @@ async fn execute_file_mutation(
     args: &Value,
     context: &ToolContext,
 ) -> ToolExecutionResult {
+    if let Some(binding) = crate::privacy::tasks::remote_binding() {
+        let name = match handler {
+            ToolHandler::WriteFile => "write_file",
+            ToolHandler::EditFile => "edit_file",
+            ToolHandler::ApplyPatch => "apply_patch",
+            ToolHandler::HashlineEdit => "hashline_edit",
+            ToolHandler::DeleteFile => "delete_file",
+            _ => "",
+        };
+        let args = crate::formatting::plain_arguments(args);
+        if !matches!(
+            tokio::task::spawn_blocking(move || crate::privacy::tasks::rpc(
+                &binding,
+                "consume_edit",
+                serde_json::json!({"name":name,"args":args})
+            ))
+            .await,
+            Ok(Ok(_))
+        ) {
+            return ToolExecutionResult::Failure(
+                "Error: shared private edit preparation expired".into(),
+            );
+        }
+    }
+    if let Some(privacy) = crate::privacy::for_edit_owner(context.job_owner) {
+        let name = match handler {
+            ToolHandler::WriteFile => "write_file",
+            ToolHandler::EditFile => "edit_file",
+            ToolHandler::ApplyPatch => "apply_patch",
+            ToolHandler::HashlineEdit => "hashline_edit",
+            ToolHandler::DeleteFile => "delete_file",
+            _ => "",
+        }
+        .to_string();
+        let original = crate::formatting::plain_arguments(args);
+        let checked = tokio::task::spawn_blocking(move || {
+            privacy.consume_edit_ticket_if_required(&name, &original)
+        })
+        .await;
+        if let Err(error) = checked
+            .map_err(|_| "Protected edit validation worker stopped".to_string())
+            .and_then(|result| result)
+        {
+            return ToolExecutionResult::Failure(error);
+        }
+    }
     let (prepared, marker) = if crate::formatting::has_ticket(args) {
         match crate::formatting::consume(
             match handler {
@@ -843,6 +1121,35 @@ async fn execute_file_mutation(
             };
         (prepared, marker)
     };
+    if let Some(privacy) =
+        crate::privacy::for_owner(context.job_owner).filter(|privacy| !privacy.filename_only())
+    {
+        let receipts = prepared.receipt().receipts().to_vec();
+        let validated = tokio::task::spawn_blocking(move || {
+            for receipt in receipts {
+                if let crate::undo::FileState::Utf8(after) = &receipt.after {
+                    let before = match &receipt.before {
+                        crate::undo::FileState::Utf8(before) => Some(before.as_str()),
+                        _ => None,
+                    };
+                    crate::privacy::projection::validate_restored(
+                        &receipt.path.to_string_lossy(),
+                        before,
+                        after,
+                    )?;
+                    privacy.classify_restored_edit(&receipt.path, after)?;
+                }
+            }
+            Ok::<_, String>(())
+        })
+        .await;
+        if let Err(error) = validated
+            .map_err(|_| "Restored source validation worker stopped".to_string())
+            .and_then(|result| result)
+        {
+            return ToolExecutionResult::Failure(error);
+        }
+    }
     // Register before spawning: dropping the async waiter cannot hide a queued
     // blocking mutation from turn retirement and sealing.
     let recovery_admission = if let Some(recovery) = context.recovery.clone() {
@@ -1098,6 +1405,7 @@ async fn execute_builtin(
                 Err(e) => format!("Error listing {}: {}", resolved, e),
             }
         }
+        ToolHandler::SelectFiles | ToolHandler::MoveFiles => "Error: private file tool bypassed typed execution".into(),
         ToolHandler::RunCommand | ToolHandler::AwaitJob => {
             "Error: job tool bypassed typed execution".into()
         }
@@ -1444,9 +1752,14 @@ async fn execute_builtin(
                 Some(f) if !f.is_empty() => f.to_string(),
                 _ => format!("image-{}.png", chrono::Utc::now().timestamp()),
             };
-            let images_dir = format!("{}/.ca-images", cwd);
-            let _ = tokio::fs::create_dir_all(&images_dir).await;
-            let out_path = format!("{}/{}", images_dir, out_name);
+            let requested = if std::path::Path::new(&out_name).is_absolute() { std::path::PathBuf::from(&out_name) }
+                else { context.cwd.join(".ca-images").join(&out_name) };
+            let authority = match crate::workspace::WorkspaceContext::from_roots(&context.cwd, &context.workspace_roots) { Ok(authority) => authority, Err(error) => return format!("Error: {error}") };
+            let out_path = match authority.resolve(&requested.to_string_lossy(), crate::workspace::PathOperation::Create) { Ok(path) => path, Err(error) => return format!("Error: {error}") };
+            if let Some(parent) = out_path.parent() {
+                if tokio::fs::create_dir_all(parent).await.is_err() { return "Image output directory cannot be created".into(); }
+            }
+            let out_path = out_path.to_string_lossy().into_owned();
 
             let client = reqwest::Client::new();
 
@@ -1566,12 +1879,31 @@ async fn execute_builtin(
         | ToolHandler::CancelAgentJob
         | ToolHandler::ListAgentRoutes
         | ToolHandler::ListAgents => "Error: agent manager context is unavailable".into(),
-        ToolHandler::ActivateSkill | ToolHandler::SkillView | ToolHandler::SkillManage => {
+        ToolHandler::ActivateSkill
+        | ToolHandler::SkillSearch
+        | ToolHandler::SkillView
+        | ToolHandler::SkillManage => {
             "Error: skill context is unavailable".into()
         }
         ToolHandler::SessionSearch => {
             match crate::session_recall::execute_process_json(args.clone(), &context.cwd).await {
                 Ok(output) => output,
+                Err(error) => format!("Error: {error}"),
+            }
+        }
+        ToolHandler::MemorySearch => {
+            match serde_json::from_value::<crate::memory::MemorySearchRequest>(args.clone()) {
+                Ok(request) => {
+                    let project = context
+                        .workspace_roots
+                        .iter()
+                        .find(|root| context.cwd.starts_with(root))
+                        .map_or(context.cwd.as_path(), |root| root.as_path());
+                    match crate::memory::execute_search_process(request, project).await {
+                        Ok(output) => output,
+                        Err(error) => format!("Error: {error}"),
+                    }
+                }
                 Err(error) => format!("Error: {error}"),
             }
         }
@@ -1610,6 +1942,7 @@ async fn execute_builtin(
         ToolHandler::ReadPdf => PDF_MAX_RESULT_BYTES,
         ToolHandler::WebFetch => WEB_FETCH_MAX_RESULT_BYTES,
         ToolHandler::SessionSearch => crate::session_recall::MAX_RESULT_BYTES,
+        ToolHandler::MemorySearch => 8 * 1024,
         _ => 4096,
     };
     truncate_output(&result, limit)
@@ -1859,6 +2192,98 @@ impl BoundedLineBytes {
     }
 }
 
+async fn read_private_file_range(
+    privacy: std::sync::Arc<crate::privacy::Context>,
+    resolved: &str,
+    requested_path: &str,
+    start_line: Option<usize>,
+    end_line: Option<usize>,
+    include_line_hashes: bool,
+) -> Result<(String, String), String> {
+    let path = resolved.to_string();
+    let requested = requested_path.to_string();
+    tokio::task::spawn_blocking(move || {
+        read_private_file_range_blocking(
+            privacy,
+            &path,
+            &requested,
+            start_line,
+            end_line,
+            include_line_hashes,
+        )
+    })
+    .await
+    .map_err(|_| "Privacy source worker stopped")?
+}
+
+pub(crate) fn read_private_file_range_blocking(
+    privacy: std::sync::Arc<crate::privacy::Context>,
+    resolved: &str,
+    requested_path: &str,
+    start_line: Option<usize>,
+    end_line: Option<usize>,
+    include_line_hashes: bool,
+) -> Result<(String, String), String> {
+    let path = resolved.to_string();
+    let requested_path = requested_path.to_string();
+    let start = start_line.unwrap_or(1);
+    if start == 0 {
+        return Err("start_line must be at least 1".into());
+    }
+    let end = end_line.unwrap_or_else(|| start.saturating_add(READ_FILE_DEFAULT_LINES - 1));
+    if end < start {
+        return Err("end_line must be greater than or equal to start_line".into());
+    }
+    if end.saturating_sub(start).saturating_add(1) > READ_FILE_MAX_LINES {
+        return Err(format!(
+            "requested line span exceeds the {READ_FILE_MAX_LINES}-line maximum"
+        ));
+    }
+    use std::io::Read;
+    let file = std::fs::File::open(&path).map_err(|_| "Protected source cannot be opened")?;
+    let mut source = String::new();
+    file.take(8 * 1024 * 1024 + 1)
+        .read_to_string(&mut source)
+        .map_err(|_| "Protected source must be readable UTF-8")?;
+    if source.len() > 8 * 1024 * 1024 {
+        return Err("Protected source exceeds the 8 MiB parsing bound".into());
+    }
+    crate::provider_filter::scan_outbound(source.as_bytes())
+        .map_err(|error| crate::provider_filter::withheld_message(&error))?;
+    let total_lines = source.lines().count();
+    let selected = crate::privacy::render_read(&source, start, end, include_line_hashes);
+    let shown_end = end.min(total_lines);
+    let mut footer = format!("\nShowing lines {}-{} of {total_lines} · {} bytes total\nOmitted lines: {} before, {} after", start.min(total_lines + 1), shown_end, source.len(), start.saturating_sub(1).min(total_lines), total_lines.saturating_sub(shown_end));
+    if shown_end < total_lines {
+        let mut next = serde_json::json!({"path":requested_path,"start_line":shown_end + 1,"end_line":(shown_end + READ_FILE_DEFAULT_LINES).min(total_lines)});
+        if include_line_hashes {
+            next["include_line_hashes"] = Value::Bool(true);
+        }
+        footer.push_str(&format!("\nNext range: {next}"));
+    }
+    let output = format!(
+        "{}{}",
+        truncate_output(
+            &selected,
+            READ_FILE_MAX_RESULT_BYTES.saturating_sub(footer.len())
+        ),
+        footer
+    );
+    let origin = privacy.record_read_capped(
+        &path,
+        &source,
+        &output,
+        (start, end),
+        include_line_hashes,
+        crate::privacy::read_projection::Footer {
+            text: footer,
+            path: requested_path,
+            max_bytes: READ_FILE_MAX_RESULT_BYTES,
+        },
+    )?;
+    Ok((output, origin))
+}
+
 async fn read_file_range(
     resolved: &str,
     requested_path: &str,
@@ -1878,6 +2303,18 @@ async fn read_file_range(
         return Err(format!(
             "requested line span exceeds the {READ_FILE_MAX_LINES}-line maximum"
         ));
+    }
+    if let Some(privacy) = crate::privacy::current().filter(|context| context.enabled()) {
+        return read_private_file_range(
+            privacy,
+            resolved,
+            requested_path,
+            start_line,
+            end_line,
+            include_line_hashes,
+        )
+        .await
+        .map(|(text, _)| text);
     }
 
     let mut file = tokio::fs::File::open(resolved)
@@ -1980,7 +2417,8 @@ async fn read_file_range(
     }
     let body_budget = READ_FILE_MAX_RESULT_BYTES.saturating_sub(footer.len());
     let body = truncate_output(&selected, body_budget);
-    Ok(format!("{body}{footer}"))
+    let output = format!("{body}{footer}");
+    Ok(output)
 }
 
 async fn read_pdf_pages(
@@ -2781,9 +3219,14 @@ async fn execute_bounded_file_query(
         Ok(Ok(permit)) => permit,
         _ => return "Error: file query worker admission timed out".into(),
     };
+    let projection = (pattern.contains("__CA_PATH_")
+        || pattern.contains("__CA_NAME_")
+        || pattern.contains("__CA_PRIVATE_"))
+    .then(|| crate::privacy::for_owner(context.job_owner))
+    .flatten();
     match tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        bounded_file_query(base, roots, query, cancelled, deadline)
+        bounded_file_query_projected(base, roots, query, cancelled, deadline, projection)
     })
     .await
     {
@@ -2792,12 +3235,24 @@ async fn execute_bounded_file_query(
     }
 }
 
+#[cfg(test)]
 fn bounded_file_query(
     base: std::path::PathBuf,
     roots: Vec<std::path::PathBuf>,
     query: FileQuery,
     cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     deadline: std::time::Instant,
+) -> String {
+    bounded_file_query_projected(base, roots, query, cancelled, deadline, None)
+}
+
+fn bounded_file_query_projected(
+    base: std::path::PathBuf,
+    roots: Vec<std::path::PathBuf>,
+    query: FileQuery,
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    deadline: std::time::Instant,
+    projection: Option<std::sync::Arc<crate::privacy::Context>>,
 ) -> String {
     use std::io::Read;
     let base = match std::fs::canonicalize(&base) {
@@ -2910,14 +3365,37 @@ fn bounded_file_query(
         match &query {
             FileQuery::Glob(pattern) => {
                 let relative = canonical.strip_prefix(&base).unwrap_or(&canonical);
-                if pattern.matches_path_with(
-                    relative,
-                    glob::MatchOptions {
-                        case_sensitive: true,
-                        require_literal_separator: true,
-                        require_literal_leading_dot: true,
-                    },
-                ) && append(canonical.to_string_lossy().into_owned()).is_none()
+                let projected = projection
+                    .as_ref()
+                    .map(|context| context.project_filename_path(&canonical))
+                    .transpose();
+                let projected = match projected {
+                    Ok(projected) => projected,
+                    Err(error) => return format!("Error: {error}"),
+                };
+                let projected_relative = projected.as_ref().and_then(|path| {
+                    projection
+                        .as_ref()
+                        .and_then(|context| context.project_filename_path(&base).ok())
+                        .and_then(|base| path.strip_prefix(&(base + "/")).map(str::to_owned))
+                });
+                let matched = projected.as_ref().is_some_and(|path| {
+                    pattern.matches(path)
+                        || pattern.matches(path.rsplit('/').next().unwrap_or(path))
+                }) || projected_relative
+                    .as_ref()
+                    .is_some_and(|path| pattern.matches(path));
+                if (matched
+                    || (projection.is_none()
+                        && pattern.matches_path_with(
+                            relative,
+                            glob::MatchOptions {
+                                case_sensitive: true,
+                                require_literal_separator: true,
+                                require_literal_leading_dot: true,
+                            },
+                        )))
+                    && append(canonical.to_string_lossy().into_owned()).is_none()
                 {
                     limited = Some("output budget");
                     break;
@@ -2996,6 +3474,15 @@ fn bounded_file_query(
                         continue;
                     }
                 };
+                let projected_content = match projection
+                    .as_ref()
+                    .map(|context| context.project_query_source(&canonical, content))
+                    .transpose()
+                {
+                    Ok(projected) => projected,
+                    Err(error) => return format!("Error: {error}"),
+                };
+                let content = projected_content.as_deref().unwrap_or(content);
                 for (index, line) in content.lines().enumerate() {
                     if pattern.is_match(line) {
                         let appended = append(format!(
@@ -3198,10 +3685,56 @@ async fn image_provider_response(
     let filter = active_filter();
     let encoded = serde_json::to_vec(body)
         .map_err(|error| format!("Error preparing image request: {error}"))?;
-    let encoded = filter
+    let mut encoded = filter
         .prepare_request(&encoded)
         .map_err(|error| crate::provider_filter::withheld_message(&error))?;
-    if filter.shows_banner() {
+    let context = crate::privacy::current();
+    if let Some(context) = context.clone() {
+        tokio::task::spawn_blocking(move || context.refresh_policy())
+            .await
+            .map_err(|_| "Image privacy rules could not be refreshed")??;
+    }
+    let privacy = context.clone().filter(|context| context.enabled());
+    let mut privacy_revision = None;
+    let mut private_revision = None;
+    let fingerprint = privacy.as_ref().map(|context| context.policy_fingerprint());
+    if let Some(context) = privacy.clone() {
+        let original =
+            serde_json::to_vec(body).map_err(|_| "Image privacy request cannot be encoded")?;
+        let raw = encoded;
+        let projection_fingerprint = fingerprint.clone().ok_or("Image privacy binding missing")?;
+        let (projected, revision, inspected) = tokio::task::spawn_blocking(move || {
+            let mut value: Value =
+                serde_json::from_slice(&raw).map_err(|_| "Image privacy request is invalid")?;
+            if value.get("image").is_some() || value.get("image_url").is_some() {
+                return Err(
+                    "Project privacy withholds image inputs; use a text-only image request"
+                        .to_string(),
+                );
+            }
+            context.refresh_classification()?;
+            crate::privacy::mask_value_strings(&context, &mut value)?;
+            let projected = serde_json::to_vec(&value)
+                .map_err(|_| "Image privacy request cannot be encoded")?;
+            let revision = context.policy().revision;
+            context.commit_registry()?;
+            let inspected = context.private_revision();
+            context.validate_wire(&projected, revision, &projection_fingerprint)?;
+            context.publish_wire(&original, &projected)?;
+            if context.private_revision() != inspected {
+                return Err(
+                    "Private values changed during image preparation; retry locally".into(),
+                );
+            }
+            Ok::<_, String>((projected, revision, inspected))
+        })
+        .await
+        .map_err(|_| "Image privacy worker stopped")??;
+        encoded = projected;
+        privacy_revision = Some(revision);
+        private_revision = Some(inspected);
+    }
+    if filter.shows_banner() || privacy.is_some() {
         crate::provider_filter::publish_outbound_body(&encoded);
     }
     let mut request = client
@@ -3210,6 +3743,32 @@ async fn image_provider_response(
         .body(encoded);
     if !api_key.is_empty() {
         request = request.bearer_auth(api_key);
+    }
+    if let Some(context) = context {
+        tokio::task::spawn_blocking(move || {
+            context.refresh_policy()?;
+            if context.enabled() && privacy_revision.is_none() {
+                return Err(
+                    "Project privacy was enabled after image preparation; retry locally".into(),
+                );
+            }
+            if let Some(revision) = privacy_revision {
+                context.check_policy(revision)?;
+                if fingerprint.as_deref() != Some(context.policy_fingerprint().as_str()) {
+                    return Err(
+                        "Privacy rules changed after image preparation; retry locally".into(),
+                    );
+                }
+                if private_revision != Some(context.private_revision()) {
+                    return Err(
+                        "Private values changed before image transmission; retry locally".into(),
+                    );
+                }
+            }
+            Ok::<_, String>(())
+        })
+        .await
+        .map_err(|_| "Image privacy worker stopped before transmission")??;
     }
     let response = image_filter_guarded(&active_filter, request.send())
         .await?
@@ -3361,6 +3920,62 @@ mod image_provider_filter_tests {
     }
 
     #[tokio::test]
+    async fn privacy_image_reclassifies_formerly_allowed_receipts_before_http() {
+        let root = tempfile::tempdir().unwrap();
+        let context = crate::privacy::Context::open(
+            root.path().into(),
+            root.path().into(),
+            uuid::Uuid::new_v4(),
+            None,
+        )
+        .unwrap();
+        context.allow_ephemeral();
+        let mut policy = context.policy();
+        policy.enabled = true;
+        policy.rules.push(crate::privacy::policy::Rule {
+            file: "**".into(),
+            selector: "**".into(),
+            action: crate::privacy::policy::Action::Allow,
+        });
+        context.save_policy(policy).unwrap();
+        let source = "{\"customer\":\"FormerAllowedImageCanary\"}";
+        context
+            .record_read(
+                &root.path().join("private.json").to_string_lossy(),
+                source,
+                source,
+                1,
+                1,
+                false,
+            )
+            .unwrap();
+        assert_eq!(
+            context.mask_known("FormerAllowedImageCanary").unwrap(),
+            "FormerAllowedImageCanary"
+        );
+        let mut hidden = context.policy();
+        hidden.rules.clear();
+        context.save_policy(hidden).unwrap();
+        let (url, server) = image_fixture(br#"{"data":[]}"#).await;
+        let filter = Arc::new(ProviderFilter::compile(&ProviderFilterConfig::default()).unwrap());
+        let result = crate::privacy::scope(Some(context.clone()), image_provider_response(
+            &reqwest::Client::new(), &url,
+            &serde_json::json!({"model":"image-model","prompt":"paint FormerAllowedImageCanary"}),
+            "", Some(filter),
+        )).await;
+        assert!(result.is_ok(), "{result:?}");
+        let sent = tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!sent.to_string().contains("FormerAllowedImageCanary"));
+        assert!(sent["prompt"]
+            .as_str()
+            .unwrap()
+            .contains(crate::privacy::store::TOKEN_PREFIX));
+    }
+
+    #[tokio::test]
     async fn image_provider_filter_stops_a_response_before_delivering_it() {
         let filter = Arc::new(
             ProviderFilter::compile(&ProviderFilterConfig {
@@ -3493,6 +4108,72 @@ mod job_tool_tests {
     use super::*;
     use serde_json::json;
     use tokio::io::AsyncWriteExt;
+
+    #[tokio::test]
+    async fn filename_alias_admission_blocks_opaque_tools_and_preserves_plain_reads() {
+        let root = tempfile::tempdir().unwrap();
+        let profile = root.path().join("profile");
+        let workspace_path = root.path().join("workspace");
+        std::fs::create_dir(&workspace_path).unwrap();
+        let path = workspace_path.join("ConfidentialCanary.unknown");
+        let source = "ordinary unparsed content: if malformed(:\n";
+        std::fs::write(&path, source).unwrap();
+        let settings = crate::provider_filter::ProviderFilterConfig {
+            enabled: true,
+            hide: crate::provider_filter::FilterHide {
+                filenames: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let privacy = crate::provider_filter::with_test_filter(&settings, || {
+            crate::privacy::Context::open(
+                profile.clone(),
+                workspace_path.clone(),
+                uuid::Uuid::new_v4(),
+                None,
+            )
+            .unwrap()
+        });
+        privacy.allow_ephemeral();
+        assert!(privacy.filename_only());
+        let workspace = crate::workspace::WorkspaceContext::discover(&workspace_path).unwrap();
+        let context = ToolContext::native_read(
+            &workspace,
+            5,
+            ToolProfile::Main,
+            crate::sandbox::SandboxMode::PolicyOnly,
+            crate::jobs::JobOwner::new(Some(privacy.session_id)),
+        );
+        let marker = workspace_path.join("must-not-exist");
+        let result =
+            execute_tool_with_context("custom_file_tool", &json!({"path":path}), &context).await;
+        assert!(!result.is_success(), "{}", result.model_text());
+        assert!(!marker.exists());
+        let result = execute_tool_with_context("read_file", &json!({"path":path}), &context).await;
+        assert!(result.is_success(), "{}", result.model_text());
+        assert!(result.model_text().contains(source.trim_end()));
+        assert!(matches!(result, ToolExecutionResult::Success(_)));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
+
+        let allows = [crate::config::ApprovalRule::AllowTool("read_file".into())];
+        let broker = crate::approval::ApprovalBroker::new(
+            &workspace,
+            &allows,
+            crate::approval::ApprovalOrigin::Mcp("fixture".into()),
+        );
+        let (_, decision) = crate::privacy::scope(Some(privacy), async {
+            broker.prepare_dynamic(
+                "read_file",
+                &json!({"path":path}),
+                crate::agent::registry::ToolOrigin::Mcp("fixture".into()),
+                false,
+            )
+        })
+        .await;
+        assert_eq!(decision, crate::approval::BrokerDecision::DeniedByRule);
+        assert!(!profile.join("privacy").exists());
+    }
 
     #[cfg(unix)]
     #[tokio::test]
@@ -5434,6 +6115,121 @@ mod job_tool_tests {
             classify_job_result(job(crate::jobs::JobStatus::Cancelling), false),
             ToolExecutionResult::Command { success: true, .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn skill_search_uses_injected_registry_without_loading_or_activating() {
+        let temp = tempfile::tempdir().unwrap();
+        let skill_dir = temp.path().join("skills/replay");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: replay\ndescription: Repair provider continuation replay\n---\nPrivateSkillBodyCanary",
+        )
+        .unwrap();
+        let skills = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::skills::SkillRegistry::discover(
+                crate::skills::SkillRoots {
+                    project: Some(temp.path().join("skills")),
+                    project_boundary: Some(temp.path().to_path_buf()),
+                    user: None,
+                    compatibility: Vec::new(),
+                },
+                &[],
+            ),
+        ));
+        let workspace = crate::workspace::WorkspaceContext::discover(temp.path()).unwrap();
+        let result = execute_prepared_tool_in_workspace_policy_owned_with_skills(
+            "skill_search",
+            &json!({"query":"provider continuation"}),
+            &workspace,
+            2,
+            crate::sandbox::SandboxMode::PolicyOnly,
+            false,
+            crate::jobs::JobOwner::process(),
+            &skills,
+        )
+        .await;
+        assert!(result.is_success(), "{}", result.model_text());
+        let output = result.model_text();
+        assert!(output.contains("replay"));
+        assert!(!output.contains("PrivateSkillBodyCanary"));
+        assert!(skills.lock().unwrap().active_refs().is_empty());
+        let invalid = execute_prepared_tool_in_workspace_policy_owned_with_skills(
+            "skill_search",
+            &json!({"query":" "}),
+            &workspace,
+            2,
+            crate::sandbox::SandboxMode::PolicyOnly,
+            false,
+            crate::jobs::JobOwner::process(),
+            &skills,
+        )
+        .await;
+        assert!(matches!(invalid, ToolExecutionResult::Failure(_)));
+    }
+
+    #[tokio::test]
+    async fn skill_search_refreshes_published_metadata_and_preserves_active_refs() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("skills");
+        let active = root.join("active");
+        std::fs::create_dir_all(&active).unwrap();
+        std::fs::write(
+            active.join("SKILL.md"),
+            "---\nname: active\ndescription: Existing active skill\n---\nActiveBodyCanary",
+        )
+        .unwrap();
+        let mut registry = crate::skills::SkillRegistry::discover(
+            crate::skills::SkillRoots {
+                project: Some(root.clone()),
+                project_boundary: Some(temp.path().to_path_buf()),
+                user: None,
+                compatibility: Vec::new(),
+            },
+            &[],
+        );
+        registry.activate_exact("active").unwrap();
+        let active_before = registry.active_refs();
+        let skills = std::sync::Arc::new(std::sync::Mutex::new(registry));
+        let published = root.join("background-lesson");
+        std::fs::create_dir_all(&published).unwrap();
+        std::fs::write(
+            published.join("SKILL.md"),
+            "---\nname: background-lesson\ndescription: Freshly published recovery lesson\n---\nPublishedBodyCanary",
+        )
+        .unwrap();
+        assert_eq!(
+            skills
+                .lock()
+                .unwrap()
+                .search_for_model(crate::skills::SkillSearchRequest {
+                    query: "published recovery lesson".into(),
+                    limit: None,
+                })
+                .unwrap(),
+            "[]"
+        );
+        let workspace = crate::workspace::WorkspaceContext::discover(temp.path()).unwrap();
+        let result = execute_prepared_tool_in_workspace_policy_owned_with_skills(
+            "skill_search",
+            &json!({"query":"published recovery lesson"}),
+            &workspace,
+            2,
+            crate::sandbox::SandboxMode::PolicyOnly,
+            false,
+            crate::jobs::JobOwner::process(),
+            &skills,
+        )
+        .await;
+        assert!(result.is_success(), "{}", result.model_text());
+        let output = result.model_text();
+        assert!(output.contains("background-lesson"));
+        assert!(!output.contains("BodyCanary"));
+        let registry = skills.lock().unwrap();
+        assert_eq!(registry.active_refs(), active_before);
+        assert!(!registry.is_active("background-lesson"));
+        assert!(registry.active_prompt().contains("ActiveBodyCanary"));
     }
 
     #[tokio::test]

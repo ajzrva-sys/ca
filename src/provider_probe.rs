@@ -192,7 +192,9 @@ fn status_for_error(error: ProviderError) -> ProviderCheckStatus {
         | ProviderError::UnresolvedToolCall { .. }
         | ProviderError::Protocol(_)
         | ProviderError::StreamAnomaly(_) => ProviderCheckStatus::InvalidResponse,
-        ProviderError::FilterStopped { .. } => ProviderCheckStatus::FilterStopped,
+        ProviderError::FilterStopped { .. } | ProviderError::PrivacyBlocked { .. } => {
+            ProviderCheckStatus::FilterStopped
+        }
     }
 }
 

@@ -1814,6 +1814,7 @@ mod tests {
         let turn_id = Uuid::new_v4();
         state.active_agent_turn_id = Some(turn_id);
         state.messages.push(crate::app::Message {
+            retrieved_spans: Some(Vec::new()),
             role: crate::app::Role::User,
             content: "Create a plan to implement the feature".into(),
             tool_calls: None,
@@ -1828,6 +1829,7 @@ mod tests {
             ..Default::default()
         };
         state.messages.push(crate::app::Message {
+            retrieved_spans: Some(Vec::new()),
             role: crate::app::Role::User,
             content: "Implement another feature now".into(),
             tool_calls: None,

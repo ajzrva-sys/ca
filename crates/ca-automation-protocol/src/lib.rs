@@ -5,6 +5,7 @@
 //! structurally validate requests; ca owns execution through `ca-automation`.
 
 pub mod headless_contract;
+pub mod private_files;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

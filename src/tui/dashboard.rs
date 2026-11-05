@@ -1406,6 +1406,7 @@ mod tests {
             crate::interaction::InteractionRequest::host_masked("Waiting for answer", None),
         ));
         second.messages.push(crate::app::Message {
+            retrieved_spans: Some(Vec::new()),
             role: crate::app::Role::Assistant,
             content: "Second pane preview".into(),
             tool_calls: None,

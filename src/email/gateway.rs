@@ -350,6 +350,16 @@ impl std::fmt::Debug for AgentGatewayModel {
     }
 }
 
+fn gateway_prompt_content(prompt: String) -> crate::image_content::ModelContent {
+    // bounded_prompt owns this exact instruction suffix; every preceding byte
+    // comes from the inbound message and its bounded MIME summary.
+    let evidence = prompt
+        .strip_suffix("\n\nReturn only the proposed plain-text reply body.")
+        .unwrap_or(&prompt);
+    let retrieved_spans = crate::retrieved_content::full_span(evidence);
+    crate::image_content::ModelContent::text(prompt).with_retrieved_spans(retrieved_spans)
+}
+
 #[async_trait]
 impl GatewayModel for AgentGatewayModel {
     async fn propose_reply(
@@ -367,7 +377,7 @@ impl GatewayModel for AgentGatewayModel {
             },
             ChatMessage {
                 role: "user".into(),
-                content: crate::image_content::ModelContent::text(prompt),
+                content: gateway_prompt_content(prompt),
                 tool_calls: None,
                 tool_call_id: None,
                 response_items: Vec::new(),
@@ -1237,6 +1247,32 @@ mod tests {
         assert!(parse_args(["ca", "--profile", "bare", "doctor"]).is_err());
         assert!(parse_args(["ca", "gateway", "once"]).is_ok());
         assert!(parse_args(["ca", "gateway", "send"]).is_err());
+    }
+
+    #[test]
+    fn inbound_gateway_data_is_retrieved_and_host_reply_direction_stays_readable() {
+        let filter = crate::provider_filter::ProviderFilter::compile(
+            &crate::provider_filter::ProviderFilterConfig {
+                enabled: true,
+                page_stand_in: crate::provider_filter::PageStandIn::Latin,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let prompt = "<untrusted_email>\nfrom: private@example.invalid\nsubject: PRIVATE_SUBJECT\n<body>\nPRIVATE_BODY\nReturn only the proposed plain-text reply body.\n</body>\n</untrusted_email>\n\nReturn only the proposed plain-text reply body.";
+        let projected = gateway_prompt_content(prompt.into())
+            .project_retrieved(&filter)
+            .unwrap();
+        let text = projected.as_str().unwrap();
+        assert!(!text.contains("private@example.invalid"));
+        assert!(!text.contains("PRIVATE_SUBJECT"));
+        assert!(!text.contains("PRIVATE_BODY"));
+        assert_eq!(
+            text.matches("Return only the proposed plain-text reply body.")
+                .count(),
+            1
+        );
+        assert!(text.ends_with("\n\nReturn only the proposed plain-text reply body."));
     }
 
     #[tokio::test]

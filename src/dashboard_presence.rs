@@ -509,6 +509,7 @@ mod tests {
             "fixture",
             "fixture",
             vec![crate::app::Message {
+                retrieved_spans: Some(Vec::new()),
                 role: crate::app::Role::Assistant,
                 content: format!("COMMITTED_REPLY {}", "é".repeat(4096)),
                 tool_calls: None,

@@ -5,7 +5,7 @@ use crate::personality_preferences::{self, Answer, Preferences, Snapshot, QUESTI
 use crate::tui::Event;
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Gauge, Paragraph, Wrap};
 use std::cell::Cell;
@@ -664,17 +664,17 @@ fn edit_text(editor: &mut TextEditor, key: KeyCode, modifiers: KeyModifiers) -> 
     true
 }
 
-fn accent() -> Style {
-    Style::default().fg(Color::Cyan)
+fn accent(theme: crate::tui::render::ThemePalette) -> Style {
+    Style::default().fg(theme.accent)
 }
 
-fn muted() -> Style {
-    Style::default().fg(Color::DarkGray)
+fn muted(theme: crate::tui::render::ThemePalette) -> Style {
+    Style::default().fg(theme.muted)
 }
 
-fn selected_style(selected: bool) -> Style {
+fn selected_style(selected: bool, theme: crate::tui::render::ThemePalette) -> Style {
     if selected {
-        accent().add_modifier(Modifier::BOLD)
+        accent(theme).add_modifier(Modifier::BOLD)
     } else {
         Style::default()
     }
@@ -704,7 +704,14 @@ fn footer(editor: &Editor) -> &'static str {
 }
 
 pub fn render(frame: &mut ratatui::Frame, area: Rect, editor: &Editor) {
-    render_with_version_label(frame, area, editor, super::VERSION_LABEL);
+    // Standalone questionnaire has no AppState; use the achromatic palette.
+    render_with_version_label(
+        frame,
+        area,
+        editor,
+        super::VERSION_LABEL,
+        super::render::standalone_palette(),
+    );
 }
 
 pub(super) fn render_with_version_label(
@@ -712,6 +719,7 @@ pub(super) fn render_with_version_label(
     area: Rect,
     editor: &Editor,
     version_label: &str,
+    theme: crate::tui::render::ThemePalette,
 ) {
     frame.render_widget(Clear, area);
     let title = if UnicodeWidthStr::width(version_label) + 3 > usize::from(area.width) {
@@ -722,7 +730,7 @@ pub(super) fn render_with_version_label(
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
-        .border_style(accent());
+        .border_style(accent(theme));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.width < 35 || inner.height < 10 {
@@ -775,7 +783,7 @@ pub(super) fn render_with_version_label(
         frame,
         areas[0],
         vec![Line::from(vec![
-            Span::styled(format!("{} profile", editor.profile_label()), accent()),
+            Span::styled(format!("{} profile", editor.profile_label()), accent(theme)),
             Span::raw(format!("{progress}{status}")),
         ])],
     );
@@ -783,19 +791,19 @@ pub(super) fn render_with_version_label(
         paragraph(
             frame,
             areas[2],
-            vec![Line::styled(error, Style::default().fg(Color::Red))],
+            vec![Line::styled(error, Style::default().fg(theme.error))],
         );
     } else if let Some(notice) = editor.notice.as_ref() {
-        paragraph(frame, areas[2], vec![Line::styled(notice, accent())]);
+        paragraph(frame, areas[2], vec![Line::styled(notice, accent(theme))]);
     }
     paragraph(
         frame,
         areas[3],
         vec![
-            Line::styled(footer(editor), muted()),
+            Line::styled(footer(editor), muted(theme)),
             Line::styled(
                 "Save at any point. Unanswered questions are optional.",
-                muted(),
+                muted(theme),
             ),
         ],
     );
@@ -812,18 +820,18 @@ pub(super) fn render_with_version_label(
         return;
     }
     match &editor.screen {
-        Screen::Overview(selected) => render_overview(frame, areas[1], editor, *selected),
-        Screen::Sections(selected) => render_sections(frame, areas[1], editor, *selected),
-        Screen::Question(walk) => render_question(frame, areas[1], editor, walk),
-        Screen::Text(text) => render_text(frame, areas[1], text),
-        Screen::Review(scroll) => render_review(frame, areas[1], editor, *scroll),
+        Screen::Overview(selected) => render_overview(frame, areas[1], editor, *selected, theme),
+        Screen::Sections(selected) => render_sections(frame, areas[1], editor, *selected, theme),
+        Screen::Question(walk) => render_question(frame, areas[1], editor, walk, theme),
+        Screen::Text(text) => render_text(frame, areas[1], text, theme),
+        Screen::Review(scroll) => render_review(frame, areas[1], editor, *scroll, theme),
         Screen::Discard(discard) => paragraph(
             frame,
             areas[1],
             vec![
                 Line::styled(
                     "Leave without saving?",
-                    accent().add_modifier(Modifier::BOLD),
+                    accent(theme).add_modifier(Modifier::BOLD),
                 ),
                 Line::from("Your saved preferences will stay as they are."),
                 Line::from(""),
@@ -833,7 +841,7 @@ pub(super) fn render_with_version_label(
                     } else {
                         "  1 Keep editing"
                     },
-                    selected_style(!discard),
+                    selected_style(!discard, theme),
                 ),
                 Line::styled(
                     if *discard {
@@ -841,14 +849,20 @@ pub(super) fn render_with_version_label(
                     } else {
                         "  2 Discard changes"
                     },
-                    selected_style(*discard),
+                    selected_style(*discard, theme),
                 ),
             ],
         ),
     }
 }
 
-fn render_overview(frame: &mut ratatui::Frame, area: Rect, editor: &Editor, selected: usize) {
+fn render_overview(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    editor: &Editor,
+    selected: usize,
+    theme: crate::tui::render::ThemePalette,
+) {
     let quick = QUESTIONS.iter().filter(|question| question.quick).count();
     let descriptions = [
         format!("Start with {quick} questions. Resume where you left off."),
@@ -864,7 +878,7 @@ fn render_overview(frame: &mut ratatui::Frame, area: Rect, editor: &Editor, sele
     let mut lines = vec![
         Line::styled(
             "How would you like CA to work with you?",
-            accent().add_modifier(Modifier::BOLD),
+            accent(theme).add_modifier(Modifier::BOLD),
         ),
         Line::from(
             if editor
@@ -895,11 +909,11 @@ fn render_overview(frame: &mut ratatui::Frame, area: Rect, editor: &Editor, sele
                 ),
                 area.width,
             ),
-            selected_style(index == selected),
+            selected_style(index == selected, theme),
         ));
     }
     lines.push(Line::from(""));
-    lines.push(Line::styled(&descriptions[selected], muted()));
+    lines.push(Line::styled(&descriptions[selected], muted(theme)));
     if !editor.preferences.additional.is_empty() && area.height > 14 {
         lines.push(Line::from(
             "Your additional instructions are included in the review.",
@@ -908,12 +922,21 @@ fn render_overview(frame: &mut ratatui::Frame, area: Rect, editor: &Editor, sele
     paragraph(frame, area, lines);
 }
 
-fn render_sections(frame: &mut ratatui::Frame, area: Rect, editor: &Editor, selected: usize) {
+fn render_sections(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    editor: &Editor,
+    selected: usize,
+    theme: crate::tui::render::ThemePalette,
+) {
     let sections = Editor::sections();
     let capacity = usize::from(area.height.saturating_sub(2)).max(1);
     let start = selected.saturating_sub(capacity - 1);
     let mut lines = vec![
-        Line::styled("Explore by section", accent().add_modifier(Modifier::BOLD)),
+        Line::styled(
+            "Explore by section",
+            accent(theme).add_modifier(Modifier::BOLD),
+        ),
         Line::from(""),
     ];
     for (index, section) in sections.iter().enumerate().skip(start).take(capacity) {
@@ -934,13 +957,19 @@ fn render_sections(frame: &mut ratatui::Frame, area: Rect, editor: &Editor, sele
                 ),
                 area.width,
             ),
-            selected_style(index == selected),
+            selected_style(index == selected, theme),
         ));
     }
     paragraph(frame, area, lines);
 }
 
-fn render_question(frame: &mut ratatui::Frame, area: Rect, editor: &Editor, walk: &Walkthrough) {
+fn render_question(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    editor: &Editor,
+    walk: &Walkthrough,
+    theme: crate::tui::render::ThemePalette,
+) {
     let question = &QUESTIONS[walk.questions[walk.position]];
     let title = format!("{} · {}", question.section, question.title);
     let title_height = Paragraph::new(title.as_str())
@@ -961,7 +990,7 @@ fn render_question(frame: &mut ratatui::Frame, area: Rect, editor: &Editor, walk
         .split(area);
     frame.render_widget(
         Gauge::default()
-            .gauge_style(accent())
+            .gauge_style(accent(theme))
             .ratio((walk.position + 1) as f64 / walk.questions.len() as f64)
             .label(format!(
                 "{} · {} of {}",
@@ -974,7 +1003,10 @@ fn render_question(frame: &mut ratatui::Frame, area: Rect, editor: &Editor, walk
     paragraph(
         frame,
         areas[1],
-        vec![Line::styled(title, accent().add_modifier(Modifier::BOLD))],
+        vec![Line::styled(
+            title,
+            accent(theme).add_modifier(Modifier::BOLD),
+        )],
     );
     paragraph(frame, areas[2], vec![Line::from(question.prompt)]);
     let mut lines = Vec::new();
@@ -991,7 +1023,7 @@ fn render_question(frame: &mut ratatui::Frame, area: Rect, editor: &Editor, walk
                 ),
                 area.width,
             ),
-            selected_style(index == walk.selected),
+            selected_style(index == walk.selected, theme),
         ));
     }
     let custom = question.choices.len();
@@ -1006,7 +1038,7 @@ fn render_question(frame: &mut ratatui::Frame, area: Rect, editor: &Editor, walk
             custom + 1,
             if custom_current { " (current)" } else { "" }
         ),
-        selected_style(walk.selected == custom),
+        selected_style(walk.selected == custom, theme),
     ));
     lines.push(Line::styled(
         format!(
@@ -1018,7 +1050,7 @@ fn render_question(frame: &mut ratatui::Frame, area: Rect, editor: &Editor, walk
             },
             custom + 2
         ),
-        selected_style(walk.selected == custom + 1),
+        selected_style(walk.selected == custom + 1, theme),
     ));
     paragraph(frame, areas[3], lines);
     let detail = question.choices.get(walk.selected).map_or_else(
@@ -1031,9 +1063,9 @@ fn render_question(frame: &mut ratatui::Frame, area: Rect, editor: &Editor, walk
         },
         |choice| choice.detail,
     );
-    let mut explanation = vec![Line::styled(detail, accent())];
+    let mut explanation = vec![Line::styled(detail, accent(theme))];
     if areas[4].height >= 4 {
-        explanation.push(Line::styled(question.help, muted()));
+        explanation.push(Line::styled(question.help, muted(theme)));
     }
     paragraph(frame, areas[4], explanation);
 }
@@ -1075,7 +1107,12 @@ fn wrapped_text(text: &str, width: usize, cursor: usize) -> (Vec<String>, usize,
     (rows, cursor_row, cursor_column)
 }
 
-fn render_text(frame: &mut ratatui::Frame, area: Rect, editor: &TextEditor) {
+fn render_text(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    editor: &TextEditor,
+    theme: crate::tui::render::ThemePalette,
+) {
     let (title, prompt) = match editor.target {
         TextTarget::Answer { question, .. } => ("Custom answer", QUESTIONS[question].prompt),
         TextTarget::Additional => (
@@ -1100,11 +1137,13 @@ fn render_text(frame: &mut ratatui::Frame, area: Rect, editor: &TextEditor) {
                 editor.text.chars().count(),
                 text_limit(editor)
             ),
-            accent().add_modifier(Modifier::BOLD),
+            accent(theme).add_modifier(Modifier::BOLD),
         )],
     );
     paragraph(frame, areas[1], vec![Line::from(prompt)]);
-    let block = Block::default().borders(Borders::ALL).border_style(muted());
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(muted(theme));
     let text_area = block.inner(areas[2]);
     frame.render_widget(block, areas[2]);
     if text_area.width == 0 || text_area.height == 0 {
@@ -1126,7 +1165,13 @@ fn render_text(frame: &mut ratatui::Frame, area: Rect, editor: &TextEditor) {
     ));
 }
 
-fn render_review(frame: &mut ratatui::Frame, area: Rect, editor: &Editor, scroll: u16) {
+fn render_review(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    editor: &Editor,
+    scroll: u16,
+    theme: crate::tui::render::ThemePalette,
+) {
     let areas = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(2), Constraint::Min(1)])
@@ -1135,7 +1180,10 @@ fn render_review(frame: &mut ratatui::Frame, area: Rect, editor: &Editor, scroll
         frame,
         areas[0],
         vec![
-            Line::styled("Review and save", accent().add_modifier(Modifier::BOLD)),
+            Line::styled(
+                "Review and save",
+                accent(theme).add_modifier(Modifier::BOLD),
+            ),
             Line::from("Enter saves these preferences. Esc returns to editing."),
         ],
     );

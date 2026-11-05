@@ -339,6 +339,7 @@ fn decode_request(
                         id: call.id,
                         call_type: call.kind,
                         function: FunctionCall {
+                            arguments_retrieved_spans: Vec::new(),
                             name: call.function.name,
                             arguments: call.function.arguments,
                         },

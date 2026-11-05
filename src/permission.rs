@@ -284,6 +284,77 @@ pub fn evaluate_explained(
     rules: &[PermissionRule],
     session_grants: &[PermissionMatcher],
 ) -> PermissionEvaluation {
+    let result = evaluate_single(tool, arguments, legacy_rules, rules, session_grants);
+    if tool != "move_files"
+        || result.outcome != PermissionOutcome::Allow
+        || result.matcher != Some(MatcherCategory::Path)
+    {
+        return result;
+    }
+    // A path-specific allow must cover both the removal and publication roots.
+    // Deny/Ask and exact batch approvals retain their existing precedence.
+    if let Some(batch) = arguments.get("_ca_private_batch") {
+        for field in ["source", "destination"] {
+            if let Some(path) = batch.get(field) {
+                let mut one = arguments.clone();
+                let object = one.as_object_mut().expect("validated batch arguments");
+                object.remove("_ca_private_batch");
+                object.remove("dest");
+                object.insert("path".into(), path.clone());
+                let evaluation = evaluate_single(tool, &one, legacy_rules, rules, session_grants);
+                if evaluation.outcome != PermissionOutcome::Allow {
+                    return evaluation;
+                }
+            }
+        }
+    }
+    result
+}
+
+/// Evaluate path ceilings against the frozen native membership without copying
+/// filenames into a provider-visible invocation or approval payload.
+pub(crate) fn evaluate_private_batch(
+    arguments: &serde_json::Value,
+    paths: &[std::path::PathBuf],
+    legacy_rules: &[crate::config::ApprovalRule],
+    rules: &[PermissionRule],
+    session_grants: &[PermissionMatcher],
+) -> PermissionEvaluation {
+    let batch = evaluate_explained("move_files", arguments, legacy_rules, rules, session_grants);
+    if batch.outcome == PermissionOutcome::Deny {
+        return batch;
+    }
+    for path in paths {
+        let mut member = arguments.clone();
+        let object = member.as_object_mut().expect("validated private batch");
+        object.remove("_ca_private_batch");
+        object.remove("dest");
+        object.insert(
+            "path".into(),
+            serde_json::Value::String(path.to_string_lossy().into_owned()),
+        );
+        let evaluation =
+            evaluate_single("move_files", &member, legacy_rules, rules, session_grants);
+        if matches!(
+            evaluation.outcome,
+            PermissionOutcome::Deny | PermissionOutcome::Ask
+        ) || (batch.outcome == PermissionOutcome::Allow
+            && batch.matcher == Some(MatcherCategory::Path)
+            && evaluation.outcome != PermissionOutcome::Allow)
+        {
+            return evaluation;
+        }
+    }
+    batch
+}
+
+fn evaluate_single(
+    tool: &str,
+    arguments: &serde_json::Value,
+    legacy_rules: &[crate::config::ApprovalRule],
+    rules: &[PermissionRule],
+    session_grants: &[PermissionMatcher],
+) -> PermissionEvaluation {
     if let Some(index) = legacy_rules.iter().position(|rule| {
         legacy_decision(rule) == PermissionDecision::Deny && legacy_matches(rule, tool, arguments)
     }) {
@@ -657,6 +728,11 @@ fn candidate_paths(arguments: &serde_json::Value) -> impl Iterator<Item = &str> 
     ["path", "cwd", "dest"]
         .into_iter()
         .filter_map(|field| arguments.get(field).and_then(serde_json::Value::as_str))
+        .chain(
+            ["source", "destination"]
+                .into_iter()
+                .filter_map(|field| arguments.get("_ca_private_batch")?.get(field)?.as_str()),
+        )
 }
 
 pub fn derive_session_grant(
@@ -665,6 +741,14 @@ pub fn derive_session_grant(
 ) -> Result<PermissionMatcher, PermissionError> {
     if crate::email::is_outbound_tool(tool) {
         return Err(PermissionError::UnsafeCommand);
+    }
+    if tool == "move_files" {
+        let matcher = PermissionMatcher::Invocation {
+            tool: tool.into(),
+            arguments: normalize_invocation_arguments(tool, arguments),
+        };
+        matcher.validate()?;
+        return Ok(matcher);
     }
     if tool == "run_command" {
         if arguments
@@ -1657,5 +1741,57 @@ mod tests {
         };
         assert_eq!(matcher.safe_label(), "run_command · deploy production …");
         assert!(!matcher.safe_label().contains("possibly-sensitive-tail"));
+    }
+}
+
+#[cfg(test)]
+mod private_batch_tests {
+    use super::*;
+    #[test]
+    fn private_batch_member_path_ceilings_survive_exact_batch_approval() {
+        let args = serde_json::json!({"selection":"files_fixture","destination":"folder_fixture","_ca_private_batch":{"source":"/source","destination":"/destination","operation":"move_fixture","count":1}});
+        let paths = vec![
+            std::path::PathBuf::from("/source/protected/private.pdf"),
+            std::path::PathBuf::from("/destination/protected/private.pdf"),
+        ];
+        let grant = PermissionMatcher::Invocation {
+            tool: "move_files".into(),
+            arguments: args.clone(),
+        };
+        for decision in [PermissionDecision::Deny, PermissionDecision::Ask] {
+            let rules = vec![PermissionRule {
+                decision,
+                matcher: PermissionMatcher::Path {
+                    tool: "move_files".into(),
+                    path_pattern: "/source/protected/**".into(),
+                },
+            }];
+            let result =
+                evaluate_private_batch(&args, &paths, &[], &rules, std::slice::from_ref(&grant));
+            assert_eq!(
+                result.outcome,
+                if decision == PermissionDecision::Deny {
+                    PermissionOutcome::Deny
+                } else {
+                    PermissionOutcome::Ask
+                }
+            );
+        }
+        assert_eq!(
+            evaluate_private_batch(&args, &paths, &[], &[], &[grant]).outcome,
+            PermissionOutcome::Allow
+        );
+        let roots = ["/source", "/destination"].map(|path| PermissionRule {
+            decision: PermissionDecision::Allow,
+            matcher: PermissionMatcher::Path {
+                tool: "move_files".into(),
+                path_pattern: path.into(),
+            },
+        });
+        assert_eq!(
+            evaluate_private_batch(&args, &paths, &[], &roots, &[]).outcome,
+            PermissionOutcome::NoMatch,
+            "a root-only path grant cannot authorize unlisted member paths"
+        );
     }
 }

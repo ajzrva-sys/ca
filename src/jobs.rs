@@ -12,6 +12,7 @@ use tokio::sync::{broadcast, Mutex, Notify};
 use uuid::Uuid;
 
 const DEFAULT_BUFFER_BYTES: usize = 64 * 1024;
+const PRIVACY_SHELL_GUIDANCE: &str = "\nPrivacy keeps project sources read-only for shell commands. Use read_file and the native edit_file, apply_patch, or write_file tools for source changes.\n";
 tokio::task_local! {
     /// Supplied by ca's validated automation coordinator, outside tool grants.
     pub(crate) static AUTOMATION_PRIVATE_PATHS: Vec<std::path::PathBuf>;
@@ -23,6 +24,12 @@ pub(crate) fn automation_private_paths() -> Vec<std::path::PathBuf> {
     if let Some(store) = ca_automation::runtime::current_run_store() {
         paths.push(store.context().state_root.clone());
         paths.push(store.context().lease_root.clone());
+    }
+    if let Some(binding) = crate::privacy::tasks::remote_binding() {
+        paths.push(binding.directory().to_path_buf());
+    }
+    if let Some(context) = crate::privacy::current().filter(|c| c.enabled()) {
+        paths.push(context.private_metadata_root());
     }
     paths.sort();
     paths.dedup();
@@ -653,6 +660,7 @@ struct JobState {
     background: bool,
     owner: JobOwner,
     origin: JobOrigin,
+    protected_sources: bool,
     completion_delivery: CompletionDelivery,
     timeout_forced: bool,
     keep_awake_lease: Option<crate::keep_awake::KeepAwakeLease>,
@@ -931,8 +939,32 @@ impl JobManager {
         execution_policy: JobExecutionPolicy,
         origin: JobOrigin,
     ) -> Result<JobId, String> {
-        let command = command.into();
-        let cwd = cwd.into();
+        let mut command = command.into();
+        let mut cwd = cwd.into();
+        let mut roots = roots;
+        if origin == JobOrigin::ModelTool {
+            if let Some(context) =
+                crate::privacy::for_owner(owner).filter(|context| context.filenames_enabled())
+            {
+                let source_command = command.clone();
+                let source_cwd = cwd.clone();
+                let source_roots = roots.clone();
+                let view = tokio::task::spawn_blocking(move || {
+                    context.prepare_command_workspace(&source_command, &source_cwd, &source_roots)
+                })
+                .await
+                .map_err(|_| "Command workspace preparation worker stopped")??;
+                command = view.command;
+                cwd = view.cwd;
+                roots = view.roots;
+                // Source identity is emitted as public diagnostic metadata, not
+                // as a path. Artifacts outlive the managed job's temp folder.
+                command = format!(
+                    "printf '%s\\n' 'command_source_generation: {}' 'command_artifact_directory: {}'\n{}",
+                    view.generation, view.artifact_directory, command
+                );
+            }
+        }
         // The job owns its workspace independently of the provider/UI waiter,
         // including manual shell commands and promoted background commands.
         // The transient registry never creates or changes a profile store.
@@ -946,7 +978,6 @@ impl JobManager {
         .map_err(|_| "Workspace ownership worker stopped before command dispatch".to_string())?
         .map_err(|error| format!("Workspace ownership refused command dispatch: {error}"))?;
         let temporary_directory = job_temporary_directory(&owner)?;
-        let mut roots = roots;
         let mut read_only_roots = Vec::new();
         execution_policy.extend_sandbox_roots(&mut roots, &mut read_only_roots);
         let cwd_path = std::path::PathBuf::from(&cwd);
@@ -957,13 +988,51 @@ impl JobManager {
         {
             read_only_roots.push(cwd_path);
         }
-        let backend = crate::sandbox::SandboxBackend::new(
-            crate::automation_runtime::admitted_sandbox_mode(sandbox_mode),
-        );
+        let protected_workspace = (origin == JobOrigin::ModelTool)
+            .then(|| crate::privacy::for_owner(owner))
+            .flatten()
+            .map(|context| context.workspace().to_path_buf())
+            .or_else(|| {
+                (origin == JobOrigin::ModelTool
+                    && crate::privacy::tasks::remote_binding().is_some())
+                .then(|| std::path::PathBuf::from(&cwd))
+            });
+        let mut protected_paths = protected_workspace.iter().cloned().collect::<Vec<_>>();
+        if origin == JobOrigin::ModelTool {
+            let privacy = crate::privacy::for_owner(owner);
+            let remote = crate::privacy::tasks::remote_binding();
+            if privacy.is_some() || remote.is_some() {
+                let folders = tokio::task::spawn_blocking(move || {
+                    let value = if let Some(context) = privacy {
+                        crate::privacy::tasks::call_for(
+                            &context,
+                            "protected_folders",
+                            serde_json::Value::Null,
+                        )
+                    } else {
+                        crate::privacy::tasks::rpc(
+                            &remote.expect("private worker"),
+                            "protected_folders",
+                            serde_json::Value::Null,
+                        )
+                    }?;
+                    serde_json::from_value::<Vec<std::path::PathBuf>>(value)
+                        .map_err(|_| "private folder bindings are invalid".to_string())
+                })
+                .await
+                .map_err(|_| "private folder worker stopped")??;
+                protected_paths.extend(folders);
+            }
+        }
+        let backend = crate::sandbox::SandboxBackend::new(if protected_workspace.is_some() {
+            crate::sandbox::SandboxMode::Required
+        } else {
+            crate::automation_runtime::admitted_sandbox_mode(sandbox_mode)
+        });
         let native_command = ca_automation::runtime::current_run_store().is_some()
             || crate::automation_runtime::current_sandbox_binding().is_some();
         let private_paths = automation_private_paths();
-        let prepared = match backend.prepare_process_with_denied_paths(
+        let prepared = match backend.prepare_process_with_read_only_paths(
             std::path::Path::new("/bin/sh"),
             &["-c".into(), command.clone()],
             &crate::sandbox::SandboxPolicy {
@@ -974,6 +1043,7 @@ impl JobManager {
                 hide_other_processes: execution_policy.hide_other_processes || native_command,
             },
             &private_paths,
+            &protected_paths,
         ) {
             Ok(prepared) => prepared,
             Err(error) => {
@@ -1019,6 +1089,21 @@ impl JobManager {
                 process.as_std_mut().process_group(0);
             }
         }
+        let id = JobId::new();
+        if origin == JobOrigin::ModelTool {
+            if let Some(context) =
+                crate::privacy::for_owner(owner).filter(|context| context.filenames_enabled())
+            {
+                let binding =
+                    tokio::task::spawn_blocking(move || context.bind_native_id("JOB", id.0))
+                        .await
+                        .map_err(|_| "Job identity worker stopped before command dispatch")?;
+                if let Err(error) = binding {
+                    discard_unused_job_temp(&temporary_directory);
+                    return Err(error);
+                }
+            }
+        }
         let mut child = match process.spawn() {
             Ok(child) => child,
             Err(error) => {
@@ -1045,7 +1130,6 @@ impl JobManager {
                     // streams and reserve space for omission labels/framing.
                     .min(bytes.saturating_sub(512).saturating_div(6).max(1))
             });
-        let id = JobId::new();
         let record = Arc::new(JobRecord {
             state: Mutex::new(JobState {
                 command,
@@ -1058,6 +1142,7 @@ impl JobManager {
                 background,
                 owner,
                 origin,
+                protected_sources: protected_workspace.is_some(),
                 completion_delivery: CompletionDelivery::Pending,
                 timeout_forced: false,
                 keep_awake_lease: (origin == JobOrigin::ModelTool)
@@ -1721,6 +1806,14 @@ async fn ensure_owner(record: &JobRecord, owner: JobOwner) -> Result<(), String>
 async fn set_terminal_status(inner: &Inner, id: JobId, record: &JobRecord, status: JobStatus) {
     let mut state = record.state.lock().await;
     state.status = status;
+    if state.protected_sources && matches!(status, JobStatus::Failed { .. }) {
+        state.stderr.push(PRIVACY_SHELL_GUIDANCE.as_bytes());
+        let _ = inner.events.send(JobEvent::Output {
+            id,
+            stream: JobStream::Stderr,
+            text: PRIVACY_SHELL_GUIDANCE.to_string(),
+        });
+    }
     state.finished_at = Some(Instant::now());
     state.keep_awake_lease.take();
     state.workspace_activity_lease.take();
@@ -1840,6 +1933,97 @@ impl BoundedText {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn privacy_model_shell_is_read_only_despite_off_mode_and_broad_grants() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("project");
+        let output = root.path().join("output");
+        std::fs::create_dir(&workspace).unwrap();
+        std::fs::create_dir(&output).unwrap();
+        let source = workspace.join("source.txt");
+        std::fs::write(&source, "protected-original").unwrap();
+        let session_id = Uuid::new_v4();
+        let context = crate::privacy::Context::open(
+            root.path().join("profile"),
+            workspace.clone(),
+            session_id,
+            None,
+        )
+        .unwrap();
+        context
+            .save_policy(crate::privacy::policy::Policy {
+                enabled: true,
+                ..context.policy()
+            })
+            .unwrap();
+        let owner = JobOwner::new(Some(session_id));
+        let manager = JobManager::new();
+        let roots = vec![root.path().to_path_buf(), workspace.clone(), output];
+        let read = manager
+            .start_sandboxed_owned_with_origin(
+                "cat source.txt",
+                workspace.to_string_lossy(),
+                false,
+                Duration::from_secs(3),
+                roots.clone(),
+                false,
+                crate::sandbox::SandboxMode::Off,
+                owner,
+                JobOrigin::ModelTool,
+            )
+            .await
+            .unwrap();
+        let read = manager.await_job_owned(read, owner).await.unwrap();
+        assert_eq!(read.status, JobStatus::Completed { exit_code: 0 });
+        assert_eq!(read.stdout, "protected-original");
+        let write = manager
+            .start_sandboxed_owned_with_origin(
+                "printf changed > source.txt",
+                workspace.to_string_lossy(),
+                false,
+                Duration::from_secs(3),
+                roots.clone(),
+                false,
+                crate::sandbox::SandboxMode::Off,
+                owner,
+                JobOrigin::ModelTool,
+            )
+            .await
+            .unwrap();
+        let write = manager.await_job_owned(write, owner).await.unwrap();
+        assert!(matches!(write.status, JobStatus::Failed { .. }));
+        assert!(write.stderr.contains("native edit_file"));
+        assert_eq!(
+            std::fs::read_to_string(&source).unwrap(),
+            "protected-original"
+        );
+        // Host verification retains its existing explicit authority.
+        let host = manager
+            .start_sandboxed_owned_with_origin(
+                "printf host > host-authority.txt",
+                workspace.to_string_lossy(),
+                false,
+                Duration::from_secs(3),
+                roots,
+                false,
+                crate::sandbox::SandboxMode::PolicyOnly,
+                owner,
+                JobOrigin::Internal,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            manager.await_job_owned(host, owner).await.unwrap().status,
+            JobStatus::Completed { exit_code: 0 }
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("host-authority.txt")).unwrap(),
+            "host"
+        );
+        assert!(context.enabled());
+    }
 
     #[cfg(unix)]
     #[test]

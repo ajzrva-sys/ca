@@ -10,8 +10,8 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
   Approve tool [1/3] — write_file
     Reason: workspace write · [g] this file for this run
     {"path":"src/foo.rs"}
-  [y] run  [n] deny  [e] edit  [s] all uses of this tool  [g] allow exact for run  [p] always allow
-exact path  [x] always deny  [a] yolo
+  [y] run  [n] deny
+  [e] edit  [s] tool always  [g] this run  [p] path always  [x] always deny  [a] yolo
 
 
 
@@ -41,9 +41,9 @@ exact path  [x] always deny  [a] yolo
   Approve tool [1/3] — write_file
     Reason: workspace write · [g] this file for this run
     {"path":"src/foo.rs"}
-  [y] run  [n] deny  [e] edit  [s] all uses of this tool
-[g] allow exact for run  [p] always allow exact path  [x]
-always deny  [a] yolo
+  [y] run  [n] deny
+  [e] edit  [s] tool always  [g] this run  [p] path always
+[x] always deny  [a] yolo
 
 
 

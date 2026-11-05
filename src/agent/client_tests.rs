@@ -12,6 +12,7 @@ fn fixed_time() -> chrono::DateTime<chrono::Utc> {
 
 fn user(content: &str) -> Message {
     Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::User,
         content: content.to_string(),
         tool_calls: None,
@@ -23,6 +24,7 @@ fn user(content: &str) -> Message {
 
 fn system(content: &str) -> Message {
     Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::System,
         content: content.to_string(),
         tool_calls: None,
@@ -34,16 +36,20 @@ fn system(content: &str) -> Message {
 
 fn call(id: &str, status: ToolStatus, output: Option<&str>) -> ToolCall {
     ToolCall {
+        output_source: None,
+        arguments_retrieved_spans: Vec::new(),
         id: id.to_string(),
         name: "read_file".to_string(),
         arguments: r#"{"path":"input.txt"}"#.to_string(),
         status,
         output: output.map(str::to_string),
+        started_at: None,
     }
 }
 
 fn assistant_with_calls(calls: Vec<ToolCall>) -> Message {
     Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::Assistant,
         content: String::new(),
         tool_calls: Some(calls),
@@ -997,6 +1003,7 @@ fn final_reasoning_replay_is_deepseek_only_and_requires_provenance() {
         ("mimo", "mimo-v2.5-pro", None),
     ] {
         let mut assistant = Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::Assistant,
             content: "answer".into(),
             tool_calls: None,
@@ -1153,6 +1160,7 @@ fn duplicate_tool_result_id_prevents_request_construction() {
 #[test]
 fn legacy_tool_message_still_serializes_once() {
     let legacy = Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::Tool,
         content: String::new(),
         tool_calls: Some(vec![call("legacy-call", ToolStatus::Done, Some("legacy"))]),
@@ -1196,6 +1204,7 @@ fn mixed_assistant_and_legacy_duplicate_is_rejected() {
         Some("assistant result"),
     )]);
     let legacy = Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::Tool,
         content: String::new(),
         tool_calls: Some(vec![call(
@@ -1544,14 +1553,20 @@ async fn capture_reasoning_content_tool_loop(provider: &'static str) -> Vec<Vec<
     let continuation_state = vec![
         user("read input.txt"),
         Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::Assistant,
             content: first_turn.content,
             tool_calls: Some(vec![ToolCall {
+                output_source: None,
+                arguments_retrieved_spans: first_turn.tool_calls[0]
+                    .arguments_retrieved_spans
+                    .clone(),
                 id: first_turn.tool_calls[0].id.clone(),
                 name: first_turn.tool_calls[0].name.clone(),
                 arguments: first_turn.tool_calls[0].arguments.clone(),
                 status: ToolStatus::Done,
                 output: Some("hello".into()),
+                started_at: None,
             }]),
             thinking: first_turn.reasoning,
             response_items: first_turn.response_items,
@@ -1687,14 +1702,18 @@ async fn deepseek_replays_tool_and_final_reasoning_on_the_next_question() {
             .tool_calls
             .into_iter()
             .map(|call| ToolCall {
+                output_source: None,
+                arguments_retrieved_spans: call.arguments_retrieved_spans.clone(),
                 id: call.id,
                 name: call.name,
                 arguments: call.arguments,
                 status: ToolStatus::Done,
                 output: Some("hello".into()),
+                started_at: None,
             })
             .collect::<Vec<_>>();
         history.push(Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::Assistant,
             content: turn.content,
             tool_calls: (!calls.is_empty()).then_some(calls),
@@ -1871,14 +1890,20 @@ async fn chat_reasoning_continuation_is_bound_to_the_exact_runtime_endpoint() {
         &[
             user("read input.txt"),
             Message {
+                retrieved_spans: Some(Vec::new()),
                 role: Role::Assistant,
                 content: first_turn.content,
                 tool_calls: Some(vec![ToolCall {
+                    output_source: None,
+                    arguments_retrieved_spans: first_turn.tool_calls[0]
+                        .arguments_retrieved_spans
+                        .clone(),
                     id: first_turn.tool_calls[0].id.clone(),
                     name: first_turn.tool_calls[0].name.clone(),
                     arguments: first_turn.tool_calls[0].arguments.clone(),
                     status: ToolStatus::Done,
                     output: Some("hello".into()),
+                    started_at: None,
                 }]),
                 thinking: first_turn.reasoning,
                 response_items: first_turn.response_items,
@@ -2254,14 +2279,20 @@ async fn capture_openai_responses_reasoning_tool_loop() -> (Vec<Vec<u8>>, String
     let continuation_state = vec![
         user("read input.txt"),
         Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::Assistant,
             content: first_turn.content,
             tool_calls: Some(vec![ToolCall {
+                output_source: None,
+                arguments_retrieved_spans: first_turn.tool_calls[0]
+                    .arguments_retrieved_spans
+                    .clone(),
                 id: first_turn.tool_calls[0].id.clone(),
                 name: first_turn.tool_calls[0].name.clone(),
                 arguments: first_turn.tool_calls[0].arguments.clone(),
                 status: ToolStatus::Done,
                 output: Some("hello".into()),
+                started_at: None,
             }]),
             thinking: first_turn.reasoning,
             response_items: first_turn.response_items,
@@ -2463,14 +2494,20 @@ async fn capture_first_party_responses_tool_loop(provider: &str, model: &str) ->
     let continuation_state = vec![
         user("read input.txt"),
         Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::Assistant,
             content: first_turn.content,
             tool_calls: Some(vec![ToolCall {
+                output_source: None,
+                arguments_retrieved_spans: first_turn.tool_calls[0]
+                    .arguments_retrieved_spans
+                    .clone(),
                 id: first_turn.tool_calls[0].id.clone(),
                 name: first_turn.tool_calls[0].name.clone(),
                 arguments: first_turn.tool_calls[0].arguments.clone(),
                 status: ToolStatus::Done,
                 output: Some("hello".into()),
+                started_at: None,
             }]),
             thinking: first_turn.reasoning,
             response_items: first_turn.response_items,
@@ -3546,6 +3583,7 @@ async fn error_body_response_rule_stops_without_echoing_the_match() {
         crate::provider_filter::ProviderFilter::compile(
             &crate::provider_filter::ProviderFilterConfig {
                 enabled: true,
+                structural: false,
                 trip_file: None,
                 phrases: Vec::new(),
                 urls: Vec::new(),
@@ -3588,6 +3626,7 @@ async fn error_body_response_rule_stops_without_echoing_the_match() {
         crate::provider_filter::ProviderFilter::compile(
             &crate::provider_filter::ProviderFilterConfig {
                 enabled: true,
+                structural: false,
                 trip_file: None,
                 phrases: Vec::new(),
                 urls: Vec::new(),
@@ -5339,4 +5378,609 @@ async fn google_strict_schema_rejection_is_visible_before_any_post_without_schem
         ))
         .is_none()
     );
+}
+
+fn retrieved_wire_filter() -> std::sync::Arc<crate::provider_filter::ProviderFilter> {
+    std::sync::Arc::new(
+        crate::provider_filter::ProviderFilter::compile(
+            &crate::provider_filter::ProviderFilterConfig {
+                enabled: true,
+                page_stand_in: crate::provider_filter::PageStandIn::Latin,
+                ..Default::default()
+            },
+        )
+        .unwrap(),
+    )
+}
+
+/// Intentionally reject after reading: this fixture verifies the final HTTP
+/// request independently of any successful provider response or model service.
+async fn capture_retrieved_wire_request(
+    protocol: crate::agent::ProviderProtocol,
+    messages: &[ChatMessage],
+    tools: &[ToolDef],
+) -> serde_json::Value {
+    use tokio::io::AsyncWriteExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = tokio::time::timeout(Duration::from_secs(3), listener.accept())
+            .await
+            .expect("provider request must reach the loopback fixture")
+            .unwrap();
+        let bytes = read_http_request(&mut socket).await;
+        socket.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+            .await.unwrap();
+        serde_json::from_slice(request_body(&bytes)).unwrap()
+    });
+    let mut policy = fast_policy();
+    policy.connect_timeout = Duration::from_secs(2);
+    policy.headers_timeout = Duration::from_secs(2);
+    let client = test_client_with_protocol(format!("http://{address}/v1"), policy, protocol)
+        .with_filter_for_test(retrieved_wire_filter());
+    let result = client
+        .chat_stream_with_options(
+            messages,
+            tools,
+            &ChatRequestOptions {
+                reasoning_effort: Some(ReasoningEffort::High),
+                reasoning_request_format: (protocol
+                    == crate::agent::ProviderProtocol::ChatCompletions)
+                    .then_some(ReasoningRequestFormat::ReasoningEffort),
+                ..Default::default()
+            },
+        )
+        .await;
+    assert!(
+        matches!(result, Err(ProviderError::Http { status: 400, .. })),
+        "capture fixture must be the only rejection: {result:?}"
+    );
+    server.await.unwrap()
+}
+
+#[tokio::test]
+async fn retrieved_content_crosses_all_four_actual_provider_transports() {
+    use crate::agent::ProviderProtocol;
+    let raw = r#"LocalCanary /private/CustomerCanary/123456.txt https://HostCanary.invalid/SlugCanary <a class="AttributeCanary">TextCanary</a> {"name":"NameCanary","id":"IdCanary","KeyCanary":"ValueCanary"}"#;
+    let argument_value =
+        serde_json::json!({"path":"ArgumentCanary/<img src=\"ArgumentImage\">","mode":"safe"});
+    let schema = serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"ParameterInstructionCanary"},"mode":{"type":"string","enum":["safe"]}},"required":["path"]});
+    let names = [
+        "read_file",
+        "list_dir",
+        "run_command",
+        "search_files",
+        "await_agent",
+        "future_tool",
+    ];
+    let mut mixed_system = system("SystemInstructionCanary\nMemoryCanary\nSystemSuffixCanary");
+    let start = mixed_system.content.find("MemoryCanary").unwrap();
+    mixed_system.retrieved_spans = Some(vec![crate::retrieved_content::RetrievedSpan {
+        source: None,
+        start,
+        end: start + "MemoryCanary".len(),
+    }]);
+    let mut mixed_user = user("UserPromptCanary\nFileCanary\nUserSuffixCanary");
+    let start = mixed_user.content.find("FileCanary").unwrap();
+    mixed_user.retrieved_spans = Some(vec![crate::retrieved_content::RetrievedSpan {
+        source: None,
+        start,
+        end: start + "FileCanary".len(),
+    }]);
+    let calls = names
+        .iter()
+        .enumerate()
+        .map(|(index, name)| ToolCall {
+            output_source: None,
+            arguments_retrieved_spans: Vec::new(),
+            id: format!("retrieved-call-{index}"),
+            name: (*name).into(),
+            arguments: argument_value.to_string(),
+            status: ToolStatus::Done,
+            output: Some(raw.into()),
+            started_at: None,
+        })
+        .collect();
+    let mut assistant = assistant_with_calls(calls);
+    assistant.content = "AssistantHistoryCanary".into();
+    let canonical = vec![mixed_system, mixed_user, assistant];
+    let canonical_before = serde_json::to_vec(&canonical).unwrap();
+    let image = crate::image_content::normalize_rgba(1, 1, vec![0, 0, 0, 255]).unwrap();
+    let messages =
+        AgentClient::build_messages(Some("StableInstructionCanary"), &canonical, None, &[image])
+            .unwrap();
+    let message_before = serde_json::to_vec(&messages).unwrap();
+    let content_before: Vec<_> = messages
+        .iter()
+        .map(|message| message.content.clone())
+        .collect();
+    let tools: Vec<_> = names
+        .iter()
+        .map(|name| ToolDef {
+            def_type: "function".into(),
+            function: ToolFunction {
+                name: (*name).into(),
+                description: "ToolInstructionCanary".into(),
+                parameters: schema.clone(),
+            },
+        })
+        .collect();
+    let tools_before = serde_json::to_vec(&tools).unwrap();
+    for protocol in [
+        ProviderProtocol::ChatCompletions,
+        ProviderProtocol::OpenAiResponses,
+        ProviderProtocol::AnthropicMessages,
+        ProviderProtocol::GoogleGenerateContent,
+    ] {
+        let body = capture_retrieved_wire_request(protocol, &messages, &tools).await;
+        let sent = body.to_string();
+        for canary in [
+            "LocalCanary",
+            "CustomerCanary",
+            "123456",
+            "HostCanary",
+            "SlugCanary",
+            "AttributeCanary",
+            "TextCanary",
+            "NameCanary",
+            "IdCanary",
+            "KeyCanary",
+            "ValueCanary",
+            "MemoryCanary",
+            "FileCanary",
+        ] {
+            assert!(
+                !sent.contains(canary),
+                "{protocol:?} sent retrieved plaintext {canary}: {sent}"
+            );
+        }
+        for authored in [
+            "StableInstructionCanary",
+            "SystemInstructionCanary",
+            "SystemSuffixCanary",
+            "UserPromptCanary",
+            "UserSuffixCanary",
+            "AssistantHistoryCanary",
+            "ToolInstructionCanary",
+            "ParameterInstructionCanary",
+            "ArgumentCanary",
+            "ArgumentImage",
+        ] {
+            assert!(
+                sent.contains(authored),
+                "{protocol:?} changed authored text {authored}: {sent}"
+            );
+        }
+        assert!(
+            sent.contains("[image]"),
+            "{protocol:?} omitted the image placeholder"
+        );
+        for media_field in [
+            "image_url",
+            "input_image",
+            "inlineData",
+            "fileData",
+            "base64",
+            "image/png",
+        ] {
+            assert!(
+                !sent.contains(media_field),
+                "{protocol:?} kept opaque image field {media_field}"
+            );
+        }
+        let (sent_schema, sent_arguments) = match protocol {
+            ProviderProtocol::ChatCompletions => {
+                assert_eq!(body["stream"], true);
+                assert_eq!(body["model"], "model");
+                assert_eq!(body["reasoning_effort"], "high");
+                let call = body["messages"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find_map(|message| message.get("tool_calls"))
+                    .unwrap();
+                (
+                    body["tools"][0]["function"]["parameters"].clone(),
+                    serde_json::from_str::<serde_json::Value>(
+                        call[0]["function"]["arguments"].as_str().unwrap(),
+                    )
+                    .unwrap(),
+                )
+            }
+            ProviderProtocol::OpenAiResponses => {
+                assert_eq!(body["stream"], true);
+                assert_eq!(body["model"], "model");
+                assert_eq!(body["reasoning"]["effort"], "high");
+                let call = body["input"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|item| item["type"] == "function_call")
+                    .unwrap();
+                (
+                    body["tools"][0]["parameters"].clone(),
+                    serde_json::from_str::<serde_json::Value>(call["arguments"].as_str().unwrap())
+                        .unwrap(),
+                )
+            }
+            ProviderProtocol::AnthropicMessages => {
+                assert_eq!(body["stream"], true);
+                assert_eq!(body["model"], "model");
+                assert_eq!(body["output_config"]["effort"], "high");
+                let call = body["messages"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .flat_map(|message| message["content"].as_array().unwrap())
+                    .find(|block| block["type"] == "tool_use")
+                    .unwrap();
+                (
+                    body["tools"][0]["input_schema"].clone(),
+                    call["input"].clone(),
+                )
+            }
+            ProviderProtocol::GoogleGenerateContent => {
+                assert_eq!(
+                    body["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+                    "HIGH"
+                );
+                let call = body["contents"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .flat_map(|message| message["parts"].as_array().unwrap())
+                    .find_map(|part| part.get("functionCall"))
+                    .unwrap();
+                (
+                    body["tools"][0]["functionDeclarations"][0]["parameters"].clone(),
+                    call["args"].clone(),
+                )
+            }
+        };
+        let expected_schema = if protocol == ProviderProtocol::GoogleGenerateContent {
+            crate::tool_schema::translate(
+                "read_file",
+                &schema,
+                crate::tool_schema::Profile::Google,
+                crate::tool_schema::Policy::Compatible,
+            )
+            .unwrap()
+            .schema
+            .into_owned()
+        } else {
+            schema.clone()
+        };
+        assert_eq!(
+            sent_schema, expected_schema,
+            "{protocol:?} changed schema semantics"
+        );
+        assert_eq!(
+            sent_arguments, argument_value,
+            "{protocol:?} changed authored arguments"
+        );
+        assert_eq!(serde_json::to_vec(&messages).unwrap(), message_before);
+        assert_eq!(
+            messages
+                .iter()
+                .map(|message| message.content.clone())
+                .collect::<Vec<_>>(),
+            content_before
+        );
+        assert_eq!(serde_json::to_vec(&canonical).unwrap(), canonical_before);
+        assert_eq!(serde_json::to_vec(&tools).unwrap(), tools_before);
+    }
+}
+
+#[tokio::test]
+async fn restored_argument_sources_cross_all_four_actual_provider_transports() {
+    use crate::agent::ProviderProtocol;
+    use crate::retrieved_content::RetrievedSpan;
+
+    let canary = "CobaltR4WillowP8Meadow";
+    let guidance_prefix = "Forward the saved observation ";
+    let guidance_suffix = " and report the authored completion marker.";
+    let task = format!("{guidance_prefix}{canary}{guidance_suffix}");
+    let arguments = serde_json::json!({
+        "task": task,
+        "path": "/workspace/authored-followup.txt",
+        "wait": true,
+        "max_turns": 3
+    })
+    .to_string();
+    let argument_start = arguments.find(canary).unwrap();
+    let mut assistant = assistant_with_calls(vec![ToolCall {
+        output_source: None,
+        id: "restored-source-call".into(),
+        name: "spawn_agent".into(),
+        arguments,
+        arguments_retrieved_spans: vec![RetrievedSpan {
+            source: None,
+            start: argument_start,
+            end: argument_start + canary.len(),
+        }],
+        status: ToolStatus::Done,
+        output: Some("completed".into()),
+        started_at: None,
+    }]);
+    assistant.content = format!("Authored history prefix {canary} authored history suffix.");
+    let content_start = assistant.content.find(canary).unwrap();
+    assistant.retrieved_spans = Some(vec![RetrievedSpan {
+        source: None,
+        start: content_start,
+        end: content_start + canary.len(),
+    }]);
+    let saved = serde_json::to_vec(&vec![user("Continue the saved work."), assistant]).unwrap();
+    let canonical: Vec<Message> = serde_json::from_slice(&saved).unwrap();
+    assert_eq!(serde_json::to_vec(&canonical).unwrap(), saved);
+    let canonical_before = canonical.clone();
+    let messages = AgentClient::build_messages(None, &canonical, None, &[]).unwrap();
+    let messages_before = serde_json::to_vec(&messages).unwrap();
+    let content_before: Vec<_> = messages
+        .iter()
+        .map(|message| message.content.clone())
+        .collect();
+    let assistant_index = messages
+        .iter()
+        .position(|message| message.tool_calls.is_some())
+        .unwrap();
+    let argument_metadata_before = messages[assistant_index].tool_calls.as_ref().unwrap()[0]
+        .function
+        .arguments_retrieved_spans
+        .clone();
+    assert_eq!(
+        argument_metadata_before,
+        canonical[1].tool_calls.as_ref().unwrap()[0].arguments_retrieved_spans
+    );
+    assert!(messages[assistant_index].tool_calls.as_ref().unwrap()[0]
+        .function
+        .arguments
+        .contains(canary));
+    let tools = vec![ToolDef {
+        def_type: "function".into(),
+        function: ToolFunction {
+            name: "spawn_agent".into(),
+            description: "Run the authored follow-up task.".into(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string"},
+                    "path": {"type": "string"},
+                    "wait": {"type": "boolean"},
+                    "max_turns": {"type": "integer"}
+                },
+                "required": ["task", "path", "wait", "max_turns"]
+            }),
+        },
+    }];
+    let expected_task = format!(
+        "{guidance_prefix}{}{guidance_suffix}",
+        retrieved_wire_filter().encode_retrieved(canary)
+    );
+    assert!(!expected_task.contains(canary));
+    for protocol in [
+        ProviderProtocol::ChatCompletions,
+        ProviderProtocol::OpenAiResponses,
+        ProviderProtocol::AnthropicMessages,
+        ProviderProtocol::GoogleGenerateContent,
+    ] {
+        let body = capture_retrieved_wire_request(protocol, &messages, &tools).await;
+        let sent = body.to_string();
+        assert!(!sent.contains(canary), "{protocol:?} sent restored source");
+        assert!(!sent.contains("arguments_retrieved_spans"));
+        for authored in [
+            guidance_prefix,
+            guidance_suffix,
+            "Authored history prefix ",
+            " authored history suffix.",
+            "/workspace/authored-followup.txt",
+        ] {
+            assert!(sent.contains(authored), "{protocol:?} changed {authored}");
+        }
+        let sent_arguments = match protocol {
+            ProviderProtocol::ChatCompletions => {
+                let calls = body["messages"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find_map(|message| message.get("tool_calls"))
+                    .unwrap();
+                serde_json::from_str::<serde_json::Value>(
+                    calls[0]["function"]["arguments"].as_str().unwrap(),
+                )
+                .unwrap()
+            }
+            ProviderProtocol::OpenAiResponses => {
+                let call = body["input"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|item| item["type"] == "function_call")
+                    .unwrap();
+                serde_json::from_str::<serde_json::Value>(call["arguments"].as_str().unwrap())
+                    .unwrap()
+            }
+            ProviderProtocol::AnthropicMessages => body["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|message| message["content"].as_array().unwrap())
+                .find(|block| block["type"] == "tool_use")
+                .unwrap()["input"]
+                .clone(),
+            ProviderProtocol::GoogleGenerateContent => body["contents"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|message| message["parts"].as_array().unwrap())
+                .find_map(|part| part.get("functionCall"))
+                .unwrap()["args"]
+                .clone(),
+        };
+        assert_eq!(
+            sent_arguments,
+            serde_json::json!({
+                "task": expected_task,
+                "path": "/workspace/authored-followup.txt",
+                "wait": true,
+                "max_turns": 3
+            }),
+            "{protocol:?} changed authored argument structure"
+        );
+        assert_eq!(serde_json::to_vec(&messages).unwrap(), messages_before);
+        assert_eq!(
+            messages
+                .iter()
+                .map(|message| message.content.clone())
+                .collect::<Vec<_>>(),
+            content_before
+        );
+        assert_eq!(
+            messages[assistant_index].tool_calls.as_ref().unwrap()[0]
+                .function
+                .arguments_retrieved_spans,
+            argument_metadata_before
+        );
+        assert_eq!(canonical, canonical_before);
+        assert_eq!(serde_json::to_vec(&canonical).unwrap(), saved);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = test_client_with_protocol(
+            format!("http://{}/v1", listener.local_addr().unwrap()),
+            fast_policy(),
+            protocol,
+        )
+        .with_filter_for_test(retrieved_wire_filter());
+        let mut invalid = messages.clone();
+        let function = &mut invalid[assistant_index].tool_calls.as_mut().unwrap()[0].function;
+        function.arguments_retrieved_spans = vec![RetrievedSpan {
+            source: None,
+            start: argument_start,
+            end: function.arguments.len() + 1,
+        }];
+        let error = client.chat_stream(&invalid, &tools).await.unwrap_err();
+        assert!(
+            matches!(error, ProviderError::Protocol(_)),
+            "{protocol:?} did not reject invalid argument origins: {error}"
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(40), listener.accept())
+                .await
+                .is_err(),
+            "{protocol:?} sent arguments with invalid source metadata"
+        );
+    }
+}
+
+#[tokio::test]
+async fn retrieved_legacy_unknown_is_withheld_before_http_but_authored_markers_remain_readable() {
+    use crate::agent::ProviderProtocol;
+    let text = "UserPromptCanary\n\n--- Attached file: example.txt ---\nAuthoredMarkerCanary\n--- End file ---";
+    for protocol in [
+        ProviderProtocol::ChatCompletions,
+        ProviderProtocol::OpenAiResponses,
+        ProviderProtocol::AnthropicMessages,
+        ProviderProtocol::GoogleGenerateContent,
+    ] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = test_client_with_protocol(
+            format!("http://{}/v1", listener.local_addr().unwrap()),
+            fast_policy(),
+            protocol,
+        )
+        .with_filter_for_test(retrieved_wire_filter());
+        let mut legacy = user(text);
+        legacy.retrieved_spans = None;
+        let messages = AgentClient::build_messages(None, &[legacy], None, &[]).unwrap();
+        let error = client.chat_stream(&messages, &[]).await.unwrap_err();
+        assert!(
+            matches!(error,ProviderError::Protocol(ref message) if message.contains("source metadata")),
+            "{protocol:?}: {error}"
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(40), listener.accept())
+                .await
+                .is_err(),
+            "{protocol:?} sent legacy plaintext"
+        );
+        let messages = AgentClient::build_messages(None, &[user(text)], None, &[]).unwrap();
+        let sent = capture_retrieved_wire_request(protocol, &messages, &[])
+            .await
+            .to_string();
+        assert!(
+            sent.contains("AuthoredMarkerCanary"),
+            "{protocol:?} reclassified authored prose"
+        );
+    }
+}
+
+#[tokio::test]
+async fn privacy_prepared_body_receipt_rejects_tamper_before_socket() {
+    let root = tempfile::tempdir().unwrap();
+    let context = crate::privacy::Context::open(
+        root.path().join("profile"),
+        root.path().into(),
+        uuid::Uuid::new_v4(),
+        None,
+    )
+    .unwrap();
+    context.allow_ephemeral();
+    let mut policy = context.policy();
+    policy.enabled = true;
+    context.save_policy(policy).unwrap();
+    let prepared = br#"{"model":"model","messages":[{"role":"user","content":"PUBLIC_A"}]}"#;
+    let changed = br#"{"model":"model","messages":[{"role":"user","content":"PUBLIC_B"}]}"#;
+    assert_eq!(prepared.len(), changed.len());
+    for receipt in [
+        Some(crate::provider_replay::PreparedBodyReceipt::new(prepared)),
+        None,
+    ] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!(
+            "http://{}/v1/chat/completions",
+            listener.local_addr().unwrap()
+        );
+        let client = test_client(endpoint.clone(), fast_policy());
+        client
+            .request_store
+            .set_privacy_context(Some(context.clone()));
+        let replay = crate::provider_replay::ReplayBindings {
+            privacy_body: receipt,
+            privacy_context: Some(context.clone()),
+            privacy_revision: Some(context.policy().revision),
+            privacy_policy_digest: Some(context.policy_fingerprint()),
+            ..Default::default()
+        };
+        let result = execute_provider_request(
+            &client,
+            crate::agent::ProviderProtocol::ChatCompletions.adapter(),
+            &endpoint,
+            changed,
+            &replay,
+            1,
+            None,
+            None,
+        )
+        .await;
+        assert!(
+            matches!(result, Err(ProviderError::PrivacyBlocked { ref detail }) if detail.contains("changed after privacy projection")),
+            "{result:?}"
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(150), listener.accept())
+                .await
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn privacy_prepared_body_receipt_compares_all_bytes_and_hides_debug_content() {
+    let mut body = vec![b'x'; 1024 * 1024];
+    let receipt = crate::provider_replay::PreparedBodyReceipt::new(&body);
+    assert!(receipt.matches(&body));
+    body[512 * 1024] = b'y';
+    assert!(!receipt.matches(&body));
+    assert!(!receipt.matches(&body[..body.len() - 1]));
+    let secret = crate::provider_replay::PreparedBodyReceipt::new(b"private-body-canary");
+    assert!(!format!("{secret:?}").contains("private-body-canary"));
 }

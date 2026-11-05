@@ -265,8 +265,10 @@ impl ReviewConvergenceRound {
 }
 
 pub struct ReviewPairRun<'a> {
+    pub job_owner: crate::jobs::JobOwner,
     pub input: &'a ReviewInput,
     pub project_instructions: &'a str,
+    pub project_retrieved_spans: &'a [crate::retrieved_content::RetrievedSpan],
     pub workspace: &'a WorkspaceContext,
     pub timeout_secs: u64,
     pub usage_ledger: Arc<Mutex<UsageLedger>>,
@@ -300,7 +302,9 @@ where
         second_route.model.clone(),
     );
     let first_run = ReviewRunConfig {
+        job_owner: run.job_owner,
         project_instructions: run.project_instructions,
+        project_retrieved_spans: run.project_retrieved_spans,
         workspace: run.workspace,
         timeout_secs: run.timeout_secs,
         usage_recorder: first_recorder,
@@ -310,7 +314,9 @@ where
         pricing: first_route.pricing.as_ref(),
     };
     let second_run = ReviewRunConfig {
+        job_owner: run.job_owner,
         project_instructions: run.project_instructions,
+        project_retrieved_spans: run.project_retrieved_spans,
         workspace: run.workspace,
         timeout_secs: run.timeout_secs,
         usage_recorder: second_recorder,
@@ -588,8 +594,10 @@ mod tests {
             &second,
             &plan,
             ReviewPairRun {
+                job_owner: crate::jobs::JobOwner::process(),
                 input: &input(),
                 project_instructions: "SAME-RUBRIC",
+                project_retrieved_spans: &[],
                 workspace: &workspace,
                 timeout_secs: 5,
                 usage_ledger: ledger,
@@ -616,8 +624,10 @@ mod tests {
             &second,
             &plan,
             ReviewPairRun {
+                job_owner: crate::jobs::JobOwner::process(),
                 input: &input(),
                 project_instructions: "SAME-RUBRIC",
+                project_retrieved_spans: &[],
                 workspace: &workspace,
                 timeout_secs: 5,
                 usage_ledger: Arc::new(Mutex::new(UsageLedger::default())),
@@ -649,8 +659,10 @@ mod tests {
             &second,
             &plan,
             ReviewPairRun {
+                job_owner: crate::jobs::JobOwner::process(),
                 input: &input(),
                 project_instructions: "rubric",
+                project_retrieved_spans: &[],
                 workspace: &workspace,
                 timeout_secs: 5,
                 usage_ledger: Arc::new(Mutex::new(UsageLedger::default())),

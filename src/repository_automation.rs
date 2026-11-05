@@ -391,6 +391,8 @@ async fn run_inner(
             usage: reserved_usage(budget),
         });
     }
+    let review_owner =
+        crate::jobs::JobOwner::new(reviewer.privacy_context().map(|privacy| privacy.session_id));
     let review_backend = BudgetedReviewer {
         client: reviewer,
         dispatch: Arc::new(Mutex::new(reviewer_policy.start())),
@@ -401,7 +403,9 @@ async fn run_inner(
         (&task.reviewer_route.provider, &task.reviewer_route.model),
         &input,
         crate::review::ReviewRunConfig {
+            job_owner: review_owner,
             project_instructions: &instructions,
+            project_retrieved_spans: &[],
             workspace: &workspace,
             timeout_secs: ctx.runtime_seconds,
             usage_recorder: crate::usage::UsageRecorder::new(
@@ -627,6 +631,7 @@ fn client(
         call_policy,
         crate::request::RequestStore::default(),
     )
+    .with_privacy_context(crate::privacy::current())
     .with_output_token_cap(policy.output_token_cap())
     .and_then(|client| client.with_input_byte_cap(policy.input_byte_cap()))
     .map_err(|error| error.to_string())

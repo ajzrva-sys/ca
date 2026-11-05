@@ -106,7 +106,7 @@ impl ProviderAdapter {
         }
         match self.protocol {
             ProviderProtocol::GoogleGenerateContent => {
-                let (body, diagnostics, parts) =
+                let (body, diagnostics, parts, privacy_prefixes) =
                     crate::google_provider::body(request, source, request.tool_schema_policy)?;
                 Ok(AdapterRequest {
                     path: crate::google_provider::model_path(&request.model)?,
@@ -114,6 +114,7 @@ impl ProviderAdapter {
                     diagnostics,
                     replay: crate::provider_replay::ReplayBindings {
                         google_parts: parts,
+                        google_privacy_prefixes: privacy_prefixes,
                         ..Default::default()
                     },
                 })
@@ -124,18 +125,39 @@ impl ProviderAdapter {
                 path: "chat/completions".into(),
                 body: serialize_chat_completions(request, source, contract)?,
             }),
-            ProviderProtocol::OpenAiResponses => Ok(AdapterRequest {
-                replay: Default::default(),
-                diagnostics: Vec::new(),
-                path: "responses".into(),
-                body: serialize_openai_responses(
+            ProviderProtocol::OpenAiResponses => {
+                let native = openai_responses_request(
                     request,
                     source,
                     contract,
                     responses_options,
                     prompt_cache,
-                )?,
-            }),
+                )?;
+                // Only Output variants have passed route and canonical-history
+                // validation. Ordinary authored/fallback calls still filter.
+                let responses_items = native
+                    .input
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, item)| {
+                        matches!(item, OpenAiResponsesInputItem::Output(_)).then_some(index)
+                    })
+                    .collect();
+                Ok(AdapterRequest {
+                    replay: crate::provider_replay::ReplayBindings {
+                        responses_items,
+                        responses_privacy_prefixes: native.privacy_prefixes.clone(),
+                        ..Default::default()
+                    },
+                    diagnostics: Vec::new(),
+                    path: "responses".into(),
+                    body: serde_json::to_vec(&native).map_err(|_| {
+                        ProviderError::Protocol(
+                            "could not serialize the prepared provider request".into(),
+                        )
+                    })?,
+                })
+            }
             ProviderProtocol::AnthropicMessages => {
                 let native = anthropic_messages_request(request, Some(source))?;
                 let diagnostics = if native.replay_invalidated {
@@ -150,9 +172,8 @@ impl ProviderAdapter {
                     })?,
                     diagnostics,
                     replay: crate::provider_replay::ReplayBindings {
-                        google_parts: Vec::new(),
                         messages: native.replay_bindings,
-                        request_sequence: 0,
+                        ..Default::default()
                     },
                 })
             }
@@ -253,6 +274,11 @@ pub(crate) enum ProviderStreamDecoder {
 
 impl ProviderStreamDecoder {
     pub(crate) fn bind_sent_prefix(&mut self, prefix: &crate::provider_replay::SentPrefix) {
+        if let Self::OpenAiResponses(decoder) = self {
+            if decoder.source.privacy_policy_digest.is_some() {
+                decoder.privacy_prefix_sha256 = Some(prefix.0.clone());
+            }
+        }
         if let Self::Google(decoder) = self {
             decoder.bind_sent_prefix(&prefix.0);
         }
@@ -856,6 +882,7 @@ pub(crate) struct OpenAiResponsesDecoder {
     text: BTreeMap<(usize, usize), String>,
     reasoning: BTreeMap<(String, usize, usize), String>,
     source: ProviderStateSourceV1,
+    privacy_prefix_sha256: Option<String>,
     output_items: BTreeMap<usize, serde_json::Value>,
     output_item_bytes: usize,
     metadata: ResponsesMetadataState,
@@ -906,6 +933,7 @@ impl OpenAiResponsesDecoder {
             text: BTreeMap::new(),
             reasoning: BTreeMap::new(),
             source,
+            privacy_prefix_sha256: None,
             output_items: BTreeMap::new(),
             output_item_bytes: 0,
             metadata: ResponsesMetadataState::default(),
@@ -1179,6 +1207,10 @@ impl OpenAiResponsesDecoder {
                 events.extend(self.output_items.iter().map(|(output_index, item)| {
                     ProviderEvent::ResponseItem(ProviderResponseItem::ResponsesOutput {
                         source: self.source.clone(),
+                        privacy_prefix_sha256: item
+                            .get("encrypted_content")
+                            .filter(|value| !value.is_null() && value.as_str() != Some(""))
+                            .and(self.privacy_prefix_sha256.clone()),
                         output_index: *output_index,
                         item: item.clone(),
                     })
@@ -1562,6 +1594,7 @@ fn response_output_items_for_replay<'a>(
                 source: item_source,
                 output_index,
                 item,
+                ..
             } if item_source == source => Some((*output_index, item)),
             _ => None,
         })
@@ -1632,6 +1665,9 @@ fn validate_response_output_replay(
         }
     }
     if output_text != canonical_text {
+        crate::provider_filter::restore_view_in_place(&mut output_text);
+    }
+    if output_text != canonical_text {
         return Err(ProviderError::Protocol(
             "response output message does not match canonical assistant text".into(),
         ));
@@ -1645,7 +1681,7 @@ fn validate_response_output_replay(
                 call.call_type != "function"
                     || *call_id != call.id
                     || *name != call.function.name
-                    || *arguments != call.function.arguments
+                    || !response_tool_arguments_match(arguments, &call.function.arguments)
             })
     {
         return Err(ProviderError::Protocol(
@@ -1653,6 +1689,27 @@ fn validate_response_output_replay(
         ));
     }
     Ok(())
+}
+
+fn response_tool_arguments_match(raw: &str, canonical: &str) -> bool {
+    if raw == canonical {
+        return true;
+    }
+    let Ok(canonical) = serde_json::from_str::<serde_json::Value>(canonical) else {
+        return false;
+    };
+    let Ok(normalized) = crate::agent::stream::normalized_tool_arguments(raw) else {
+        return false;
+    };
+    let Ok(raw) = serde_json::from_str::<serde_json::Value>(&normalized) else {
+        return false;
+    };
+    if !canonical.is_object() || !raw.is_object() {
+        return false;
+    }
+    // Match the assembler's local view without rewriting provider-issued replay
+    // items. Restore values once; tool/property names remain exact.
+    canonical == raw || canonical == crate::provider_filter::restore_local_value(&raw)
 }
 
 fn required_string<'a>(
@@ -2510,6 +2567,8 @@ fn serialize_chat_completions(
 
 #[derive(Debug, Clone, Serialize)]
 struct OpenAiResponsesRequest {
+    #[serde(skip)]
+    privacy_prefixes: Vec<(usize, String)>,
     model: String,
     input: Vec<OpenAiResponsesInputItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2624,6 +2683,7 @@ fn openai_responses_request(
         }
     }
     let mut input = Vec::new();
+    let mut privacy_prefixes = Vec::new();
     for (message_index, message) in request.messages.iter().enumerate() {
         match message.role.as_str() {
             "system" | "developer" | "user" => {
@@ -2657,6 +2717,26 @@ fn openai_responses_request(
                     ));
                 }
                 if let Some(items) = response_output_items_for_replay(message, source)? {
+                    if source.privacy_policy_digest.is_some() {
+                        for response in &message.response_items {
+                            if response
+                                .opaque_source()
+                                .is_some_and(|origin| origin == source)
+                            {
+                                let ProviderResponseItem::ResponsesOutput {
+                                    privacy_prefix_sha256,
+                                    ..
+                                } = response
+                                else {
+                                    continue;
+                                };
+                                let prefix = privacy_prefix_sha256.clone().ok_or_else(|| ProviderError::PrivacyBlocked {
+                                    detail: "Opaque Responses history has no host prefix receipt; use /filter continue".into(),
+                                })?;
+                                privacy_prefixes.push((input.len(), prefix));
+                            }
+                        }
+                    }
                     input.extend(
                         items
                             .into_iter()
@@ -2758,6 +2838,7 @@ fn openai_responses_request(
         None => (None, None),
     };
     Ok(OpenAiResponsesRequest {
+        privacy_prefixes,
         model: request.model.clone(),
         input,
         tools,
@@ -2832,6 +2913,7 @@ fn openai_responses_content(
     ))
 }
 
+#[cfg(test)]
 fn serialize_openai_responses(
     request: &crate::request::PreparedModelRequest,
     source: &ProviderStateSourceV1,
@@ -3210,9 +3292,8 @@ fn serialize_anthropic_messages_on_route(
     crate::provider_replay::prepare_outbound(
         &bytes,
         &crate::provider_replay::ReplayBindings {
-            google_parts: Vec::new(),
             messages: native.replay_bindings,
-            request_sequence: 0,
+            ..Default::default()
         },
         &filter,
     )
@@ -3359,6 +3440,7 @@ mod tests {
                 id: "call-1".into(),
                 call_type: "function".into(),
                 function: crate::agent::client::FunctionCall {
+                    arguments_retrieved_spans: Vec::new(),
                     name: "read_file".into(),
                     arguments: "{\"path\":\"a\"}".into(),
                 },
@@ -3367,6 +3449,7 @@ mod tests {
                 id: "call-2".into(),
                 call_type: "function".into(),
                 function: crate::agent::client::FunctionCall {
+                    arguments_retrieved_spans: Vec::new(),
                     name: "read_file".into(),
                     arguments: "{\"path\":\"b\"}".into(),
                 },
@@ -3474,6 +3557,7 @@ mod tests {
                     id: "call".into(),
                     call_type: "function".into(),
                     function: crate::agent::client::FunctionCall {
+                        arguments_retrieved_spans: Vec::new(),
                         name: "tool".into(),
                         arguments: "[]".into(),
                     },
@@ -3696,6 +3780,7 @@ mod tests {
                         id: "call-1".into(),
                         call_type: "function".into(),
                         function: crate::agent::client::FunctionCall {
+                            arguments_retrieved_spans: Vec::new(),
                             name: "read_file".into(),
                             arguments: "{\"path\":\"input.txt\"}".into(),
                         },
@@ -3830,6 +3915,7 @@ mod tests {
                         id: "call-1".into(),
                         call_type: "function".into(),
                         function: crate::agent::client::FunctionCall {
+                            arguments_retrieved_spans: Vec::new(),
                             name: "read_file".into(),
                             arguments: "{\"path\":\"input.txt\"}".into(),
                         },
@@ -3837,6 +3923,7 @@ mod tests {
                     tool_call_id: None,
                     response_items: vec![
                         ProviderResponseItem::ResponsesOutput {
+                            privacy_prefix_sha256: None,
                             source: ProviderStateSourceV1::for_test(
                                 "other-provider",
                                 ProviderProtocol::OpenAiResponses,
@@ -3849,6 +3936,7 @@ mod tests {
                             }),
                         },
                         ProviderResponseItem::ResponsesOutput {
+                            privacy_prefix_sha256: None,
                             source: ProviderStateSourceV1::for_test(
                                 "openai",
                                 ProviderProtocol::OpenAiResponses,
@@ -3857,6 +3945,7 @@ mod tests {
                             item: reasoning_item.clone(),
                         },
                         ProviderResponseItem::ResponsesOutput {
+                            privacy_prefix_sha256: None,
                             source: ProviderStateSourceV1::for_test(
                                 "openai",
                                 ProviderProtocol::OpenAiResponses,
@@ -3865,6 +3954,7 @@ mod tests {
                             item: earlier_reasoning_item.clone(),
                         },
                         ProviderResponseItem::ResponsesOutput {
+                            privacy_prefix_sha256: None,
                             source: ProviderStateSourceV1::for_test(
                                 "openai",
                                 ProviderProtocol::OpenAiResponses,
@@ -3873,6 +3963,7 @@ mod tests {
                             item: function_call_item.clone(),
                         },
                         ProviderResponseItem::ResponsesOutput {
+                            privacy_prefix_sha256: None,
                             source: ProviderStateSourceV1::for_test(
                                 "openai",
                                 ProviderProtocol::OpenAiResponses,
@@ -3920,6 +4011,7 @@ mod tests {
     #[test]
     fn responses_replay_rejects_duplicate_indexes_and_excess_item_count() {
         let reasoning = |output_index: usize, id: String| ProviderResponseItem::ResponsesOutput {
+            privacy_prefix_sha256: None,
             source: ProviderStateSourceV1::for_test("openai", ProviderProtocol::OpenAiResponses),
             output_index,
             item: serde_json::json!({
@@ -3954,6 +4046,296 @@ mod tests {
     }
 
     #[test]
+    fn responses_replay_accepts_restored_history_and_preserves_issued_items() {
+        let config = crate::provider_filter::ProviderFilterConfig {
+            enabled: true,
+            adjustments: vec![crate::provider_filter::ContentAdjustment {
+                from: "private \"quoted\" \\ path".into(),
+                to: "replacement".into(),
+            }],
+            ..Default::default()
+        };
+        crate::provider_filter::with_test_filter(&config, || {
+            let source =
+                ProviderStateSourceV1::for_test("openai", ProviderProtocol::OpenAiResponses);
+            let issued = [
+                serde_json::json!({
+                    "id": "rs_1", "type": "reasoning", "summary": [],
+                    "encrypted_content": "opaque reasoning", "status": "completed"
+                }),
+                serde_json::json!({
+                    "id": "msg_1", "type": "message", "role": "assistant",
+                    "content": [{"type": "output_text", "text": "replacement", "annotations": []}],
+                    "status": "completed"
+                }),
+                serde_json::json!({
+                    "id": "fc_1", "type": "function_call", "call_id": "call-1",
+                    "name": "read_file", "arguments": "{\"path\":\"replacement.txt\"}",
+                    "status": "completed"
+                }),
+            ];
+            let message = ChatMessage {
+                role: "assistant".into(),
+                content: crate::image_content::ModelContent::text("private \"quoted\" \\ path"),
+                tool_calls: Some(vec![crate::agent::client::ToolCallMsg {
+                    id: "call-1".into(),
+                    call_type: "function".into(),
+                    function: crate::agent::client::FunctionCall {
+                        arguments_retrieved_spans: Vec::new(),
+                        name: "read_file".into(),
+                        arguments: serde_json::json!({"path": "private \"quoted\" \\ path.txt"})
+                            .to_string(),
+                    },
+                }]),
+                tool_call_id: None,
+                response_items: issued
+                    .iter()
+                    .enumerate()
+                    .map(
+                        |(output_index, item)| ProviderResponseItem::ResponsesOutput {
+                            privacy_prefix_sha256: None,
+                            source: source.clone(),
+                            output_index,
+                            item: item.clone(),
+                        },
+                    )
+                    .collect(),
+            };
+            let replay = response_output_items_for_replay(&message, &source)
+                .unwrap()
+                .unwrap();
+            assert_eq!(replay, issued.iter().collect::<Vec<_>>());
+
+            for field in ["id", "name", "arguments", "count"] {
+                let mut changed = message.clone();
+                let calls = changed.tool_calls.as_mut().unwrap();
+                match field {
+                    "id" => calls[0].id = "another-call".into(),
+                    "name" => calls[0].function.name = "write_file".into(),
+                    "arguments" => calls[0].function.arguments = "{\"path\":\"other.txt\"}".into(),
+                    "count" => calls.clear(),
+                    _ => unreachable!(),
+                }
+                assert!(
+                    matches!(
+                        response_output_items_for_replay(&changed, &source),
+                        Err(ProviderError::Protocol(error))
+                            if error.contains("canonical assistant tool calls")
+                    ),
+                    "{field}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn responses_replay_overlapping_aliases_stay_exact_after_final_filtering() {
+        let config = crate::provider_filter::ProviderFilterConfig {
+            enabled: true,
+            page_stand_in: crate::provider_filter::PageStandIn::Latin,
+            adjustments: vec![crate::provider_filter::ContentAdjustment {
+                from: "main-image.png".into(),
+                to: "alias-main-image.png".into(),
+            }],
+            ..Default::default()
+        };
+        crate::provider_filter::with_test_filter(&config, || {
+            let source =
+                ProviderStateSourceV1::for_test("openai", ProviderProtocol::OpenAiResponses);
+            let issued = [
+                serde_json::json!({
+                    "id":"rs_1", "type":"reasoning", "summary":[],
+                    "encrypted_content":"opaque-state", "status":"completed"
+                }),
+                serde_json::json!({
+                    "id":"msg_1", "type":"message", "role":"assistant",
+                    "content":[{"type":"output_text", "text":"Inspect alias-main-image.png", "annotations":[]}],
+                    "status":"completed"
+                }),
+                serde_json::json!({
+                    "id":"fc_1", "type":"function_call", "call_id":"call-1",
+                    "name":"view_image", "arguments":" { \"path\" : \"alias-main-image.png\" } ",
+                    "status":"completed"
+                }),
+            ];
+            let assistant = ChatMessage {
+                role: "assistant".into(),
+                content: crate::image_content::ModelContent::text("Inspect main-image.png"),
+                tool_calls: Some(vec![crate::agent::client::ToolCallMsg {
+                    id: "call-1".into(),
+                    call_type: "function".into(),
+                    function: crate::agent::client::FunctionCall {
+                        arguments_retrieved_spans: Vec::new(),
+                        name: "view_image".into(),
+                        arguments: "{\"path\":\"main-image.png\"}".into(),
+                    },
+                }]),
+                tool_call_id: None,
+                response_items: issued
+                    .iter()
+                    .enumerate()
+                    .map(
+                        |(output_index, item)| ProviderResponseItem::ResponsesOutput {
+                            privacy_prefix_sha256: None,
+                            source: source.clone(),
+                            output_index,
+                            item: item.clone(),
+                        },
+                    )
+                    .collect(),
+            };
+            let request = crate::request::PreparedModelRequest::new(
+                crate::request::RequestKind::ToolContinuation,
+                "openai",
+                "gpt-6.1-sol",
+                vec![
+                    ChatMessage {
+                        role: "user".into(),
+                        content: crate::image_content::ModelContent::text(
+                            "Authored main-image.png",
+                        ),
+                        tool_calls: None,
+                        tool_call_id: None,
+                        response_items: Vec::new(),
+                    },
+                    assistant,
+                    ChatMessage {
+                        role: "tool".into(),
+                        content: crate::image_content::ModelContent::text("RetrievedCanary"),
+                        tool_calls: None,
+                        tool_call_id: Some("call-1".into()),
+                        response_items: Vec::new(),
+                    },
+                ],
+                Vec::new(),
+                crate::agent::client::ChatRequestOptions::default(),
+            );
+            let original = serde_json::to_value(&request.messages).unwrap();
+            let filter = crate::provider_filter::current();
+            for _ in 0..2 {
+                let prepared = ProviderProtocol::OpenAiResponses
+                    .adapter()
+                    .prepare(&request, &source, None, None, None)
+                    .unwrap();
+                let (bytes, diagnostics) = crate::provider_replay::prepare_outbound(
+                    &prepared.body,
+                    &prepared.replay,
+                    &filter,
+                )
+                .unwrap();
+                let sent: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                assert!(diagnostics.is_empty());
+                assert_eq!(&sent["input"].as_array().unwrap()[1..4], &issued);
+                assert_eq!(sent["input"][0]["content"], "Authored alias-main-image.png");
+                assert_eq!(sent["input"][4]["type"], "function_call_output");
+                assert_eq!(sent["input"][4]["call_id"], "call-1");
+                assert!(sent["input"][4]["output"].as_str().unwrap().contains('«'));
+                assert!(!String::from_utf8(bytes)
+                    .unwrap()
+                    .contains("RetrievedCanary"));
+            }
+            assert_eq!(serde_json::to_value(&request.messages).unwrap(), original);
+
+            let prepared = ProviderProtocol::OpenAiResponses
+                .adapter()
+                .prepare(&request, &source, None, None, None)
+                .unwrap();
+            for (pattern, stopped) in [("opaque-state", true), ("null", false)] {
+                let stop_filter = crate::provider_filter::ProviderFilter::compile(
+                    &crate::provider_filter::ProviderFilterConfig {
+                        enabled: true,
+                        rules: vec![crate::provider_filter::ProviderFilterRule {
+                            id: "replay-stop".into(),
+                            target: crate::provider_filter::ProviderFilterTarget::Request,
+                            kind: crate::provider_filter::ProviderFilterKind::Literal,
+                            pattern: pattern.into(),
+                        }],
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                let result = crate::provider_replay::prepare_outbound(
+                    &prepared.body,
+                    &prepared.replay,
+                    &stop_filter,
+                );
+                assert_eq!(
+                    matches!(result, Err(ProviderError::FilterStopped { .. })),
+                    stopped,
+                    "stop scan must inspect restored items, not temporary masks"
+                );
+                if !stopped {
+                    result.unwrap();
+                }
+            }
+
+            let mut legacy = request;
+            legacy.messages[1].response_items.clear();
+            let prepared = ProviderProtocol::OpenAiResponses
+                .adapter()
+                .prepare(&legacy, &source, None, None, None)
+                .unwrap();
+            let (bytes, _) =
+                crate::provider_replay::prepare_outbound(&prepared.body, &prepared.replay, &filter)
+                    .unwrap();
+            let sent: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(
+                sent["input"][2]["arguments"],
+                "{\"path\":\"alias-main-image.png\"}"
+            );
+        });
+    }
+
+    #[test]
+    fn responses_replay_matches_object_arguments_after_existing_normalization() {
+        let canonical = r#"{"line":2,"path":"input.txt"}"#;
+        for raw in [
+            r#" { "path": "input.txt", "line": 2 } "#,
+            r#"{"path":"\u0069nput.txt","line":2}"#,
+            r#"{"line":2,"path":"input.txt"} trailing note"#,
+            r#"{"line":2,"path":"input.txt"}{"path":"input.txt","line":2}"#,
+        ] {
+            assert!(response_tool_arguments_match(raw, canonical), "{raw}");
+        }
+        for raw in [
+            r#"{"line":2,"path":"other.txt"}"#,
+            r#"{"line":2,"path":"input.txt"}{"line":3}"#,
+            r#"{"line":2,"path":"input.txt"}{"line":"#,
+            r#"["input.txt",2]"#,
+            r#"{"line":2,"path":"input.txt""#,
+        ] {
+            assert!(!response_tool_arguments_match(raw, canonical), "{raw}");
+        }
+    }
+
+    #[test]
+    fn responses_replay_restores_argument_values_once_and_keeps_keys_exact() {
+        let original = "private \"quoted\" \\ path";
+        let config = crate::provider_filter::ProviderFilterConfig {
+            enabled: true,
+            adjustments: vec![crate::provider_filter::ContentAdjustment {
+                from: original.into(),
+                to: "replacement".into(),
+            }],
+            ..Default::default()
+        };
+        crate::provider_filter::with_test_filter(&config, || {
+            let raw = serde_json::json!({"path": "replacement.txt"}).to_string();
+            let canonical = serde_json::json!({"path": format!("{original}.txt")}).to_string();
+            assert!(response_tool_arguments_match(&raw, &canonical));
+            assert!(response_tool_arguments_match(&raw, &raw));
+            assert!(!response_tool_arguments_match(
+                &raw,
+                &serde_json::json!({"path": "different.txt"}).to_string()
+            ));
+            assert!(!response_tool_arguments_match(
+                &serde_json::json!({"replacement": "value"}).to_string(),
+                &serde_json::json!({"private \"quoted\" \\ path": "value"}).to_string()
+            ));
+        });
+    }
+
+    #[test]
     fn responses_replay_rejects_output_that_disagrees_with_canonical_history() {
         let message = ChatMessage {
             role: "assistant".into(),
@@ -3961,6 +4343,7 @@ mod tests {
             tool_calls: None,
             tool_call_id: None,
             response_items: vec![ProviderResponseItem::ResponsesOutput {
+                privacy_prefix_sha256: None,
                 source: ProviderStateSourceV1::for_test(
                     "openai",
                     ProviderProtocol::OpenAiResponses,
@@ -4169,6 +4552,7 @@ mod tests {
                     arg: "\"input.txt\"}".into(),
                 },
                 ProviderEvent::ResponseItem(ProviderResponseItem::ResponsesOutput {
+                    privacy_prefix_sha256: None,
                     source: ProviderStateSourceV1::for_test(
                         "unknown",
                         ProviderProtocol::OpenAiResponses
@@ -4177,6 +4561,7 @@ mod tests {
                     item: reasoning_item,
                 }),
                 ProviderEvent::ResponseItem(ProviderResponseItem::ResponsesOutput {
+                    privacy_prefix_sha256: None,
                     source: ProviderStateSourceV1::for_test(
                         "unknown",
                         ProviderProtocol::OpenAiResponses
@@ -4185,6 +4570,7 @@ mod tests {
                     item: message_item,
                 }),
                 ProviderEvent::ResponseItem(ProviderResponseItem::ResponsesOutput {
+                    privacy_prefix_sha256: None,
                     source: ProviderStateSourceV1::for_test(
                         "unknown",
                         ProviderProtocol::OpenAiResponses
@@ -4371,6 +4757,7 @@ mod tests {
         assert_eq!(
             turn.response_items[0],
             ProviderResponseItem::ResponsesOutput {
+                privacy_prefix_sha256: None,
                 source: ProviderStateSourceV1::for_test(
                     "openai",
                     ProviderProtocol::OpenAiResponses
@@ -4382,6 +4769,7 @@ mod tests {
         assert_eq!(
             turn.response_items[1],
             ProviderResponseItem::ResponsesOutput {
+                privacy_prefix_sha256: None,
                 source: ProviderStateSourceV1::for_test(
                     "openai",
                     ProviderProtocol::OpenAiResponses
@@ -5370,6 +5758,7 @@ mod native_replay_tests {
                         id: call.id,
                         call_type: "function".into(),
                         function: crate::agent::client::FunctionCall {
+                            arguments_retrieved_spans: Vec::new(),
                             name: call.name,
                             arguments: call.arguments,
                         },

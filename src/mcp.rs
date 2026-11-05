@@ -5435,6 +5435,7 @@ finally:
         .to_string();
         let messages = vec![
             crate::app::Message {
+                retrieved_spans: Some(Vec::new()),
                 role: crate::app::Role::User,
                 content: format!("arbitrary transcript text: {valid_output}"),
                 tool_calls: None,
@@ -5443,14 +5444,18 @@ finally:
                 timestamp: chrono::Utc::now(),
             },
             crate::app::Message {
+                retrieved_spans: Some(Vec::new()),
                 role: crate::app::Role::Assistant,
                 content: String::new(),
                 tool_calls: Some(vec![crate::app::ToolCall {
+                    output_source: None,
+                    arguments_retrieved_spans: Vec::new(),
                     id: "call-190".into(),
                     name: "delegate_mechanistic".into(),
                     arguments: "{}".into(),
                     status: crate::app::ToolStatus::Done,
                     output: Some(valid_output),
+                    started_at: None,
                 }]),
                 thinking: None,
                 response_items: Vec::new(),

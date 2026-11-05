@@ -1261,6 +1261,15 @@ fn redaction_marker(key: &str) -> &'static str {
 }
 
 fn sanitize_raw_frame(bytes: &[u8], secrets: &[&str]) -> Option<Value> {
+    if bytes.len() > MAX_FRAME_BYTES {
+        // A large response.created frame can echo the complete tool catalog.
+        // Never parse a truncated JSON prefix or retain uninspected contents;
+        // keep recording complete outbound requests and decoded events.
+        return Some(serde_json::json!({
+            "marker": "oversized raw provider frame withheld",
+            "bytes": bytes.len(),
+        }));
+    }
     let retained = bytes.len().min(MAX_FRAME_BYTES);
     let slice = &bytes[..retained];
     let omitted = bytes.len().saturating_sub(retained);
@@ -1430,6 +1439,50 @@ impl RequestKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oversized_raw_catalog_frame_keeps_complete_request_tracing_active() {
+        let temp = tempfile::tempdir().unwrap();
+        let hub = ProviderTraceHub::new(temp.path().join("traces"), true);
+        let TraceStart::Started(id) = hub.start().unwrap() else {
+            panic!("trace must start");
+        };
+        let request = PreparedModelRequest::new(
+            RequestKind::MainTurn,
+            "provider",
+            "model",
+            Vec::new(),
+            Vec::new(),
+            crate::agent::client::ChatRequestOptions::default(),
+        );
+        let trace = hub
+            .begin_request_with_session(&request, "test", &[], None)
+            .unwrap();
+        let frame = format!(
+            "data: {{\"tools\":\"{}\",\"password\":\"oversized-secret-canary\"}}",
+            "x".repeat(MAX_FRAME_BYTES)
+        );
+        trace.raw_frame(1, frame.as_bytes());
+        assert!(hub.status().enabled);
+        trace.decoded_event(1, &ProviderEvent::Text("decoded-result".into()));
+        trace.outcome(1, "completed", None);
+        trace.attempt_started(
+            2,
+            "POST",
+            "https://example.invalid/responses",
+            &reqwest::header::HeaderMap::new(),
+            br#"{"input":"next-complete-request"}"#,
+        );
+        trace.outcome(2, "completed", None);
+        hub.stop_and_flush(Duration::from_secs(1));
+        let text = hub.open_text(id).unwrap();
+        assert!(text.contains("oversized raw provider frame withheld"));
+        assert!(text.contains("decoded-result"));
+        assert!(text.contains("next-complete-request"));
+        assert!(!text.contains("oversized-secret-canary"));
+        assert!(!text.contains(&"x".repeat(256)));
+        assert_eq!(text.matches("\"event\":\"request_finished\"").count(), 2);
+    }
 
     fn wait_for_writer(hub: &ProviderTraceHub) {
         for _ in 0..100 {
@@ -1613,6 +1666,7 @@ mod tests {
         assert!(rendered.contains("secret-shaped JSON"));
 
         let item = ProviderEvent::ResponseItem(ProviderResponseItem::ResponsesOutput {
+            privacy_prefix_sha256: None,
             source: crate::agent::stream::ProviderStateSourceV1::for_test(
                 "openai",
                 crate::agent::provider::ProviderProtocol::OpenAiResponses,

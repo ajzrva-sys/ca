@@ -259,22 +259,282 @@ fn tool_input_matches(arguments: &str, input: &Value) -> bool {
     canonical == Some(crate::provider_filter::restore_local_value(input))
 }
 
+/// Host-only immutable bytes prove the exact prepared body at the send boundary.
+/// Protocol-prefix and durable registry digests keep their SHA-256 contracts.
+#[derive(Clone)]
+pub(crate) struct PreparedBodyReceipt(std::sync::Arc<[u8]>);
+
+impl PreparedBodyReceipt {
+    pub(crate) fn new(body: &[u8]) -> Self {
+        Self(std::sync::Arc::from(body))
+    }
+    pub(crate) fn matches(&self, body: &[u8]) -> bool {
+        self.0.as_ref() == body
+    }
+    pub(crate) fn bytes(&self) -> std::sync::Arc<[u8]> {
+        self.0.clone()
+    }
+}
+
+impl std::fmt::Debug for PreparedBodyReceipt {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PreparedBodyReceipt")
+            .field("bytes", &self.0.len())
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ReplayBindings {
+    pub privacy_body: Option<PreparedBodyReceipt>,
+    pub privacy_revision: Option<u64>,
+    pub privacy_policy_digest: Option<String>,
+    pub privacy_context: Option<std::sync::Arc<crate::privacy::Context>>,
+    pub privacy_original: Option<std::sync::Arc<[u8]>>,
+    pub responses_items: Vec<usize>,
+    pub responses_privacy_prefixes: Vec<(usize, String)>,
     pub google_parts: Vec<usize>,
+    pub google_privacy_prefixes: Vec<(usize, String)>,
     pub messages: Vec<(usize, String)>,
     pub request_sequence: u64,
 }
 #[derive(Clone)]
 pub(crate) struct SentPrefix(pub String);
 
-/// Protect exact provider-issued assistant arrays from transformations, then
-/// check signatures against the actual outgoing prefix. Stop rules see final bytes.
+pub(crate) fn responses_prefix(body: &[u8], end: Option<usize>) -> Result<String, ProviderError> {
+    let value: Value = serde_json::from_slice(body)
+        .map_err(|_| ProviderError::Protocol("Responses prefix is not JSON".into()))?;
+    responses_prefix_value(&value, end)
+}
+
+fn responses_prefix_value(value: &Value, end: Option<usize>) -> Result<String, ProviderError> {
+    let mut prefix = ResponsesPrefix::new(value)?;
+    prefix.at(end.unwrap_or(prefix.input.len()))
+}
+
+struct ResponsesPrefix<'a> {
+    input: &'a [Value],
+    hash: Sha256,
+    through: usize,
+}
+impl<'a> ResponsesPrefix<'a> {
+    fn new(value: &'a Value) -> Result<Self, ProviderError> {
+        let input = value
+            .get("input")
+            .and_then(Value::as_array)
+            .ok_or_else(|| ProviderError::Protocol("Responses prefix has no input array".into()))?;
+        let mut hash = Sha256::new();
+        hash.update(b"ca-private-responses-prefix-v1\0");
+        hash_json(&mut hash, value.get("tools").unwrap_or(&Value::Null))?;
+        hash.update([0]);
+        hash_json(&mut hash, value.get("instructions").unwrap_or(&Value::Null))?;
+        Ok(Self {
+            input,
+            hash,
+            through: 0,
+        })
+    }
+    fn at(&mut self, end: usize) -> Result<String, ProviderError> {
+        if end < self.through || end > self.input.len() {
+            return Err(ProviderError::Protocol(
+                "Responses prefix boundary is invalid".into(),
+            ));
+        }
+        for item in &self.input[self.through..end] {
+            self.hash.update([0]);
+            hash_json(&mut self.hash, item)?;
+        }
+        self.through = end;
+        let mut hash = self.hash.clone();
+        hash.update((end as u64).to_le_bytes());
+        Ok(format!("{:x}", hash.finalize()))
+    }
+}
+
+fn hash_json(hash: &mut Sha256, value: &Value) -> Result<(), ProviderError> {
+    struct Writer<'a>(&'a mut Sha256);
+    impl std::io::Write for Writer<'_> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.update(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    serde_json::to_writer(Writer(hash), value)
+        .map_err(|_| ProviderError::Protocol("Responses prefix serialization failed".into()))
+}
+
+pub(crate) fn google_prefix(body: &[u8], end: Option<usize>) -> Result<String, ProviderError> {
+    let value: Value = serde_json::from_slice(body)
+        .map_err(|_| ProviderError::Protocol("Google prefix is not JSON".into()))?;
+    let mut prefix = GooglePrefix::new(&value)?;
+    prefix.at(end.unwrap_or(prefix.contents.len()))
+}
+
+// Preserve the existing Google receipt digest (the canonical request excluding
+// generationConfig), while hashing long conversation prefixes only once.
+struct GooglePrefix<'a> {
+    contents: &'a [Value],
+    hash: Sha256,
+    tail: Vec<u8>,
+    through: usize,
+}
+
+impl<'a> GooglePrefix<'a> {
+    fn new(value: &'a Value) -> Result<Self, ProviderError> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| ProviderError::Protocol("Google prefix is not an object".into()))?;
+        let contents = value
+            .get("contents")
+            .and_then(Value::as_array)
+            .ok_or_else(|| ProviderError::Protocol("Google prefix has no contents array".into()))?;
+        let mut head = vec![b'{'];
+        let mut tail = Vec::new();
+        let mut after_contents = false;
+        let mut first = true;
+        // Preserve Map::remove's exact key order, including swap removal when
+        // serde_json's preserve_order feature is enabled. Copy only header
+        // keys; cloning values here would duplicate the complete conversation.
+        let mut fields = object
+            .iter()
+            .map(|(key, _)| (key.clone(), Value::Null))
+            .collect::<serde_json::Map<_, _>>();
+        fields.remove("generationConfig");
+        for key in fields.keys() {
+            let item = &object[key];
+            let output = if after_contents { &mut tail } else { &mut head };
+            if !first {
+                output.push(b',');
+            }
+            first = false;
+            serde_json::to_writer(&mut *output, key).map_err(|_| {
+                ProviderError::Protocol("Google prefix key cannot be encoded".into())
+            })?;
+            output.push(b':');
+            if key == "contents" {
+                output.push(b'[');
+                tail.push(b']');
+                after_contents = true;
+            } else {
+                serde_json::to_writer(output, item).map_err(|_| {
+                    ProviderError::Protocol("Google prefix value cannot be encoded".into())
+                })?;
+            }
+        }
+        tail.push(b'}');
+        let mut hash = Sha256::new();
+        hash.update(head);
+        Ok(Self {
+            contents,
+            hash,
+            tail,
+            through: 0,
+        })
+    }
+
+    fn at(&mut self, end: usize) -> Result<String, ProviderError> {
+        if end < self.through || end > self.contents.len() {
+            return Err(ProviderError::Protocol(
+                "Google prefix boundary is invalid".into(),
+            ));
+        }
+        for (index, content) in self.contents[self.through..end].iter().enumerate() {
+            if self.through + index > 0 {
+                self.hash.update(b",");
+            }
+            hash_json(&mut self.hash, content)?;
+        }
+        self.through = end;
+        let mut hash = self.hash.clone();
+        hash.update(&self.tail);
+        Ok(format!("{:x}", hash.finalize()))
+    }
+}
+
+/// Protect unchanged provider-issued assistant arrays, then check signatures
+/// against the actual outgoing prefix. Stop rules see final bytes.
 pub(crate) fn prepare_outbound(
     body: &[u8],
     bindings: &ReplayBindings,
     filter: &crate::provider_filter::ProviderFilter,
 ) -> Result<(Vec<u8>, Vec<String>), ProviderError> {
+    prepare_projected(body, bindings, filter, None)
+}
+
+/// Project host-owned data while immutable provider arrays are removed, then
+/// validate their bindings against the actual outgoing prefix after restoration.
+pub(crate) fn prepare_outbound_with_projection(
+    body: &[u8],
+    bindings: &ReplayBindings,
+    filter: &crate::provider_filter::ProviderFilter,
+    project: &OutboundProjection<'_>,
+) -> Result<(Vec<u8>, Vec<String>), ProviderError> {
+    prepare_projected(body, bindings, filter, Some(project))
+}
+type OutboundProjection<'a> = dyn Fn(&[u8]) -> Result<Vec<u8>, ProviderError> + 'a;
+struct OptionalProjection<'a>(Option<&'a OutboundProjection<'a>>);
+impl OptionalProjection<'_> {
+    fn apply<'a>(&self, body: &'a [u8]) -> Result<std::borrow::Cow<'a, [u8]>, ProviderError> {
+        match self.0 {
+            Some(project) => project(body).map(std::borrow::Cow::Owned),
+            None => Ok(std::borrow::Cow::Borrowed(body)),
+        }
+    }
+}
+fn prepare_projected(
+    body: &[u8],
+    bindings: &ReplayBindings,
+    filter: &crate::provider_filter::ProviderFilter,
+    projection: Option<&OutboundProjection<'_>>,
+) -> Result<(Vec<u8>, Vec<String>), ProviderError> {
+    let project = OptionalProjection(projection);
+    if !bindings.responses_items.is_empty() {
+        let mut value: Value = serde_json::from_slice(body)
+            .map_err(|_| ProviderError::Protocol("Responses request is not JSON".into()))?;
+        let mut originals = Vec::new();
+        for index in &bindings.responses_items {
+            let item = value
+                .pointer_mut(&format!("/input/{index}"))
+                .ok_or_else(|| {
+                    ProviderError::Protocol("Responses replay binding has no input item".into())
+                })?;
+            originals.push((*index, std::mem::replace(item, Value::Null)));
+        }
+        let filtered = filter.prepare_request_without_final_scan(
+            &project.apply(&serde_json::to_vec(&value).expect("JSON serializes"))?,
+        )?;
+        value = serde_json::from_slice(&filtered).map_err(|_| {
+            ProviderError::Protocol("filter produced invalid Responses JSON".into())
+        })?;
+        for (index, original) in originals {
+            let item = value
+                .pointer_mut(&format!("/input/{index}"))
+                .ok_or_else(|| {
+                    ProviderError::Protocol("filter removed a Responses replay item".into())
+                })?;
+            *item = original;
+        }
+        let bytes = serde_json::to_vec(&value).expect("JSON serializes");
+        filter.scan_prepared_request(&bytes)?;
+        let mut required = bindings
+            .responses_privacy_prefixes
+            .iter()
+            .collect::<Vec<_>>();
+        required.sort_by_key(|(end, _)| *end);
+        if !required.is_empty() {
+            let mut prefix = ResponsesPrefix::new(&value)?;
+            for (end, expected) in required {
+                if prefix.at(*end)? != *expected {
+                    return Err(ProviderError::PrivacyBlocked { detail: "Earlier request content changed under project privacy while opaque reasoning depends on its original prefix; use /filter continue".into() });
+                }
+            }
+        }
+        return Ok((bytes, Vec::new()));
+    }
     if !bindings.google_parts.is_empty() {
         let mut value: Value = serde_json::from_slice(body)
             .map_err(|_| ProviderError::Protocol("Google request is not JSON".into()))?;
@@ -287,19 +547,50 @@ pub(crate) fn prepare_outbound(
                 })?;
             originals.push((*index, std::mem::replace(parts, json!([0]))));
         }
-        let filtered =
-            filter.prepare_request(&serde_json::to_vec(&value).expect("JSON serializes"))?;
+        let filtered = filter.prepare_request(
+            &project.apply(&serde_json::to_vec(&value).expect("JSON serializes"))?,
+        )?;
         value = serde_json::from_slice(&filtered)
             .map_err(|_| ProviderError::Protocol("filter produced invalid Google JSON".into()))?;
-        for (index, parts) in originals {
+        let mut image_signature_omitted = false;
+        for (index, mut parts) in originals {
+            if filter.replaces_images() {
+                let parts = parts.as_array_mut().ok_or_else(|| {
+                    ProviderError::Protocol("Google replay parts must be an array".into())
+                })?;
+                for part in parts {
+                    let signed = part.get("thoughtSignature").is_some()
+                        || part.get("thought_signature").is_some();
+                    // Drop only the replaced image's own signature. Other
+                    // issued parts and authored function arguments stay exact.
+                    if crate::provider_filter::placeholder_google_image_part(part) {
+                        image_signature_omitted |= signed;
+                    }
+                }
+            }
             value["contents"][index]["parts"] = parts;
+        }
+        let mut required = bindings.google_privacy_prefixes.iter().collect::<Vec<_>>();
+        required.sort_by_key(|(end, _)| *end);
+        if !required.is_empty() {
+            let mut prefix = GooglePrefix::new(&value)?;
+            for (end, expected) in required {
+                if prefix.at(*end)? != *expected {
+                    return Err(ProviderError::PrivacyBlocked { detail: "Earlier request content changed under project privacy while opaque Google history depends on its original prefix; use /filter continue".into() });
+                }
+            }
         }
         let body = serde_json::to_vec(&value).expect("JSON serializes");
         filter.scan_prepared_request(&body)?;
-        return Ok((body, vec![]));
+        let diagnostics = if image_signature_omitted {
+            vec!["Native image replay signature omitted: outbound image placeholder replaced its source part.".into()]
+        } else {
+            Vec::new()
+        };
+        return Ok((body, diagnostics));
     }
     if bindings.messages.is_empty() {
-        return Ok((filter.prepare_request(body)?, Vec::new()));
+        return Ok((filter.prepare_request(&project.apply(body)?)?, Vec::new()));
     }
     let mut value: Value = serde_json::from_slice(body)
         .map_err(|_| ProviderError::Protocol("native request is not JSON".into()))?;
@@ -312,7 +603,8 @@ pub(crate) fn prepare_outbound(
             })?;
         originals.push((*index, std::mem::replace(content, json!([0]))));
     }
-    let filtered = filter.prepare_request(&serde_json::to_vec(&value).expect("JSON serializes"))?;
+    let filtered = filter
+        .prepare_request(&project.apply(&serde_json::to_vec(&value).expect("JSON serializes"))?)?;
     value = serde_json::from_slice(&filtered)
         .map_err(|_| ProviderError::Protocol("filter produced invalid native JSON".into()))?;
     for (index, content) in originals {
@@ -323,6 +615,20 @@ pub(crate) fn prepare_outbound(
     for (index, expected) in &bindings.messages {
         let prefix = json!({"system": value.get("system").cloned().unwrap_or(json!([])), "tools":value.get("tools").cloned().unwrap_or(json!([])), "messages": &value["messages"].as_array().ok_or_else(|| ProviderError::Protocol("native history is invalid".into()))?[..*index]});
         if valid && *expected != prefix_digest(&prefix) {
+            if bindings.privacy_context.is_some()
+                && value["messages"][*index]["content"]
+                    .as_array()
+                    .is_some_and(|content| {
+                        content.iter().any(|block| {
+                            matches!(
+                                block["type"].as_str(),
+                                Some("thinking" | "redacted_thinking")
+                            )
+                        })
+                    })
+            {
+                return Err(ProviderError::PrivacyBlocked { detail: "Earlier request content changed under project privacy while opaque Anthropic history depends on its original prefix; use /filter continue".into() });
+            }
             diagnostics.push(
                 "Native thinking replay omitted: final outgoing request prefix changed.".into(),
             );
@@ -358,6 +664,29 @@ pub(crate) fn prepare_outbound(
 mod tests {
     use super::*;
     use crate::agent::client::{FunctionCall, ToolCallMsg};
+
+    #[test]
+    fn privacy_google_prefix_boundaries_match_existing_canonical_receipts() {
+        let mut value = json!({
+            "before":"header", "contents":[
+                {"role":"user","parts":[{"text":"first"}]},
+                {"role":"model","parts":[{"text":"second","thoughtSignature":"opaque"}]}
+            ],
+            "generationConfig":{"thinkingConfig":{"thinkingLevel":"HIGH"}},
+            "systemInstruction":{"parts":[{"text":"public instruction"}]},
+            "tools":[{"functionDeclarations":[]}]
+        });
+        let mut prefix = GooglePrefix::new(&value).unwrap();
+        let mut expected = value.clone();
+        expected.as_object_mut().unwrap().remove("generationConfig");
+        for end in 0..=2 {
+            expected["contents"] = json!(&value["contents"].as_array().unwrap()[..end]);
+            assert_eq!(prefix.at(end).unwrap(), prefix_digest(&expected));
+        }
+        assert!(prefix.at(1).is_err());
+        value["contents"] = json!([]);
+        assert!(google_prefix(&serde_json::to_vec(&value).unwrap(), Some(1)).is_err());
+    }
     use crate::agent::ProviderProtocol;
     fn capture() -> AnthropicCapture {
         AnthropicCapture::new(
@@ -460,6 +789,7 @@ mod tests {
                             id: "call-1".into(),
                             call_type: "function".into(),
                             function: FunctionCall {
+                                arguments_retrieved_spans: Vec::new(),
                                 name: "read_file".into(),
                                 arguments,
                             },
@@ -504,12 +834,49 @@ mod final_wire_tests {
         (
             body,
             ReplayBindings {
-                google_parts: Vec::new(),
                 messages: vec![(1, prefix_digest(&prefix))],
-                request_sequence: 0,
+                ..Default::default()
             },
         )
     }
+    #[test]
+    fn native_final_wire_latin_keeps_provider_assistant_replay_unchanged() {
+        let filter = ProviderFilter::compile(&ProviderFilterConfig {
+            enabled: true,
+            page_stand_in: crate::provider_filter::PageStandIn::Latin,
+            ..Default::default()
+        })
+        .unwrap();
+        let (body, mut bindings) = fixture();
+        bindings.messages[0].1 = prefix_digest(
+            &json!({"system":[],"tools":[],"messages":[body["messages"][0].clone()]}),
+        );
+        let (bytes, diagnostics) =
+            prepare_outbound(&serde_json::to_vec(&body).unwrap(), &bindings, &filter).unwrap();
+        assert!(diagnostics.is_empty());
+        assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), body);
+
+        let google = json!({"contents":[
+            {"role":"user","parts":[{"text":"read input.txt"}]},
+            {"role":"model","parts":[
+                {"text":"private thought","thought":true,"thoughtSignature":"opaque signature"},
+                {"functionCall":{"name":"read_file","args":{"path":"input.txt"}}}
+            ]}
+        ]});
+        let google_bindings = ReplayBindings {
+            google_parts: vec![1],
+            ..Default::default()
+        };
+        let (bytes, diagnostics) = prepare_outbound(
+            &serde_json::to_vec(&google).unwrap(),
+            &google_bindings,
+            &filter,
+        )
+        .unwrap();
+        assert!(diagnostics.is_empty());
+        assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), google);
+    }
+
     #[test]
     fn native_final_wire_preserves_issued_arrays_and_binds_filtered_prefix() {
         let filter = ProviderFilter::compile(&ProviderFilterConfig {

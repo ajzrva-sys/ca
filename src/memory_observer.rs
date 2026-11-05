@@ -254,6 +254,7 @@ mod tests {
         let mut state = crate::tui::test_support::test_state();
         state.messages = (0..130)
             .map(|_| crate::app::Message {
+                retrieved_spans: Some(Vec::new()),
                 role: crate::app::Role::Assistant,
                 content: "preserved history".into(),
                 thinking: None,

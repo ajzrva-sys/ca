@@ -673,6 +673,10 @@ pub struct WorkerSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) native_sandbox_binding: Option<crate::automation_runtime::NativeSandboxBinding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) privacy_binding: Option<crate::privacy::tasks::Binding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) worker_max_turns: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub automation_pricing: Option<crate::automation::PricingBindingV1>,
     pub provider: String,
     pub model: String,
@@ -1621,6 +1625,8 @@ async fn execute_v2_claim_inner(
                         automation_budget: None,
                         native_context: None,
                         native_sandbox_binding: None,
+                        privacy_binding: None,
+                        worker_max_turns: None,
                         automation_pricing: None,
                         provider,
                         model,
@@ -2145,6 +2151,8 @@ pub(crate) async fn execute_automation_target_inner(
                         automation_budget: Some(definition.per_run_budget.clone()),
                         native_context: None,
                         native_sandbox_binding: None,
+                        privacy_binding: None,
+                        worker_max_turns: None,
                         automation_pricing: Some(definition.pricing.clone()),
                         provider,
                         model,
@@ -3019,16 +3027,16 @@ async fn execute_claimed(
 }
 
 #[derive(Debug)]
-struct WorkerResult {
+pub(crate) struct WorkerResult {
     dispatch_usage: Option<crate::automation::AutomationUsageCountersV1>,
-    content: String,
+    pub(crate) content: String,
     successful_tools: HashSet<String>,
     usages: Vec<crate::agent::stream::UsageInfo>,
     tool_calls: u32,
 }
 
 #[derive(Debug)]
-enum WorkerFailure {
+pub(crate) enum WorkerFailure {
     TimedOut,
     Failed { code: Option<i32>, message: String },
 }
@@ -3046,6 +3054,8 @@ async fn execute_record(
                     automation_budget: None,
                     native_context: None,
                     native_sandbox_binding: None,
+                    privacy_binding: None,
+                    worker_max_turns: None,
                     automation_pricing: None,
                     provider: definition.provider.clone(),
                     model: definition.model.clone(),
@@ -3267,6 +3277,8 @@ async fn execute_workflow_with_budget(
                 automation_budget: None,
                 native_context: None,
                 native_sandbox_binding: None,
+                privacy_binding: None,
+                worker_max_turns: None,
                 automation_pricing: None,
                 provider: definition.provider.clone(),
                 model: definition.model.clone(),
@@ -3519,11 +3531,16 @@ fn worker_group_active(group: Option<i32>) -> bool {
     false
 }
 
-async fn run_worker(
+pub(crate) async fn run_worker(
     mut spec: WorkerSpec,
     profile: &crate::runtime::ActiveProfile,
 ) -> Result<WorkerResult, WorkerFailure> {
     let native_store = ca_automation::runtime::current_run_store();
+    spec.privacy_binding =
+        crate::privacy::tasks::active_binding().map_err(|message| WorkerFailure::Failed {
+            code: Some(8),
+            message,
+        })?;
     spec.native_context = native_store.as_ref().map(|store| store.context().clone());
     spec.native_sandbox_binding = native_store
         .as_ref()
@@ -4294,6 +4311,8 @@ mod tests {
             automation_budget: None,
             native_context: None,
             native_sandbox_binding: None,
+            privacy_binding: None,
+            worker_max_turns: None,
             automation_pricing: None,
             provider: "fixture-provider".into(),
             model: "fixture-model".into(),
@@ -4708,6 +4727,8 @@ mod tests {
             automation_budget: None,
             native_context: None,
             native_sandbox_binding: None,
+            privacy_binding: None,
+            worker_max_turns: None,
             automation_pricing: None,
             provider: definition.provider.clone(),
             model: definition.model.clone(),
@@ -4734,6 +4755,8 @@ mod tests {
             automation_budget: None,
             native_context: None,
             native_sandbox_binding: None,
+            privacy_binding: None,
+            worker_max_turns: None,
             automation_pricing: None,
             provider: "p".into(),
             model: "m".into(),
@@ -4856,6 +4879,8 @@ mod tests {
             automation_budget: None,
             native_context: None,
             native_sandbox_binding: None,
+            privacy_binding: None,
+            worker_max_turns: None,
             automation_pricing: None,
             provider: "fake".into(),
             model: "model".into(),

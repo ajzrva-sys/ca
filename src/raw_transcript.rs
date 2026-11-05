@@ -210,6 +210,7 @@ mod tests {
 
     fn message(role: Role, content: &str) -> Message {
         Message {
+            retrieved_spans: Some(Vec::new()),
             role,
             content: content.into(),
             tool_calls: None,
@@ -229,18 +230,24 @@ mod tests {
         }];
         assistant.tool_calls = Some(vec![
             ToolCall {
+                output_source: None,
+                arguments_retrieved_spans: Vec::new(),
                 id: "call-1".into(),
                 name: "read_file".into(),
                 arguments: r#"{"path":"/tmp/private"}"#.into(),
                 status: ToolStatus::Done,
                 output: Some("file body".into()),
+                started_at: None,
             },
             ToolCall {
+                output_source: None,
+                arguments_retrieved_spans: Vec::new(),
                 id: "call-2".into(),
                 name: "email_read".into(),
                 arguments: "private email arguments".into(),
                 status: ToolStatus::Error,
                 output: Some("private email body".into()),
+                started_at: None,
             },
         ]);
         let messages = vec![
@@ -313,11 +320,14 @@ mod tests {
     fn raw_transcript_bounds_untrusted_tool_names_by_unicode_scalars() {
         let mut assistant = message(Role::Assistant, "done");
         assistant.tool_calls = Some(vec![ToolCall {
+            output_source: None,
+            arguments_retrieved_spans: Vec::new(),
             id: "call".into(),
             name: "界".repeat(300),
             arguments: String::new(),
             status: ToolStatus::Running,
             output: None,
+            started_at: None,
         }]);
 
         let output = render(&[assistant], &[]);

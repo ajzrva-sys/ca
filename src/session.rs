@@ -65,16 +65,31 @@ pub fn automatic_session_title(messages: &[Message]) -> Option<String> {
 /// generation request. Attachments stay available to the conversation but do
 /// not become title-generation instructions.
 pub fn session_title_subject(messages: &[Message]) -> Option<String> {
-    let prompt = messages
-        .iter()
-        .find(|message| message.role == Role::User)?
-        .content
-        .as_str();
+    let message = messages.iter().find(|message| message.role == Role::User)?;
+    let spans = crate::retrieved_content::checked_spans(
+        &message.content,
+        message.retrieved_spans.as_deref(),
+        true,
+    )
+    .ok()?;
+    let mut authored = String::with_capacity(message.content.len());
+    let mut cursor = 0;
+    for span in spans {
+        authored.push_str(&message.content[cursor..span.start]);
+        cursor = span.end;
+    }
+    authored.push_str(&message.content[cursor..]);
+    let prompt = authored.as_str();
     let prompt = explicit_user_request(prompt).unwrap_or(prompt);
+    let prompt = if message.retrieved_spans.is_none() {
+        prompt
+            .split("\n\n--- Attached file:")
+            .next()
+            .unwrap_or(prompt)
+    } else {
+        prompt
+    };
     let prompt = prompt
-        .split("\n\n--- Attached file:")
-        .next()
-        .unwrap_or(prompt)
         .split("\n\n[Image unavailable:")
         .next()
         .unwrap_or(prompt)
@@ -524,6 +539,9 @@ pub struct SessionV4 {
     /// Process-local compare-and-swap binding; never exported or model-visible.
     #[serde(skip)]
     pub storage_binding: Option<SessionBinding>,
+    /// Local-only alias sidecars; portable exports omit this reference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub privacy: Option<crate::privacy::store::PrivacySessionRef>,
     pub version: u32,
     pub id: Uuid,
     pub title: String,
@@ -611,6 +629,7 @@ impl SessionV4 {
         let now = Utc::now();
         Self {
             storage_binding: None,
+            privacy: None,
             version: 4,
             id: Uuid::new_v4(),
             title: title.into(),
@@ -1230,7 +1249,13 @@ impl SessionStore {
             ));
         }
         self.unique_identity_location(expected_uuid)?;
-        move_exact_session(&self.root, &archive, storage_key, expected_uuid)
+        move_exact_session(
+            &self.root,
+            &archive,
+            storage_key,
+            expected_uuid,
+            self.access.scope(),
+        )
     }
 
     pub fn restore(&self, storage_key: &str, expected_uuid: Uuid) -> io::Result<()> {
@@ -1248,6 +1273,7 @@ impl SessionStore {
             &self.root,
             storage_key,
             expected_uuid,
+            self.access.scope(),
         )
     }
 
@@ -1414,6 +1440,7 @@ impl SessionStore {
         }
         let now = Utc::now();
         session.messages.push(Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::User,
             content: format!(
                 "[Automation: {} · occurrence {}]\n\n{}",
@@ -1425,6 +1452,7 @@ impl SessionStore {
             timestamp: now,
         });
         session.messages.push(Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::Assistant,
             content: result.to_string(),
             tool_calls: None,
@@ -1634,6 +1662,8 @@ impl SessionStore {
         lease: &crate::session_access::SessionWriterLease,
     ) -> io::Result<PathBuf> {
         self.access.validate(lease, session.id)?;
+        crate::privacy::sync_session_binding(session);
+        self.prepare_privacy_for_save(session)?;
         validate_import_provenance(session)?;
         let location = self.unique_identity_location(session.id)?;
         std::fs::create_dir_all(&self.root)?;
@@ -1682,6 +1712,38 @@ impl SessionStore {
             .ok_or_else(|| io::Error::other("saved session commit is missing"))?;
         session.storage_binding = Some(binding_for_metadata(&metadata)?);
         Ok(target)
+    }
+
+    fn prepare_privacy_for_save(&self, session: &mut SessionV2) -> io::Result<()> {
+        let Some(reference) = session.privacy.clone() else {
+            return Ok(());
+        };
+        let scope = self.access.scope();
+        if reference.session_id == session.id {
+            return crate::privacy::store::AliasRegistry::validate_reference(
+                scope, session.id, &reference,
+            )
+            .map_err(io::Error::other);
+        }
+        if session.storage_binding.is_some()
+            || session.parent.as_ref().map(|parent| parent.session_id) != Some(reference.session_id)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "privacy registry belongs to another session",
+            ));
+        }
+        let source =
+            crate::privacy::store::AliasRegistry::load(scope, reference.session_id, &reference)
+                .map_err(io::Error::other)?;
+        let mut fork = source
+            .fork_to(scope, session.id)
+            .map_err(io::Error::other)?;
+        let mut fork_reference = fork.stage(scope).map_err(io::Error::other)?;
+        fork_reference.optional_policy = reference.optional_policy;
+        fork_reference.task_context = reference.task_context.clone();
+        session.privacy = Some(fork_reference);
+        Ok(())
     }
 
     pub fn save_inert_import(&self, session: &mut SessionV2) -> io::Result<PathBuf> {
@@ -1781,6 +1843,7 @@ impl SessionStore {
     fn purge_side_state(&self, expected_uuid: Uuid) {
         let scope = self.access.scope();
         let _ = std::fs::remove_dir_all(scope.join("recovery").join(expected_uuid.to_string()));
+        let _ = crate::privacy::store::AliasRegistry::delete(scope, expected_uuid);
     }
 
     pub fn delete_retention_batch(
@@ -1992,12 +2055,19 @@ fn move_exact_session(
     destination_root: &Path,
     storage_key: &str,
     expected_uuid: Uuid,
+    privacy_scope: &Path,
 ) -> io::Result<()> {
     validate_storage_key(storage_key)?;
     let source = source_root.join(format!("{storage_key}.json"));
     if let Some(metadata) = read_bundle_metadata_if_present(&source, storage_key)? {
         verify_bundle_id(&metadata, expected_uuid)?;
         validate_bundle_files(&source, &metadata)?;
+        if let Some(value) = metadata.session.get("privacy") {
+            let reference: crate::privacy::store::PrivacySessionRef =
+                serde_json::from_value(value.clone()).map_err(io::Error::other)?;
+            crate::privacy::store::AliasRegistry::archive(privacy_scope, expected_uuid, &reference)
+                .map_err(io::Error::other)?;
+        }
         std::fs::create_dir_all(destination_root)?;
         let destination = destination_root.join(format!("{storage_key}.json"));
         let source_log = bundle_log_path(&source, &metadata);
@@ -2024,6 +2094,10 @@ fn move_exact_session(
     }
     let session = read_session_file(&source, storage_key)?;
     verify_session_id(&session, expected_uuid)?;
+    if let Some(reference) = &session.privacy {
+        crate::privacy::store::AliasRegistry::archive(privacy_scope, expected_uuid, reference)
+            .map_err(io::Error::other)?;
+    }
     std::fs::create_dir_all(destination_root)?;
     let destination = destination_root.join(format!("{storage_key}.json"));
     std::fs::hard_link(&source, &destination)?;
@@ -2058,6 +2132,7 @@ pub fn branch_in_memory(
         branch_turn,
     });
     branch.reasoning_effort = source.reasoning_effort;
+    branch.privacy = source.privacy.clone();
     branch.workspace_roots = source.workspace_roots.clone();
     branch.active_skills = source.active_skills.clone();
     branch.persistent_skill_refs = source.persistent_skill_refs.clone();
@@ -2725,6 +2800,9 @@ fn next_metadata_revision(revision: u64) -> io::Result<u64> {
 }
 
 fn validate_import_provenance(session: &SessionV2) -> io::Result<()> {
+    if let Some(reference) = &session.privacy {
+        reference.validate().map_err(io::Error::other)?;
+    }
     if let Some(workflow) = &session.work_state.plan_workflow {
         workflow
             .validate()
@@ -2970,7 +3048,50 @@ fn write_bundle_metadata(path: &Path, metadata: &SessionBundleMetadataV1) -> io:
             "saved session metadata exceeds the 8 MiB limit",
         ));
     }
-    atomic_write_with(path, |file| file.write_all(&bytes))
+    #[cfg(test)]
+    if injected_privacy_save_failure(metadata, PrivacySaveFault::BeforeCommit) {
+        return Err(io::Error::other(
+            "injected privacy save failure before commit",
+        ));
+    }
+    atomic_write_with(path, |file| file.write_all(&bytes))?;
+    #[cfg(test)]
+    if injected_privacy_save_failure(metadata, PrivacySaveFault::AfterCommit) {
+        return Err(io::Error::other(
+            "injected privacy save failure after commit",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PrivacySaveFault {
+    BeforeCommit,
+    AfterCommit,
+}
+
+#[cfg(test)]
+thread_local! {
+    static PRIVACY_SAVE_FAULT: std::cell::Cell<Option<PrivacySaveFault>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+fn injected_privacy_save_failure(
+    metadata: &SessionBundleMetadataV1,
+    point: PrivacySaveFault,
+) -> bool {
+    if metadata.session.get("privacy").is_none() {
+        return false;
+    }
+    PRIVACY_SAVE_FAULT.with(|fault| {
+        if fault.get() == Some(point) {
+            fault.set(None);
+            true
+        } else {
+            false
+        }
+    })
 }
 
 fn write_new_log(path: &Path, bytes: &[u8]) -> io::Result<()> {
@@ -3067,7 +3188,17 @@ fn rotate_session_bundle(
     let log_path = bundle_log_path(path, &metadata);
     write_new_log(&log_path, &bytes)?;
     if let Err(error) = write_bundle_metadata(path, &metadata) {
-        let _ = std::fs::remove_file(&log_path);
+        // A directory-sync error can follow successful metadata publication.
+        // Keep its referenced history, and retain uncertain outcomes for an
+        // authoritative readback rather than leaving a dangling commit.
+        let unpublished = match read_bundle_metadata_if_present(path, storage_key) {
+            Ok(Some(committed)) => committed.generation != metadata.generation,
+            Ok(None) => true,
+            Err(_) => false,
+        };
+        if unpublished {
+            let _ = std::fs::remove_file(&log_path);
+        }
         return Err(error);
     }
     if let Some(previous) = previous {
@@ -3121,6 +3252,7 @@ fn convert_v1(legacy: SessionV1, storage_key: &str) -> SessionV2 {
     let id = Uuid::new_v5(&Uuid::NAMESPACE_URL, storage_key.as_bytes());
     SessionV2 {
         storage_binding: None,
+        privacy: None,
         version: 4,
         id,
         title: legacy.name,
@@ -3149,6 +3281,7 @@ fn convert_v1(legacy: SessionV1, storage_key: &str) -> SessionV2 {
             .messages
             .into_iter()
             .map(|message| Message {
+                retrieved_spans: Some(Vec::new()),
                 role: match message.role.as_str() {
                     "system" => Role::System,
                     "assistant" => Role::Assistant,
@@ -3160,6 +3293,8 @@ fn convert_v1(legacy: SessionV1, storage_key: &str) -> SessionV2 {
                     calls
                         .into_iter()
                         .map(|call| ToolCall {
+                            output_source: None,
+                            arguments_retrieved_spans: Vec::new(),
                             id: call.id,
                             name: call.name,
                             arguments: call.arguments,
@@ -3169,6 +3304,7 @@ fn convert_v1(legacy: SessionV1, storage_key: &str) -> SessionV2 {
                                 ToolStatus::Pending
                             },
                             output: call.output,
+                            started_at: None,
                         })
                         .collect()
                 }),
@@ -3234,6 +3370,7 @@ mod tests {
 
     fn message(role: Role, content: &str, second: i64) -> Message {
         Message {
+            retrieved_spans: Some(Vec::new()),
             role,
             content: content.into(),
             tool_calls: None,
@@ -3252,6 +3389,7 @@ mod tests {
 
     fn responses_provider_state(content: &str) -> ProviderResponseItem {
         ProviderResponseItem::ResponsesOutput {
+            privacy_prefix_sha256: None,
             source: ProviderStateSourceV1::for_test("openai", ProviderProtocol::OpenAiResponses),
             output_index: 0,
             item: serde_json::json!({
@@ -3333,6 +3471,31 @@ mod tests {
         let subject = session_title_subject(&messages).unwrap();
         assert_eq!(subject.chars().count(), MAX_TITLE_SUBJECT_CHARS);
         assert!(subject.chars().all(|character| character == '界'));
+    }
+
+    #[test]
+    fn title_subject_excludes_retrieved_ranges_and_unknown_legacy_attachments() {
+        let mut sourced = message(Role::User, "Fix SOURCE_DATA today", 0);
+        sourced.retrieved_spans = Some(vec![crate::retrieved_content::RetrievedSpan {
+            source: None,
+            start: 4,
+            end: 16,
+        }]);
+        assert_eq!(
+            session_title_subject(&[sourced]).as_deref(),
+            Some("Fix today")
+        );
+
+        let text =
+            "Explain this literal marker:\n\n--- Attached file: a ---\nexample\n--- End file ---";
+        let mut known = message(Role::User, text, 0);
+        known.retrieved_spans = Some(Vec::new());
+        assert_eq!(
+            session_title_subject(&[known.clone()]).as_deref(),
+            Some(text)
+        );
+        known.retrieved_spans = None;
+        assert!(session_title_subject(&[known]).is_none());
     }
 
     #[test]
@@ -3485,11 +3648,14 @@ mod tests {
         let sentinel = "direct-session-private-email-sentinel";
         let mut assistant = message(Role::Assistant, "", 1);
         assistant.tool_calls = Some(vec![ToolCall {
+            output_source: None,
+            arguments_retrieved_spans: Vec::new(),
             id: "email-call".into(),
             name: "email_read".into(),
             arguments: serde_json::json!({"body": sentinel}).to_string(),
             status: crate::app::ToolStatus::Done,
             output: Some(sentinel.into()),
+            started_at: None,
         }]);
         let record = String::from_utf8(serialize_log_record(0, &assistant).unwrap()).unwrap();
         assert!(!record.contains(sentinel));
@@ -3873,10 +4039,255 @@ mod tests {
     }
 
     #[test]
+    fn filename_alias_registry_commit_failures_reconcile_without_changing_completed_tools() {
+        let settings = crate::provider_filter::ProviderFilterConfig {
+            enabled: true,
+            hide: crate::provider_filter::FilterHide {
+                filenames: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        crate::provider_filter::with_test_filter(&settings, || {
+            for point in [
+                PrivacySaveFault::BeforeCommit,
+                PrivacySaveFault::AfterCommit,
+            ] {
+                let root = TempDir::new().unwrap();
+                let workspace = root.path().join("workspace");
+                std::fs::create_dir(&workspace).unwrap();
+                let workspace = std::fs::canonicalize(workspace).unwrap();
+                let file = workspace.join("PrivateFilenameCanary.rs");
+                let contents = "pub fn already_completed() {}\n";
+                std::fs::write(&file, contents).unwrap();
+                let real_path = file.to_str().unwrap();
+                let store = SessionStore::new(root.path().join("profile/sessions"));
+                let mut completed = message(Role::Assistant, "Completed native read", 1);
+                completed.tool_calls = Some(vec![ToolCall {
+                    output_source: None,
+                    arguments_retrieved_spans: Vec::new(),
+                    id: "completed-read-once".into(),
+                    name: "read_file".into(),
+                    arguments: serde_json::json!({"path":real_path}).to_string(),
+                    status: crate::app::ToolStatus::Done,
+                    output: Some(contents.into()),
+                    started_at: None,
+                }]);
+                let mut session = SessionV4::new(
+                    "filename fault fixture",
+                    workspace.to_string_lossy(),
+                    "local",
+                    "fixture",
+                    vec![completed],
+                );
+                let lease = store.try_writer_lease(session.id).unwrap();
+                store.save_owned(&mut session, &lease).unwrap();
+                let original_messages = session.messages.clone();
+                let scope = store.access_coordinator().scope().to_path_buf();
+                let context = crate::privacy::Context::open(
+                    scope.clone(),
+                    workspace.clone(),
+                    session.id,
+                    None,
+                )
+                .unwrap();
+                context.set_owner(store.clone(), lease.clone());
+                context.refresh_filenames().unwrap();
+                let alias = context.mask_known(real_path).unwrap();
+                assert_ne!(alias, real_path);
+                assert!(!alias.contains("PrivateFilenameCanary"));
+
+                PRIVACY_SAVE_FAULT.with(|fault| fault.set(Some(point)));
+                let committed = context.commit_registry();
+                assert!(PRIVACY_SAVE_FAULT.with(|fault| fault.get().is_none()));
+                if point == PrivacySaveFault::BeforeCommit {
+                    assert!(committed.is_err());
+                    let before = store.load_owned(&session.id.to_string(), &lease).unwrap();
+                    assert!(before.privacy.is_none());
+                    assert_eq!(before.messages, original_messages);
+                    assert_eq!(context.mask_known(real_path).unwrap(), alias);
+                    context.commit_registry().unwrap();
+                } else {
+                    committed.unwrap();
+                }
+                context.commit_registry().unwrap();
+                let saved = store.load_owned(&session.id.to_string(), &lease).unwrap();
+                assert_eq!(saved.messages, original_messages);
+                assert_eq!(saved.messages[0].tool_calls.as_ref().unwrap().len(), 1);
+                assert!(saved.privacy.is_some());
+                drop(context);
+                let resumed =
+                    crate::privacy::Context::open(scope, workspace, saved.id, saved.privacy)
+                        .unwrap();
+                assert_eq!(resumed.mask_known(real_path).unwrap(), alias);
+                assert_eq!(
+                    resumed.restore_text(&alias).unwrap(),
+                    "PrivateFilenameCanary.rs"
+                );
+                let resolved = resumed
+                    .prepare_edit_ticket("read_file", &serde_json::json!({"path":alias}))
+                    .unwrap();
+                assert_eq!(resolved["path"], real_path);
+                assert_eq!(std::fs::read_to_string(&file).unwrap(), contents);
+                assert_eq!(
+                    store
+                        .load_owned(&session.id.to_string(), &lease)
+                        .unwrap()
+                        .messages,
+                    original_messages
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn privacy_session_ref_commit_failures_preserve_exact_aliases_and_authoritative_readback() {
+        for point in [
+            PrivacySaveFault::BeforeCommit,
+            PrivacySaveFault::AfterCommit,
+        ] {
+            let root = TempDir::new().unwrap();
+            let store = SessionStore::new(root.path().join("sessions"));
+            let mut session = test_session();
+            let mut registry = crate::privacy::store::AliasRegistry::new(session.id);
+            let first_token = registry.alias("STRING", "private-first-original").unwrap();
+            let first_ref = registry.stage(store.access_coordinator().scope()).unwrap();
+            session.privacy = Some(first_ref.clone());
+            store.save(&mut session).unwrap();
+            let second_token = registry.alias("STRING", "private-second-original").unwrap();
+            let next_ref = registry.stage(store.access_coordinator().scope()).unwrap();
+            session.privacy = Some(next_ref.clone());
+            PRIVACY_SAVE_FAULT.with(|fault| fault.set(Some(point)));
+            assert!(store.save(&mut session).is_err());
+            let mut authoritative = store.load(&session.id.to_string()).unwrap();
+            let expected = if point == PrivacySaveFault::BeforeCommit {
+                &first_ref
+            } else {
+                &next_ref
+            };
+            assert_eq!(authoritative.privacy.as_ref(), Some(expected));
+            let loaded = crate::privacy::store::AliasRegistry::load(
+                store.access_coordinator().scope(),
+                session.id,
+                authoritative.privacy.as_ref().unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                loaded.restore_exact(&first_token).unwrap(),
+                "private-first-original"
+            );
+            assert_eq!(
+                loaded.lookup(&second_token).is_some(),
+                point == PrivacySaveFault::AfterCommit
+            );
+            // Retry the identical local reference after refreshing the binding.
+            // The caller never needs to replay an external action.
+            authoritative.privacy = Some(next_ref.clone());
+            store.save(&mut authoritative).unwrap();
+            assert_eq!(
+                registry.alias("STRING", "private-second-original").unwrap(),
+                second_token
+            );
+            assert_eq!(
+                store.load(&session.id.to_string()).unwrap().privacy,
+                Some(next_ref)
+            );
+        }
+    }
+
+    #[test]
+    fn privacy_first_save_failure_after_commit_keeps_published_history() {
+        for point in [
+            PrivacySaveFault::BeforeCommit,
+            PrivacySaveFault::AfterCommit,
+        ] {
+            let root = TempDir::new().unwrap();
+            let store = SessionStore::new(root.path().join("sessions"));
+            let mut session = test_session();
+            let mut registry = crate::privacy::store::AliasRegistry::new(session.id);
+            let token = registry
+                .alias("STRING", "private-first-save-original")
+                .unwrap();
+            let reference = registry.stage(store.access_coordinator().scope()).unwrap();
+            session.privacy = Some(reference.clone());
+            PRIVACY_SAVE_FAULT.with(|fault| fault.set(Some(point)));
+            assert!(store.save(&mut session).is_err());
+            let readback = store.load(&session.id.to_string());
+            if point == PrivacySaveFault::BeforeCommit {
+                assert!(readback.is_err());
+                store.save(&mut session).unwrap();
+            } else {
+                let committed = readback.unwrap();
+                assert_eq!(committed.messages.len(), session.messages.len());
+                assert_eq!(committed.privacy.as_ref(), Some(&reference));
+                let restored = crate::privacy::store::AliasRegistry::load(
+                    store.access_coordinator().scope(),
+                    committed.id,
+                    &reference,
+                )
+                .unwrap();
+                assert_eq!(
+                    restored.restore_exact(&token).unwrap(),
+                    "private-first-save-original"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn privacy_sidecars_exceed_metadata_limit_and_survive_fork_and_archive() {
+        let root = TempDir::new().unwrap();
+        let store =
+            SessionStore::with_archive(root.path().join("sessions"), root.path().join("archive"));
+        let mut source = test_session();
+        let mut registry = crate::privacy::store::AliasRegistry::new(source.id);
+        let mut tokens = Vec::new();
+        for ch in ['a', 'b', 'c'] {
+            tokens.push(
+                registry
+                    .alias("BLOCK", &ch.to_string().repeat(3 * 1024 * 1024))
+                    .unwrap(),
+            );
+        }
+        source.privacy = Some(registry.stage(store.access_coordinator().scope()).unwrap());
+        let path = store.save(&mut source).unwrap();
+        assert!(std::fs::metadata(&path).unwrap().len() < MAX_SESSION_METADATA_BYTES);
+        let branch = store
+            .branch(&source, source.messages.len(), 1, "privacy branch")
+            .unwrap();
+        assert_eq!(branch.privacy.as_ref().unwrap().session_id, branch.id);
+        assert_ne!(
+            branch.privacy.as_ref().unwrap().registry_id,
+            source.privacy.as_ref().unwrap().registry_id
+        );
+        store.archive(&branch.id.to_string(), branch.id).unwrap();
+        store.restore(&branch.id.to_string(), branch.id).unwrap();
+        store.delete(&source.id.to_string(), source.id).unwrap();
+        assert!(!store
+            .access_coordinator()
+            .scope()
+            .join("privacy")
+            .join(source.id.to_string())
+            .exists());
+        let loaded = store.load(&branch.id.to_string()).unwrap();
+        let restored = crate::privacy::store::AliasRegistry::load(
+            store.access_coordinator().scope(),
+            branch.id,
+            loaded.privacy.as_ref().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            restored.restore_exact(&tokens[2]).unwrap().len(),
+            3 * 1024 * 1024
+        );
+    }
+
+    #[test]
     fn pre_change_message_records_default_state_and_remain_appendable_prefixes() {
         let old_record = r#"{"index":0,"message":{"role":"Assistant","content":"before","tool_calls":null,"thinking":null,"timestamp":"1970-01-01T00:00:01Z"}}"#;
         let parsed: OwnedSessionLogRecord = serde_json::from_str(old_record).unwrap();
         assert!(parsed.message.response_items.is_empty());
+        assert!(parsed.message.retrieved_spans.is_none());
 
         let expected_record = format!("{old_record}\n").into_bytes();
         assert_eq!(
@@ -3918,6 +4329,36 @@ mod tests {
             store.load(storage_key).unwrap().messages[1].response_items,
             vec![provider_state(sentinel)]
         );
+        assert!(store.load(storage_key).unwrap().messages[0]
+            .retrieved_spans
+            .is_none());
+    }
+
+    #[test]
+    fn native_resume_preserves_retrieved_ranges_and_known_authored_content() {
+        let temp = TempDir::new().unwrap();
+        let store = SessionStore::new(temp.path());
+        let mut user = message(Role::User, "Read évidence", 1);
+        let spans = vec![crate::retrieved_content::RetrievedSpan {
+            source: None,
+            start: 5,
+            end: user.content.len(),
+        }];
+        user.retrieved_spans = Some(spans.clone());
+        let mut session = SessionV2::new(
+            "Provenance",
+            "/workspace",
+            "local",
+            "fixture",
+            vec![user, message(Role::Assistant, "authored response", 2)],
+        );
+        store.save(&mut session).unwrap();
+        let loaded = store.load(&public_session_id(session.id)).unwrap();
+        assert_eq!(loaded.messages[0].content, "Read évidence");
+        assert_eq!(loaded.messages[0].retrieved_spans, Some(spans));
+        assert_eq!(loaded.messages[1].retrieved_spans, Some(Vec::new()));
+        let recent = store.load_recent(&session.id.to_string(), 2).unwrap();
+        assert_eq!(recent.session.messages, loaded.messages);
     }
 
     #[test]
@@ -4021,6 +4462,7 @@ mod tests {
         let store = SessionStore::new(root.path());
         let mut session = test_session();
         session.context_checkpoint = Some(ContextCheckpoint {
+            user_quotes_authored: true,
             format_version: 1,
             through_message_count: 2,
             summary: "## Goal\nContinue".into(),
@@ -4149,6 +4591,7 @@ mod tests {
         let store = SessionStore::new(root.path());
         let mut session = test_session();
         session.context_checkpoint = Some(ContextCheckpoint {
+            user_quotes_authored: true,
             format_version: 1,
             through_message_count: 2,
             summary: "## Goal\nContinue".into(),
@@ -4176,6 +4619,7 @@ mod tests {
     fn branch_derives_legacy_checkpoint_integrity_for_the_retained_prefix() {
         let mut source = test_session();
         source.context_checkpoint = Some(ContextCheckpoint {
+            user_quotes_authored: true,
             format_version: 1,
             through_message_count: 2,
             summary: "## Goal\nContinue".into(),
@@ -5157,14 +5601,18 @@ mod tests {
             message(Role::Assistant, "first answer", 2),
             message(Role::User, "second question", 3),
             Message {
+                retrieved_spans: Some(Vec::new()),
                 role: Role::Assistant,
                 content: "calling tool".into(),
                 tool_calls: Some(vec![ToolCall {
+                    output_source: None,
+                    arguments_retrieved_spans: Vec::new(),
                     id: "call-1".into(),
                     name: "read_file".into(),
                     arguments: "{}".into(),
                     status: ToolStatus::Done,
                     output: Some("ok".into()),
+                    started_at: None,
                 }]),
                 thinking: None,
                 timestamp: DateTime::from_timestamp(4, 0).unwrap(),

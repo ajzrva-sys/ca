@@ -495,6 +495,13 @@ pub fn bound_tool_result(
         text.push_str(suffix);
     };
     match &mut result {
+        ToolExecutionResult::SourceSuccess { text, source } => {
+            let original_len = text.len();
+            bound(text);
+            if text.len() != original_len {
+                source.clear();
+            }
+        }
         ToolExecutionResult::Success(text)
         | ToolExecutionResult::Failure(text)
         | ToolExecutionResult::Denied(text)

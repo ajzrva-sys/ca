@@ -4,13 +4,13 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
 ---
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
 │                                                              ┌ Render diagnostics ──────────────┐│
-│                                                              │Redraws          2                ││
+│ Try one of these, or ask anything:                           │Redraws          2                ││
 │                                                              │Dirty regions    5                ││
-│                                                              │Last / max frame 140 / 140 ms     ││
-│                                                              │Render failures  1                ││
-│                                                              │Repaint rate     2/s              ││
+│   · Fix the failing tests in this repo                       │Last / max frame 140 / 140 ms     ││
+│   · Explain how the approval flow works                      │Render failures  1                ││
+│   · Summarize what changed in this workspace                 │Repaint rate     2/s              ││
 │                                                              │Highlight        on               ││
-│                                                              │Cache layouts    1 · 0 blocks     ││
+│ / shows commands · /help for help · /keymap for keys         │Cache layouts    1 · 0 blocks     ││
 │                                                              │Cached payload   0 KiB · ready    ││
 │                                                              │                                  ││
 │                                                              └──────────────────────────────────┘│
@@ -35,13 +35,13 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
 -- narrow --
 ┌──────────────────────────────────────────────────────────┐
 │                      ┌ Render diagnostics ──────────────┐│
-│                      │Redraws          2                ││
+│ Try one of these, or │Redraws          2                ││
 │                      │Dirty regions    5                ││
-│                      │Last / max frame 140 / 140 ms     ││
-│                      │Render failures  1                ││
-│                      │Repaint rate     2/s              ││
+│   · Fix the failing t│Last / max frame 140 / 140 ms     ││
+│   · Explain how the a│Render failures  1                ││
+│   · Summarize what ch│Repaint rate     2/s              ││
 │                      │Highlight        on               ││
-│                      │Cache layouts    2 · 0 blocks     ││
+│ / shows commands · /h│Cache layouts    2 · 0 blocks     ││
 │                      │Cached payload   0 KiB · ready    ││
 │                      │                                  ││
 │                      └──────────────────────────────────┘│

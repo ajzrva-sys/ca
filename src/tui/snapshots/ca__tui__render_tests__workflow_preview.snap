@@ -4,13 +4,13 @@ expression: "wide_narrow(render_to_text(&preview, 100, 30),\nrender_to_text(&pre
 ---
  ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
-    ┌ Run workflow ────────────────────────────────────────────────────────────────────────────┐
+  Tr┌ Run workflow ────────────────────────────────────────────────────────────────────────────┐
     │Release readiness (release-check)                                                         │
     │2 steps · .ca/workflows/release.toml · digest 0123456789ab                                │
     │                                                                                          │
     │- inspect · ready · mimo/mimo-v2.5 · tools: read_file · retries: 1                        │
     │    evidence: assistant output                                                            │
-    │    output: inspection                                                                    │
+  / │    output: inspection                                                                    │
     │- verify · after inspect · current model · tools: no tools · retries: 0                   │
     │    evidence: assistant output                                                            │
     │                                                                                          │

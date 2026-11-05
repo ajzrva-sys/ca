@@ -526,6 +526,7 @@ mod tests {
         source.cwd = "/workspace".into();
         source.input = "private draft".into();
         source.messages.push(crate::app::Message {
+            retrieved_spans: Some(Vec::new()),
             role: crate::app::Role::User,
             content: "private transcript".into(),
             tool_calls: None,

@@ -322,6 +322,7 @@ async fn verify_route(
             id: call.id.clone(),
             call_type: "function".into(),
             function: FunctionCall {
+                arguments_retrieved_spans: call.arguments_retrieved_spans.clone(),
                 name: call.name.clone(),
                 arguments: call.arguments.clone(),
             },
@@ -542,10 +543,12 @@ mod tests {
                     .map(|(nonce, _)| nonce)
                     .unwrap();
                 Ok(crate::agent::stream::AssembledAssistantTurn {
+                    retrieved_spans: Vec::new(),
                     content: String::new(),
                     reasoning: None,
                     response_items: Vec::new(),
                     tool_calls: vec![crate::agent::stream::AssembledToolCall {
+                        arguments_retrieved_spans: Vec::new(),
                         index: 0,
                         id: "call-1".into(),
                         name: TOOL_NAME.into(),
@@ -556,6 +559,7 @@ mod tests {
                 })
             } else {
                 Ok(crate::agent::stream::AssembledAssistantTurn {
+                    retrieved_spans: Vec::new(),
                     content: "OK".into(),
                     reasoning: None,
                     response_items: Vec::new(),

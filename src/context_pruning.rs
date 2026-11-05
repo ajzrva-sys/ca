@@ -259,6 +259,7 @@ mod tests {
                     id: format!("call{i}"),
                     call_type: "function".into(),
                     function: FunctionCall {
+                        arguments_retrieved_spans: Vec::new(),
                         name: "read_file".into(),
                         arguments: "{}".into(),
                     },
@@ -348,11 +349,14 @@ mod tests {
     #[test]
     fn orc290_qualification_requires_known_success_and_protects_skills() {
         let mut call = ToolCall {
+            output_source: None,
+            arguments_retrieved_spans: Vec::new(),
             id: "c".into(),
             name: "read_file".into(),
             arguments: "{}".into(),
             status: ToolStatus::Done,
             output: Some("text".into()),
+            started_at: None,
         };
         assert!(qualified(&call));
         call.status = ToolStatus::Error;

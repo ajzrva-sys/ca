@@ -12,9 +12,19 @@ pub struct ProviderStateSourceV1 {
     pub endpoint_sha256: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential_sha256: Option<String>,
+    /// Host-only receipt for the project policy that covered the issued state.
+    /// Omitted in legacy mode; never lowered into a provider request field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub privacy_policy_digest: Option<String>,
 }
 
 impl ProviderStateSourceV1 {
+    pub(crate) fn same_transport(&self, other: &Self) -> bool {
+        self.provider == other.provider
+            && self.protocol == other.protocol
+            && self.endpoint_sha256 == other.endpoint_sha256
+            && self.credential_sha256 == other.credential_sha256
+    }
     pub(crate) fn from_route(
         provider: impl Into<String>,
         protocol: crate::agent::provider::ProviderProtocol,
@@ -29,6 +39,7 @@ impl ProviderStateSourceV1 {
             protocol,
             endpoint_sha256: format!("{:x}", hasher.finalize()),
             credential_sha256: None,
+            privacy_policy_digest: None,
         })
     }
 
@@ -94,12 +105,46 @@ pub enum ProviderResponseItem {
     ResponsesOutput {
         source: ProviderStateSourceV1,
         output_index: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        privacy_prefix_sha256: Option<String>,
         item: Value,
     },
     ChatReasoning {
         source: ProviderStateSourceV1,
         content: String,
     },
+}
+
+impl ProviderResponseItem {
+    pub(crate) fn opaque_source(&self) -> Option<&ProviderStateSourceV1> {
+        fn payload(value: Option<&Value>) -> bool {
+            value.is_some_and(|value| !value.is_null() && value.as_str() != Some(""))
+        }
+        match self {
+            Self::ResponsesOutput { source, item, .. }
+                if payload(item.get("encrypted_content")) =>
+            {
+                Some(source)
+            }
+            Self::NativeContent {
+                source, content, ..
+            } => content
+                .iter()
+                .any(|part| match source.protocol {
+                    crate::agent::ProviderProtocol::AnthropicMessages => {
+                        (part["type"] == "thinking" && payload(part.get("signature")))
+                            || (part["type"] == "redacted_thinking" && payload(part.get("data")))
+                    }
+                    crate::agent::ProviderProtocol::GoogleGenerateContent => {
+                        payload(part.get("thoughtSignature"))
+                            || payload(part.get("thought_signature"))
+                    }
+                    _ => false,
+                })
+                .then_some(source),
+            _ => None,
+        }
+    }
 }
 
 impl std::fmt::Debug for ProviderResponseItem {
@@ -501,6 +546,9 @@ pub enum ProviderError {
     /// The user-owned provider filter tripped. The rule id is not the matched text.
     #[error("provider filter stopped the session ({rule})")]
     FilterStopped { rule: String },
+    /// Recoverable local preparation failure; no provider action is retried.
+    #[error("privacy request blocked: {detail}")]
+    PrivacyBlocked { detail: String },
 }
 
 impl ProviderError {
@@ -540,11 +588,13 @@ pub struct AssembledToolCall {
     pub id: String,
     pub name: String,
     pub arguments: String,
+    pub arguments_retrieved_spans: Vec<crate::retrieved_content::RetrievedSpan>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssembledAssistantTurn {
     pub content: String,
+    pub retrieved_spans: Vec<crate::retrieved_content::RetrievedSpan>,
     pub reasoning: Option<String>,
     pub response_items: Vec<ProviderResponseItem>,
     pub tool_calls: Vec<AssembledToolCall>,
@@ -760,18 +810,21 @@ impl AssistantTurnAssembler {
                     detail: format!("invalid arguments JSON: {error}"),
                 }
             })?;
-            let arguments = restored_tool_arguments(&arguments);
+            let (arguments, arguments_retrieved_spans) =
+                restored_tool_arguments_with_spans(&arguments);
             tool_calls.push(AssembledToolCall {
                 index,
                 id,
                 name,
                 arguments,
+                arguments_retrieved_spans,
             });
         }
-        crate::provider_filter::restore_view_in_place(&mut self.content);
+        let retrieved_spans = crate::provider_filter::restore_view_with_spans(&mut self.content);
         crate::provider_filter::restore_view_in_place(&mut self.reasoning);
         Ok(AssembledAssistantTurn {
             content: self.content,
+            retrieved_spans,
             reasoning: (!self.reasoning.is_empty()).then_some(self.reasoning),
             response_items: self.response_items,
             tool_calls,
@@ -784,25 +837,35 @@ impl AssistantTurnAssembler {
 /// Restore complete tool JSON as values so quoted or escaped originals remain
 /// valid JSON. Incomplete streaming fragments stay raw until they can be parsed.
 pub(crate) fn restored_tool_arguments(raw: &str) -> String {
+    restored_tool_arguments_with_spans(raw).0
+}
+
+pub(crate) fn restored_tool_arguments_with_spans(
+    raw: &str,
+) -> (String, Vec<crate::retrieved_content::RetrievedSpan>) {
+    if crate::privacy::current().is_some_and(|context| context.enabled()) {
+        // Privacy references remain provider-spelled until the source-bound
+        // local preparation step. Restoring here would lose edit provenance.
+        return match serde_json::from_str::<Value>(raw) {
+            Ok(value) => (
+                crate::provider_filter::restore_legacy_local_value(&value).to_string(),
+                Vec::new(),
+            ),
+            Err(_) => (raw.to_string(), Vec::new()),
+        };
+    }
     if !crate::provider_filter::rewrites_outbound() {
-        return raw.to_string();
+        return (raw.to_string(), Vec::new());
     }
-    let Ok(value) = serde_json::from_str::<Value>(raw) else {
-        return raw.to_string();
-    };
-    let restored = crate::provider_filter::restore_local_value(&value);
-    if restored == value {
-        raw.to_string()
-    } else {
-        serde_json::to_string(&restored).expect("JSON values remain serializable after restoration")
-    }
+    crate::retrieved_content::restore_argument_json(raw)
+        .unwrap_or_else(|| (raw.to_string(), Vec::new()))
 }
 
 /// Tool arguments must be one JSON object. Some models close that object and
 /// then keep writing in the same argument stream. Keep the first object when
 /// the suffix is commentary or an exact duplicate. A different JSON value, or
 /// a suffix that starts another object or array, stays unresolved.
-fn normalized_tool_arguments(raw: &str) -> Result<String, String> {
+pub(crate) fn normalized_tool_arguments(raw: &str) -> Result<String, String> {
     if serde_json::from_str::<Value>(raw).is_ok() {
         return Ok(raw.to_string());
     }
@@ -983,6 +1046,7 @@ mod tests {
     #[test]
     fn provider_response_item_debug_redacts_opaque_reasoning_payloads() {
         let responses = ProviderResponseItem::ResponsesOutput {
+            privacy_prefix_sha256: None,
             source: ProviderStateSourceV1::for_test(
                 "openai",
                 crate::agent::provider::ProviderProtocol::OpenAiResponses,
@@ -1325,6 +1389,48 @@ mod tests {
     }
 
     #[test]
+    fn restored_tool_arguments_preserve_retrieved_value_provenance() {
+        let settings = crate::provider_filter::ProviderFilterConfig {
+            enabled: true,
+            page_stand_in: crate::provider_filter::PageStandIn::Latin,
+            ..Default::default()
+        };
+        crate::provider_filter::with_test_filter(&settings, || {
+            let filter = crate::provider_filter::current();
+            let source = "CobaltR4WillowP8Meadow café 雪";
+            let encoded = filter.encode_retrieved(source);
+            let raw = serde_json::json!({
+                "task": format!("Authored CobaltR4WillowP8Meadow; quote {encoded}."),
+                "nested": [{"task": format!("Compare {encoded}")}],
+                (encoded.clone()): "authored property name"
+            })
+            .to_string();
+            let (restored, spans) = restored_tool_arguments_with_spans(&raw);
+            assert!(
+                !spans.is_empty(),
+                "restored source ranges must survive argument decoding"
+            );
+            crate::retrieved_content::validate_spans(&restored, &spans).unwrap();
+            let data: serde_json::Value = serde_json::from_str(&restored).unwrap();
+            assert_eq!(
+                data["task"],
+                format!("Authored CobaltR4WillowP8Meadow; quote {source}.")
+            );
+            assert_eq!(data[&encoded], "authored property name");
+            let sourced: String = spans
+                .iter()
+                .map(|span| &restored[span.start..span.end])
+                .collect();
+            assert!(sourced.contains("CobaltR4WillowP8Meadow"));
+            let authored = restored.find("Authored CobaltR4WillowP8Meadow").unwrap();
+            assert!(!spans.iter().any(|span| {
+                span.start < authored + "Authored CobaltR4WillowP8Meadow".len()
+                    && span.end > authored
+            }));
+        });
+    }
+
+    #[test]
     fn filter_restores_tool_arguments_as_json_values_once() {
         for original in ["hide secret", "hidden \"quoted\" \\ path"] {
             let config = crate::provider_filter::ProviderFilterConfig {
@@ -1554,6 +1660,7 @@ mod tests {
     fn bounded_assembler_counts_opaque_response_items_in_aggregate_limit() {
         let canary = "sentinel-opaque-provider-item";
         let item = ProviderResponseItem::ResponsesOutput {
+            privacy_prefix_sha256: None,
             source: ProviderStateSourceV1::for_test(
                 "openai",
                 crate::agent::provider::ProviderProtocol::OpenAiResponses,

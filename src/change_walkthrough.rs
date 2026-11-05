@@ -330,7 +330,7 @@ pub async fn run_walkthrough<B: ChatBackend + ?Sized>(
         },
         ChatMessage {
             role: "user".into(),
-            content: crate::image_content::ModelContent::text(snapshot.prompt()),
+            content: crate::retrieved_content::model_with_evidence("", &snapshot.prompt()),
             tool_calls: None,
             tool_call_id: None,
             response_items: Vec::new(),

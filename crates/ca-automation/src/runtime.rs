@@ -601,6 +601,27 @@ impl RunStore {
         }
         read(&path, 16)
     }
+    /// The identical private operation is explicitly admitted again under its
+    /// execution lease. Completed entries remain immutable in the file journal.
+    pub(crate) fn clear_cancel_for_private_continuation(&self) -> Result<()> {
+        let _lock = self.lock()?;
+        let mut r = self.status()?;
+        anyhow::ensure!(
+            r.state == ExecutionState::NeedsAttention
+                && r.actions.iter().any(|a| a.id == "target"
+                    && matches!(a.state, ActionState::Running | ActionState::Unknown)),
+            "private operation is not parked for continuation"
+        );
+        match fs::remove_file(self.root.join("cancel.json")) {
+            Ok(()) => File::open(&self.root)?.sync_all()?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+        r.state = ExecutionState::Running;
+        r.result = None;
+        r.reason = None;
+        self.write(&r)
+    }
     pub fn reconcile(&self) -> Result<ExecutionReceipt> {
         let Ok(_executor) = self.execution_lease() else {
             return self.status();

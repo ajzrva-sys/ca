@@ -147,8 +147,8 @@ pub(crate) fn apply(messages: &mut [ChatMessage], policy: &HintPolicy) {
         return;
     }
     if let Some(message) = messages.iter_mut().find(|m| m.role == "system") {
-        if let Some(text) = message.content.as_str() {
-            message.content = crate::image_content::ModelContent::text(format!("{text}{suffix}"));
+        if message.content.as_str().is_some() {
+            message.content = message.content.append_authored(&suffix);
         }
     }
 }
@@ -172,6 +172,7 @@ pub(crate) mod tests {
             id: id.into(),
             call_type: "function".into(),
             function: FunctionCall {
+                arguments_retrieved_spans: Vec::new(),
                 name: "run_command".into(),
                 arguments: serde_json::json!({"command":command}).to_string(),
             },
@@ -206,6 +207,30 @@ pub(crate) mod tests {
             vec![ExecutionHint::DependencyProbes]
         );
         assert!(!ExecutionHint::DependencyProbes.text().is_empty());
+        let mut sourced = message("system", "Host directions. PRIVATE_CHILD_SUMMARY");
+        sourced.content =
+            sourced
+                .content
+                .with_retrieved_spans(vec![crate::retrieved_content::RetrievedSpan {
+                    source: None,
+                    start: "Host directions. ".len(),
+                    end: "Host directions. PRIVATE_CHILD_SUMMARY".len(),
+                }]);
+        messages.insert(0, sourced);
+        apply(&mut messages, &all());
+        let filter = crate::provider_filter::ProviderFilter::compile(
+            &crate::provider_filter::ProviderFilterConfig {
+                enabled: true,
+                page_stand_in: crate::provider_filter::PageStandIn::Latin,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let projected = messages[0].content.project_retrieved(&filter).unwrap();
+        let text = projected.as_str().unwrap();
+        assert!(text.starts_with("Host directions. "));
+        assert!(text.contains("Execution reminder:"));
+        assert!(!text.contains("PRIVATE_CHILD_SUMMARY"));
         command(&mut messages, "next", "cargo test");
         assert!(reminders(&messages, &all()).is_empty());
     }

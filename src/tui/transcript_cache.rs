@@ -473,6 +473,7 @@ impl TranscriptCache {
         let offset = state.transcript_scroll.bottom_offset();
         let mut controls = Vec::new();
         append_conversation_controls(&mut controls, state, area.width, true);
+        append_private_move_progress(&mut controls, state, area.width);
         let control_rows = controls
             .iter()
             .map(|line| {
@@ -870,6 +871,7 @@ mod tests {
     fn composer_and_blink_reuse_layout_and_expansion_invalidates_it() {
         let mut state = crate::tui::test_support::test_state();
         state.messages.push(crate::app::Message {
+            retrieved_spans: Some(Vec::new()),
             role: crate::app::Role::Assistant,
             content: "history ".repeat(1000),
             thinking: None,
@@ -893,6 +895,7 @@ mod tests {
         let mut state = crate::tui::test_support::test_state();
         state.messages = (0..4096)
             .map(|index| crate::app::Message {
+                retrieved_spans: Some(Vec::new()),
                 role: crate::app::Role::Assistant,
                 content: format!("Row {index}: **Unicode** 你好 `code` and normal text."),
                 thinking: None,
@@ -974,6 +977,7 @@ mod tests {
     async fn bug257_workers_keep_history_visible_and_discard_other_session_results() {
         let mut state = crate::tui::test_support::test_state();
         let message = |text: &str| crate::app::Message {
+            retrieved_spans: Some(Vec::new()),
             role: crate::app::Role::Assistant,
             content: text.into(),
             thinking: None,
@@ -1018,6 +1022,7 @@ mod tests {
         for width in [60, 100] {
             let mut state = crate::tui::test_support::test_state();
             state.messages.push(crate::app::Message {
+                retrieved_spans: Some(Vec::new()),
                 role: crate::app::Role::Assistant,
                 content: "**Memory** renders Unicode 你好 and `code`.\n".repeat(100),
                 thinking: None,
@@ -1088,6 +1093,7 @@ mod tests {
         let mut state = crate::tui::test_support::test_state();
         state.transcript_cache.async_build.set(true);
         state.messages.push(crate::app::Message {
+            retrieved_spans: Some(Vec::new()),
             role: crate::app::Role::Assistant,
             content: "Streaming snapshot remains visible ".repeat(2048),
             thinking: None,

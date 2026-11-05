@@ -5,14 +5,14 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
  ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 The verification needs a command.
 
-  ⟳ run_command {"command":"cargo test workflow"}
+  ⠋ run_command {"command":"cargo test workflow"}
 
 
   Approve command [1/1] — run_command
     Reason: local process execution · [g] this exact command for this run
     Command: cargo test workflow
-  [y] run  [n] deny  [e] edit  [s] all uses of this tool  [g] allow exact for run  [p] always allow
-exact path  [x] always deny  [a] yolo
+  [y] run  [n] deny
+  [e] edit  [s] tool always  [g] this run  [p] path always  [x] always deny  [a] yolo
 
 
 
@@ -36,16 +36,16 @@ Tool needs approval [1/1] (y/n/a/g/s/x/p)
  ca v0.0.0 │ /workspace/ca                      [Dashboard]
 The verification needs a command.
 
-  ⟳ run_command {"command":"cargo test workflow"}
+  ⠋ run_command {"command":"cargo test workflow"}
 
 
   Approve command [1/1] — run_command
     Reason: local process execution · [g] this exact command
 for this run
     Command: cargo test workflow
-  [y] run  [n] deny  [e] edit  [s] all uses of this tool
-[g] allow exact for run  [p] always allow exact path  [x]
-always deny  [a] yolo
+  [y] run  [n] deny
+  [e] edit  [s] tool always  [g] this run  [p] path always
+[x] always deny  [a] yolo
 
 
 

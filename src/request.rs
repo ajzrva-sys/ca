@@ -311,6 +311,8 @@ impl std::fmt::Debug for EffectivePromptCachePlan {
 
 #[derive(Clone)]
 pub struct PreparedModelRequest {
+    pub(crate) privacy_revision: Option<u64>,
+    pub(crate) privacy_policy_digest: Option<String>,
     pub(crate) tool_schema_policy: crate::tool_schema::Policy,
     pub pruning: crate::context_pruning::PruningStats,
     pub(crate) guidance_prepared: bool,
@@ -356,6 +358,8 @@ impl PreparedModelRequest {
         let pruning =
             crate::context_pruning::project_request(&mut messages, kind, &provider, &model);
         Self {
+            privacy_revision: None,
+            privacy_policy_digest: None,
             tool_schema_policy: Default::default(),
             pruning,
             kind,
@@ -795,6 +799,8 @@ pub struct RequestStore {
 
 #[derive(Default)]
 struct RequestStoreInner {
+    privacy: Option<std::sync::Arc<crate::privacy::Context>>,
+    privacy_pending: bool,
     memory: Option<crate::cache_memory::Essential>,
     sequence: u64,
     latest: Option<RequestSnapshot>,
@@ -816,6 +822,34 @@ impl std::fmt::Debug for RequestStore {
 }
 
 impl RequestStore {
+    pub(crate) fn set_privacy_pending(&self, pending: bool) {
+        self.inner
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .privacy_pending = pending;
+    }
+
+    pub(crate) fn privacy_pending(&self) -> bool {
+        self.inner
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .privacy_pending
+    }
+    pub(crate) fn set_privacy_context(
+        &self,
+        context: Option<std::sync::Arc<crate::privacy::Context>>,
+    ) {
+        self.inner.lock().unwrap_or_else(|p| p.into_inner()).privacy = context;
+    }
+
+    pub(crate) fn privacy_context(&self) -> Option<std::sync::Arc<crate::privacy::Context>> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .privacy
+            .clone()
+    }
+
     pub fn record(&self, request: &PreparedModelRequest, secrets: &[&str]) -> u64 {
         self.record_with_protocol(request, "chat_completions", secrets)
     }
@@ -1190,6 +1224,7 @@ mod tests {
 
     fn provider_state(content: &str) -> ProviderResponseItem {
         ProviderResponseItem::ResponsesOutput {
+            privacy_prefix_sha256: None,
             source: ProviderStateSourceV1::for_test("openai", ProviderProtocol::OpenAiResponses),
             output_index: 0,
             item: serde_json::json!({
@@ -1316,6 +1351,7 @@ mod tests {
                         id: "email-call".into(),
                         call_type: "function".into(),
                         function: FunctionCall {
+                            arguments_retrieved_spans: Vec::new(),
                             name: "email_read".into(),
                             arguments: serde_json::json!({"body": sentinel}).to_string(),
                         },
@@ -1363,6 +1399,7 @@ mod tests {
                         id: "call-1".into(),
                         call_type: "function".into(),
                         function: FunctionCall {
+                            arguments_retrieved_spans: Vec::new(),
                             name: "deploy".into(),
                             arguments: format!(r#"{{"api_key":"{secret}","value":"ok"}}"#),
                         },
@@ -1453,6 +1490,7 @@ mod tests {
                 id: format!("call-{index}"),
                 call_type: "function".into(),
                 function: FunctionCall {
+                    arguments_retrieved_spans: Vec::new(),
                     name: "inspect".into(),
                     arguments: r#"{"token":"must-not-appear","value":"ok"}"#.into(),
                 },

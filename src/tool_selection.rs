@@ -403,6 +403,7 @@ fn resolve(
     }
 
     if !constraints.skills_enabled {
+        selected.remove("skill_search");
         selected.remove("activate_skill");
         selected.remove("skill_view");
         selected.remove("skill_manage");
@@ -516,7 +517,10 @@ fn resolve(
             "skill_view" => constraints.skill_view_ids.as_deref(),
             _ => None,
         };
-        if let Some(ids) = skill_ids {
+        // Discovery returns exact IDs on demand; do not repeat the entire
+        // unrelated catalog in every activation/view schema. The execution
+        // registry still validates exact availability, scope and digest.
+        if let Some(ids) = skill_ids.filter(|_| !selected.contains("skill_search")) {
             let field = if spec.name.as_str() == "skill_view" {
                 "instance_id"
             } else {
@@ -1025,7 +1029,7 @@ mod tests {
         let empty = resolve_tools(
             ToolRegistry::builtins(),
             ToolProfile::Main,
-            &ToolSelectionPolicy::default(),
+            &ToolSelectionPolicy::default().excluding("skill_search"),
             &ToolSelectionConstraints {
                 skill_activation_ids: Some(Vec::new()),
                 skill_view_ids: Some(Vec::new()),
@@ -1039,7 +1043,7 @@ mod tests {
         let available = resolve_tools(
             ToolRegistry::builtins(),
             ToolProfile::Main,
-            &ToolSelectionPolicy::default(),
+            &ToolSelectionPolicy::default().excluding("skill_search"),
             &ToolSelectionConstraints {
                 skill_activation_ids: Some(vec!["workspace:review".into()]),
                 skill_view_ids: Some(Vec::new()),
@@ -1057,6 +1061,38 @@ mod tests {
             serde_json::json!(["workspace:review"])
         );
         assert!(!names(&available).contains(&"skill_view"));
+    }
+
+    #[test]
+    fn demand_skill_search_omits_bulk_identifier_enums_and_respects_disabled_skills() {
+        let constraints = ToolSelectionConstraints {
+            skill_activation_ids: Some(vec!["UNRELATED_SKILL_ID_CANARY".into()]),
+            skill_view_ids: Some(vec!["UNRELATED_INSTANCE_ID_CANARY".into()]),
+            ..Default::default()
+        };
+        let resolved = resolve_tools(
+            ToolRegistry::builtins(),
+            ToolProfile::Main,
+            &ToolSelectionPolicy::default(),
+            &constraints,
+        )
+        .unwrap();
+        assert!(names(&resolved).contains(&"skill_search"));
+        let definitions = serde_json::to_string(resolved.definitions()).unwrap();
+        assert!(!definitions.contains("UNRELATED_SKILL_ID_CANARY"));
+        assert!(!definitions.contains("UNRELATED_INSTANCE_ID_CANARY"));
+        let disabled = resolve_tools(
+            ToolRegistry::builtins(),
+            ToolProfile::Main,
+            &ToolSelectionPolicy::default(),
+            &ToolSelectionConstraints {
+                skills_enabled: false,
+                ..constraints
+            },
+        )
+        .unwrap();
+        assert!(!names(&disabled).contains(&"skill_search"));
+        assert!(!names(&disabled).contains(&"activate_skill"));
     }
 
     #[test]

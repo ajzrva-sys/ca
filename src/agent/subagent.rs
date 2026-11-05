@@ -126,6 +126,7 @@ pub struct AgentSpawnRequest {
     pub parent_turn: Uuid,
     pub task_id: Option<crate::work::TaskId>,
     pub task: String,
+    pub task_retrieved_spans: Vec<crate::retrieved_content::RetrievedSpan>,
     pub context_mode: AgentContextMode,
     pub context_summary: String,
     pub grants: AgentGrant,
@@ -540,7 +541,11 @@ pub struct AgentActivitySnapshot {
 
 #[derive(Debug)]
 pub enum AgentCommand {
-    Message { id: Uuid, text: String },
+    Message {
+        id: Uuid,
+        text: String,
+        retrieved_spans: Vec<crate::retrieved_content::RetrievedSpan>,
+    },
     Approval(bool),
 }
 
@@ -585,7 +590,7 @@ pub struct AgentRunContext {
     pub request: AgentSpawnRequest,
     pub limits: AgentLimits,
     pub commands: mpsc::Receiver<AgentCommand>,
-    pending_steers: VecDeque<(Uuid, String)>,
+    pending_steers: VecDeque<(Uuid, String, Vec<crate::retrieved_content::RetrievedSpan>)>,
     pub cancelled: watch::Receiver<bool>,
     pub events: mpsc::UnboundedSender<RunnerEvent>,
     pub job_owner: crate::jobs::JobOwner,
@@ -663,6 +668,8 @@ impl AgentRunner for ProviderAgentRunner {
     }
 
     async fn run(&self, mut context: AgentRunContext) -> Result<String, String> {
+        let privacy_context = self.client.privacy_context();
+        crate::privacy::scope(privacy_context.clone(), async move {
         use crate::agent::client::{ChatMessage, FunctionCall, ToolCallMsg};
         let (client, images_supported) = if let Some(route) = context.request.route.as_ref() {
             let (client, images_supported) =
@@ -676,6 +683,10 @@ impl AgentRunner for ProviderAgentRunner {
         } else {
             (self.client.clone(), self.images_supported)
         };
+        let client = client.with_privacy_context(privacy_context);
+        if let Some(privacy)=client.privacy_context().filter(|c|c.enabled()) {
+            if let Some(result)=crate::privacy::tasks::contained_planner(privacy,&mut context,client.provider_id(),client.model_id()).await {return result;}
+        }
         let client = if context.graph_budget.is_some() {
             client.with_one_attempt_policy()
         } else {
@@ -753,23 +764,31 @@ impl AgentRunner for ProviderAgentRunner {
                 "\nA structured result is required. Finish by calling report_structured_output exactly once as the sole final tool call.".into()
             },
         );
+        let mut system_content = format!(
+            "You are a bounded child coding agent. Use only granted tools. Never widen workspace roots or network authority.{}\n\nState summary:\n",
+            structured_instruction,
+        );
+        let mut summary_spans = Vec::new();
+        crate::retrieved_content::append(
+            &mut system_content,
+            &mut summary_spans,
+            &context.request.context_summary,
+        );
+        system_content.push_str(&active_skills);
+        system_content.push_str(&task_skills);
         let mut messages = vec![
             ChatMessage {
                 role: "system".into(),
-                content: crate::image_content::ModelContent::text(format!(
-                    "You are a bounded child coding agent. Use only granted tools. Never widen workspace roots or network authority.{}\n\nState summary:\n{}{}{}",
-                    structured_instruction,
-                    context.request.context_summary,
-                    active_skills,
-                    task_skills
-                )),
+                content: crate::image_content::ModelContent::text(system_content)
+                    .with_retrieved_spans(summary_spans),
                 tool_calls: None,
                 tool_call_id: None,
                 response_items: Vec::new(),
             },
             ChatMessage {
                 role: "user".into(),
-                content: crate::image_content::ModelContent::text(context.request.task.clone()),
+                content: crate::image_content::ModelContent::text(context.request.task.clone())
+                    .with_retrieved_spans(context.request.task_retrieved_spans.clone()),
                 tool_calls: None,
                 tool_call_id: None,
                 response_items: Vec::new(),
@@ -881,20 +900,29 @@ impl AgentRunner for ProviderAgentRunner {
             let calls: Vec<_> = assembled
                 .tool_calls
                 .into_iter()
-                .map(|call| (call.id, call.name, call.arguments))
+                .map(|call| {
+                    (
+                        call.id,
+                        call.name,
+                        call.arguments,
+                        call.arguments_retrieved_spans,
+                    )
+                })
                 .collect();
             messages.push(ChatMessage {
                 role: "assistant".into(),
-                content: crate::image_content::ModelContent::text(assembled.content.clone()),
+                content: crate::image_content::ModelContent::text(assembled.content.clone())
+                    .with_retrieved_spans(assembled.retrieved_spans),
                 tool_calls: (!calls.is_empty()).then(|| {
                     calls
                         .iter()
-                        .map(|(id, name, arguments)| ToolCallMsg {
+                        .map(|(id, name, arguments, spans)| ToolCallMsg {
                             id: id.clone(),
                             call_type: "function".into(),
                             function: FunctionCall {
                                 name: name.clone(),
                                 arguments: arguments.clone(),
+                                arguments_retrieved_spans: spans.clone(),
                             },
                         })
                         .collect()
@@ -920,10 +948,7 @@ impl AgentRunner for ProviderAgentRunner {
                 ));
                 messages.push(ChatMessage {
                     role: "system".into(),
-                    content: crate::image_content::ModelContent::text(format!(
-                        "The final structured result was rejected: {}. Correct it now by calling report_structured_output exactly once as the sole final tool call. This is the only repair turn.",
-                        crate::terminal_text::sanitize_terminal_text(error)
-                    )),
+                    content: structured_repair_content(error),
                     tool_calls: None,
                     tool_call_id: None,
                     response_items: Vec::new(),
@@ -933,7 +958,7 @@ impl AgentRunner for ProviderAgentRunner {
             if let Some(contract) = &context.request.output_contract {
                 if !calls
                     .iter()
-                    .any(|(_, name, _)| name == crate::headless_contract::STRUCTURED_OUTPUT_TOOL)
+                    .any(|(_, name, _, _)| name == crate::headless_contract::STRUCTURED_OUTPUT_TOOL)
                 {
                     // Ordinary tool work may continue before the final structured call.
                 } else {
@@ -960,7 +985,7 @@ impl AgentRunner for ProviderAgentRunner {
                         }
                         Err(error) => {
                             structured_repair_attempted = true;
-                            for (call_id, _, _) in &calls {
+                            for (call_id, _, _, _) in &calls {
                                 messages.push(ChatMessage {
                                     role: "tool".into(),
                                     content: crate::image_content::ModelContent::text(format!(
@@ -976,15 +1001,12 @@ impl AgentRunner for ProviderAgentRunner {
                                 "structured output repair turn 1 of 1".into(),
                             ));
                             messages.push(ChatMessage {
-                            role: "system".into(),
-                            content: crate::image_content::ModelContent::text(format!(
-                                "The final structured result was rejected: {}. Correct it now by calling report_structured_output exactly once as the sole final tool call. This is the only repair turn.",
-                                crate::terminal_text::sanitize_terminal_text(&error)
-                            )),
-                            tool_calls: None,
-                            tool_call_id: None,
-                            response_items: Vec::new(),
-                        });
+                                role: "system".into(),
+                                content: structured_repair_content(&error),
+                                tool_calls: None,
+                                tool_call_id: None,
+                                response_items: Vec::new(),
+                            });
                             continue;
                         }
                     }
@@ -994,7 +1016,9 @@ impl AgentRunner for ProviderAgentRunner {
             let execution_grants = context.request.grants.clone();
             let frozen_policy = context.frozen_policy.clone();
             let mut prefetched_reads = std::collections::HashMap::new();
-            for (call_index, (call_id, name, raw_arguments)) in calls.iter().cloned().enumerate() {
+            for (call_index, (call_id, name, raw_arguments, argument_spans)) in
+                calls.iter().cloned().enumerate()
+            {
                 if let Some(budget) = context
                     .graph_budget
                     .as_ref()
@@ -1041,6 +1065,9 @@ impl AgentRunner for ProviderAgentRunner {
                 let result = if let Some(result) = prefetched_reads.remove(&call_index) {
                     result
                 } else if granted.contains(&name)
+                    && !client
+                        .privacy_context()
+                        .is_some_and(|context| context.filenames_enabled())
                     && !policy_prompt
                     && registry
                         .supports_native_read(&name, crate::agent::registry::ToolProfile::Subagent)
@@ -1052,7 +1079,7 @@ impl AgentRunner for ProviderAgentRunner {
                                 name: name.clone(),
                                 args: prepared.arguments,
                             }];
-                            for (_, next_name, raw) in calls
+                            for (_, next_name, raw, _) in calls
                                 .iter()
                                 .skip(call_index + 1)
                                 .take(crate::agent::tools::MAX_NATIVE_READ_CONCURRENCY - 1)
@@ -1110,7 +1137,14 @@ impl AgentRunner for ProviderAgentRunner {
                         }
                     }
                 } else if name == "spawn_agent" && granted.contains(&name) && !policy_prompt {
-                    execute_child_nested_spawn(&context, &native_context, &parsed).await
+                    execute_child_nested_spawn_with_provenance(
+                        &context,
+                        &native_context,
+                        &parsed,
+                        &raw_arguments,
+                        &argument_spans,
+                    )
+                    .await
                 } else if name == "request_graph_clarification" {
                     if context.graph_budget.is_none() {
                         crate::agent::registry::ToolExecutionResult::Failure(
@@ -1163,7 +1197,14 @@ impl AgentRunner for ProviderAgentRunner {
                             policy_approved: true,
                             ..native_context
                         };
-                        execute_child_nested_spawn(&context, &approved_context, &parsed).await
+                        execute_child_nested_spawn_with_provenance(
+                            &context,
+                            &approved_context,
+                            &parsed,
+                            &raw_arguments,
+                            &argument_spans,
+                        )
+                        .await
                     } else {
                         execute_child_tool(
                             ChildToolContext {
@@ -1240,6 +1281,10 @@ impl AgentRunner for ProviderAgentRunner {
                 messages.push(ChatMessage {
                     role: "tool".into(),
                     content: crate::image_content::ModelContent::text(result.model_text())
+                        .with_retrieved_spans(crate::retrieved_content::full_span(
+                            result.model_text(),
+                        ))
+                        .with_source_receipt(result.source_for(result.model_text()))
                         .with_prunable_tool_result(crate::context_pruning::qualified_result(
                             &name,
                             &raw_arguments,
@@ -1270,6 +1315,7 @@ impl AgentRunner for ProviderAgentRunner {
             "subagent exceeded maximum {} turns",
             context.limits.max_turns
         ))
+        }).await
     }
 
     fn replace_route_clients(&self, clients: AgentRouteClients) {
@@ -1422,17 +1468,45 @@ fn child_permission_decision(
         .map(|(_, decision)| decision)
 }
 
+#[cfg(test)]
 async fn execute_child_nested_spawn(
     context: &AgentRunContext,
     tool_context: &ChildToolContext<'_>,
     arguments: &serde_json::Value,
 ) -> crate::agent::registry::ToolExecutionResult {
+    execute_child_nested_spawn_with_provenance(
+        context,
+        tool_context,
+        arguments,
+        &arguments.to_string(),
+        &[],
+    )
+    .await
+}
+
+async fn execute_child_nested_spawn_with_provenance(
+    context: &AgentRunContext,
+    tool_context: &ChildToolContext<'_>,
+    arguments: &serde_json::Value,
+    original_arguments: &str,
+    argument_spans: &[crate::retrieved_content::RetrievedSpan],
+) -> crate::agent::registry::ToolExecutionResult {
     match prepare_child_tool(tool_context, "spawn_agent", arguments) {
         Ok(prepared) => {
-            execute_nested_spawn(
+            let task_spans = match manager_argument_spans(
+                &prepared.arguments,
+                original_arguments,
+                argument_spans,
+                "/task",
+            ) {
+                Ok(spans) => spans,
+                Err(error) => return crate::agent::registry::ToolExecutionResult::Failure(error),
+            };
+            execute_nested_spawn_with_provenance(
                 context,
                 &prepared.arguments,
                 &tool_context.runner.manager_link,
+                task_spans,
             )
             .await
         }
@@ -1440,10 +1514,20 @@ async fn execute_child_nested_spawn(
     }
 }
 
+#[cfg(test)]
 async fn execute_nested_spawn(
     context: &AgentRunContext,
     arguments: &serde_json::Value,
     manager_link: &std::sync::OnceLock<std::sync::Weak<AgentManager>>,
+) -> crate::agent::registry::ToolExecutionResult {
+    execute_nested_spawn_with_provenance(context, arguments, manager_link, Vec::new()).await
+}
+
+async fn execute_nested_spawn_with_provenance(
+    context: &AgentRunContext,
+    arguments: &serde_json::Value,
+    manager_link: &std::sync::OnceLock<std::sync::Weak<AgentManager>>,
+    task_retrieved_spans: Vec<crate::retrieved_content::RetrievedSpan>,
 ) -> crate::agent::registry::ToolExecutionResult {
     let Some(manager) = manager_link.get().and_then(std::sync::Weak::upgrade) else {
         return crate::agent::registry::ToolExecutionResult::Failure(
@@ -1510,6 +1594,7 @@ async fn execute_nested_spawn(
         parent_turn: context.request.parent_turn,
         task_id: None,
         task: task.to_string(),
+        task_retrieved_spans,
         context_mode: AgentContextMode::Summary,
         context_summary: context.request.context_summary.clone(),
         grants: AgentGrant {
@@ -1535,10 +1620,13 @@ async fn execute_nested_spawn(
         .spawn_with_inherited_policy(request, origin, context.frozen_policy.clone())
         .await
     {
-        Ok(id) => crate::agent::registry::ToolExecutionResult::Success(format!(
-            "Spawned nested agent {id}{}",
-            child_route_suffix(route.as_ref(), selection.as_ref())
-        )),
+        Ok(id) => {
+            let text = format!(
+                "Spawned nested agent {id}{}",
+                child_route_suffix(route.as_ref(), selection.as_ref())
+            );
+            manager_spawn_success(&manager, id, text).await
+        }
         Err(error) => crate::agent::registry::ToolExecutionResult::Failure(error.to_string()),
     }
 }
@@ -1553,8 +1641,8 @@ async fn await_child_approval(
             _ = wait_cancelled(context.cancelled.clone()) => return Err("cancelled".into()),
             command = context.commands.recv() => match command {
                 Some(AgentCommand::Approval(approved)) => return Ok(approved),
-                Some(AgentCommand::Message { id, text }) => {
-                    context.pending_steers.push_back((id, text));
+                Some(AgentCommand::Message { id, text, retrieved_spans }) => {
+                    context.pending_steers.push_back((id, text, retrieved_spans));
                     let _ = context.events.send(RunnerEvent::Activity(
                         "steering retained for the next provider boundary".into(),
                     ));
@@ -1603,7 +1691,7 @@ async fn await_graph_clarification(
             ToolExecutionResult::Failure("clarification cancelled".into())
         }
         command = context.commands.recv() => match command {
-            Some(AgentCommand::Message { id, text }) => {
+            Some(AgentCommand::Message { id, text, .. }) => {
                 let _ = context.events.send(RunnerEvent::SteerDelivered { id });
                 if !text.is_empty()
                     && (text.len() > MAX_CLARIFICATION_ANSWER_CHARS
@@ -1626,19 +1714,39 @@ async fn await_graph_clarification(
     }
 }
 
+fn structured_repair_content(error: &str) -> crate::image_content::ModelContent {
+    let mut content = "The final structured result was rejected: ".to_string();
+    let mut spans = Vec::new();
+    crate::retrieved_content::append(
+        &mut content,
+        &mut spans,
+        &crate::terminal_text::sanitize_terminal_text(error),
+    );
+    content.push_str(". Correct it now by calling report_structured_output exactly once as the sole final tool call. This is the only repair turn.");
+    crate::image_content::ModelContent::text(content).with_retrieved_spans(spans)
+}
+
 fn drain_child_steering(
     context: &mut AgentRunContext,
     messages: &mut Vec<crate::agent::client::ChatMessage>,
 ) {
     while let Ok(command) = context.commands.try_recv() {
-        if let AgentCommand::Message { id, text } = command {
-            context.pending_steers.push_back((id, text));
+        if let AgentCommand::Message {
+            id,
+            text,
+            retrieved_spans,
+        } = command
+        {
+            context
+                .pending_steers
+                .push_back((id, text, retrieved_spans));
         }
     }
-    while let Some((id, text)) = context.pending_steers.pop_front() {
+    while let Some((id, text, retrieved_spans)) = context.pending_steers.pop_front() {
         messages.push(crate::agent::client::ChatMessage {
             role: "user".into(),
-            content: crate::image_content::ModelContent::text(text),
+            content: crate::image_content::ModelContent::text(text)
+                .with_retrieved_spans(retrieved_spans),
             tool_calls: None,
             tool_call_id: None,
             response_items: Vec::new(),
@@ -1774,6 +1882,52 @@ fn prepare_child_tool(
             ));
         }
     }
+    let extra_paths = if crate::privacy::for_owner(context.owner)
+        .is_some_and(|privacy| privacy.filenames_enabled())
+    {
+        crate::privacy::tool_contract::additional_write_paths(
+            name,
+            &prepared.arguments,
+            context.workspace.cwd(),
+        )
+        .map_err(|error| Box::new(crate::agent::registry::ToolExecutionResult::Failure(error)))?
+    } else {
+        Vec::new()
+    };
+    for path in extra_paths {
+        let mut authority = context.workspace.clone();
+        if let Some(privacy) = crate::privacy::for_owner(context.owner) {
+            for root in privacy.command_artifact_roots() {
+                authority.add_root(root, false).map_err(|error| {
+                    Box::new(crate::agent::registry::ToolExecutionResult::Denied(
+                        error.to_string(),
+                    ))
+                })?;
+            }
+        }
+        let path = authority
+            .resolve(
+                &path.to_string_lossy(),
+                crate::workspace::PathOperation::Create,
+            )
+            .map_err(|error| {
+                Box::new(crate::agent::registry::ToolExecutionResult::Denied(
+                    error.to_string(),
+                ))
+            })?;
+        if !context
+            .grant
+            .path_scopes
+            .iter()
+            .any(|scope| path.starts_with(scope))
+        {
+            return Err(Box::new(
+                crate::agent::registry::ToolExecutionResult::Denied(
+                    "Child write resource is outside inherited scope".into(),
+                ),
+            ));
+        }
+    }
     if prepared.network_requested && !context.grant.network {
         return Err(Box::new(
             crate::agent::registry::ToolExecutionResult::Denied(
@@ -1789,7 +1943,28 @@ async fn execute_child_tool(
     name: &str,
     arguments: &serde_json::Value,
 ) -> crate::agent::registry::ToolExecutionResult {
-    let mut prepared = match prepare_child_tool(&context, name, arguments) {
+    let arguments = if let Some(privacy) = crate::privacy::for_owner(context.owner) {
+        let name = name.to_string();
+        let args = arguments.clone();
+        let workspace = context.workspace.clone();
+        match tokio::task::spawn_blocking(move || {
+            privacy.authorize_tool_roots(&workspace)?;
+            privacy.prepare_edit_ticket(&name, &args)
+        })
+        .await
+        {
+            Ok(Ok(args)) => args,
+            Ok(Err(error)) => return crate::agent::registry::ToolExecutionResult::Failure(error),
+            Err(_) => {
+                return crate::agent::registry::ToolExecutionResult::Failure(
+                    "Protected child tool preparation worker stopped".into(),
+                )
+            }
+        }
+    } else {
+        arguments.clone()
+    };
+    let mut prepared = match prepare_child_tool(&context, name, &arguments) {
         Ok(prepared) => prepared,
         Err(result) => return *result,
     };
@@ -1869,9 +2044,139 @@ async fn cleanup_owned_jobs(owner: crate::jobs::JobOwner) {
     }
 }
 
+#[cfg(test)]
 pub async fn execute_manager_tool(
     name: &str,
     arguments: &serde_json::Value,
+    manager: &Arc<AgentManager>,
+    work_state: &Arc<std::sync::Mutex<crate::work::WorkState>>,
+    workspace: &crate::workspace::WorkspaceContext,
+) -> Option<crate::agent::registry::ToolExecutionResult> {
+    execute_manager_tool_with_provenance(
+        name,
+        arguments,
+        &arguments.to_string(),
+        &[],
+        manager,
+        work_state,
+        workspace,
+    )
+    .await
+}
+
+fn manager_argument_spans(
+    arguments: &serde_json::Value,
+    original_arguments: &str,
+    spans: &[crate::retrieved_content::RetrievedSpan],
+    pointer: &str,
+) -> Result<Vec<crate::retrieved_content::RetrievedSpan>, String> {
+    let ranges = crate::retrieved_content::json_string_spans(original_arguments, spans, pointer)
+        .map_err(|error| error.to_string())?;
+    if !ranges.is_empty() {
+        let original: serde_json::Value =
+            serde_json::from_str(original_arguments).map_err(|error| error.to_string())?;
+        if original.pointer(pointer) != arguments.pointer(pointer) {
+            return Err(
+                "retrieved task argument changed without provenance; request withheld".into(),
+            );
+        }
+    }
+    Ok(ranges)
+}
+
+fn native_agent_control(
+    snapshot: &AgentSnapshot,
+) -> crate::privacy::native_control::NativeAgentControl {
+    use crate::privacy::native_control::{NativeAgentControl, NativeAgentStatus};
+    NativeAgentControl {
+        id: snapshot.id.0,
+        status: match &snapshot.status {
+            AgentStatus::Queued => NativeAgentStatus::Queued,
+            AgentStatus::Running => NativeAgentStatus::Running,
+            AgentStatus::WaitingApproval => NativeAgentStatus::WaitingApproval,
+            AgentStatus::Completed => NativeAgentStatus::Completed,
+            AgentStatus::Failed => NativeAgentStatus::Failed,
+            AgentStatus::Cancelled => NativeAgentStatus::Cancelled,
+            AgentStatus::TimedOut => NativeAgentStatus::TimedOut,
+            AgentStatus::Interrupted => NativeAgentStatus::Interrupted,
+        },
+    }
+}
+
+fn native_batch_control(
+    snapshot: &AgentBatchSnapshot,
+) -> crate::privacy::native_control::TypedNativeControl {
+    use crate::privacy::native_control::{
+        NativeAgentControl, NativeAgentStatus, TypedNativeControl,
+    };
+    TypedNativeControl {
+        agents: snapshot.agents.iter().map(native_agent_control).collect(),
+        batch: Some(NativeAgentControl {
+            id: snapshot.id.0,
+            status: if snapshot.terminal {
+                NativeAgentStatus::Completed
+            } else {
+                NativeAgentStatus::Running
+            },
+        }),
+    }
+}
+
+fn successful_control_error(
+    text: String,
+    error: impl std::fmt::Display,
+) -> crate::agent::registry::ToolExecutionResult {
+    crate::agent::registry::ToolExecutionResult::Success(format!("{text}\nPrivacy coordination metadata could not be recorded: {error}. This action succeeded; do not repeat spawning. Inspect the existing agents with list_agents."))
+}
+
+async fn manager_control_success(
+    text: String,
+    control: crate::privacy::native_control::TypedNativeControl,
+) -> crate::agent::registry::ToolExecutionResult {
+    use crate::agent::registry::ToolExecutionResult;
+    let Some(context) = crate::privacy::current().filter(|context| context.enabled()) else {
+        return ToolExecutionResult::Success(text);
+    };
+    let original = text.clone();
+    match tokio::task::spawn_blocking(move || context.record_native_control(&original, control))
+        .await
+    {
+        Ok(Ok(source)) => ToolExecutionResult::SourceSuccess { text, source },
+        Ok(Err(error)) => successful_control_error(text, error),
+        Err(_) => successful_control_error(text, "local metadata worker stopped"),
+    }
+}
+
+async fn manager_spawn_success(
+    manager: &AgentManager,
+    id: AgentId,
+    text: String,
+) -> crate::agent::registry::ToolExecutionResult {
+    use crate::privacy::native_control::TypedNativeControl;
+    if crate::privacy::current().is_none_or(|context| !context.enabled()) {
+        return crate::agent::registry::ToolExecutionResult::Success(text);
+    }
+    match manager.snapshot(id).await {
+        Ok(snapshot) => {
+            manager_control_success(
+                text,
+                TypedNativeControl {
+                    agents: vec![native_agent_control(&snapshot)],
+                    batch: None,
+                },
+            )
+            .await
+        }
+        Err(error) => successful_control_error(text, error),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn execute_manager_tool_with_provenance(
+    name: &str,
+    arguments: &serde_json::Value,
+    original_arguments: &str,
+    arguments_retrieved_spans: &[crate::retrieved_content::RetrievedSpan],
     manager: &Arc<AgentManager>,
     work_state: &Arc<std::sync::Mutex<crate::work::WorkState>>,
     workspace: &crate::workspace::WorkspaceContext,
@@ -1881,6 +2186,15 @@ pub async fn execute_manager_tool(
     let result = match name {
         "spawn_agent" => {
             let task = arguments.get("task")?.as_str()?.to_string();
+            let task_retrieved_spans = match manager_argument_spans(
+                arguments,
+                original_arguments,
+                arguments_retrieved_spans,
+                "/task",
+            ) {
+                Ok(spans) => spans,
+                Err(error) => return Some(ToolExecutionResult::Failure(error)),
+            };
             let requested: Vec<String> = arguments
                 .get("tools")?
                 .as_array()?
@@ -1895,7 +2209,11 @@ pub async fn execute_manager_tool(
                         .collect(),
                     Err(error) => return Some(failure(error)),
                 };
-            if requested.is_empty() || requested.iter().any(|tool| !available.contains(tool)) {
+            // An explicit [] grants no tools and is useful for contained
+            // planning/review. Invalid or unavailable grants still fail closed.
+            if requested.len() != arguments.get("tools")?.as_array()?.len()
+                || requested.iter().any(|tool| !available.contains(tool))
+            {
                 return Some(ToolExecutionResult::Failure(
                     "spawn_agent requires explicit valid non-agent tool grants".into(),
                 ));
@@ -1946,6 +2264,7 @@ pub async fn execute_manager_tool(
                 parent_turn: manager.parent_turn(),
                 task_id,
                 task,
+                task_retrieved_spans,
                 context_mode: AgentContextMode::Summary,
                 context_summary,
                 grants: AgentGrant {
@@ -1998,10 +2317,17 @@ pub async fn execute_manager_tool(
                 },
             };
             match manager.spawn(request).await {
-                Ok(id) => ToolExecutionResult::Success(format!(
-                    "Spawned agent {id}{}",
-                    child_route_suffix(route.as_ref(), selection.as_ref())
-                )),
+                Ok(id) => {
+                    manager_spawn_success(
+                        manager,
+                        id,
+                        format!(
+                            "Spawned agent {id}{}",
+                            child_route_suffix(route.as_ref(), selection.as_ref())
+                        ),
+                    )
+                    .await
+                }
                 Err(error) => failure(error),
             }
         }
@@ -2009,9 +2335,18 @@ pub async fn execute_manager_tool(
             let tasks = arguments.get("tasks")?.as_array()?;
             let mut requests = Vec::with_capacity(tasks.len());
             let mut route_details = Vec::with_capacity(tasks.len());
-            for task in tasks {
+            for (index, task) in tasks.iter().enumerate() {
                 match build_spawn_request(task, manager, work_state, workspace) {
-                    Ok((request, selection)) => {
+                    Ok((mut request, selection)) => {
+                        request.task_retrieved_spans = match manager_argument_spans(
+                            arguments,
+                            original_arguments,
+                            arguments_retrieved_spans,
+                            &format!("/tasks/{index}/task"),
+                        ) {
+                            Ok(spans) => spans,
+                            Err(error) => return Some(ToolExecutionResult::Failure(error)),
+                        };
                         route_details.push(child_route_suffix(
                             request.route.as_ref(),
                             selection.as_ref(),
@@ -2032,10 +2367,17 @@ pub async fn execute_manager_tool(
                         .enumerate()
                         .map(|(index, (id, details))| format!("{}. {id}{details}", index + 1))
                         .collect::<Vec<_>>();
-                    ToolExecutionResult::Success(format!(
-                        "Spawned batch {batch_id}\n{}",
-                        rows.join("\n")
-                    ))
+                    let text = format!("Spawned batch {batch_id}\n{}", rows.join("\n"));
+                    if crate::privacy::current().is_none_or(|context| !context.enabled()) {
+                        ToolExecutionResult::Success(text)
+                    } else {
+                        match manager.await_batch_bounded(batch_id, Some(0)).await {
+                            Ok(snapshot) => {
+                                manager_control_success(text, native_batch_control(&snapshot)).await
+                            }
+                            Err(error) => successful_control_error(text, error),
+                        }
+                    }
                 }
                 Err(error) => failure(error),
             }
@@ -2054,7 +2396,16 @@ pub async fn execute_manager_tool(
                 },
             };
             match manager.await_agent_bounded(id, timeout_secs).await {
-                Ok(snapshot) => ToolExecutionResult::Success(format_agent_snapshot(&snapshot)),
+                Ok(snapshot) => {
+                    manager_control_success(
+                        format_agent_snapshot(&snapshot),
+                        crate::privacy::native_control::TypedNativeControl {
+                            agents: vec![native_agent_control(&snapshot)],
+                            batch: None,
+                        },
+                    )
+                    .await
+                }
                 Err(error) => failure(error),
             }
         }
@@ -2076,14 +2427,32 @@ pub async fn execute_manager_tool(
                 },
             };
             match manager.await_batch_bounded(id, timeout_secs).await {
-                Ok(snapshot) => ToolExecutionResult::Success(format_agent_batch(&snapshot)),
+                Ok(snapshot) => {
+                    manager_control_success(
+                        format_agent_batch(&snapshot),
+                        native_batch_control(&snapshot),
+                    )
+                    .await
+                }
                 Err(error) => failure(error),
             }
         }
         "send_agent_message" => {
             let id = parse_agent_id(arguments)?;
             let message = arguments.get("message")?.as_str()?.to_string();
-            match manager.send_message(id, message).await {
+            let message_spans = match manager_argument_spans(
+                arguments,
+                original_arguments,
+                arguments_retrieved_spans,
+                "/message",
+            ) {
+                Ok(spans) => spans,
+                Err(error) => return Some(ToolExecutionResult::Failure(error)),
+            };
+            match manager
+                .send_message_with_provenance(id, message, message_spans)
+                .await
+            {
                 Ok(steer_id) => {
                     ToolExecutionResult::Success(format!("Steering {steer_id} queued for {id}"))
                 }
@@ -2126,7 +2495,7 @@ pub async fn execute_manager_tool(
         ),
         "list_agents" => {
             let snapshots = manager.list().await;
-            ToolExecutionResult::Success(if snapshots.is_empty() {
+            let text = if snapshots.is_empty() {
                 "No child agents".into()
             } else {
                 snapshots
@@ -2134,11 +2503,28 @@ pub async fn execute_manager_tool(
                     .map(format_agent_snapshot)
                     .collect::<Vec<_>>()
                     .join("\n")
-            })
+            };
+            manager_control_success(
+                text,
+                crate::privacy::native_control::TypedNativeControl {
+                    agents: snapshots.iter().map(native_agent_control).collect(),
+                    batch: None,
+                },
+            )
+            .await
         }
         "task" => {
             let name = arguments.get("subagent_name")?.as_str()?;
             let task = arguments.get("prompt")?.as_str()?.to_string();
+            let task_retrieved_spans = match manager_argument_spans(
+                arguments,
+                original_arguments,
+                arguments_retrieved_spans,
+                "/prompt",
+            ) {
+                Ok(spans) => spans,
+                Err(error) => return Some(ToolExecutionResult::Failure(error)),
+            };
             let definition = builtin_subagents()
                 .into_iter()
                 .find(|agent| agent.name == name);
@@ -2202,6 +2588,7 @@ pub async fn execute_manager_tool(
                 parent_turn: manager.parent_turn(),
                 task_id: None,
                 task,
+                task_retrieved_spans,
                 context_mode: AgentContextMode::Summary,
                 context_summary,
                 grants: AgentGrant {
@@ -2375,6 +2762,7 @@ fn build_spawn_request(
             parent_turn: manager.parent_turn(),
             task_id,
             task,
+            task_retrieved_spans: Vec::new(),
             context_mode: AgentContextMode::Summary,
             context_summary,
             grants: AgentGrant {
@@ -4629,6 +5017,18 @@ impl AgentManager {
         id: AgentId,
         message: String,
     ) -> Result<Uuid, AgentManagerError> {
+        self.send_message_with_provenance(id, message, Vec::new())
+            .await
+    }
+
+    pub async fn send_message_with_provenance(
+        &self,
+        id: AgentId,
+        message: String,
+        retrieved_spans: Vec<crate::retrieved_content::RetrievedSpan>,
+    ) -> Result<Uuid, AgentManagerError> {
+        crate::retrieved_content::validate_spans(&message, &retrieved_spans)
+            .map_err(|error| AgentManagerError::InvalidSteer(error.to_string()))?;
         if message.trim().is_empty() {
             return Err(AgentManagerError::InvalidSteer(
                 "message must not be empty".into(),
@@ -4663,6 +5063,7 @@ impl AgentManager {
             .try_send(AgentCommand::Message {
                 id: steer_id,
                 text: message.clone(),
+                retrieved_spans,
             })
             .map_err(|error| match error {
                 mpsc::error::TrySendError::Full(_) => AgentManagerError::SteerQueueFull,
@@ -5313,10 +5714,18 @@ pub async fn run_subagent(
         };
         let content = turn.content;
         let response_items = turn.response_items;
-        let tool_calls: Vec<(usize, String, String, String)> = turn
+        let tool_calls: Vec<_> = turn
             .tool_calls
             .into_iter()
-            .map(|call| (call.index, call.id, call.name, call.arguments))
+            .map(|call| {
+                (
+                    call.index,
+                    call.id,
+                    call.name,
+                    call.arguments,
+                    call.arguments_retrieved_spans,
+                )
+            })
             .collect();
 
         // Build assistant message
@@ -5328,13 +5737,15 @@ pub async fn run_subagent(
                 function: crate::agent::client::FunctionCall {
                     name: tc.2.clone(),
                     arguments: tc.3.clone(),
+                    arguments_retrieved_spans: tc.4.clone(),
                 },
             })
             .collect();
 
         messages.push(ChatMessage {
             role: "assistant".into(),
-            content: crate::image_content::ModelContent::text(content.clone()),
+            content: crate::image_content::ModelContent::text(content.clone())
+                .with_retrieved_spans(turn.retrieved_spans),
             tool_calls: if tc_msgs.is_empty() {
                 None
             } else {
@@ -5354,7 +5765,8 @@ pub async fn run_subagent(
             let output = crate::agent::tools::execute_tool(&tc.2, &args, cwd, 60).await;
             messages.push(ChatMessage {
                 role: "tool".into(),
-                content: crate::image_content::ModelContent::text(output.model_text()),
+                content: crate::image_content::ModelContent::text(output.model_text())
+                    .with_retrieved_spans(crate::retrieved_content::full_span(output.model_text())),
                 tool_calls: None,
                 tool_call_id: Some(tc.1.clone()),
                 response_items: Vec::new(),
@@ -5441,6 +5853,90 @@ mod manager_tests {
             images_supported: false,
             pricing: Arc::new(std::collections::HashMap::new()),
         }
+    }
+
+    #[test]
+    fn child_responses_restores_local_arguments_and_filters_retrieved_continuation() {
+        use crate::headless::retrieved_response_fixture as fixture;
+        let settings = crate::provider_filter::ProviderFilterConfig {
+            enabled: true,
+            page_stand_in: crate::provider_filter::PageStandIn::Latin,
+            ..Default::default()
+        };
+        crate::provider_filter::with_test_filter(&settings, || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let temp = tempfile::tempdir().unwrap();
+                    std::fs::write(temp.path().join(fixture::FILE), fixture::PAYLOAD).unwrap();
+                    let filter = crate::provider_filter::current();
+                    let arguments = serde_json::json!({
+                        "path": filter.encode_retrieved(fixture::FILE)
+                    })
+                    .to_string();
+                    let (provider, server) = fixture::start(
+                        filter.encode_retrieved(fixture::ECHO),
+                        arguments.clone(),
+                    )
+                    .await;
+                    let mut runner = permission_test_runner();
+                    runner.client = crate::agent::AgentClient::with_request_store(
+                        "fixture",
+                        &provider,
+                        "fixture-model",
+                        crate::request::RequestStore::default(),
+                    )
+                    .with_filter_for_test(filter);
+                    runner.tool_policy =
+                        crate::tool_selection::ToolSelectionPolicy::replacing(&["read_file"]);
+                    *runner.task_skill_snapshot.lock().unwrap() =
+                        "\nAuthored skill guidance remains readable.".into();
+                    let mut child = request("Read the fixture file and finish.", Uuid::new_v4());
+                    child.context_summary = "CHILD_RETRIEVED_CONTEXT_SENTINEL".into();
+                    child.workspace =
+                        crate::workspace::WorkspaceContext::discover(temp.path()).unwrap();
+                    let (_command_tx, commands) = mpsc::channel(1);
+                    let (_cancel_tx, cancelled) = watch::channel(false);
+                    let (events, mut event_rx) = mpsc::unbounded_channel();
+                    let result = tokio::time::timeout(
+                        std::time::Duration::from_secs(10),
+                        runner.run(AgentRunContext {
+                            id: AgentId::new(),
+                            request: child,
+                            limits: AgentLimits {
+                                max_turns: 2,
+                                ..Default::default()
+                            },
+                            commands,
+                            pending_steers: VecDeque::new(),
+                            cancelled,
+                            events,
+                            job_owner: crate::jobs::JobOwner::new(None),
+                            graph_budget: None,
+                            frozen_policy: None,
+                        }),
+                    )
+                    .await
+                    .unwrap();
+                    assert_eq!(result.unwrap(), "done");
+                    let mut read_succeeded = false;
+                    while let Ok(event) = event_rx.try_recv() {
+                        if matches!(event, RunnerEvent::ToolCompleted { name, succeeded: true } if name == "read_file") {
+                            read_succeeded = true;
+                        }
+                    }
+                    assert!(read_succeeded);
+                    let requests = server.await.unwrap();
+                    let first = requests[0].to_string();
+                    assert!(first.contains("State summary:"));
+                    assert!(first.contains("Read the fixture file and finish."));
+                    assert!(first.contains("Authored skill guidance remains readable."));
+                    assert!(!first.contains("CHILD_RETRIEVED_CONTEXT_SENTINEL"));
+                    fixture::assert_filtered_continuation(&requests, &arguments);
+                });
+        });
     }
 
     fn test_child_policy(
@@ -6271,7 +6767,7 @@ mod manager_tests {
                 tokio::select! {
                     _ = wait_cancelled(context.cancelled) => return Err("cancelled".into()),
                     command = context.commands.recv() => {
-                        if let Some(AgentCommand::Message { id, text }) = command {
+                        if let Some(AgentCommand::Message { id, text, .. }) = command {
                             let _ = context.events.send(RunnerEvent::SteerDelivered { id });
                             return Ok(text);
                         }
@@ -6401,6 +6897,7 @@ mod manager_tests {
             parent_turn: turn,
             task_id: None,
             task: task.into(),
+            task_retrieved_spans: Vec::new(),
             context_mode: AgentContextMode::Summary,
             context_summary: "summary-only".into(),
             grants: AgentGrant {
@@ -6416,6 +6913,50 @@ mod manager_tests {
             purpose: AgentRunPurpose::Subagent,
             output_contract: None,
             isolation: AgentIsolation::Shared,
+        }
+    }
+
+    #[test]
+    fn manager_task_routes_keep_only_restored_argument_origins() {
+        for (arguments, pointer) in [
+            (
+                json!({"task":"Authored CobaltR4WillowP8Meadow; source WillowQ7"}),
+                "/task",
+            ),
+            (
+                json!({"tasks":[{"task":"Authored; source WillowQ7"}]}),
+                "/tasks/0/task",
+            ),
+            (json!({"prompt":"Authored; source WillowQ7"}), "/prompt"),
+            (json!({"message":"Authored; source WillowQ7"}), "/message"),
+        ] {
+            let original = arguments.to_string();
+            let start = original.find("WillowQ7").unwrap();
+            let spans = vec![crate::retrieved_content::RetrievedSpan {
+                source: None,
+                start,
+                end: start + "WillowQ7".len(),
+            }];
+            let ranges = manager_argument_spans(&arguments, &original, &spans, pointer).unwrap();
+            let task = arguments.pointer(pointer).unwrap().as_str().unwrap();
+            assert_eq!(ranges.len(), 1);
+            assert_eq!(&task[ranges[0].start..ranges[0].end], "WillowQ7");
+            let content =
+                crate::image_content::ModelContent::text(task).with_retrieved_spans(ranges);
+            let filter = crate::provider_filter::ProviderFilter::compile(
+                &crate::provider_filter::ProviderFilterConfig {
+                    enabled: true,
+                    page_stand_in: crate::provider_filter::PageStandIn::Latin,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let projected = content.project_retrieved(&filter).unwrap();
+            assert!(projected.as_str().unwrap().starts_with("Authored"));
+            assert!(!projected.as_str().unwrap().contains("WillowQ7"));
+            let mut changed = arguments.clone();
+            *changed.pointer_mut(pointer).unwrap() = json!("changed");
+            assert!(manager_argument_spans(&changed, &original, &spans, pointer).is_err());
         }
     }
 
@@ -7743,6 +8284,11 @@ mod manager_tests {
             .send(AgentCommand::Message {
                 id: steer_id,
                 text: "use the narrower path".into(),
+                retrieved_spans: vec![crate::retrieved_content::RetrievedSpan {
+                    source: None,
+                    start: 8,
+                    end: 16,
+                }],
             })
             .await
             .unwrap();
@@ -7764,12 +8310,33 @@ mod manager_tests {
             .unwrap());
         assert_eq!(
             context.pending_steers,
-            VecDeque::from([(steer_id, "use the narrower path".into())])
+            VecDeque::from([(
+                steer_id,
+                "use the narrower path".into(),
+                vec![crate::retrieved_content::RetrievedSpan {
+                    source: None,
+                    start: 8,
+                    end: 16
+                }]
+            )])
         );
         let mut messages = Vec::new();
         drain_child_steering(&mut context, &mut messages);
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].content.as_str(), Some("use the narrower path"));
+        let filter = crate::provider_filter::ProviderFilter::compile(
+            &crate::provider_filter::ProviderFilterConfig {
+                enabled: true,
+                page_stand_in: crate::provider_filter::PageStandIn::Latin,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let projected = messages[0].content.project_retrieved(&filter).unwrap();
+        let projected = projected.as_str().unwrap();
+        assert!(projected.starts_with("use the "));
+        assert!(projected.ends_with(" path"));
+        assert!(!projected.contains("narrower"));
         assert!(matches!(
             event_rx.recv().await,
             Some(RunnerEvent::ApprovalRequired(_))
@@ -7828,6 +8395,7 @@ mod manager_tests {
             .send(AgentCommand::Message {
                 id: steer_id,
                 text: "use the wider path".into(),
+                retrieved_spans: Vec::new(),
             })
             .await
             .unwrap();
@@ -7898,6 +8466,7 @@ mod manager_tests {
             .send(AgentCommand::Message {
                 id: Uuid::new_v4(),
                 text: "a\u{1b}b".to_string(),
+                retrieved_spans: Vec::new(),
             })
             .await
             .unwrap();
@@ -7911,6 +8480,142 @@ mod manager_tests {
         )
         .await;
         assert!(!result.is_success());
+    }
+
+    #[tokio::test]
+    async fn privacy_native_agent_controls_restore_exact_ids_and_keep_private_task_output_hidden() {
+        struct PrivateRunner;
+        #[async_trait]
+        impl AgentRunner for PrivateRunner {
+            async fn run(&self, _context: AgentRunContext) -> Result<String, String> {
+                Ok("PRIVATE_CHILD_SUMMARY_CANARY 11111111-2222-4333-8444-555555555555".into())
+            }
+        }
+        fn metadata(
+            privacy: &crate::privacy::Context,
+            result: &crate::agent::registry::ToolExecutionResult,
+        ) -> serde_json::Value {
+            assert!(result.is_success());
+            let original = result.model_text();
+            let source = result
+                .source_for(original)
+                .expect("typed manager result must retain its source receipt");
+            let sent = privacy.project_retrieved(original, Some(&source)).unwrap();
+            assert!(!sent.contains("PRIVATE_CHILD_TASK_CANARY"));
+            assert!(!sent.contains("PRIVATE_CHILD_SUMMARY_CANARY"));
+            assert!(!sent.contains("11111111-2222-4333-8444-555555555555"));
+            assert_eq!(
+                privacy.mask_known(&sent).unwrap(),
+                sent,
+                "fixed status metadata must survive the final masking boundary"
+            );
+            serde_json::from_str(sent.strip_prefix("Native tool metadata\n").unwrap()).unwrap()
+        }
+        let temporary = tempfile::tempdir().unwrap();
+        let workspace = crate::workspace::WorkspaceContext::discover(temporary.path()).unwrap();
+        let privacy = crate::privacy::Context::open(
+            temporary.path().join("profile"),
+            temporary.path().into(),
+            Uuid::new_v4(),
+            None,
+        )
+        .unwrap();
+        privacy.allow_ephemeral();
+        let mut policy = privacy.policy();
+        policy.enabled = true;
+        privacy.save_policy(policy).unwrap();
+        // A project value that spells a status must not corrupt typed controls.
+        privacy.project_source("private.txt", "completed").unwrap();
+        let manager = AgentManager::new(Arc::new(PrivateRunner), AgentLimits::default());
+        let work = Arc::new(std::sync::Mutex::new(crate::work::WorkState::default()));
+        let spawned = crate::privacy::scope(
+            Some(privacy.clone()),
+            execute_manager_tool(
+                "spawn_agent",
+                &json!({"task":"PRIVATE_CHILD_TASK_CANARY", "tools":["read_file"]}),
+                &manager,
+                &work,
+                &workspace,
+            ),
+        )
+        .await
+        .unwrap();
+        let spawn_metadata = metadata(&privacy, &spawned);
+        let alias = spawn_metadata["agents"][0]["agent_id"].as_str().unwrap();
+        let arguments = privacy
+            .restore_arguments(&json!({"agent_id":alias, "timeout_secs":0}))
+            .unwrap();
+        let id: AgentId = arguments["agent_id"].as_str().unwrap().parse().unwrap();
+        assert!(manager.snapshot(id).await.is_ok());
+        assert!(!spawn_metadata.to_string().contains(&id.to_string()));
+        for timeout in [0, 2] {
+            let waited = crate::privacy::scope(
+                Some(privacy.clone()),
+                execute_manager_tool(
+                    "await_agent",
+                    &json!({"agent_id":id.to_string(), "timeout_secs":timeout}),
+                    &manager,
+                    &work,
+                    &workspace,
+                ),
+            )
+            .await
+            .unwrap();
+            let waited_metadata = metadata(&privacy, &waited);
+            assert_eq!(waited_metadata["agents"][0]["agent_id"], alias);
+            if timeout == 2 {
+                assert_eq!(waited_metadata["agents"][0]["status"], "completed");
+            }
+        }
+        let listed = crate::privacy::scope(
+            Some(privacy.clone()),
+            execute_manager_tool("list_agents", &json!({}), &manager, &work, &workspace),
+        )
+        .await
+        .unwrap();
+        assert_eq!(metadata(&privacy, &listed)["agents"][0]["agent_id"], alias);
+
+        let batch = crate::privacy::scope(
+            Some(privacy.clone()),
+            execute_manager_tool(
+                "spawn_agent_batch",
+                &json!({"tasks":[
+                    {"task":"PRIVATE_CHILD_TASK_CANARY batch one", "tools":["read_file"]},
+                    {"task":"PRIVATE_CHILD_TASK_CANARY batch two", "tools":["read_file"]}
+                ]}),
+                &manager,
+                &work,
+                &workspace,
+            ),
+        )
+        .await
+        .unwrap();
+        let batch_metadata = metadata(&privacy, &batch);
+        assert_eq!(batch_metadata["agents"].as_array().unwrap().len(), 2);
+        let batch_alias = batch_metadata["batch"]["batch_id"].as_str().unwrap();
+        let batch_arguments = privacy
+            .restore_arguments(&json!({"batch_id":batch_alias, "timeout_secs":2}))
+            .unwrap();
+        assert!(batch_arguments["batch_id"]
+            .as_str()
+            .unwrap()
+            .parse::<AgentBatchId>()
+            .is_ok());
+        let waited = crate::privacy::scope(
+            Some(privacy.clone()),
+            execute_manager_tool(
+                "await_agent_batch",
+                &batch_arguments,
+                &manager,
+                &work,
+                &workspace,
+            ),
+        )
+        .await
+        .unwrap();
+        let waited_metadata = metadata(&privacy, &waited);
+        assert_eq!(waited_metadata["batch"]["batch_id"], batch_alias);
+        assert_eq!(waited_metadata["batch"]["status"], "completed");
     }
 
     #[tokio::test]
@@ -8620,6 +9325,70 @@ mod manager_tests {
         };
         let owner = crate::jobs::JobOwner::new(None);
         let id = AgentId::new();
+        // A built-in without an original top-level destination resource must
+        // still honor inherited write scopes when filename privacy enables it.
+        let filename_settings = crate::provider_filter::ProviderFilterConfig {
+            enabled: true,
+            hide: crate::provider_filter::FilterHide {
+                filenames: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let filename_context = crate::provider_filter::with_test_filter(&filename_settings, || {
+            crate::privacy::Context::open(
+                temp.path().join("private-profile"),
+                temp.path().to_path_buf(),
+                uuid::Uuid::new_v4(),
+                None,
+            )
+            .unwrap()
+        });
+        filename_context.allow_ephemeral();
+        let image_grant = AgentGrant {
+            tools: vec!["generate_image".into()],
+            workspace_root_ids: vec![],
+            path_scopes: vec![allowed_scope.to_string_lossy().into_owned()],
+            command_scopes: vec![],
+            network: true,
+        };
+        let image_context = ChildToolContext {
+            runner: &runner,
+            id,
+            owner: crate::jobs::JobOwner::new(Some(filename_context.session_id)),
+            grant: &image_grant,
+            workspace: &workspace,
+            policy_approved: true,
+            frozen_policy: None,
+        };
+        assert!(prepare_child_tool(
+            &image_context,
+            "generate_image",
+            &serde_json::json!({"prompt":"public image","filename":denied})
+        )
+        .is_err());
+        assert!(prepare_child_tool(
+            &image_context,
+            "generate_image",
+            &serde_json::json!({"prompt":"public image","filename":allowed})
+        )
+        .is_ok());
+        #[cfg(unix)]
+        {
+            let assigned_dir = temp.path().join("assigned-images");
+            let unassigned_dir = temp.path().join("unassigned-images");
+            std::fs::create_dir(&assigned_dir).unwrap();
+            std::fs::create_dir(&unassigned_dir).unwrap();
+            std::os::unix::fs::symlink(&unassigned_dir, assigned_dir.join("linked")).unwrap();
+            let mut directory_grant = image_grant.clone();
+            directory_grant.path_scopes = vec![assigned_dir.to_string_lossy().into_owned()];
+            let directory_context = ChildToolContext {
+                grant: &directory_grant,
+                ..image_context
+            };
+            assert!(prepare_child_tool(&directory_context, "generate_image", &serde_json::json!({"prompt":"public image","filename":assigned_dir.join("plain.png")})).is_ok());
+            assert!(prepare_child_tool(&directory_context, "generate_image", &serde_json::json!({"prompt":"public image","filename":assigned_dir.join("linked/escape.png")})).is_err());
+        }
         let allowed_result = execute_child_tool(
             ChildToolContext {
                 runner: &runner,
@@ -8777,6 +9546,7 @@ mod manager_tests {
                 parent_turn: Uuid::new_v4(),
                 task_id: None,
                 task: "parent".into(),
+                task_retrieved_spans: Vec::new(),
                 context_mode: AgentContextMode::Summary,
                 context_summary: "summary".into(),
                 grants: AgentGrant {
@@ -8853,6 +9623,46 @@ mod manager_tests {
         let completed = manager.await_agent(allowed).await.unwrap();
         assert_eq!(completed.status, AgentStatus::Completed);
         assert_eq!(completed.grants.tools, ["read_file"]);
+    }
+
+    #[tokio::test]
+    async fn explicit_toolless_planner_has_no_file_or_command_grants() {
+        let manager = AgentManager::new_with_tool_policy(
+            Arc::new(FakeRunner),
+            AgentLimits::default(),
+            crate::tool_selection::ToolSelectionPolicy::replacing(&["read_file"]),
+            false,
+            false,
+        );
+        let work = Arc::new(std::sync::Mutex::new(crate::work::WorkState::default()));
+        let workspace = crate::workspace::WorkspaceContext::discover("/tmp").unwrap();
+        let result = execute_manager_tool(
+            "spawn_agent",
+            &json!({"task":"Review anonymous references only","tools":[]}),
+            &manager,
+            &work,
+            &workspace,
+        )
+        .await
+        .unwrap();
+        assert!(result.is_success(), "{}", result.model_text());
+        let children = manager.list().await;
+        assert_eq!(children.len(), 1);
+        assert!(children[0].grants.tools.is_empty());
+        assert!(children[0].grants.command_scopes.is_empty());
+        assert!(!children[0].grants.network);
+        let invalid = execute_manager_tool(
+            "spawn_agent",
+            &json!({"task":"invalid","tools":[42]}),
+            &manager,
+            &work,
+            &workspace,
+        )
+        .await
+        .unwrap();
+        assert!(!invalid.is_success());
+        assert_eq!(manager.list().await.len(), 1);
+        manager.shutdown().await;
     }
 
     #[tokio::test]

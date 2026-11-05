@@ -69,4 +69,5 @@ pub mod torrent;
 pub mod verification;
 pub mod worktree_manager;
 
+pub mod private_files;
 pub mod repository;

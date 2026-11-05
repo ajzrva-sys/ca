@@ -134,9 +134,9 @@ impl LearningVault {
         &self.root
     }
 
-    /// Inject filesystem measurements into a disposable debug fixture. Reopening
-    /// a vault always restores the real filesystem probe; clones retain this one.
-    #[cfg(any(test, debug_assertions))]
+    /// Inject filesystem measurements into a disposable fixture, including
+    /// optimized test binaries. Reopening a vault restores the real filesystem
+    /// probe; normal runtime construction always uses that real probe.
     #[doc(hidden)]
     pub fn with_filesystem_space_probe(mut self, probe: fn(&Path) -> Result<(u64, u64)>) -> Self {
         self.filesystem_space_probe = probe;

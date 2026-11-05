@@ -628,16 +628,91 @@ pub fn range_suffix(filter: &str) -> Result<String, String> {
     }
 }
 
+#[cfg(test)]
 pub fn expand_file_mentions(
     input: &str,
     workspace: &crate::workspace::WorkspaceContext,
     selected: &[ComposerAttachment],
 ) -> Result<String, String> {
+    expand_file_mentions_with_spans(input, workspace, selected).map(|(text, _)| text)
+}
+
+/// Keep the authored composer text separate from host-appended file evidence.
+pub fn expand_file_mentions_with_spans(
+    input: &str,
+    workspace: &crate::workspace::WorkspaceContext,
+    selected: &[ComposerAttachment],
+) -> Result<(String, Vec<crate::retrieved_content::RetrievedSpan>), String> {
+    expand_file_mentions_impl(input, workspace, selected, false)
+        .map(|(text, spans, _)| (text, spans))
+}
+
+/// Host-only source evidence captured at the actual attachment read. These
+/// fields are never inferred from attachment text or provider metadata.
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct AttachmentSource {
+    #[serde(default)]
+    pub receipt_id: String,
+    pub path: String,
+    pub source: String,
+    pub original: String,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub prefix: String,
+    pub suffix: String,
+    pub max_chars: usize,
+    pub ranged: bool,
+}
+
+impl std::fmt::Debug for AttachmentSource {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AttachmentSource")
+            .field("source_bytes", &self.source.len())
+            .field("attached_bytes", &self.original.len())
+            .field("start_line", &self.start_line)
+            .field("end_line", &self.end_line)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Return source evidence separately so the session owner can register it on
+/// its privacy worker before sending, including when expansion predates binding.
+pub(crate) fn expand_file_mentions_with_sources(
+    input: &str,
+    workspace: &crate::workspace::WorkspaceContext,
+    selected: &[ComposerAttachment],
+) -> Result<
+    (
+        String,
+        Vec<crate::retrieved_content::RetrievedSpan>,
+        Vec<AttachmentSource>,
+    ),
+    String,
+> {
+    expand_file_mentions_impl(input, workspace, selected, true)
+}
+
+fn expand_file_mentions_impl(
+    input: &str,
+    workspace: &crate::workspace::WorkspaceContext,
+    selected: &[ComposerAttachment],
+    capture_sources: bool,
+) -> Result<
+    (
+        String,
+        Vec<crate::retrieved_content::RetrievedSpan>,
+        Vec<AttachmentSource>,
+    ),
+    String,
+> {
     let mentions = mention_tokens(input)?;
     if mentions.is_empty() {
-        return Ok(input.to_string());
+        return Ok((input.to_string(), Vec::new(), Vec::new()));
     }
     let mut result = input.to_string();
+    let mut spans = Vec::new();
+    let mut sources = Vec::new();
     for mention in mentions.into_iter().take(MAX_MENTIONS) {
         if mention.reference.starts_with("mcp:") {
             continue;
@@ -678,7 +753,13 @@ pub fn expand_file_mentions(
             match workspace.resolve(&mention.reference, crate::workspace::PathOperation::Read) {
                 Ok(path) => path,
                 Err(crate::workspace::WorkspaceError::Missing(_)) => {
+                    let start = result.len();
                     result.push_str(&format!("\n\n(file not found: {})", mention.raw));
+                    spans.push(crate::retrieved_content::RetrievedSpan {
+                        source: None,
+                        start,
+                        end: result.len(),
+                    });
                     continue;
                 }
                 Err(error) => {
@@ -686,9 +767,141 @@ pub fn expand_file_mentions(
                 }
             }
         };
-        append_path(&mut result, workspace, &resolved, &mention)?;
+        let start = result.len();
+        let mut source_id = None;
+        if let Some(source) =
+            append_path(&mut result, workspace, &resolved, &mention, capture_sources)?
+        {
+            source_id = Some(source.receipt_id.clone());
+            sources.push(source);
+        }
+        spans.push(crate::retrieved_content::RetrievedSpan {
+            source: source_id,
+            start,
+            end: result.len(),
+        });
     }
-    Ok(result)
+    Ok((result, spans, sources))
+}
+
+/// References established by complete host-appended sections, never by prose.
+pub(crate) fn refreshed_attachment_references(
+    text: &str,
+    spans: &[crate::retrieved_content::RetrievedSpan],
+) -> Vec<String> {
+    if crate::retrieved_content::validate_spans(text, spans).is_err() {
+        return Vec::new();
+    }
+    spans
+        .iter()
+        .take(MAX_MENTIONS)
+        .filter_map(|span| {
+            let section = &text[span.start..span.end];
+            let (end, reference) = file_section_at(section)?;
+            (end == section.len()).then_some(reference)
+        })
+        .collect()
+}
+
+/// Strip only complete legacy sections whose exact reference was freshly
+/// attached. This is a request projection; saved history is left unchanged.
+pub(crate) fn remove_legacy_attachment_sections(text: &str, references: &[String]) -> String {
+    const OPEN: &str = "\n\n--- Attached file: ";
+    let mut result = String::with_capacity(text.len());
+    let mut rest = text;
+    let mut count = 0;
+    while count < MAX_MENTIONS {
+        let Some(start) = rest.find(OPEN) else {
+            break;
+        };
+        result.push_str(&rest[..start]);
+        let section = &rest[start..];
+        let Some((end, reference)) = file_section_at(section) else {
+            result.push_str(section);
+            return result;
+        };
+        if !references.contains(&reference) {
+            result.push_str(&section[..end]);
+        }
+        rest = &section[end..];
+        count += 1;
+    }
+    result.push_str(rest);
+    result
+}
+
+fn file_section_at(section: &str) -> Option<(usize, String)> {
+    const OPEN: &str = "\n\n--- Attached file: ";
+    const CLOSE: &str = "\n--- End file ---";
+    let tail = section.strip_prefix(OPEN)?;
+    let header_end = tail.find(" ---\n")?;
+    if header_end > MAX_PICKER_QUERY_BYTES + 64 {
+        return None;
+    }
+    let header = &tail[..header_end];
+    let reference = if let Some((reference, range)) = header.rsplit_once(" lines ") {
+        let range = parse_line_range(range).ok()?;
+        format!("{reference}#{}-{}", range.start, range.end)
+    } else {
+        header.to_string()
+    };
+    if reference.is_empty() || reference.chars().any(char::is_whitespace) {
+        return None;
+    }
+    let body_start = OPEN.len() + header_end + 5;
+    let mut bounded_end = section
+        .len()
+        .min(body_start + MAX_ATTACHED_CHARS * 4 + CLOSE.len());
+    while !section.is_char_boundary(bounded_end) {
+        bounded_end -= 1;
+    }
+    for (relative, _) in section[body_start..bounded_end].match_indices(CLOSE) {
+        let end = body_start + relative + CLOSE.len();
+        let suffix = &section[end..];
+        if suffix.is_empty() || suffix.starts_with(OPEN) || is_persisted_image_suffix(suffix) {
+            return Some((end, reference));
+        }
+    }
+    None
+}
+
+fn is_persisted_image_suffix(mut text: &str) -> bool {
+    for _ in 0..MAX_COMPOSER_ATTACHMENTS + crate::image_content::MAX_IMAGES_PER_REQUEST {
+        if let Some(tail) = text.strip_prefix("\n\n(MCP resource unavailable: ") {
+            let Some(end) = tail.find(')') else {
+                return false;
+            };
+            if end == 0 || end > MAX_PICKER_QUERY_BYTES || tail[..end].chars().any(char::is_control)
+            {
+                return false;
+            }
+            text = &tail[end + 1..];
+            if text.is_empty() {
+                return true;
+            }
+            continue;
+        }
+        let Some(tail) = text.strip_prefix("\n\n[Attached image: image/png ") else {
+            return false;
+        };
+        let Some((dimensions, rest)) = tail.split_once("; unavailable after this process]") else {
+            return false;
+        };
+        let Some((width, height)) = dimensions.split_once('×') else {
+            return false;
+        };
+        if ![width, height]
+            .into_iter()
+            .all(|value| value.parse::<u32>().is_ok_and(|value| value > 0))
+        {
+            return false;
+        }
+        if rest.is_empty() {
+            return true;
+        }
+        text = rest;
+    }
+    false
 }
 
 /// Return only host-validated explicit file references from the composer.
@@ -804,7 +1017,8 @@ fn append_path(
     workspace: &crate::workspace::WorkspaceContext,
     resolved: &Path,
     mention: &Mention,
-) -> Result<(), String> {
+    capture_source: bool,
+) -> Result<Option<AttachmentSource>, String> {
     let root = workspace
         .roots()
         .iter()
@@ -856,11 +1070,30 @@ fn append_path(
         (content.to_string(), String::new())
     };
     let body = body.chars().take(MAX_ATTACHED_CHARS).collect::<String>();
-    result.push_str(&format!(
-        "\n\n--- Attached file: {}{} ---\n{}\n--- End file ---",
-        mention.reference, range_label, body
-    ));
-    Ok(())
+    let prefix = format!(
+        "\n\n--- Attached file: {}{} ---\n",
+        mention.reference, range_label
+    );
+    let suffix = "\n--- End file ---".to_string();
+    let original = format!("{prefix}{body}{suffix}");
+    result.push_str(&original);
+    if !capture_source {
+        return Ok(None);
+    }
+    Ok(Some(AttachmentSource {
+        receipt_id: uuid::Uuid::new_v4().to_string(),
+        path: resolved.to_string_lossy().into_owned(),
+        source: content.to_string(),
+        original,
+        start_line: mention.range.map_or(1, |range| range.start),
+        end_line: mention
+            .range
+            .map_or_else(|| content.split_terminator('\n').count(), |range| range.end),
+        prefix,
+        suffix,
+        max_chars: MAX_ATTACHED_CHARS,
+        ranged: mention.range.is_some(),
+    }))
 }
 
 fn reject_symlink_components(root: &Path, target: &Path) -> Result<(), String> {
@@ -1008,6 +1241,79 @@ mod tests {
             std::os::unix::fs::symlink(root.join("sample.txt"), root.join("linked.txt")).unwrap();
             assert!(expand_file_mentions("@linked.txt", &workspace, &[]).is_err());
         }
+    }
+
+    #[test]
+    fn annotated_expansion_marks_only_host_file_sections() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        fs::write(root.join("sample.txt"), "évidence\nsecond\n").unwrap();
+        let workspace =
+            crate::workspace::WorkspaceContext::from_primary(root.clone(), root.clone());
+        let authored = "Keep this instruction @sample.txt#1-1";
+        let (expanded, spans) = expand_file_mentions_with_spans(authored, &workspace, &[]).unwrap();
+        assert_eq!(spans.len(), 1);
+        assert_eq!(&expanded[..spans[0].start], authored);
+        assert_eq!(
+            &expanded[spans[0].start..spans[0].end],
+            "\n\n--- Attached file: sample.txt lines 1-1 ---\névidence\n--- End file ---"
+        );
+        assert_eq!(
+            refreshed_attachment_references(&expanded, &spans),
+            ["sample.txt#1-1"]
+        );
+        assert!(refreshed_attachment_references(&expanded, &[]).is_empty());
+    }
+
+    #[test]
+    fn legacy_file_replacement_preserves_known_image_suffixes() {
+        let file = "authored\n\n--- Attached file: a.txt ---\nold file\n--- End file ---";
+        let images = "\n\n[Attached image: image/png 1×1; unavailable after this process]\n\n[Attached image: image/png 2×1; unavailable after this process]";
+        assert_eq!(
+            remove_legacy_attachment_sections(&format!("{file}{images}"), &["a.txt".into()]),
+            format!("authored{images}")
+        );
+        let malformed = format!("{file}{images}private trailing data");
+        assert_eq!(
+            remove_legacy_attachment_sections(&malformed, &["a.txt".into()]),
+            malformed
+        );
+        let unavailable = "\n\n(MCP resource unavailable: mcp:fixture/private)";
+        assert_eq!(
+            remove_legacy_attachment_sections(
+                &format!("{file}{unavailable}{images}"),
+                &["a.txt".into()]
+            ),
+            format!("authored{unavailable}{images}")
+        );
+        let arbitrary = format!("{file}{unavailable}\nuser text");
+        assert_eq!(
+            remove_legacy_attachment_sections(&arbitrary, &["a.txt".into()]),
+            arbitrary
+        );
+    }
+
+    #[test]
+    fn refreshed_attachments_replace_only_matching_complete_legacy_sections() {
+        let original = "Authored text\n\n--- Attached file: a.txt ---\nold a\n--- End file ---\n\n--- Attached file: b.txt lines 2-3 ---\nold b\n--- End file ---";
+        assert_eq!(
+            remove_legacy_attachment_sections(original, &["a.txt".into()]),
+            "Authored text\n\n--- Attached file: b.txt lines 2-3 ---\nold b\n--- End file ---"
+        );
+        assert_eq!(
+            remove_legacy_attachment_sections(original, &["b.txt#1-2".into()]),
+            original
+        );
+        let truncated = "text\n\n--- Attached file: a.txt ---\nnot complete";
+        assert_eq!(
+            remove_legacy_attachment_sections(truncated, &["a.txt".into()]),
+            truncated
+        );
+        let embedded_close = "text\n\n--- Attached file: a.txt ---\nbody\n--- End file ---\nstill body\n--- End file ---";
+        assert_eq!(
+            remove_legacy_attachment_sections(embedded_close, &["a.txt".into()]),
+            "text"
+        );
     }
 
     #[test]

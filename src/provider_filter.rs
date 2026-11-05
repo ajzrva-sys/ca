@@ -75,6 +75,10 @@ pub struct ProviderFilterRule {
 pub struct ProviderFilterConfig {
     #[serde(default)]
     pub enabled: bool,
+    /// Use selected-value structural privacy at startup, as with `--filter`.
+    /// The saved `enabled` switch still controls whether filtering is active.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub structural: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trip_file: Option<PathBuf>,
     /// Quoted words and phrases, matched in any case in either direction.
@@ -206,11 +210,19 @@ pub struct FilterHide {
     /// back. Tools still fetch the real URL.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub all_urls: bool,
+    /// Session-owned aliases for discovered workspace filenames. Requires the
+    /// native privacy boundary; this does not conceal general source content.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub filenames: bool,
 }
 
 impl FilterHide {
     fn is_empty(&self) -> bool {
-        self.words.is_empty() && self.pairs.is_empty() && self.urls.is_empty() && !self.all_urls
+        self.words.is_empty()
+            && self.pairs.is_empty()
+            && self.urls.is_empty()
+            && !self.all_urls
+            && !self.filenames
     }
 }
 
@@ -352,6 +364,7 @@ impl Default for ProviderFilterConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            structural: false,
             trip_file: None,
             phrases: Vec::new(),
             urls: Vec::new(),
@@ -372,6 +385,7 @@ impl Default for ProviderFilterConfig {
 impl ProviderFilterConfig {
     pub fn is_disabled(&self) -> bool {
         !self.enabled
+            && !self.structural
             && self.trip_file.is_none()
             && self.phrases.is_empty()
             && self.urls.is_empty()
@@ -415,6 +429,7 @@ struct FilterSpec {
     pairs: Vec<HidePair>,
     hide_words: Vec<String>,
     hide_all_urls: bool,
+    hide_filenames: bool,
     page_stand_in: PageStandIn,
     page_stand_ins: Vec<String>,
     placeholder_images: bool,
@@ -675,6 +690,7 @@ fn normalize(config: &ProviderFilterConfig) -> anyhow::Result<FilterSpec> {
         pairs,
         hide_words,
         hide_all_urls: config.hide.all_urls,
+        hide_filenames: config.hide.filenames,
         page_stand_in,
         page_stand_ins,
         placeholder_images,
@@ -783,6 +799,9 @@ fn spec_summary(spec: &FilterSpec) -> String {
     } else if spec.hide_all_urls {
         parts.push("hide urls".into());
     }
+    if spec.hide_filenames {
+        parts.push("filename aliases".into());
+    }
     match spec.page_stand_in {
         PageStandIn::Off => {}
         PageStandIn::Latin => parts.push("pages latin".into()),
@@ -798,7 +817,7 @@ fn spec_summary(spec: &FilterSpec) -> String {
         PageStandIn::Characters => parts.push("pages characters".into()),
         PageStandIn::Phrases => parts.push("pages phrases".into()),
     }
-    if spec.placeholder_images {
+    if spec.placeholder_images || spec.page_stand_in != PageStandIn::Off {
         parts.push("images on".into());
     }
     parts.join(" · ")
@@ -806,6 +825,9 @@ fn spec_summary(spec: &FilterSpec) -> String {
 
 fn spec_entries(spec: &FilterSpec) -> Vec<String> {
     let mut lines = Vec::new();
+    if spec.hide_filenames {
+        lines.push("hide filenames (session-owned workspace aliases)".into());
+    }
     for phrase in &spec.phrases {
         let kind = if parse_url_rule(&phrase.text).is_ok() {
             "substring"
@@ -860,7 +882,7 @@ fn spec_entries(spec: &FilterSpec) -> Vec<String> {
         PageStandIn::Latin => lines.push("pages latin".into()),
         other => lines.push(format!("pages {other:?}")),
     }
-    if spec.placeholder_images {
+    if spec.placeholder_images || spec.page_stand_in != PageStandIn::Off {
         lines.push("images on".into());
     }
     lines
@@ -1234,12 +1256,30 @@ enum CompiledAdjustment {
     },
 }
 
+/// Process-local presentation state; never persisted or used for enforcement.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FilterStatus {
+    #[default]
+    Off,
+    Empty,
+    Active,
+    Stopped,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FilterPresentation {
+    pub status: FilterStatus,
+    pub detail: String,
+}
+
 pub struct ProviderFilter {
     enabled: bool,
+    selected_values_only: bool,
     obfuscate: bool,
     obfuscation_patterns: bool,
     placeholder_images: bool,
     hide_all_urls: bool,
+    hide_filenames: bool,
     /// Original URL for each `ca-rNN` stand-in, in first-seen order.
     url_restorations: Mutex<Vec<String>>,
     page: Option<PageStandInCoder>,
@@ -1264,7 +1304,26 @@ impl ProviderFilter {
     }
 
     fn compile_locked(config: &ProviderFilterConfig) -> anyhow::Result<Self> {
-        let spec = normalize(config)?;
+        let mut spec = normalize(config)?;
+        let selected_values_only = config.structural || structural_flag().load(Ordering::SeqCst);
+        if selected_values_only {
+            spec.page_stand_in = PageStandIn::Off;
+            spec.page_stand_ins.clear();
+            spec.summary = if spec.summary.is_empty() {
+                "selected values".into()
+            } else {
+                let mut config = config.clone();
+                config.pages = PagesSetting::Off;
+                config.page_stand_in = PageStandIn::Off;
+                config.page_stand_ins.clear();
+                let summary = normalize(&config)?.summary;
+                format!(
+                    "selected values{}{}",
+                    if summary.is_empty() { "" } else { " · " },
+                    summary
+                )
+            };
+        }
         let mut rules = Vec::with_capacity(spec.rules.len() + spec.phrases.len() + spec.urls.len());
         for rule in &spec.rules {
             let matcher = match rule.kind {
@@ -1311,6 +1370,15 @@ impl ProviderFilter {
             append_masks(&spec, &mut adjustments)?;
             append_hide_words(&spec, &mut adjustments)?;
         }
+        if selected_values_only {
+            for (index, adjustment) in adjustments.iter_mut().enumerate() {
+                if let CompiledAdjustment::Literal { to, .. } = adjustment {
+                    if to.starts_with("ca-kw-") && !spec.pairs.iter().any(|pair| pair.to == *to) {
+                        *to = format!("__CA_FILTER_VALUE_{:02}__", index + 1);
+                    }
+                }
+            }
+        }
         let page = if spec.enabled {
             PageStandInCoder::from_parts(spec.page_stand_in, &spec.page_stand_ins)?
         } else {
@@ -1328,10 +1396,12 @@ impl ProviderFilter {
         let report = format_spec(&spec);
         Ok(Self {
             enabled: spec.enabled,
+            selected_values_only,
             obfuscate: spec.enabled && spec.phrases.iter().chain(&spec.urls).any(|item| item.mask),
             obfuscation_patterns: spec.enabled && !spec.hide_words.is_empty(),
             placeholder_images: spec.enabled && spec.placeholder_images,
             hide_all_urls: spec.enabled && spec.hide_all_urls,
+            hide_filenames: spec.enabled && spec.hide_filenames,
             url_restorations: Mutex::new(Vec::new()),
             page,
             rules,
@@ -1351,10 +1421,12 @@ impl ProviderFilter {
     fn disabled() -> Self {
         Self {
             enabled: false,
+            selected_values_only: false,
             obfuscate: false,
             obfuscation_patterns: false,
             placeholder_images: false,
             hide_all_urls: false,
+            hide_filenames: false,
             url_restorations: Mutex::new(Vec::new()),
             page: None,
             rules: Vec::new(),
@@ -1369,6 +1441,36 @@ impl ProviderFilter {
             report: String::new(),
             last_trip_poll: Mutex::new(None),
         }
+    }
+
+    pub(crate) fn selected_values_only(&self) -> bool {
+        self.enabled && self.selected_values_only
+    }
+
+    pub(crate) fn filenames(&self) -> bool {
+        self.enabled && self.hide_filenames
+    }
+
+    /// Read authoritative state without polling, arming, or changing the filter.
+    pub fn presentation(&self) -> FilterPresentation {
+        let status = if self.is_tripped() {
+            FilterStatus::Stopped
+        } else if !self.enabled {
+            FilterStatus::Off
+        } else if self.watches() || self.obfuscation_patterns || self.hide_all_urls {
+            FilterStatus::Active
+        } else {
+            FilterStatus::Empty
+        };
+        let detail = match status {
+            FilterStatus::Stopped => self
+                .local_stop_notice()
+                .unwrap_or_else(|| "This process stays stopped.".to_string()),
+            FilterStatus::Empty => "nothing armed".to_string(),
+            FilterStatus::Off => String::new(),
+            FilterStatus::Active => self.summary_line().to_string(),
+        };
+        FilterPresentation { status, detail }
     }
 
     pub fn local_stop_notice(&self) -> Option<String> {
@@ -1392,7 +1494,9 @@ impl ProviderFilter {
 
     pub fn watches(&self) -> bool {
         self.enabled
-            && (!self.rules.is_empty()
+            && (self.selected_values_only
+                || self.hide_filenames
+                || !self.rules.is_empty()
                 || self.trip_file.is_some()
                 || !self.adjustments.is_empty()
                 || self.page.is_some()
@@ -1403,23 +1507,35 @@ impl ProviderFilter {
     /// The returned bytes are what a provider may receive. Image placeholders
     /// run after keyword and page stand-ins, and the stop scan sees that result.
     pub fn prepare_request(&self, body: &[u8]) -> Result<Vec<u8>, ProviderError> {
+        let adjusted = self.prepare_request_without_final_scan(body)?;
+        self.scan_prepared_request(&adjusted)?;
+        Ok(adjusted)
+    }
+
+    /// Native replay temporarily masks immutable provider-issued items. Scan
+    /// only after restoring them, so stop rules inspect the actual wire bytes.
+    pub(crate) fn prepare_request_without_final_scan(
+        &self,
+        body: &[u8],
+    ) -> Result<Vec<u8>, ProviderError> {
         if !self.enabled {
             return Ok(body.to_vec());
         }
         if self.is_tripped() || self.poll_trip_file() {
             return Err(self.stopped_error());
         }
-        let mut adjusted = self.adjust_bytes(body, true);
-        if self.placeholder_images {
-            adjusted = placeholder_image_bytes(&adjusted);
-        }
+        let body = if self.replaces_images() {
+            placeholder_image_bytes(body)
+        } else {
+            body.to_vec()
+        };
+        let mut adjusted = self.adjust_bytes(&body, true);
         if self.hide_all_urls {
             match String::from_utf8(adjusted) {
                 Ok(text) => adjusted = self.rewrite_request_urls(text).into_bytes(),
                 Err(error) => adjusted = error.into_bytes(),
             }
         }
-        self.scan(&adjusted, Direction::Request, ScanOrigin::Request)?;
         Ok(adjusted)
     }
 
@@ -1451,17 +1567,49 @@ impl ProviderFilter {
         } else {
             adjust_request_text(text, &self.adjustments)
         };
+        if self.replaces_images() {
+            adjusted = placeholder_image_text(&adjusted);
+        }
         if let Some(page) = &self.page {
             adjusted = page.encode_page(&adjusted, &self.protected_literals);
-        }
-        if self.placeholder_images {
-            adjusted = placeholder_image_text(&adjusted);
         }
         if self.hide_all_urls {
             adjusted = self.rewrite_urls(adjusted);
         }
         self.scan(adjusted.as_bytes(), Direction::Request, ScanOrigin::Request)?;
         Ok(adjusted)
+    }
+
+    /// Whether retrieved text is replaced with reversible stand-ins.
+    pub(crate) fn substitutes_retrieved(&self) -> bool {
+        self.enabled && self.page.is_some()
+    }
+
+    pub(crate) fn replaces_images(&self) -> bool {
+        self.enabled && (self.placeholder_images || self.page.is_some())
+    }
+
+    /// Project retrieved data without changing the locally retained source.
+    pub(crate) fn encode_retrieved(&self, text: &str) -> String {
+        if !self.enabled {
+            return text.to_string();
+        }
+        let mut adjusted = if self.replaces_images() {
+            placeholder_in_text(text)
+        } else {
+            text.to_string()
+        };
+        if let Some(page) = &self.page {
+            adjusted = adjust_text(&adjusted, &self.adjustments);
+            // Retrieved data is fully encoded, including literal hide aliases,
+            // so final request hiding cannot match inside those aliases again.
+            adjusted = page.encode_content(&adjusted, &[]);
+            if self.hide_all_urls {
+                adjusted = self.rewrite_urls(adjusted);
+            }
+        }
+        // Without text substitution, the final request boundary owns hiding.
+        adjusted
     }
 
     /// Tool schemas contain protocol URIs, not page content. Apply the same
@@ -1523,6 +1671,68 @@ impl ProviderFilter {
             };
         }
         current
+    }
+
+    fn restore_text_with_spans(
+        &self,
+        text: &str,
+    ) -> (String, Vec<crate::retrieved_content::RetrievedSpan>) {
+        if !self.enabled || text.is_empty() {
+            return (text.to_string(), Vec::new());
+        }
+        let mut current = if self.hide_all_urls {
+            self.restore_urls(text)
+        } else {
+            text.to_string()
+        };
+        let mut marked = vec![false; current.len()];
+        if let Some(page) = &self.page {
+            let mut edits = Vec::new();
+            let mut offset = 0;
+            while let Some(start) = current[offset..].find(PAGE_TOKEN_OPEN) {
+                let start = offset + start;
+                let inner = start + PAGE_TOKEN_OPEN.len_utf8();
+                if let Some(end) = current[inner..].find(PAGE_TOKEN_CLOSE) {
+                    let end = inner + end;
+                    if let Some(word) = page.decode_inner(&current[inner..end]) {
+                        edits.push((start, end + PAGE_TOKEN_CLOSE.len_utf8(), word, true));
+                        offset = end + PAGE_TOKEN_CLOSE.len_utf8();
+                        continue;
+                    }
+                }
+                offset = inner;
+            }
+            apply_restoration_edits(&mut current, &mut marked, edits);
+        }
+        for adjustment in self.adjustments.iter().rev() {
+            let edits = match adjustment {
+                CompiledAdjustment::Literal { from, to } => {
+                    literal_restoration_edits(&current, to, from)
+                }
+                CompiledAdjustment::Url { from, to, prefix } => {
+                    url_restoration_edits(&current, to, from, *prefix)
+                }
+            };
+            apply_restoration_edits(&mut current, &mut marked, edits);
+        }
+        let mut spans = Vec::new();
+        let mut offset = 0;
+        while offset < marked.len() {
+            if !marked[offset] {
+                offset += 1;
+                continue;
+            }
+            let start = offset;
+            while offset < marked.len() && marked[offset] {
+                offset += 1;
+            }
+            spans.push(crate::retrieved_content::RetrievedSpan {
+                source: None,
+                start,
+                end: offset,
+            });
+        }
+        (current, spans)
     }
 
     fn restore_urls(&self, text: &str) -> String {
@@ -2061,7 +2271,7 @@ fn split_url_authority(trimmed: &str) -> Option<(String, &str)> {
     if host.is_empty() {
         return None;
     }
-    let scheme_len = if trimmed.len() >= 8 && trimmed[..8].eq_ignore_ascii_case("https://") {
+    let scheme_len = if has_ascii_prefix(trimmed.as_bytes(), b"https://") {
         8
     } else {
         7
@@ -2148,6 +2358,104 @@ fn restore_all_urls(text: &str, map: &[String]) -> String {
         }
     }
     out
+}
+
+type RestorationEdit = (usize, usize, String, bool);
+
+fn apply_restoration_edits(text: &mut String, marked: &mut Vec<bool>, edits: Vec<RestorationEdit>) {
+    if edits.is_empty() {
+        return;
+    }
+    let mut result = String::new();
+    let mut result_marks = Vec::new();
+    let mut offset = 0;
+    for (start, end, replacement, retrieved) in edits {
+        result.push_str(&text[offset..start]);
+        result_marks.extend_from_slice(&marked[offset..start]);
+        let inherited = retrieved || marked[start..end].iter().any(|item| *item);
+        result_marks.extend(std::iter::repeat_n(inherited, replacement.len()));
+        result.push_str(&replacement);
+        offset = end;
+    }
+    result.push_str(&text[offset..]);
+    result_marks.extend_from_slice(&marked[offset..]);
+    *text = result;
+    *marked = result_marks;
+}
+
+fn literal_restoration_edits(text: &str, from: &str, to: &str) -> Vec<RestorationEdit> {
+    if from.is_empty() {
+        return Vec::new();
+    }
+    let mut edits = Vec::new();
+    if from.is_ascii() {
+        let mut offset = 0;
+        while offset < text.len() {
+            if text
+                .as_bytes()
+                .get(offset..offset + from.len())
+                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(from.as_bytes()))
+            {
+                edits.push((offset, offset + from.len(), to.to_string(), false));
+                offset += from.len();
+            } else {
+                offset += text[offset..]
+                    .chars()
+                    .next()
+                    .expect("nonempty text")
+                    .len_utf8();
+            }
+        }
+    } else {
+        let folded = from.to_lowercase();
+        let lower = text.to_lowercase();
+        let mut boundaries = vec![(0, 0)];
+        let mut folded_offset = 0;
+        for (offset, ch) in text.char_indices() {
+            folded_offset += ch.to_lowercase().len();
+            boundaries.push((folded_offset, offset + ch.len_utf8()));
+        }
+        let mut copied = 0;
+        for (start, _) in lower.match_indices(&folded) {
+            let end = start + folded.len();
+            let start_slot = boundaries
+                .partition_point(|(at, _)| *at <= start)
+                .saturating_sub(1);
+            let end_slot = boundaries.partition_point(|(at, _)| *at < end);
+            if let Some((_, original_end)) = boundaries.get(end_slot) {
+                let original_start = boundaries[start_slot].1;
+                if original_start >= copied {
+                    edits.push((original_start, *original_end, to.to_string(), false));
+                    copied = *original_end;
+                }
+            }
+        }
+    }
+    edits
+}
+
+fn url_restoration_edits(
+    text: &str,
+    from: &UrlRule,
+    to: &UrlRule,
+    prefix: bool,
+) -> Vec<RestorationEdit> {
+    let mut edits = Vec::new();
+    let mut offset = 0;
+    while let Some((relative, scheme_len)) = find_http_scheme(&text.as_bytes()[offset..]) {
+        let start = offset + relative;
+        let token_len = url_token_len(&text.as_bytes()[start..]);
+        let token = &text[start..start + token_len];
+        let trimmed = trim_url_tail(token);
+        if let Some(mut replacement) = rewrite_url(trimmed, from, to, prefix) {
+            replacement.push_str(&token[trimmed.len()..]);
+            edits.push((start, start + token_len, replacement, false));
+            offset = start + token_len;
+        } else {
+            offset = start + scheme_len;
+        }
+    }
+    edits
 }
 
 /// A UTF-8 file read can split a character across the 8 KiB carry. Adjust the
@@ -2863,10 +3171,8 @@ impl PageStandInCoder {
         }
     }
 
-    /// Rewrite `web_fetch` page text inside a provider request. Other tool
-    /// output, the user's own words, and JSON keys stay as written. A body
-    /// that is not a request is left alone, so a fetch-time stop scan still
-    /// sees the page.
+    /// Rewrite result payloads from every tool. Prompts, tool arguments,
+    /// definitions and protocol controls retain their authored text.
     fn rewrite_outbound(&self, text: &str, protected: &[String]) -> String {
         let trimmed = text.trim_start();
         if !trimmed.starts_with('{') && !trimmed.starts_with('[') {
@@ -2875,13 +3181,9 @@ impl PageStandInCoder {
         let Ok(mut value) = serde_json::from_str::<serde_json::Value>(text) else {
             return text.to_string();
         };
-        let mut ids = std::collections::BTreeSet::new();
-        collect_fetch_ids(&value, &mut ids);
-        if ids.is_empty() {
-            return text.to_string();
-        }
         let original = value.clone();
-        if !encode_fetch_pages(&mut value, &ids, self, protected) {
+        encode_tool_results(&mut value, self, protected);
+        if value == original {
             return text.to_string();
         }
         splice_json(text, &original, &value)
@@ -2908,10 +3210,64 @@ impl PageStandInCoder {
         out
     }
 
+    /// Full-content boundary mode: unlike HTML previews, no URL, tag,
+    /// attribute or numeric path segment is exempt. Keep punctuation and
+    /// whitespace readable and preserve previously framed tokens verbatim.
+    fn encode_content(&self, text: &str, protected: &[String]) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut index = 0;
+        while index < text.len() {
+            if text[index..].starts_with(IMAGE_PLACEHOLDER) {
+                out.push_str(IMAGE_PLACEHOLDER);
+                index += IMAGE_PLACEHOLDER.len();
+                continue;
+            }
+            if let Some(len) = protected_at(text, index, protected) {
+                out.push_str(&text[index..index + len]);
+                index += len;
+                continue;
+            }
+            if text[index..].starts_with(PAGE_TOKEN_OPEN) {
+                let after = index + PAGE_TOKEN_OPEN.len_utf8();
+                if let Some(end) = text[after..].find(PAGE_TOKEN_CLOSE) {
+                    if self.decode_inner(&text[after..after + end]).is_some() {
+                        let end = after + end + PAGE_TOKEN_CLOSE.len_utf8();
+                        out.push_str(&text[index..end]);
+                        index = end;
+                        continue;
+                    }
+                }
+            }
+            let rest = &text[index..];
+            let len = word_at(rest).or_else(|| {
+                let len = rest
+                    .chars()
+                    .take_while(|ch| ch.is_numeric())
+                    .map(char::len_utf8)
+                    .sum::<usize>();
+                (len > 0).then_some(len)
+            });
+            if let Some(len) = len {
+                out.push_str(&self.encode_word(&rest[..len]));
+                index += len;
+            } else {
+                let ch = rest.chars().next().expect("nonempty remainder");
+                out.push(ch);
+                index += ch.len_utf8();
+            }
+        }
+        out
+    }
+
     fn encode_page(&self, text: &str, protected: &[String]) -> String {
         let mut out = String::with_capacity(text.len());
         let mut index = 0;
         while index < text.len() {
+            if text[index..].starts_with(IMAGE_PLACEHOLDER) {
+                out.push_str(IMAGE_PLACEHOLDER);
+                index += IMAGE_PLACEHOLDER.len();
+                continue;
+            }
             if let Some(len) = protected_at(text, index, protected) {
                 out.push_str(&text[index..index + len]);
                 index += len;
@@ -3108,7 +3464,7 @@ impl PageStandInCoder {
             return None;
         }
         let word = std::str::from_utf8(&bytes).ok()?;
-        is_one_word(word).then(|| word.to_string())
+        (is_one_word(word) || word.chars().all(char::is_numeric)).then(|| word.to_string())
     }
 }
 
@@ -3311,100 +3667,108 @@ fn is_fetch_result(
     false
 }
 
-fn encode_fetch_pages(
+/// Locate only protocol result envelopes, then treat their payload as data.
+/// Tool names are deliberately irrelevant, including names added in the future.
+fn encode_tool_results(
     value: &mut serde_json::Value,
-    ids: &std::collections::BTreeSet<String>,
     coder: &PageStandInCoder,
     protected: &[String],
-) -> bool {
+) {
+    use serde_json::Value;
     match value {
-        serde_json::Value::Array(items) => {
-            let mut changed = false;
+        Value::Array(items) => {
             for item in items {
-                changed |= encode_fetch_pages(item, ids, coder, protected);
+                encode_tool_results(item, coder, protected);
             }
-            changed
         }
-        serde_json::Value::Object(map) => {
-            let fetch = is_fetch_result(map, ids);
-            let mut changed = false;
-            if fetch {
-                changed |= encode_result_text(map, coder, protected);
-            }
-            for (key, item) in map.iter_mut() {
-                if fetch && matches!(key.as_str(), "content" | "output") {
-                    continue;
-                }
-                changed |= encode_fetch_pages(item, ids, coder, protected);
-            }
-            changed
-        }
-        _ => false,
-    }
-}
-
-fn encode_result_text(
-    map: &mut serde_json::Map<String, serde_json::Value>,
-    coder: &PageStandInCoder,
-    protected: &[String],
-) -> bool {
-    let mut changed = false;
-    for key in ["content", "output"] {
-        if let Some(value) = map.get_mut(key) {
-            changed |= encode_page_value(value, coder, protected);
-        }
-    }
-    changed
-}
-
-fn encode_page_value(
-    value: &mut serde_json::Value,
-    coder: &PageStandInCoder,
-    protected: &[String],
-) -> bool {
-    match value {
-        serde_json::Value::String(text) => {
-            let encoded = coder.encode_page(text, protected);
-            if encoded == *text {
-                false
+        Value::Object(map) => {
+            let result_key = if map.get("role").and_then(Value::as_str) == Some("tool") {
+                Some("content")
             } else {
-                *text = encoded;
-                true
+                match map.get("type").and_then(Value::as_str) {
+                    Some("function_call_output") => Some("output"),
+                    Some("tool_result") => Some("content"),
+                    _ => None,
+                }
+            };
+            if let Some(key) = result_key {
+                if let Some(payload) = map.get_mut(key) {
+                    encode_result_payload(payload, coder, protected);
+                }
+                return;
+            }
+            if let Some(response) = map
+                .get_mut("functionResponse")
+                .and_then(Value::as_object_mut)
+            {
+                if let Some(payload) = response.get_mut("response") {
+                    encode_result_data(payload, coder, protected);
+                }
+                return;
+            }
+            for key in ["messages", "input", "contents", "content", "parts"] {
+                if let Some(item) = map.get_mut(key) {
+                    // Anthropic tool input is an authored object; Responses
+                    // input is its protocol conversation array.
+                    if key != "input" || item.is_array() {
+                        encode_tool_results(item, coder, protected);
+                    }
+                }
             }
         }
-        serde_json::Value::Array(items) => {
-            let mut changed = false;
-            for item in items {
-                changed |= encode_block(item, coder, protected);
-            }
-            changed
-        }
-        _ => false,
+        _ => {}
     }
 }
 
-fn encode_block(
+fn encode_result_payload(
     value: &mut serde_json::Value,
     coder: &PageStandInCoder,
     protected: &[String],
-) -> bool {
-    match value {
-        serde_json::Value::String(_) => encode_page_value(value, coder, protected),
-        serde_json::Value::Object(map) => {
-            if map.get("type").and_then(|value| value.as_str()) != Some("text") {
-                return false;
+) {
+    use serde_json::Value;
+    if let Value::Array(items) = value {
+        for item in items {
+            let text_block = item.as_object_mut().filter(|map| {
+                matches!(
+                    map.get("type").and_then(Value::as_str),
+                    Some("text" | "input_text" | "output_text")
+                ) && map.get("text").is_some_and(Value::is_string)
+            });
+            if let Some(block) = text_block {
+                if let Some(Value::String(text)) = block.get_mut("text") {
+                    *text = coder.encode_content(text, protected);
+                }
+            } else {
+                encode_result_data(item, coder, protected);
             }
-            let Some(serde_json::Value::String(text)) = map.get_mut("text") else {
-                return false;
-            };
-            let encoded = coder.encode_page(text, protected);
-            if encoded == *text {
-                return false;
-            }
-            *text = encoded;
-            true
         }
-        _ => false,
+    } else {
+        encode_result_data(value, coder, protected);
+    }
+}
+
+/// Inside a result even keys named role, name, id or type are retrieved data.
+fn encode_result_data(
+    value: &mut serde_json::Value,
+    coder: &PageStandInCoder,
+    protected: &[String],
+) {
+    use serde_json::Value;
+    match value {
+        Value::String(text) => *text = coder.encode_content(text, protected),
+        Value::Array(items) => {
+            for item in items {
+                encode_result_data(item, coder, protected);
+            }
+        }
+        Value::Object(map) => {
+            let original = std::mem::take(map);
+            for (key, mut item) in original {
+                encode_result_data(&mut item, coder, protected);
+                map.insert(coder.encode_content(&key, protected), item);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -3443,6 +3807,40 @@ fn placeholder_image_text(text: &str) -> String {
 }
 
 fn placeholder_image_value(value: &mut serde_json::Value) -> bool {
+    placeholder_image_value_scoped(value, true)
+}
+
+/// Replace one typed Google image part. Callers choose the protocol boundary,
+/// so image-shaped objects inside authored function arguments stay untouched.
+pub(crate) fn placeholder_google_image_part(value: &mut serde_json::Value) -> bool {
+    if let Some(map) = value.as_object() {
+        let google_image = ["inlineData", "inline_data", "fileData", "file_data"]
+            .iter()
+            .any(|key| {
+                map.get(*key)
+                    .and_then(serde_json::Value::as_object)
+                    .is_some_and(|data| {
+                        data.get("mimeType")
+                            .or_else(|| data.get("mime_type"))
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(|mime| {
+                                mime.get(..6)
+                                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case("image/"))
+                            })
+                    })
+            });
+        if google_image {
+            *value = serde_json::json!({"text": IMAGE_PLACEHOLDER});
+            return true;
+        }
+    }
+    false
+}
+
+fn placeholder_image_value_scoped(value: &mut serde_json::Value, protocol: bool) -> bool {
+    if placeholder_google_image_part(value) {
+        return true;
+    }
     if let Some(kind) = value.as_object().and_then(image_block_kind) {
         *value = serde_json::json!({
             "type": kind,
@@ -3454,14 +3852,51 @@ fn placeholder_image_value(value: &mut serde_json::Value) -> bool {
         serde_json::Value::Array(items) => {
             let mut changed = false;
             for item in items {
-                changed |= placeholder_image_value(item);
+                changed |= placeholder_image_value_scoped(item, protocol);
             }
             changed
         }
         serde_json::Value::Object(map) => {
             let mut changed = false;
-            for item in map.values_mut() {
-                changed |= placeholder_image_value(item);
+            let result_key = if protocol
+                && map.get("role").and_then(serde_json::Value::as_str) == Some("tool")
+            {
+                Some("content")
+            } else if protocol {
+                match map.get("type").and_then(serde_json::Value::as_str) {
+                    Some("function_call_output") => Some("output"),
+                    Some("tool_result") => Some("content"),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            for (key, item) in map.iter_mut() {
+                if protocol
+                    && matches!(
+                        key.as_str(),
+                        "tools"
+                            | "tool_calls"
+                            | "arguments"
+                            | "parameters"
+                            | "input_schema"
+                            | "response_format"
+                            | "functionCall"
+                            | "tool_choice"
+                            | "schema"
+                            | "response_schema"
+                            | "json_schema"
+                    )
+                {
+                    continue;
+                }
+                if protocol && key == "input" && item.is_object() {
+                    continue;
+                }
+                changed |= placeholder_image_value_scoped(
+                    item,
+                    protocol && Some(key.as_str()) != result_key && key != "response",
+                );
             }
             changed
         }
@@ -3852,6 +4287,7 @@ pub(crate) fn with_test_filter<T>(config: &ProviderFilterConfig, body: impl FnOn
             notice: Option<String>,
             force: bool,
             skip: bool,
+            structural: bool,
         }
         impl Drop for Restore {
             fn drop(&mut self) {
@@ -3863,6 +4299,7 @@ pub(crate) fn with_test_filter<T>(config: &ProviderFilterConfig, body: impl FnOn
                     .unwrap_or_else(|poison| poison.into_inner()) = self.notice.clone();
                 force_flag().store(self.force, Ordering::SeqCst);
                 skip_install_flag().store(self.skip, Ordering::SeqCst);
+                structural_flag().store(self.structural, Ordering::SeqCst);
             }
         }
         let _restore = Restore {
@@ -3873,8 +4310,10 @@ pub(crate) fn with_test_filter<T>(config: &ProviderFilterConfig, body: impl FnOn
                 .clone(),
             force: force_flag().load(Ordering::SeqCst),
             skip: skip_install_flag().load(Ordering::SeqCst),
+            structural: structural_flag().load(Ordering::SeqCst),
         };
         force_flag().store(false, Ordering::SeqCst);
+        structural_flag().store(false, Ordering::SeqCst);
         skip_install_flag().store(false, Ordering::SeqCst);
         *process_slot()
             .write()
@@ -3932,7 +4371,17 @@ fn force_enabled() -> bool {
     force_flag().load(Ordering::SeqCst)
 }
 
-/// `ca --filter` and `/filter on` arm the configured filter for this process
+fn structural_flag() -> &'static AtomicBool {
+    static FLAG: AtomicBool = AtomicBool::new(false);
+    &FLAG
+}
+
+pub fn force_structural_filter() {
+    structural_flag().store(true, Ordering::SeqCst);
+    force_process_enabled();
+}
+
+/// `/filter on` arms the configured legacy filter for this process
 /// and do not write the file.
 pub fn force_process_enabled() {
     force_flag().store(true, Ordering::SeqCst);
@@ -3998,26 +4447,6 @@ pub fn is_tripped() -> bool {
     current().is_tripped()
 }
 
-/// The interactive banner is on while this process is enforcing the filter.
-pub fn banner_active() -> bool {
-    current().shows_banner()
-}
-
-/// The second banner row. After a trip this is the local stop line.
-/// An enabled filter with empty lists says `nothing armed`.
-pub fn banner_detail() -> String {
-    let filter = current();
-    if filter.is_tripped() {
-        if let Some(notice) = filter.local_stop_notice() {
-            return notice;
-        }
-    }
-    if filter.summary_line().is_empty() && filter.enabled {
-        return "nothing armed".to_string();
-    }
-    filter.summary_line().to_string()
-}
-
 /// `/filter` pager. While this process is off, the list includes `/filter on`.
 pub fn command_report(filter: &ProviderFilter) -> String {
     let report = filter.report();
@@ -4026,7 +4455,13 @@ pub fn command_report(filter: &ProviderFilter) -> String {
     } else {
         report
     };
-    if filter.enabled || filter.is_tripped() {
+    if filter.is_tripped() {
+        return format!(
+            "Filter stopped · {}\n\n{body}",
+            filter.presentation().detail
+        );
+    }
+    if filter.enabled {
         return body.to_string();
     }
     let mut out = String::new();
@@ -4088,6 +4523,9 @@ pub fn format_check_page(config: &ProviderFilterConfig, text: &str) -> anyhow::R
         let spec = normalize(config)?;
         let mut out = format_spec(&spec);
         let filter = ProviderFilter::compile(config)?;
+        if filter.filenames() {
+            anyhow::bail!("filename preview requires --workspace PATH");
+        }
         match filter.prepare_page_text(text) {
             Ok(sent) => {
                 out.push_str("would send: ");
@@ -4097,6 +4535,56 @@ pub fn format_check_page(config: &ProviderFilterConfig, text: &str) -> anyhow::R
             Err(ProviderError::FilterStopped { .. }) => {
                 push_stop_line(&filter, &mut out);
             }
+            Err(error) => anyhow::bail!("{error}"),
+        }
+        Ok(out)
+    })
+}
+
+/// Preview filename aliases without installing a filter or saving a registry.
+pub(crate) fn format_check_filenames(
+    config: &ProviderFilterConfig,
+    workspace: &Path,
+    text: Option<&str>,
+    page: bool,
+) -> anyhow::Result<String> {
+    with_process_filter(|| {
+        let spec = normalize(config)?;
+        let filter = ProviderFilter::compile(config)?;
+        let mut out = format_spec(&spec);
+        if !filter.filenames() {
+            anyhow::bail!(
+                "filename preview is disabled; use --filenames to enable it for this check"
+            );
+        }
+        let mut aliases =
+            crate::privacy::filenames::FilenameAliases::new(workspace.to_path_buf(), "preview")
+                .map_err(anyhow::Error::msg)?;
+        aliases.discover().map_err(anyhow::Error::msg)?;
+        let Some(text) = text else {
+            return Ok(out);
+        };
+        let projected = aliases.project_text(text).map_err(anyhow::Error::msg)?;
+        let prepared = if page {
+            filter.prepare_page_text(&projected)
+        } else {
+            filter
+                .prepare_request(projected.as_bytes())
+                .and_then(|bytes| {
+                    String::from_utf8(bytes).map_err(|_| ProviderError::PrivacyBlocked {
+                        detail: "Filename preview is not UTF-8 text".into(),
+                    })
+                })
+        };
+        match prepared {
+            Ok(sent) => {
+                // Legacy substitutions must not reintroduce discovered names.
+                let sent = aliases.project_text(&sent).map_err(anyhow::Error::msg)?;
+                out.push_str("would send: ");
+                out.push_str(&truncate_check_body(&sent));
+                out.push('\n');
+            }
+            Err(ProviderError::FilterStopped { .. }) => push_stop_line(&filter, &mut out),
             Err(error) => anyhow::bail!("{error}"),
         }
         Ok(out)
@@ -4191,6 +4679,9 @@ fn format_check_locked(
         return Ok(out);
     };
     let filter = ProviderFilter::compile(config)?;
+    if filter.filenames() {
+        anyhow::bail!("filename preview requires --workspace PATH");
+    }
     match filter.prepare_request(text.as_bytes()) {
         Ok(bytes) => {
             let sent = String::from_utf8_lossy(&bytes);
@@ -4252,16 +4743,18 @@ pub fn outbound_view() -> Option<(u64, Arc<str>)> {
     }
 }
 
-/// Readable copy of a provider request. Fetched pages come first, as the
-/// provider receives them, then the rest of the exchange, then a system prompt.
-fn outbound_pane_text(body: &[u8]) -> String {
+/// Readable copy of a provider request, newest message first, with system
+/// instructions last. Each result keeps its original text order.
+pub(crate) fn outbound_pane_text(body: &[u8]) -> String {
     let truncated = body.len() > OUTBOUND_PANE_BODY_LIMIT;
     let bytes = if truncated {
         &body[..OUTBOUND_PANE_BODY_LIMIT]
     } else {
         body
     };
-    let mut text = match serde_json::from_slice::<serde_json::Value>(bytes) {
+    // The newest message is beyond the old raw-prefix limit in long sessions.
+    // Limit the display only after extracting the complete request envelope.
+    let mut text = match serde_json::from_slice::<serde_json::Value>(body) {
         Ok(value) => conversation_pane_text(&value)
             .unwrap_or_else(|| String::from_utf8_lossy(bytes).into_owned()),
         Err(_) => String::from_utf8_lossy(bytes).into_owned(),
@@ -4280,6 +4773,266 @@ fn outbound_pane_text(body: &[u8]) -> String {
     text
 }
 
+/// Render an already inspected envelope without reparsing it or copying older
+/// history after the visible pane is full. `raw` supplies the legacy fallback
+/// and the same honest request-size truncation notice.
+pub(crate) fn outbound_pane_value(value: &serde_json::Value, raw: &[u8]) -> String {
+    let mut pane = BoundedOutboundPane::default();
+    if let Some(object) = value.as_object() {
+        let empty_ids = std::collections::BTreeSet::new();
+        let mut fetch_ids = None;
+        let mut system = Vec::new();
+        if let Some(value) = object.get("system") {
+            system.push(value);
+        }
+        for key in ["messages", "input"] {
+            match object.get(key) {
+                Some(serde_json::Value::Array(items)) => {
+                    for item in items.iter().rev() {
+                        if pane.cut {
+                            break;
+                        }
+                        let Some(map) = item.as_object() else {
+                            continue;
+                        };
+                        let content = map.get("content").or_else(|| map.get("output"));
+                        // Only Anthropic's mixed content blocks need call IDs
+                        // to promote fetched pages ahead of sibling text.
+                        if fetch_ids.is_none()
+                            && content
+                                .and_then(|value| value.as_array())
+                                .is_some_and(|items| {
+                                    items.iter().any(|item| {
+                                        item.get("type").and_then(|value| value.as_str())
+                                            == Some("tool_result")
+                                    })
+                                })
+                        {
+                            let mut ids = std::collections::BTreeSet::new();
+                            collect_fetch_ids(value, &mut ids);
+                            fetch_ids = Some(ids);
+                        }
+                        let ids = fetch_ids.as_ref().unwrap_or(&empty_ids);
+                        if map.get("role").and_then(|value| value.as_str()) == Some("system") {
+                            if let Some(content) = map.get("content") {
+                                system.push(content);
+                            }
+                            continue;
+                        }
+                        if is_fetch_result(map, ids) {
+                            pane.first_plain(map, &["content", "output"], &mut false);
+                            continue;
+                        }
+                        if matches!(
+                            map.get("type").and_then(|value| value.as_str()),
+                            Some("function_call" | "tool_use")
+                        ) {
+                            continue;
+                        }
+                        pane.blocks(content, ids);
+                    }
+                }
+                Some(input) if key == "input" => pane.plain(input, &mut false),
+                _ => {}
+            }
+        }
+        if let Some(contents) = object.get("contents").and_then(|value| value.as_array()) {
+            for content in contents.iter().rev() {
+                if pane.cut {
+                    break;
+                }
+                if let Some(parts) = content.get("parts").and_then(|value| value.as_array()) {
+                    let mut started = false;
+                    for part in parts {
+                        if pane.cut {
+                            break;
+                        }
+                        if part.get("functionCall").is_some() {
+                            continue;
+                        }
+                        if let Some(text) = part.get("text") {
+                            pane.plain(text, &mut started);
+                        } else if let Some(response) = part.pointer("/functionResponse/response") {
+                            pane.google_data(response, &mut started);
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(parts) = value.pointer("/systemInstruction/parts") {
+            system.push(parts);
+        }
+        for value in system {
+            if pane.cut {
+                break;
+            }
+            if object.get("systemInstruction").is_some() && value.is_array() {
+                let mut started = false;
+                for part in value.as_array().into_iter().flatten() {
+                    if let Some(text) = part.get("text") {
+                        pane.plain(text, &mut started);
+                    }
+                }
+            } else {
+                pane.plain(value, &mut false);
+            }
+        }
+    }
+    if pane.text.is_empty() {
+        let bytes = &raw[..raw.len().min(OUTBOUND_PANE_BODY_LIMIT)];
+        pane.append(&String::from_utf8_lossy(bytes));
+    }
+    if raw.len() > OUTBOUND_PANE_BODY_LIMIT {
+        pane.append("\n\n[truncated]");
+    }
+    if pane.cut {
+        pane.text.push_str("\n\n[truncated]");
+    }
+    pane.text
+}
+
+#[derive(Default)]
+struct BoundedOutboundPane {
+    text: String,
+    cut: bool,
+}
+
+impl BoundedOutboundPane {
+    fn append(&mut self, text: &str) {
+        if self.cut {
+            return;
+        }
+        let mut end = text.len().min(OUTBOUND_PANE_TEXT_LIMIT - self.text.len());
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        self.text.push_str(&text[..end]);
+        self.cut = end < text.len();
+    }
+
+    fn piece(&mut self, text: &str, started: &mut bool) {
+        if text.is_empty() || self.cut {
+            return;
+        }
+        if *started {
+            self.append("\n");
+        } else if !self.text.is_empty() {
+            self.append("\n\n");
+        }
+        self.append(text);
+        *started = true;
+    }
+
+    fn plain(&mut self, value: &serde_json::Value, started: &mut bool) {
+        match value {
+            serde_json::Value::String(text) => self.piece(text, started),
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    if self.cut {
+                        break;
+                    }
+                    if let Some(text) = item.as_str() {
+                        self.piece(text, started);
+                    } else if matches!(
+                        item.get("type").and_then(|value| value.as_str()),
+                        Some("text" | "input_text")
+                    ) {
+                        if let Some(text) = item.get("text").and_then(|value| value.as_str()) {
+                            self.piece(text, started);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn first_plain(
+        &mut self,
+        map: &serde_json::Map<String, serde_json::Value>,
+        keys: &[&str],
+        started: &mut bool,
+    ) {
+        for key in keys {
+            let before = self.text.len();
+            if let Some(value) = map.get(*key) {
+                self.plain(value, started);
+            }
+            if self.text.len() != before || self.cut {
+                break;
+            }
+        }
+    }
+
+    fn blocks(
+        &mut self,
+        value: Option<&serde_json::Value>,
+        ids: &std::collections::BTreeSet<String>,
+    ) {
+        let Some(value) = value else {
+            return;
+        };
+        let Some(items) = value.as_array() else {
+            self.plain(value, &mut false);
+            return;
+        };
+        // Preserve the existing pane's fetched-page promotion within a message.
+        for item in items {
+            if self.cut {
+                return;
+            }
+            if let Some(map) = item.as_object().filter(|map| is_fetch_result(map, ids)) {
+                self.first_plain(map, &["content"], &mut false);
+            }
+        }
+        let mut started = false;
+        for item in items {
+            if self.cut {
+                break;
+            }
+            let Some(map) = item.as_object() else {
+                self.plain(item, &mut started);
+                continue;
+            };
+            if is_fetch_result(map, ids) {
+                continue;
+            }
+            match map.get("type").and_then(|value| value.as_str()) {
+                Some("tool_result") => self.first_plain(map, &["content"], &mut started),
+                Some("text" | "input_text") => self.first_plain(map, &["text"], &mut started),
+                _ => {}
+            }
+        }
+    }
+
+    fn google_data(&mut self, value: &serde_json::Value, started: &mut bool) {
+        if self.cut {
+            return;
+        }
+        match value {
+            serde_json::Value::String(text) => self.piece(text, started),
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    self.google_data(item, started);
+                    if self.cut {
+                        break;
+                    }
+                }
+            }
+            serde_json::Value::Object(map) => {
+                for item in map.values() {
+                    self.google_data(item, started);
+                    if self.cut {
+                        break;
+                    }
+                }
+            }
+            serde_json::Value::Null => {}
+            scalar => self.piece(&scalar.to_string(), started),
+        }
+    }
+}
+
 fn conversation_pane_text(value: &serde_json::Value) -> Option<String> {
     let object = value.as_object()?;
     if !object.contains_key("messages")
@@ -4290,33 +5043,30 @@ fn conversation_pane_text(value: &serde_json::Value) -> Option<String> {
     }
     let mut ids = std::collections::BTreeSet::new();
     collect_fetch_ids(value, &mut ids);
-    let mut pages = Vec::new();
     let mut exchange = Vec::new();
     let mut system = Vec::new();
     if let Some(system_value) = object.get("system") {
         push_plain(&mut system, plain_text(system_value));
     }
     if let Some(messages) = object.get("messages").and_then(|item| item.as_array()) {
-        for message in messages {
-            push_exchange_item(message, &ids, &mut pages, &mut exchange, &mut system);
+        for message in messages.iter().rev() {
+            push_exchange_item(message, &ids, &mut exchange, &mut system);
         }
     }
     match object.get("input") {
         Some(serde_json::Value::Array(items)) => {
-            for item in items {
-                push_exchange_item(item, &ids, &mut pages, &mut exchange, &mut system);
+            for item in items.iter().rev() {
+                push_exchange_item(item, &ids, &mut exchange, &mut system);
             }
         }
         Some(input) => push_plain(&mut exchange, plain_text(input)),
         None => {}
     }
-    if pages.is_empty() && exchange.is_empty() && system.is_empty() {
+    if exchange.is_empty() && system.is_empty() {
         return None;
     }
-    let mut parts = pages;
-    parts.extend(exchange);
-    parts.extend(system);
-    Some(parts.join("\n\n"))
+    exchange.extend(system);
+    Some(exchange.join("\n\n"))
 }
 
 fn push_plain(parts: &mut Vec<String>, text: String) {
@@ -4328,7 +5078,6 @@ fn push_plain(parts: &mut Vec<String>, text: String) {
 fn push_exchange_item(
     value: &serde_json::Value,
     ids: &std::collections::BTreeSet<String>,
-    pages: &mut Vec<String>,
     exchange: &mut Vec<String>,
     system: &mut Vec<String>,
 ) {
@@ -4336,7 +5085,7 @@ fn push_exchange_item(
         return;
     };
     if is_fetch_result(map, ids) {
-        push_plain(pages, first_plain_text(map, &["content", "output"]));
+        push_plain(exchange, first_plain_text(map, &["content", "output"]));
         return;
     }
     let kind = map.get("type").and_then(|item| item.as_str());
@@ -4344,7 +5093,13 @@ fn push_exchange_item(
         return;
     }
     let role = map.get("role").and_then(|item| item.as_str()).unwrap_or("");
-    let text = block_text(map.get("content").or_else(|| map.get("output")), ids, pages);
+    let mut pages = Vec::new();
+    let text = block_text(
+        map.get("content").or_else(|| map.get("output")),
+        ids,
+        &mut pages,
+    );
+    exchange.extend(pages);
     if role == "system" {
         push_plain(system, text);
     } else {
@@ -4464,11 +5219,25 @@ pub fn keeps_html_source() -> bool {
 /// Outbound text is rewritten, so tool arguments may contain stand-ins.
 pub fn rewrites_outbound() -> bool {
     let filter = current();
-    filter.enabled && (!filter.adjustments.is_empty() || filter.page.is_some())
+    (filter.enabled && (!filter.adjustments.is_empty() || filter.page.is_some()))
+        || crate::privacy::current().is_some_and(|context| context.enabled())
+        || crate::privacy::tasks::remote_binding().is_some()
 }
 
 /// Replace stand-ins in tool arguments with the original file name or URL.
 pub fn restore_local_value(value: &serde_json::Value) -> serde_json::Value {
+    let value = current().restore_value(value);
+    if let Some(binding) = crate::privacy::tasks::remote_binding() {
+        return crate::privacy::tasks::rpc(&binding,"restore",value)
+            .unwrap_or_else(|_|serde_json::json!({"_ca_privacy_error":"Private context is unavailable; restore it before continuing"}));
+    }
+    crate::privacy::current()
+        .filter(|context| context.enabled())
+        .and_then(|context| context.restore_arguments(&value).ok())
+        .unwrap_or(value)
+}
+
+pub(crate) fn restore_legacy_local_value(value: &serde_json::Value) -> serde_json::Value {
     current().restore_value(value)
 }
 
@@ -4484,10 +5253,66 @@ pub fn restore_view_in_place(text: &mut String) {
     if text.is_empty() || !rewrites_outbound() {
         return;
     }
-    let restored = current().restore_text(text);
-    if restored != *text {
-        *text = restored;
+    let _ = restore_view_with_spans(text);
+}
+
+/// Restore the displayed copy and return exact ranges originating in page
+/// stand-ins. Subsequent hide restoration composes those positions.
+pub fn restore_view_with_spans(text: &mut String) -> Vec<crate::retrieved_content::RetrievedSpan> {
+    let (restored, spans) = current().restore_text_with_spans(text);
+    *text = restored;
+    let Some(context) = crate::privacy::current().filter(|context| context.enabled()) else {
+        return spans;
+    };
+    let mut output = String::new();
+    let mut result = Vec::new();
+    let mut offset = 0;
+    for span in spans {
+        if let Ok((outside, outside_spans)) = context.restore_with_spans(&text[offset..span.start])
+        {
+            let base = output.len();
+            output.push_str(&outside);
+            result.extend(outside_spans.into_iter().map(|s| {
+                crate::retrieved_content::RetrievedSpan {
+                    source: None,
+                    start: base + s.start,
+                    end: base + s.end,
+                }
+            }));
+        } else {
+            output.push_str(&text[offset..span.start]);
+        }
+        let inside = context
+            .restore_text(&text[span.start..span.end])
+            .unwrap_or_else(|_| text[span.start..span.end].to_string());
+        let start = output.len();
+        output.push_str(&inside);
+        if output.len() > start {
+            result.push(crate::retrieved_content::RetrievedSpan {
+                source: None,
+                start,
+                end: output.len(),
+            });
+        }
+        offset = span.end;
     }
+    if let Ok((tail, tail_spans)) = context.restore_with_spans(&text[offset..]) {
+        let base = output.len();
+        output.push_str(&tail);
+        result.extend(
+            tail_spans
+                .into_iter()
+                .map(|s| crate::retrieved_content::RetrievedSpan {
+                    source: None,
+                    start: base + s.start,
+                    end: base + s.end,
+                }),
+        );
+    } else {
+        output.push_str(&text[offset..]);
+    }
+    *text = output;
+    result
 }
 
 pub fn scan_outbound(bytes: &[u8]) -> Result<(), ProviderError> {
@@ -4535,6 +5360,53 @@ mod tests {
     use crate::agent::stream::ProviderError;
     use crate::config::{PromptCacheMode, ProviderConfig, ProviderTimeoutConfig};
     use crate::request::{PreparedModelRequest, RequestKind};
+
+    #[test]
+    fn compact_filter_presentation_uses_authoritative_state() {
+        let off = ProviderFilter::compile(&ProviderFilterConfig::default()).unwrap();
+        assert_eq!(off.presentation(), FilterPresentation::default());
+        let empty = ProviderFilter::compile(&ProviderFilterConfig {
+            enabled: true,
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(empty.presentation().status, FilterStatus::Empty);
+        assert_eq!(empty.presentation().detail, "nothing armed");
+        for settings in [
+            "phrases = [\"fixture-secret\"]",
+            "placeholder_images = true",
+            "page_stand_in = \"latin\"",
+            "[hide]\nwords = [\"fixture-secret\"]",
+            "[hide]\nall_urls = true",
+            "[[adjustments]]\nfrom = \"before\"\nto = \"after\"",
+        ] {
+            let config: ProviderFilterConfig =
+                toml::from_str(&format!("enabled = true\n{settings}")).unwrap();
+            let filter = ProviderFilter::compile(&config).unwrap();
+            assert_eq!(
+                filter.presentation().status,
+                FilterStatus::Active,
+                "{settings}"
+            );
+            assert_eq!(filter.presentation().detail, filter.summary_line());
+        }
+        let config = ProviderFilterConfig {
+            enabled: true,
+            phrases: vec!["fixture-secret".into()],
+            ..Default::default()
+        };
+        let active = ProviderFilter::compile(&config).unwrap();
+        assert!(active.enforce_request(b"fixture-secret").is_err());
+        let stopped = active.presentation();
+        assert_eq!(stopped.status, FilterStatus::Stopped);
+        assert_eq!(Some(stopped.detail.clone()), active.local_stop_notice());
+        assert!(command_report(&active).contains(&stopped.detail));
+        assert_eq!(
+            active.presentation(),
+            stopped,
+            "reading presentation cannot clear a trip"
+        );
+    }
 
     #[test]
     fn review_request_rewriting_preserves_protocol_and_json_strings() {
@@ -4925,6 +5797,7 @@ mod tests {
     fn enabled(rules: Vec<ProviderFilterRule>) -> ProviderFilter {
         ProviderFilter::compile(&ProviderFilterConfig {
             enabled: true,
+            structural: false,
             trip_file: None,
             phrases: Vec::new(),
             urls: Vec::new(),
@@ -4970,6 +5843,7 @@ mod tests {
     fn disabled_filter_does_not_match() {
         let filter = ProviderFilter::compile(&ProviderFilterConfig {
             enabled: false,
+            structural: false,
             trip_file: None,
             phrases: Vec::new(),
             urls: Vec::new(),
@@ -5141,6 +6015,7 @@ mod tests {
     fn urls(entries: &[&str]) -> ProviderFilter {
         ProviderFilter::compile(&ProviderFilterConfig {
             enabled: true,
+            structural: false,
             trip_file: None,
             phrases: Vec::new(),
             urls: entries.iter().map(|entry| (*entry).to_string()).collect(),
@@ -5380,6 +6255,7 @@ mod tests {
     fn invalid_regex_and_relative_trip_file_fail_closed() {
         let bad_regex = ProviderFilterConfig {
             enabled: true,
+            structural: false,
             trip_file: None,
             phrases: Vec::new(),
             urls: Vec::new(),
@@ -5403,6 +6279,7 @@ mod tests {
         assert!(bad_regex.validate().is_err());
         let relative = ProviderFilterConfig {
             enabled: true,
+            structural: false,
             trip_file: Some(PathBuf::from("stop")),
             phrases: Vec::new(),
             urls: Vec::new(),
@@ -5428,6 +6305,7 @@ mod tests {
         let path = directory.path().join("trip");
         let filter = ProviderFilter::compile(&ProviderFilterConfig {
             enabled: true,
+            structural: false,
             trip_file: Some(path.clone()),
             phrases: Vec::new(),
             urls: Vec::new(),
@@ -5470,6 +6348,7 @@ mod tests {
         std::os::unix::fs::symlink(&path, &link_path).expect("symlink");
         let linked = ProviderFilter::compile(&ProviderFilterConfig {
             enabled: true,
+            structural: false,
             trip_file: Some(link_path),
             phrases: Vec::new(),
             urls: Vec::new(),
@@ -6215,13 +7094,13 @@ to = \"plain\"
         let outbound = adjusted(&filter, &request);
         assert_eq!(adjusted(&filter, &outbound), outbound);
         assert!(outbound.contains("What happened in the surgery?"));
-        assert!(outbound.contains("The surgery notes stay."));
+        assert!(!outbound.contains("The surgery notes stay."));
         assert!(outbound.contains("\"role\":\"user\""));
         let encoded = tool_content(&outbound, "page");
         let file = tool_content(&outbound, "file");
-        assert_eq!(file, "The surgery notes stay.");
-        assert!(encoded.contains("<p>"));
-        assert!(encoded.contains("https://example.com/surgery"));
+        assert_eq!(filter.restore_text(&file), "The surgery notes stay.");
+        assert!(!encoded.contains("<p>"));
+        assert!(!encoded.contains("https://example.com/"));
         let surgery = tool_content(
             &adjusted(
                 &filter,
@@ -6229,12 +7108,16 @@ to = \"plain\"
             ),
             "s",
         );
+        // Two visible words, the URL path and the comment are all retrieved.
         assert_eq!(encoded.matches(&surgery).count(), 4, "{encoded}");
         let without_url = encoded.replace("https://example.com/surgery", "");
         assert!(!without_url.contains("surgery"), "{encoded}");
         assert!(!without_url.contains("notes"), "{encoded}");
-        assert_eq!(filter.restore_text(&encoded), page);
-        assert_eq!(restore_in_chunks(&filter, &encoded), page);
+        assert_eq!(filter.restore_text(&encoded), placeholder_in_text(page));
+        assert_eq!(
+            restore_in_chunks(&filter, &encoded),
+            placeholder_in_text(page)
+        );
 
         let spaced = "{\n  \"messages\": [\n    {\"role\": \"user\", \"content\": \"ab stays\"},\n    {\"role\": \"assistant\", \"tool_calls\": [{\"id\": \"c\", \"type\": \"function\", \"function\": {\"name\": \"web_fetch\", \"arguments\": \"{}\"}}]},\n    {\"role\": \"tool\", \"tool_call_id\": \"c\", \"content\": \"ab\"}\n  ]\n}\n";
         let spaced_out = adjusted(&filter, spaced);
@@ -6287,7 +7170,7 @@ to = \"plain\"
             &fetch_request("look", &[("html", "web_fetch", &original)]),
         );
         let fixture_page = tool_content(&fixture_out, "html");
-        assert!(fixture_page.contains("<html>"));
+        assert!(!fixture_page.contains("<html>"));
         assert!(!fixture_page.contains("sample"), "{fixture_page}");
         assert_eq!(filter.restore_text(&fixture_page), original);
         assert_eq!(std::fs::read_to_string(&root).expect("disk"), original);
@@ -6388,7 +7271,41 @@ to = \"plain\"
     }
 
     #[test]
-    fn outbound_pane_shows_the_provider_page_before_the_exchange() {
+    fn outbound_pane_leads_with_latest_results_even_after_large_history() {
+        for history in ["old context".to_string(), "x".repeat(600 * 1024)] {
+            let body = serde_json::json!({"messages": [
+                {"role": "system", "content": "system rules"},
+                {"role": "user", "content": history},
+                {"role": "assistant", "tool_calls": [{
+                    "id": "old", "type": "function",
+                    "function": {"name": "web_fetch", "arguments": "{}"}
+                }]},
+                {"role": "tool", "tool_call_id": "old", "content": "OLD-PAGE"},
+                {"role": "tool", "tool_call_id": "file", "content": "LATEST-FILE\nline two"}
+            ]});
+            let text = outbound_pane_text(&serde_json::to_vec(&body).unwrap());
+            assert!(
+                text.starts_with("LATEST-FILE\nline two"),
+                "{}",
+                &text[..text.len().min(100)]
+            );
+            assert!(text.find("LATEST-FILE") < text.find("OLD-PAGE"));
+            assert!(text.len() <= OUTBOUND_PANE_TEXT_LIMIT + "\n\n[truncated]".len());
+        }
+
+        let body = serde_json::json!({"input": [
+            {"role": "user", "content": "summarize"},
+            {"type": "function_call", "name": "web_fetch", "call_id": "old"},
+            {"type": "function_call_output", "call_id": "old", "output": "OLD-PAGE"},
+            {"type": "function_call", "name": "web_fetch", "call_id": "new"},
+            {"type": "function_call_output", "call_id": "new", "output": "LATEST-PAGE\nline two"}
+        ]});
+        let text = outbound_pane_text(&serde_json::to_vec(&body).unwrap());
+        assert_eq!(text, "LATEST-PAGE\nline two\n\nOLD-PAGE\n\nsummarize");
+    }
+
+    #[test]
+    fn outbound_pane_shows_newest_exchange_before_history_and_system() {
         let chat = serde_json::json!({
             "model": "m",
             "messages": [
@@ -6408,7 +7325,7 @@ to = \"plain\"
             }]
         });
         let text = outbound_pane_text(chat.to_string().as_bytes());
-        assert!(text.starts_with("«aer-terra» <p>stay</p>"), "{text}");
+        assert!(text.starts_with("file body"), "{text}");
         assert!(text.contains("summarize"));
         assert!(text.contains("file body"));
         assert!(text.contains("system rules"));
@@ -6417,7 +7334,7 @@ to = \"plain\"
         let user_at = text.find("summarize").expect("user");
         let file_at = text.find("file body").expect("file");
         let system_at = text.find("system rules").expect("system");
-        assert!(page_at < user_at && user_at < file_at && file_at < system_at);
+        assert!(file_at < page_at && page_at < user_at && user_at < system_at);
 
         let responses = serde_json::json!({
             "input": [
@@ -6462,6 +7379,323 @@ to = \"plain\"
         );
 
         assert_eq!(outbound_pane_text(b"not json"), "not json");
+    }
+
+    #[test]
+    fn outbound_preparsed_pane_matches_legacy_prefix_after_unicode_history_updates() {
+        let history = "old é界 context\n".repeat(60_000);
+        for latest in ["LATEST-FIRST\né界", "LATEST-SECOND\nnew é界"] {
+            for body in [
+                serde_json::json!({"messages": [
+                    {"role":"system","content":"system rules"},
+                    {"role":"user","content":history},
+                    {"role":"tool","tool_call_id":"last","content":latest}
+                ]}),
+                serde_json::json!({"input": [
+                    {"role":"user","content":history},
+                    {"type":"function_call","name":"web_fetch","call_id":"last"},
+                    {"type":"function_call_output","call_id":"last","output":latest}
+                ]}),
+                serde_json::json!({"system":[{"type":"text","text":"system rules"}],"messages": [
+                    {"role":"user","content":history},
+                    {"role":"assistant","content":[{"type":"tool_use","id":"last","name":"web_fetch","input":{}}]},
+                    {"role":"user","content":[{"type":"text","text":"newest prompt"},{"type":"tool_result","tool_use_id":"last","content":[{"type":"text","text":latest}]}]}
+                ]}),
+            ] {
+                let raw = serde_json::to_vec(&body).unwrap();
+                let bounded = outbound_pane_value(&body, &raw);
+                assert_eq!(bounded, outbound_pane_text(&raw));
+                assert!(bounded.starts_with(latest));
+                assert!(bounded.ends_with("\n\n[truncated]"));
+                assert!(bounded.len() <= OUTBOUND_PANE_TEXT_LIMIT + "\n\n[truncated]".len());
+            }
+        }
+        let body = serde_json::json!({"messages":[{"role":"system","content":"system last"},{"role":"user","content":"small request"}]});
+        let raw = serde_json::to_vec(&body).unwrap();
+        assert_eq!(
+            outbound_pane_value(&body, &raw),
+            "small request\n\nsystem last"
+        );
+    }
+
+    #[test]
+    fn outbound_preparsed_google_pane_shows_latest_result_and_text_before_history() {
+        for latest in ["GOOGLE-FIRST", "GOOGLE-SECOND"] {
+            let body = serde_json::json!({
+                "systemInstruction":{"parts":[{"text":"SYSTEM-LAST"}]},
+                "contents":[
+                    {"role":"user","parts":[{"text":"old é界 history".repeat(60_000)}]},
+                    {"role":"model","parts":[{"functionCall":{"name":"read_file","args":{"path":"DO-NOT-SHOW-CALL"}}}]},
+                    {"role":"user","parts":[{"functionResponse":{"name":"read_file","response":{"result":latest}}},{"text":"LATEST-SOURCE\né界"}]}
+                ]
+            });
+            let raw = serde_json::to_vec(&body).unwrap();
+            let pane = outbound_pane_value(&body, &raw);
+            assert!(pane.starts_with(&format!("{latest}\nLATEST-SOURCE\né界\n\n")));
+            assert!(!pane.contains("DO-NOT-SHOW-CALL"));
+            assert!(pane.ends_with("\n\n[truncated]"));
+            assert!(pane.len() <= OUTBOUND_PANE_TEXT_LIMIT + "\n\n[truncated]".len());
+        }
+        let body = serde_json::json!({"systemInstruction":{"parts":[{"text":"SYSTEM-LAST"}]},"contents":[{"role":"user","parts":[{"text":"latest"}]}]});
+        let raw = serde_json::to_vec(&body).unwrap();
+        assert_eq!(outbound_pane_value(&body, &raw), "latest\n\nSYSTEM-LAST");
+    }
+
+    #[test]
+    fn outbound_preparsed_fallback_keeps_byte_cap_and_honest_truncation() {
+        for raw in [b"not json".to_vec(), "é界".repeat(200_000).into_bytes()] {
+            let pane = outbound_pane_value(&serde_json::Value::Null, &raw);
+            assert_eq!(pane, outbound_pane_text(&raw));
+            assert!(pane.len() <= OUTBOUND_PANE_TEXT_LIMIT + "\n\n[truncated]".len());
+        }
+        let body = serde_json::json!({"messages":[{"role":"user","content":"latest"}],"unused":"x".repeat(OUTBOUND_PANE_BODY_LIMIT)});
+        let raw = serde_json::to_vec(&body).unwrap();
+        assert_eq!(outbound_pane_value(&body, &raw), "latest\n\n[truncated]");
+    }
+
+    #[test]
+    fn retrieved_results_cover_all_tools_without_changing_authored_or_protocol_text() {
+        let filter = page_filter(PageStandIn::Latin, &[]);
+        let raw = "LocalCanary /private/CustomerCanary/123456.txt <a class=\"AttributeCanary\">TextCanary</a>";
+        let mut body: serde_json::Value = serde_json::from_str(&fetch_request(
+            "UserCanary",
+            &[
+                ("read", "read_file", raw),
+                ("shell", "run_command", raw),
+                ("new", "future_tool", raw),
+            ],
+        ))
+        .unwrap();
+        body["messages"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"role":"system","content":"InstructionCanary"}));
+        body["messages"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"role":"assistant","content":"HistoryCanary"}));
+        body["tool_choice"] = serde_json::json!("auto");
+        body["reasoning"] = serde_json::json!({"effort":"high"});
+        body["messages"][1]["tool_calls"][0]["function"]["arguments"] =
+            serde_json::json!("{\"path\":\"ArgumentCanary\",\"example\":\"<img src=\\\"ArgumentImage\\\">\",\"content\":{\"type\":\"tool_result\",\"content\":\"ArgumentCanary\"}}");
+        let sent = adjusted(&filter, &body.to_string());
+        for canary in [
+            "LocalCanary",
+            "CustomerCanary",
+            "123456",
+            "AttributeCanary",
+            "TextCanary",
+        ] {
+            assert!(!sent.contains(canary), "retrieved plaintext {canary}");
+        }
+        for canary in [
+            "UserCanary",
+            "InstructionCanary",
+            "HistoryCanary",
+            "ArgumentCanary",
+        ] {
+            assert!(sent.contains(canary), "authored text changed: {canary}");
+        }
+        let value: serde_json::Value = serde_json::from_str(&sent).unwrap();
+        assert_eq!(
+            value["messages"][1]["tool_calls"][0]["function"]["arguments"],
+            body["messages"][1]["tool_calls"][0]["function"]["arguments"]
+        );
+        assert_eq!(value["tool_choice"], "auto");
+        assert_eq!(value["reasoning"]["effort"], "high");
+        for id in ["read", "shell", "new"] {
+            assert_eq!(filter.restore_text(&tool_content(&sent, id)), raw);
+        }
+        assert_eq!(adjusted(&filter, &sent), sent);
+    }
+
+    #[test]
+    fn retrieved_result_objects_do_not_exempt_reserved_names() {
+        let filter = page_filter(PageStandIn::Latin, &[]);
+        for body in [
+            serde_json::json!({"messages":[{"role":"tool","tool_call_id":"c","content":{"name":"NameCanary","id":"IdCanary","KeyCanary":"ValueCanary"}}]}),
+            serde_json::json!({"input":[{"type":"function_call_output","call_id":"c","output":{"name":"NameCanary","id":"IdCanary","KeyCanary":"ValueCanary"}}]}),
+            serde_json::json!({"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"c","content":{"name":"NameCanary","id":"IdCanary","KeyCanary":"ValueCanary"}}]}]}),
+            serde_json::json!({"contents":[{"role":"user","parts":[{"functionResponse":{"name":"read_file","response":{"name":"NameCanary","id":"IdCanary","KeyCanary":"ValueCanary"}}}]}]}),
+        ] {
+            let sent = adjusted(&filter, &body.to_string());
+            for canary in ["NameCanary", "IdCanary", "KeyCanary", "ValueCanary"] {
+                assert!(
+                    !sent.contains(canary),
+                    "retrieved object leaked {canary}: {sent}"
+                );
+            }
+            assert_eq!(adjusted(&filter, &sent), sent);
+        }
+    }
+
+    #[test]
+    fn retrieved_substitution_always_replaces_images_with_valid_blocks() {
+        let filter = page_filter(PageStandIn::Latin, &[]);
+        for body in [
+            serde_json::json!({"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,ImageCanary"}}]}]}),
+            serde_json::json!({"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"ImageCanary"}}]}]}),
+            serde_json::json!({"contents":[{"role":"user","parts":[{"inlineData":{"mimeType":"image/png","data":"ImageCanary"}}]}]}),
+            serde_json::json!({"contents":[{"role":"user","parts":[{"fileData":{"mimeType":"image/png","fileUri":"ImageCanary"}}]}]}),
+        ] {
+            let sent = adjusted(&filter, &body.to_string());
+            assert!(!sent.contains("ImageCanary"));
+            assert!(!sent.contains("inlineData"));
+            assert!(!sent.contains("fileData"));
+            assert!(!sent.contains("image_url"));
+            assert!(
+                sent.contains("[image]"),
+                "missing valid placeholder: {sent}"
+            );
+            assert_eq!(adjusted(&filter, &sent), sent);
+        }
+    }
+
+    #[test]
+    fn retrieved_summary_hide_aliases_are_applied_once() {
+        let envelopes = |text: &str| {
+            [
+                (
+                    serde_json::json!({"messages": [{"role": "system", "content": text}]}),
+                    "/messages/0/content",
+                ),
+                (
+                    serde_json::json!({"instructions": text, "input": []}),
+                    "/instructions",
+                ),
+                (
+                    serde_json::json!({"system": [{"type": "text", "text": text}], "messages": []}),
+                    "/system/0/text",
+                ),
+                (
+                    serde_json::json!({"systemInstruction": {"parts": [{"text": text}]}, "contents": []}),
+                    "/systemInstruction/parts/0/text",
+                ),
+            ]
+        };
+        let config = ProviderFilterConfig {
+            enabled: true,
+            page_stand_in: PageStandIn::Latin,
+            adjustments: vec![ContentAdjustment {
+                from: "child-image.png".into(),
+                to: "alias-child-image.png".into(),
+            }],
+            ..Default::default()
+        };
+        let filter = ProviderFilter::compile(&config).unwrap();
+        let raw = "Authored child-image.png\nSummary child-image.png RetrievedCanary";
+        let content = crate::image_content::ModelContent::text(raw).with_retrieved_spans(vec![
+            crate::retrieved_content::RetrievedSpan {
+                source: None,
+                start: raw.find("Summary").unwrap(),
+                end: raw.len(),
+            },
+        ]);
+        let canonical = content.clone();
+        let projected = content.project_retrieved(&filter).unwrap();
+        let encoded_summary = filter
+            .page
+            .as_ref()
+            .unwrap()
+            .encode_content("Summary alias-child-image.png RetrievedCanary", &[]);
+        for (body, pointer) in envelopes(projected.as_str().unwrap()) {
+            let bytes = filter
+                .prepare_request(&serde_json::to_vec(&body).unwrap())
+                .unwrap();
+            let sent: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            let text = sent.pointer(pointer).unwrap().as_str().unwrap();
+            assert!(
+                !text.contains("alias-alias-child-image.png"),
+                "retrieved projection was hidden a second time at {pointer}: {text}"
+            );
+            assert_eq!(
+                text,
+                format!("Authored alias-child-image.png\n{encoded_summary}")
+            );
+            assert!(!text.contains("RetrievedCanary"));
+            assert_eq!(filter.restore_text(text), raw);
+        }
+        assert_eq!(content, canonical);
+        assert_eq!(projected.project_retrieved(&filter).unwrap(), projected);
+
+        let pages_off = ProviderFilter::compile(&ProviderFilterConfig {
+            page_stand_in: PageStandIn::Off,
+            ..config.clone()
+        })
+        .unwrap();
+        let projected = content.project_retrieved(&pages_off).unwrap();
+        for (body, pointer) in envelopes(projected.as_str().unwrap()) {
+            let bytes = pages_off
+                .prepare_request(&serde_json::to_vec(&body).unwrap())
+                .unwrap();
+            let sent: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            let text = sent.pointer(pointer).unwrap().as_str().unwrap();
+            assert_eq!(
+                text,
+                "Authored alias-child-image.png\nSummary alias-child-image.png RetrievedCanary"
+            );
+            assert_eq!(pages_off.restore_text(text), raw);
+        }
+        assert_eq!(content, canonical);
+
+        let cascade = ProviderFilter::compile(&ProviderFilterConfig {
+            adjustments: vec![
+                ContentAdjustment {
+                    from: "child-image.png".into(),
+                    to: "alias-child-image.png".into(),
+                },
+                ContentAdjustment {
+                    from: "alias-child-image.png".into(),
+                    to: "public-image.png".into(),
+                },
+            ],
+            ..config
+        })
+        .unwrap();
+        let authored = crate::image_content::ModelContent::text("Authored child-image.png");
+        let projected = authored.project_retrieved(&cascade).unwrap();
+        for (body, pointer) in envelopes(projected.as_str().unwrap()) {
+            let bytes = cascade
+                .prepare_request(&serde_json::to_vec(&body).unwrap())
+                .unwrap();
+            let sent: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(sent.pointer(pointer).unwrap(), "Authored public-image.png");
+        }
+        assert_eq!(authored.as_str().unwrap(), "Authored child-image.png");
+    }
+
+    #[test]
+    fn restored_retrieved_spans_compose_hide_replacements_and_unicode_positions() {
+        let filter = ProviderFilter::compile(&ProviderFilterConfig {
+            enabled: true,
+            page_stand_in: PageStandIn::Latin,
+            adjustments: vec![ContentAdjustment {
+                from: "LongOriginal".into(),
+                to: "X".into(),
+            }],
+            ..ProviderFilterConfig::default()
+        })
+        .unwrap();
+        let page = filter.page.as_ref().unwrap();
+        let encoded = page.encode_content("é X 123", &[]);
+        let raw = format!("X says {encoded} after");
+        let (restored, spans) = filter.restore_text_with_spans(&raw);
+        assert_eq!(restored, filter.restore_text(&raw));
+        assert_eq!(restored, "LongOriginal says é LongOriginal 123 after");
+        let pieces: Vec<_> = spans
+            .iter()
+            .map(|span| &restored[span.start..span.end])
+            .collect();
+        assert_eq!(pieces, ["é", "LongOriginal", "123"]);
+        crate::retrieved_content::validate_spans(&restored, &spans).unwrap();
+    }
+
+    #[test]
+    fn retrieved_substitution_reports_effective_images_even_when_option_is_false() {
+        let filter = page_filter(PageStandIn::Latin, &[]);
+        assert!(filter.summary_line().contains("images on"));
+        assert!(filter.report().contains("images on"));
+        assert!(filter.replaces_images());
     }
 
     fn image_filter(enabled: bool, placeholder_images: bool) -> ProviderFilter {
@@ -7183,7 +8417,7 @@ mask = true
             assert_eq!(status, "filter on, nothing armed");
             assert!(current().enabled);
             assert!(current().shows_banner());
-            assert_eq!(banner_detail(), "nothing armed");
+            assert_eq!(current().presentation().detail, "nothing armed");
             assert_eq!(
                 arm_loaded(&empty).expect("again"),
                 "filter already on, nothing armed"
@@ -7332,6 +8566,66 @@ stand_in = \"latin\"
     }
 
     #[test]
+    fn filename_alias_config_is_opt_in_and_separate_from_explicit_pair_quota() {
+        let defaults = ProviderFilterConfig::default();
+        assert!(!defaults.hide.filenames);
+        assert!(defaults.hide.is_empty());
+        let encoded = toml::to_string(&defaults).unwrap();
+        assert!(!encoded.contains("filenames"));
+        let mut config: ProviderFilterConfig =
+            toml::from_str("enabled = true\n[hide]\nfilenames = true\n").unwrap();
+        assert!(!config.hide.is_empty());
+        config.hide.pairs = (0..MAX_RULES)
+            .map(|index| ContentAdjustment {
+                from: format!("original-{index}"),
+                to: format!("replacement-{index}"),
+            })
+            .collect();
+        config.validate().unwrap();
+        let filter = ProviderFilter::compile(&config).unwrap();
+        assert!(filter.filenames());
+        assert_eq!(filter.presentation().status, FilterStatus::Active);
+        assert!(filter.summary_line().contains("filename aliases"));
+        assert!(filter.report().contains("hide filenames"));
+        assert!(format_check(&config, Some("sample")).is_err());
+        assert!(format_check_page(&config, "sample").is_err());
+        assert!(format_check(&config, None).is_ok());
+    }
+
+    #[test]
+    fn filename_alias_preview_discovers_and_masks_without_saving_state() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("src")).unwrap();
+        let path = root.path().join("src/PrivateCustomerModule.rs");
+        let original = "fn public_function() {}\n";
+        std::fs::write(&path, original).unwrap();
+        let config = ProviderFilterConfig {
+            enabled: true,
+            hide: FilterHide {
+                filenames: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let sample = "Read src/PrivateCustomerModule.rs and PrivateCustomerModule.rs";
+        let first = format_check_filenames(&config, root.path(), Some(sample), false).unwrap();
+        let second = format_check_filenames(&config, root.path(), Some(sample), false).unwrap();
+        assert_eq!(first, second);
+        assert!(!first.contains("PrivateCustomerModule"));
+        assert!(!first.contains("src/"));
+        assert!(first.contains("would send:"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+        assert_eq!(
+            std::fs::read_dir(root.path().join("src")).unwrap().count(),
+            1
+        );
+        let mut disabled = config.clone();
+        disabled.enabled = false;
+        assert!(format_check_filenames(&disabled, root.path(), Some(sample), false).is_err());
+    }
+
+    #[test]
     fn hide_all_urls_preserves_builtin_tool_schema_identifiers() {
         let config: ProviderFilterConfig = toml::from_str(
             "enabled = true\n[hide]\nall_urls = true\n[pages]\nstand_in = \"latin\"\nimages = true\n",
@@ -7423,6 +8717,36 @@ stand_in = \"latin\"
     }
 
     #[test]
+    fn hide_all_urls_unicode_authorities_round_trip() {
+        let config: ProviderFilterConfig =
+            toml::from_str("enabled=true\n[hide]\nall_urls=true\n").expect("parses");
+        for scheme in ["http", "https", "HtTp", "HtTpS"] {
+            for host in ["例え.テスト", "éxample.test", "𐐀.test"] {
+                let filter = ProviderFilter::compile(&config).expect("compiles");
+                let path = "/café?q=東京#résumé";
+                let url = format!("{scheme}://{host}{path}");
+                let opaque = format!("{}://ca-r01.invalid{path}", scheme.to_ascii_lowercase());
+                let restored = format!("{}://{host}{path}", scheme.to_ascii_lowercase());
+                let request = serde_json::json!({"messages":[{"role":"user","content":url}]});
+                let sent = filter
+                    .prepare_request(&serde_json::to_vec(&request).unwrap())
+                    .expect("request sends");
+                let sent: serde_json::Value = serde_json::from_slice(&sent).unwrap();
+                assert_eq!(sent["messages"][0]["content"], opaque);
+                assert_eq!(filter.restore_text(&opaque), restored);
+
+                let page = format!("<a href=\"{url}\">link</a>");
+                let sent = filter.prepare_page_text(&page).expect("page sends");
+                assert_eq!(sent, format!("<a href=\"{opaque}\">link</a>"));
+                assert_eq!(
+                    filter.restore_text(&sent),
+                    format!("<a href=\"{restored}\">link</a>")
+                );
+            }
+        }
+    }
+
+    #[test]
     fn hide_all_urls_rewrites_page_urls_and_restores_them() {
         let config: ProviderFilterConfig = toml::from_str(
             "\
@@ -7491,11 +8815,91 @@ stand_in = \"latin\"
         assert!(sent.contains('«'), "{sent}");
     }
 
+    #[test]
+    fn structural_startup_setting_matches_filter_flag_without_legacy_page_encoding() {
+        with_process_filter(|| {
+            let _restore = ProcessFilterRestore::capture();
+            force_flag().store(false, Ordering::SeqCst);
+            structural_flag().store(false, Ordering::SeqCst);
+            let config: ProviderFilterConfig = toml::from_str(
+                "enabled = true\nstructural = true\npages = 'latin'\n[hide]\nfilenames = true\nwords = ['PrivateStartupCanary']\n",
+            ).unwrap();
+            let saved = ProviderFilter::compile(&config).unwrap();
+            assert!(saved.selected_values_only());
+            assert!(saved.filenames());
+            assert!(!saved.substitutes_retrieved());
+            let without_setting: ProviderFilterConfig = toml::from_str(
+                "enabled = true\npages = 'latin'\n[hide]\nfilenames = true\nwords = ['PrivateStartupCanary']\n",
+            ).unwrap();
+            force_structural_filter();
+            let explicit = ProviderFilter::compile(&without_setting).unwrap();
+            assert_eq!(saved.report(), explicit.report());
+            let body = serde_json::json!({"messages":[{"role":"tool","content":"const PrivateStartupCanary = value + 1;"}]}).to_string();
+            assert_eq!(
+                saved.prepare_request(body.as_bytes()).unwrap(),
+                explicit.prepare_request(body.as_bytes()).unwrap()
+            );
+        });
+    }
+
+    #[test]
+    fn structural_startup_setting_preserves_master_disable_and_serde_defaults() {
+        with_process_filter(|| {
+            let _restore = ProcessFilterRestore::capture();
+            force_flag().store(false, Ordering::SeqCst);
+            structural_flag().store(false, Ordering::SeqCst);
+            let config: ProviderFilterConfig =
+                toml::from_str("enabled = false\nstructural = true\n").unwrap();
+            let filter = ProviderFilter::compile(&config).unwrap();
+            assert!(!filter.selected_values_only());
+            assert!(!filter.watches());
+            assert!(
+                !config.is_disabled(),
+                "retain the saved mode even while disabled"
+            );
+            let encoded = toml::to_string(&config).unwrap();
+            assert!(encoded.contains("structural = true"));
+            let absent: ProviderFilterConfig = toml::from_str("").unwrap();
+            assert!(absent.is_disabled());
+            assert!(!ProviderFilter::compile(&absent)
+                .unwrap()
+                .selected_values_only());
+            assert!(!toml::to_string(&absent).unwrap().contains("structural"));
+        });
+    }
+
+    #[test]
+    fn selected_filter_suppresses_legacy_encoding_and_preserves_valid_identifier_aliases() {
+        with_process_filter(|| {
+            let _restore = ProcessFilterRestore::capture();
+            force_structural_filter();
+            let config: ProviderFilterConfig =
+                toml::from_str("pages = 'latin'\n[hide]\nwords = ['PrivateCanary']\n").unwrap();
+            let filter = ProviderFilter::compile(&config).unwrap();
+            assert!(filter.selected_values_only());
+            assert!(!filter.substitutes_retrieved());
+            let original = "fn PrivateCanary(value: i64) -> bool { value > 0 && true }";
+            let body =
+                serde_json::json!({"messages":[{"role":"tool","content":original}]}).to_string();
+            let sent = filter.prepare_request(body.as_bytes()).unwrap();
+            let sent: serde_json::Value = serde_json::from_slice(&sent).unwrap();
+            let code = sent["messages"][0]["content"].as_str().unwrap();
+            assert!(
+                code.starts_with("fn __CA_FILTER_VALUE_01__(value: i64)"),
+                "{code}"
+            );
+            assert!(code.contains("value > 0 && true"));
+            assert!(!code.contains('«'));
+            assert_eq!(filter.restore_text(code), original);
+        });
+    }
+
     struct ProcessFilterRestore {
         filter: Arc<ProviderFilter>,
         notice: Option<String>,
         force: bool,
         skip: bool,
+        structural: bool,
     }
 
     impl ProcessFilterRestore {
@@ -7505,6 +8909,7 @@ stand_in = \"latin\"
                 notice: take_process_notice(),
                 force: force_flag().load(Ordering::SeqCst),
                 skip: skip_install_flag().load(Ordering::SeqCst),
+                structural: structural_flag().load(Ordering::SeqCst),
             }
         }
     }
@@ -7513,6 +8918,7 @@ stand_in = \"latin\"
         fn drop(&mut self) {
             force_flag().store(self.force, Ordering::SeqCst);
             skip_install_flag().store(self.skip, Ordering::SeqCst);
+            structural_flag().store(self.structural, Ordering::SeqCst);
             {
                 let mut slot = process_slot()
                     .write()

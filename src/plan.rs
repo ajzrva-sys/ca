@@ -679,6 +679,7 @@ fn prepare_execution(
     }
     state.mode = AgentMode::Agent;
     state.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::User,
         content: "Execute the approved plan.".into(),
         tool_calls: None,

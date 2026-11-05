@@ -316,13 +316,24 @@ impl<'a> ApprovalBroker<'a> {
         let prepared =
             crate::workspace::prepare_tool_invocation(self.workspace, name, arguments, tool_origin)
                 .map_err(|error| error.to_string())?;
-        let evaluation = crate::permission::evaluate_explained(
-            name,
-            &prepared.arguments,
-            self.rules,
-            self.permission_rules,
-            self.session_grants,
-        );
+        let evaluation = if name == "move_files" {
+            let paths = crate::privacy::tasks::move_authority_paths(&prepared.arguments)?;
+            crate::permission::evaluate_private_batch(
+                &prepared.arguments,
+                &paths,
+                self.rules,
+                self.permission_rules,
+                self.session_grants,
+            )
+        } else {
+            crate::permission::evaluate_explained(
+                name,
+                &prepared.arguments,
+                self.rules,
+                self.permission_rules,
+                self.session_grants,
+            )
+        };
         let classification = classify_decision(
             evaluation,
             name,
@@ -341,8 +352,51 @@ impl<'a> ApprovalBroker<'a> {
         combine_network: bool,
         sandbox: crate::sandbox::SandboxMode,
     ) -> Result<(crate::workspace::PreparedToolInvocation, BrokerDecision), String> {
+        let arguments = if crate::privacy::current().is_some_and(|c| c.enabled())
+            || crate::privacy::tasks::remote_binding().is_some()
+        {
+            let name = name.to_string();
+            let arguments = arguments.clone();
+            // Tokio task-local state does not follow spawn_blocking. Resolve
+            // through the admitted host context rather than rediscovering it
+            // on a worker thread; remote workers retain their IPC fallback.
+            let privacy = crate::privacy::current().filter(|context| context.enabled());
+            tokio::task::spawn_blocking(move || {
+                crate::privacy::tasks::resolve_typed_arguments(&name, &arguments, privacy.as_ref())
+            })
+            .await
+            .map_err(|_| "Private resource resolution worker stopped")??
+        } else {
+            arguments.clone()
+        };
+        let arguments =
+            if let Some(context) = crate::privacy::current().filter(|context| context.enabled()) {
+                let name = name.to_string();
+                let arguments = arguments.clone();
+                let workspace = self.workspace.clone();
+                tokio::task::spawn_blocking(move || {
+                    context.authorize_tool_roots(&workspace)?;
+                    context.prepare_edit_ticket(&name, &arguments)
+                })
+                .await
+                .map_err(|_| "Private edit preparation worker stopped")??
+            } else if let Some(binding) = crate::privacy::tasks::remote_binding() {
+                let name = name.to_string();
+                let arguments = arguments.clone();
+                tokio::task::spawn_blocking(move || {
+                    crate::privacy::tasks::rpc(
+                        &binding,
+                        "prepare_edit",
+                        serde_json::json!({"name":name,"args":arguments}),
+                    )
+                })
+                .await
+                .map_err(|_| "Private preparation worker stopped")??
+            } else {
+                arguments.clone()
+            };
         let (mut prepared, decision) =
-            self.prepare_with_combined_network_decision(name, arguments, origin, combine_network)?;
+            self.prepare_with_combined_network_decision(name, &arguments, origin, combine_network)?;
         if decision != BrokerDecision::DeniedByRule {
             crate::formatting::prepare_with_authority(
                 name,
@@ -376,6 +430,11 @@ impl<'a> ApprovalBroker<'a> {
             origin: tool_origin,
             network_requested,
         };
+        // Opaque tool semantics cannot safely resolve the filename namespace.
+        // This ceiling also covers dynamic tools that reuse a builtin name.
+        if crate::privacy::current().is_some_and(|context| context.filenames_enabled()) {
+            return (prepared, BrokerDecision::DeniedByRule);
+        }
         let evaluation = crate::permission::evaluate_explained(
             name,
             arguments,
@@ -1054,14 +1113,18 @@ mod tests {
             ..Default::default()
         };
         state.messages.push(Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::Assistant,
             content: "".into(),
             tool_calls: Some(vec![ToolCall {
+                output_source: None,
+                arguments_retrieved_spans: Vec::new(),
                 id: "c1".into(),
                 name: "run_command".into(),
                 arguments: "{}".into(),
                 status: ToolStatus::Running,
                 output: None,
+                started_at: Some(chrono::Utc::now()),
             }]),
             thinking: None,
             timestamp: chrono::Utc::now(),
@@ -1132,14 +1195,18 @@ mod tests {
             ..Default::default()
         };
         state.messages.push(Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::Assistant,
             content: "".into(),
             tool_calls: Some(vec![ToolCall {
+                output_source: None,
+                arguments_retrieved_spans: Vec::new(),
                 id: "c1".into(),
                 name: "run_command".into(),
                 arguments: "{}".into(),
                 status: ToolStatus::Running,
                 output: None,
+                started_at: Some(chrono::Utc::now()),
             }]),
             thinking: None,
             timestamp: chrono::Utc::now(),
@@ -1421,6 +1488,7 @@ mod tests {
         use crate::app::{ResolvedToolResult, ResolvedToolStatus};
 
         let r = ResolvedToolResult {
+            output_source: None,
             tool_id: "c1".into(),
             output: "Denied by persistent approval rule".into(),
             status: ResolvedToolStatus::Error,
@@ -1437,6 +1505,7 @@ mod tests {
         use crate::app::{ResolvedToolResult, ResolvedToolStatus};
 
         let r = ResolvedToolResult {
+            output_source: None,
             tool_id: "c1".into(),
             output: "auto-executed: read_file".into(),
             status: ResolvedToolStatus::Done,

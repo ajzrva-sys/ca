@@ -10,8 +10,8 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
   Approve command [1/1] — run_command
     Reason: local process execution · [g] this exact command for this run
     Command: cargo test
-  [y] run  [n] deny  [e] edit  [s] all uses of this tool  [g] allow exact for run  [p] always allow
-exact path  [x] always deny  [a] yolo
+  [y] run  [n] deny
+  [e] edit  [s] tool always  [g] this run  [p] path always  [x] always deny  [a] yolo
 
 
 
@@ -42,9 +42,9 @@ exact path  [x] always deny  [a] yolo
     Reason: local process execution · [g] this exact command
 for this run
     Command: cargo test
-  [y] run  [n] deny  [e] edit  [s] all uses of this tool
-[g] allow exact for run  [p] always allow exact path  [x]
-always deny  [a] yolo
+  [y] run  [n] deny
+  [e] edit  [s] tool always  [g] this run  [p] path always
+[x] always deny  [a] yolo
 
 
 

@@ -197,6 +197,10 @@ pub fn handle_event(state: &mut crate::app::AppState, event: &Event, cwd: &str) 
 fn handle_event_inner(state: &mut crate::app::AppState, event: &Event, cwd: &str) -> bool {
     // Reset status fade timer on any keypress — new status messages will restart the clock
     state.status_set_at = None;
+    if let Some(editor) = state.privacy_editor.as_mut() {
+        editor.handle(event);
+        return !matches!(event, Event::Tick | Event::Redraw);
+    }
     if let Some(editor) = state.personality_editor.as_mut() {
         let action = editor.handle(event);
         match action {
@@ -303,6 +307,15 @@ fn handle_event_inner(state: &mut crate::app::AppState, event: &Event, cwd: &str
     }
     match event {
         Event::Key(code, mods) => {
+            if state
+                .toast
+                .as_ref()
+                .is_some_and(|toast| toast.is_sticky() && toast.is_visible())
+                && (*code == KeyCode::Esc || (*code == KeyCode::Char('x') && mods.is_empty()))
+            {
+                state.toast = None;
+                return true;
+            }
             if state.loop_guard_interaction.is_some() {
                 return handle_loop_guard_interaction(state, *code);
             }

@@ -433,15 +433,21 @@ fn import_message(
             )));
         }
         imported_calls.push(ToolCall {
+            output_source: None,
+            arguments_retrieved_spans: Vec::new(),
             id: sanitize(&call.id),
             name: sanitize(&call.name),
             arguments: sanitize(&call.arguments),
             status,
             output: call.output.map(|output| sanitize(&output)),
+            started_at: None,
         });
     }
 
     Ok(Message {
+        // Portable v1 has no trustworthy source ranges. Native save/resume
+        // preserves them; imported legacy attachments require reattachment.
+        retrieved_spans: None,
         role,
         content: sanitize(&portable.content),
         tool_calls: (!imported_calls.is_empty()).then_some(imported_calls),
@@ -568,6 +574,7 @@ mod tests {
 
     fn message(role: Role, content: &str) -> Message {
         Message {
+            retrieved_spans: Some(Vec::new()),
             role,
             content: content.into(),
             tool_calls: None,
@@ -586,6 +593,7 @@ mod tests {
 
     fn responses_provider_state(content: &str) -> ProviderResponseItem {
         ProviderResponseItem::ResponsesOutput {
+            privacy_prefix_sha256: None,
             source: ProviderStateSourceV1::for_test("openai", ProviderProtocol::OpenAiResponses),
             output_index: 0,
             item: serde_json::json!({
@@ -659,6 +667,26 @@ mod tests {
     }
 
     #[test]
+    fn portable_exports_omit_private_alias_dictionary_and_commit_reference() {
+        let root = tempfile::TempDir::new().unwrap();
+        let mut source = resolved_session();
+        let mut registry = crate::privacy::store::AliasRegistry::new(source.id);
+        let token = registry
+            .alias("STRING", "private-export-dictionary-sentinel")
+            .unwrap();
+        let reference = registry.stage(root.path()).unwrap();
+        source.privacy = Some(reference.clone());
+        for format in [ExportFormat::Json, ExportFormat::Markdown] {
+            let bytes = encode_session(&source, format).unwrap();
+            let text = String::from_utf8(bytes).unwrap();
+            assert!(!text.contains("private-export-dictionary-sentinel"));
+            assert!(!text.contains(&token));
+            assert!(!text.contains(&reference.manifest_sha256));
+            assert!(!text.contains(&reference.registry_id.to_string()));
+        }
+    }
+
+    #[test]
     fn portable_json_and_markdown_omit_opaque_provider_state() {
         let sentinel = "opaque-portable-provider-state-sentinel";
         let mut source = resolved_session();
@@ -714,11 +742,14 @@ mod tests {
         let sentinel = "portable-private-email-sentinel";
         let mut source = resolved_session();
         source.messages[1].tool_calls = Some(vec![ToolCall {
+            output_source: None,
+            arguments_retrieved_spans: Vec::new(),
             id: "email-call".into(),
             name: "email_read".into(),
             arguments: serde_json::json!({"body": sentinel}).to_string(),
             status: ToolStatus::Done,
             output: Some(sentinel.into()),
+            started_at: None,
         }]);
         for bytes in [
             encode_session(&source, ExportFormat::Json).unwrap(),
@@ -757,11 +788,14 @@ mod tests {
     fn import_rejects_unresolved_or_executable_message_state() {
         let mut source = resolved_session();
         source.messages[1].tool_calls = Some(vec![ToolCall {
+            output_source: None,
+            arguments_retrieved_spans: Vec::new(),
             id: "call-1".into(),
             name: "run_command".into(),
             arguments: "{\"command\":\"touch nope\"}".into(),
             status: ToolStatus::Pending,
             output: None,
+            started_at: None,
         }]);
         let bytes = encode_session(&source, ExportFormat::Json).unwrap();
         let error = import_session_bytes(&bytes, defaults()).unwrap_err();
@@ -784,18 +818,24 @@ mod tests {
         let mut source = resolved_session();
         source.messages[1].tool_calls = Some(vec![
             ToolCall {
+                output_source: None,
+                arguments_retrieved_spans: Vec::new(),
                 id: "duplicate".into(),
                 name: "read_file".into(),
                 arguments: "{\"path\":\"one\"}".into(),
                 status: ToolStatus::Done,
                 output: Some("one".into()),
+                started_at: None,
             },
             ToolCall {
+                output_source: None,
+                arguments_retrieved_spans: Vec::new(),
                 id: "duplicate".into(),
                 name: "read_file".into(),
                 arguments: "{\"path\":\"two\"}".into(),
                 status: ToolStatus::Done,
                 output: Some("two".into()),
+                started_at: None,
             },
         ]);
         let bytes = encode_session(&source, ExportFormat::Json).unwrap();
@@ -866,11 +906,14 @@ mod tests {
     fn markdown_is_bounded_and_labels_roles_and_tool_results() {
         let mut source = resolved_session();
         source.messages[1].tool_calls = Some(vec![ToolCall {
+            output_source: None,
+            arguments_retrieved_spans: Vec::new(),
             id: "call-1".into(),
             name: "read_file".into(),
             arguments: "{\"path\":\"README.md\"}".into(),
             status: ToolStatus::Done,
             output: Some("contents".into()),
+            started_at: None,
         }]);
         let text =
             String::from_utf8(encode_session(&source, ExportFormat::Markdown).unwrap()).unwrap();

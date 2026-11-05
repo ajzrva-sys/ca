@@ -516,6 +516,7 @@ pub async fn poll(
         }
     };
     let request = AgentSpawnRequest {
+        task_retrieved_spans: Vec::new(),
         parent: None,
         parent_turn: manager.current_parent_turn(),
         task_id: None,

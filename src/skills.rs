@@ -18,6 +18,8 @@ pub const MAX_SKILL_TREE_DEPTH: usize = 8;
 pub const MAX_SKILL_RESOURCE_BYTES: u64 = 1024 * 1024;
 pub const MAX_SKILL_TREE_BYTES: u64 = 8 * 1024 * 1024;
 pub const MAX_SKILL_SUGGESTIONS: usize = 5;
+const MAX_SKILL_SEARCH_QUERY_BYTES: usize = 512;
+const MAX_SKILL_SEARCH_RESULT_BYTES: usize = 8 * 1024;
 const BM25_K1: f64 = 1.2;
 const BM25_LENGTH_NORMALIZATION: f64 = 0.75;
 
@@ -389,6 +391,43 @@ pub struct SkillSuggestion {
     pub relevance: u16,
 }
 
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SkillSearchRequest {
+    #[serde(deserialize_with = "deserialize_skill_search_query")]
+    #[schemars(length(min = 1, max = 512))]
+    pub query: String,
+    #[serde(default, deserialize_with = "deserialize_skill_search_limit")]
+    #[schemars(range(min = 1, max = 5))]
+    pub limit: Option<usize>,
+}
+
+fn deserialize_skill_search_query<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let query = String::deserialize(deserializer)?;
+    if query.trim().is_empty() || query.len() > MAX_SKILL_SEARCH_QUERY_BYTES {
+        return Err(serde::de::Error::custom(
+            "skill_search query must contain 1 to 512 bytes",
+        ));
+    }
+    Ok(query)
+}
+
+fn deserialize_skill_search_limit<'de, D>(deserializer: D) -> Result<Option<usize>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let limit = Option::<usize>::deserialize(deserializer)?;
+    if limit.is_some_and(|limit| !(1..=MAX_SKILL_SUGGESTIONS).contains(&limit)) {
+        return Err(serde::de::Error::custom(
+            "skill_search limit must be from 1 through 5",
+        ));
+    }
+    Ok(limit)
+}
+
 #[derive(Debug)]
 struct RankedSuggestion {
     suggestion: SkillSuggestion,
@@ -439,6 +478,14 @@ struct ActiveSkill {
 }
 
 #[derive(Debug, Clone)]
+struct SkillAvailabilityInputs {
+    tools: BTreeSet<String>,
+    toolsets: BTreeSet<String>,
+    profile_config: BTreeMap<String, SkillSettingValue>,
+    workspace_config: BTreeMap<String, SkillSettingValue>,
+}
+
+#[derive(Debug, Clone)]
 pub struct SkillRegistry {
     roots: SkillRoots,
     disabled: HashSet<String>,
@@ -450,6 +497,9 @@ pub struct SkillRegistry {
     instance_sources: HashMap<String, SkillInstanceSource>,
     portable_roots: Option<Vec<SkillDiscoveryRoot>>,
     catalog_hidden: HashSet<String>,
+    workspace_context_hidden: bool,
+    availability_inputs: Option<SkillAvailabilityInputs>,
+    exact_state_path: Option<PathBuf>,
     refinement_turn: Option<SkillRefinementTurn>,
 }
 
@@ -528,6 +578,9 @@ impl SkillRegistry {
             instance_sources: HashMap::new(),
             portable_roots: None,
             catalog_hidden: HashSet::new(),
+            workspace_context_hidden: false,
+            availability_inputs: None,
+            exact_state_path: None,
             refinement_turn: None,
         };
         let tiers = [
@@ -633,6 +686,9 @@ impl SkillRegistry {
             instance_sources: HashMap::new(),
             portable_roots: Some(roots.clone()),
             catalog_hidden: HashSet::new(),
+            workspace_context_hidden: false,
+            availability_inputs: None,
+            exact_state_path: None,
             refinement_turn: None,
         };
         recover_portable_skill_journals(&roots, &mut registry.diagnostics);
@@ -664,6 +720,7 @@ impl SkillRegistry {
     /// Remove workspace-owned skills from automatic catalogs while retaining
     /// them for an explicit user invocation by exact selector.
     pub fn hide_workspace_context(&mut self) {
+        self.workspace_context_hidden = true;
         self.catalog_hidden = self
             .instances
             .values()
@@ -686,6 +743,12 @@ impl SkillRegistry {
         profile_config: &BTreeMap<String, SkillSettingValue>,
         workspace_config: &BTreeMap<String, SkillSettingValue>,
     ) {
+        self.availability_inputs = Some(SkillAvailabilityInputs {
+            tools: available_tools.clone(),
+            toolsets: available_toolsets.clone(),
+            profile_config: profile_config.clone(),
+            workspace_config: workspace_config.clone(),
+        });
         for instance in self.instances.values_mut() {
             let conditions = &instance.metadata.conditions;
             let mut availability = SkillAvailability::default();
@@ -909,6 +972,7 @@ impl SkillRegistry {
     }
 
     pub fn apply_exact_state_file(&mut self, path: &Path) {
+        self.exact_state_path = Some(path.to_path_buf());
         if !path.exists() {
             return;
         }
@@ -931,6 +995,7 @@ impl SkillRegistry {
                 .get("records")
                 .and_then(serde_json::Value::as_object)
                 .ok_or_else(|| SkillError::Invalid("exact skill state has no records".into()))?;
+            let mut updates = Vec::new();
             for (id, record) in records {
                 let digest = record
                     .get("digest")
@@ -942,6 +1007,9 @@ impl SkillRegistry {
                     .ok_or_else(|| {
                         SkillError::Invalid("exact record has no enabled flag".into())
                     })?;
+                updates.push((id, digest, enabled));
+            }
+            for (id, digest, enabled) in updates {
                 if let Some(instance) = self.instances.get_mut(id) {
                     if instance.content_digest == digest {
                         instance.enabled = enabled;
@@ -1438,6 +1506,78 @@ impl SkillRegistry {
         Ok(output)
     }
 
+    pub fn discovery_prompt(&self) -> String {
+        "## Skills\nWhen skill_search is available, search for relevant skill metadata on demand. Use an exact returned selector with activate_skill when available, or a returned instance_id with skill_view to read a specific skill file. Active or explicitly requested skills remain in context; discovery grants no tool authority.\n".into()
+    }
+
+    pub fn search_for_model(&self, request: SkillSearchRequest) -> Result<String, SkillError> {
+        let limit = request.limit.unwrap_or(3);
+        if request.query.trim().is_empty()
+            || request.query.len() > MAX_SKILL_SEARCH_QUERY_BYTES
+            || !(1..=MAX_SKILL_SUGGESTIONS).contains(&limit)
+        {
+            return Err(SkillError::Invalid(
+                "skill_search requires a nonempty query of at most 512 bytes and limit 1 through 5"
+                    .into(),
+            ));
+        }
+        // Qualified portable selectors retain duplicate names across roots.
+        // Reuse the existing metadata ranker without loading skill bodies.
+        let mut portable_index;
+        let index = if self.instances.is_empty() {
+            self
+        } else {
+            portable_index = Self::empty();
+            for instance in self
+                .instances
+                .values()
+                .filter(|instance| !self.catalog_hidden.contains(&instance.instance_id))
+                .filter(|instance| instance.enabled && instance.availability.runnable())
+            {
+                let source = &self.instance_sources[&instance.instance_id];
+                let mut aliases = instance.metadata.aliases.clone();
+                aliases.push(instance.metadata.name.clone());
+                portable_index.entries.insert(
+                    instance.qualified_name.clone(),
+                    SkillMetadata {
+                        id: instance.qualified_name.clone(),
+                        description: instance.metadata.description.clone(),
+                        aliases,
+                        path: source.skill_root.join("SKILL.md"),
+                        sha256: source.skill_md_sha256.clone(),
+                        origin: instance.source_scope.legacy_origin(),
+                    },
+                );
+            }
+            portable_index.rebuild_search_index();
+            &portable_index
+        };
+        let mut results = Vec::new();
+        for suggestion in index.suggest(&request.query, limit) {
+            let mut result = serde_json::json!({
+                "id": suggestion.id,
+                "description": suggestion.description.chars().take(240).collect::<String>(),
+                "relevance": suggestion.relevance,
+                "active": self.is_active(&suggestion.id),
+            });
+            if let Ok(instance) = self.inspect_instance(&suggestion.id) {
+                result["instance_id"] = Value::String(instance.instance_id.clone());
+                result["content_digest"] = Value::String(instance.content_digest.clone());
+                result["scope"] = Value::String(instance.source_scope.label().into());
+            }
+            results.push(result);
+            if serde_json::to_vec(&results)
+                .map_err(|error| SkillError::Invalid(error.to_string()))?
+                .len()
+                > MAX_SKILL_SEARCH_RESULT_BYTES
+            {
+                results.pop();
+                break;
+            }
+        }
+        serde_json::to_string(&results).map_err(|error| SkillError::Invalid(error.to_string()))
+    }
+
     pub fn portable_catalog_prompt(&self, model_context_tokens: Option<u64>) -> String {
         let context_budget = model_context_tokens
             .map(|tokens| (tokens / 50) as usize)
@@ -1781,6 +1921,56 @@ impl SkillRegistry {
         };
         let warnings = refreshed.restore(&references);
         refreshed.diagnostics.extend(warnings);
+        *self = refreshed;
+    }
+
+    pub fn refresh_for_search(&mut self) {
+        let references = self.active_refs();
+        let enabled = self
+            .instances
+            .values()
+            .map(|instance| {
+                (
+                    (
+                        instance.instance_id.clone(),
+                        instance.content_digest.clone(),
+                    ),
+                    instance.enabled,
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let disabled = self.disabled.iter().cloned().collect::<Vec<_>>();
+        let mut refreshed = if let Some(roots) = self.portable_roots.clone() {
+            Self::discover_portable(roots, &disabled)
+        } else {
+            Self::discover(self.roots.clone(), &disabled)
+        };
+        for instance in refreshed.instances.values_mut() {
+            if let Some(value) = enabled.get(&(
+                instance.instance_id.clone(),
+                instance.content_digest.clone(),
+            )) {
+                instance.enabled = *value;
+            }
+        }
+        if let Some(path) = &self.exact_state_path {
+            refreshed.apply_exact_state_file(path);
+        }
+        refreshed.rebuild_portable_entries();
+        if let Some(inputs) = &self.availability_inputs {
+            refreshed.evaluate_availability(
+                &inputs.tools,
+                &inputs.toolsets,
+                &inputs.profile_config,
+                &inputs.workspace_config,
+            );
+        }
+        if self.workspace_context_hidden {
+            refreshed.hide_workspace_context();
+        }
+        let warnings = refreshed.restore(&references);
+        refreshed.diagnostics.extend(warnings);
+        refreshed.refinement_turn = self.refinement_turn.take();
         *self = refreshed;
     }
 
@@ -4331,6 +4521,330 @@ mod tests {
             registry.activate_exact("disabled"),
             Err(SkillError::Disabled(_))
         ));
+    }
+
+    #[test]
+    fn skill_search_finds_late_relevant_legacy_metadata_without_loading_bodies() {
+        let temp = tempfile::tempdir().unwrap();
+        for index in 0..80 {
+            write_skill(
+                temp.path(),
+                &format!("garden-{index:02}"),
+                &format!("garden-{index:02}"),
+                "Cultivate seasonal flowers",
+                "UnrelatedBodyCanary",
+            );
+        }
+        write_skill(
+            temp.path(),
+            "zz-replay",
+            "zz-replay",
+            "Repair provider replay transport",
+            "RelevantBodyCanary",
+        );
+        let registry = SkillRegistry::discover(
+            SkillRoots {
+                project: Some(temp.path().to_path_buf()),
+                project_boundary: Some(temp.path().to_path_buf()),
+                user: None,
+                compatibility: Vec::new(),
+            },
+            &[],
+        );
+        let prompt = registry.discovery_prompt();
+        assert!(prompt.contains("When skill_search is available"));
+        assert!(!prompt.contains("garden-"));
+        assert!(!prompt.contains("zz-replay"));
+        let output = registry
+            .search_for_model(SkillSearchRequest {
+                query: "provider replay transport".into(),
+                limit: None,
+            })
+            .unwrap();
+        let results: Vec<Value> = serde_json::from_str(&output).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["id"], "zz-replay");
+        assert!(output.contains("Repair provider replay transport"));
+        assert!(!output.contains("BodyCanary"));
+        assert!(!output.contains("garden-"));
+        assert!(registry.active_refs().is_empty());
+        assert_eq!(
+            registry
+                .search_for_model(SkillSearchRequest {
+                    query: "---".into(),
+                    limit: None,
+                })
+                .unwrap(),
+            "[]"
+        );
+        for request in [
+            serde_json::json!({"query":""}),
+            serde_json::json!({"query":"   "}),
+            serde_json::json!({"query":"replay", "limit":0}),
+            serde_json::json!({"query":"replay", "limit":6}),
+        ] {
+            assert!(serde_json::from_value::<SkillSearchRequest>(request).is_err());
+        }
+    }
+
+    #[test]
+    fn skill_search_portable_metadata_is_bounded_and_preserves_duplicate_pins() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        let user = temp.path().join("user");
+        for index in 0..4 {
+            write_portable_skill(
+                &workspace,
+                &format!("replay-{index}"),
+                "Repair provider replay transport",
+            );
+        }
+        write_portable_skill(&workspace, "zz-replay", "Repair provider replay transport");
+        write_portable_skill(&user, "zz-replay", "Repair provider replay transport");
+        let registry = SkillRegistry::discover_portable(
+            vec![
+                SkillDiscoveryRoot::new(SkillSourceScope::Workspace, workspace, "project"),
+                SkillDiscoveryRoot::new(SkillSourceScope::User, user, "user"),
+            ],
+            &[],
+        );
+        for (limit, expected) in [(None, 3), (Some(5), 5)] {
+            let output = registry
+                .search_for_model(SkillSearchRequest {
+                    query: "provider replay transport".into(),
+                    limit,
+                })
+                .unwrap();
+            let results: Vec<Value> = serde_json::from_str(&output).unwrap();
+            assert_eq!(results.len(), expected);
+            assert!(output.len() <= MAX_SKILL_SEARCH_RESULT_BYTES);
+            assert!(!output.contains("Use references as needed"));
+            for result in &results {
+                let instance = registry
+                    .inspect_instance(result["id"].as_str().unwrap())
+                    .unwrap();
+                assert_eq!(result["instance_id"], instance.instance_id);
+                assert_eq!(result["content_digest"], instance.content_digest);
+                assert!(registry
+                    .skill_view(&instance.instance_id, "SKILL.md")
+                    .unwrap()
+                    .contains("Use references as needed"));
+            }
+        }
+        let exact = registry
+            .search_for_model(SkillSearchRequest {
+                query: "zz-replay".into(),
+                limit: Some(5),
+            })
+            .unwrap();
+        let results: Vec<Value> = serde_json::from_str(&exact).unwrap();
+        assert!(results.len() >= 2);
+        assert!(results[..2]
+            .iter()
+            .all(|result| result["id"].as_str().unwrap().contains("zz-replay")));
+        assert_ne!(results[0]["instance_id"], results[1]["instance_id"]);
+        assert!(!registry.discovery_prompt().contains("replay-"));
+        assert!(registry.active_refs().is_empty());
+    }
+
+    #[test]
+    fn skill_search_refresh_keeps_scope_availability_and_config_for_new_publications() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        let user = temp.path().join("user");
+        write_portable_skill(&workspace, "hidden-before", "Publication recovery");
+        write_portable_skill(&user, "active", "Existing active instructions");
+        let conditional = |name: &str, tool: &str, required_config: bool| {
+            let directory = user.join(name);
+            fs::create_dir_all(&directory).unwrap();
+            let config = if required_config {
+                "    config:\n      root_path:\n        required: true\n"
+            } else {
+                ""
+            };
+            fs::write(
+                directory.join("SKILL.md"),
+                format!("---\nname: {name}\ndescription: Publication recovery\nmetadata:\n  hermes:\n    requires_tools: [{tool}]\n{config}---\nPublishedBodyCanary\n"),
+            )
+            .unwrap();
+        };
+        conditional("blocked-before", "run_privileged", false);
+        let mut registry = SkillRegistry::discover_portable(
+            vec![
+                SkillDiscoveryRoot::new(SkillSourceScope::Workspace, &workspace, "project"),
+                SkillDiscoveryRoot::new(SkillSourceScope::User, &user, "user"),
+            ],
+            &[],
+        );
+        registry.evaluate_availability(
+            &BTreeSet::from(["read_file".into()]),
+            &BTreeSet::new(),
+            &BTreeMap::from([(
+                "configured-after.root_path".into(),
+                SkillSettingValue::String("profile".into()),
+            )]),
+            &BTreeMap::from([(
+                "configured-after.root_path".into(),
+                SkillSettingValue::String("workspace".into()),
+            )]),
+        );
+        registry.activate_exact("active").unwrap();
+        let active_before = registry.active_refs();
+        registry.hide_workspace_context();
+        write_portable_skill(&workspace, "hidden-after", "Publication recovery");
+        conditional("blocked-after", "run_privileged", false);
+        conditional("unconfigured-after", "read_file", true);
+        conditional("configured-after", "read_file", true);
+        registry.refresh_for_search();
+        let output = registry
+            .search_for_model(SkillSearchRequest {
+                query: "publication recovery".into(),
+                limit: Some(5),
+            })
+            .unwrap();
+        let results: Vec<Value> = serde_json::from_str(&output).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0]["id"]
+            .as_str()
+            .unwrap()
+            .contains("configured-after"));
+        assert!(!output.contains("BodyCanary"));
+        let configured = registry.inspect_instance("configured-after").unwrap();
+        assert_eq!(
+            configured.availability.resolved_config["root_path"],
+            SkillSettingValue::String("workspace".into())
+        );
+        assert_eq!(registry.active_refs(), active_before);
+        assert!(!registry.is_active(&configured.qualified_name));
+    }
+
+    #[test]
+    fn skill_search_refresh_preserves_exact_disabled_instances_and_finds_new_publications() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("skills");
+        write_portable_skill(&root, "disabled-lesson", "Publication recovery");
+        let mut registry = SkillRegistry::discover_portable(
+            vec![SkillDiscoveryRoot::new(
+                SkillSourceScope::User,
+                &root,
+                "user",
+            )],
+            &[],
+        );
+        let disabled = registry
+            .inspect_instance("disabled-lesson")
+            .unwrap()
+            .clone();
+        let state = temp.path().join("state.json");
+        fs::write(
+            &state,
+            serde_json::to_vec(&serde_json::json!({
+                "records": BTreeMap::from([(
+                    disabled.instance_id.clone(),
+                    serde_json::json!({"digest":disabled.content_digest,"enabled":false}),
+                )]),
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        registry.apply_exact_state_file(&state);
+        assert!(
+            !registry
+                .inspect_instance(&disabled.instance_id)
+                .unwrap()
+                .enabled
+        );
+        write_portable_skill(&root, "new-lesson", "Publication recovery");
+        registry.refresh_for_search();
+        let output = registry
+            .search_for_model(SkillSearchRequest {
+                query: "publication recovery".into(),
+                limit: Some(5),
+            })
+            .unwrap();
+        let results: Vec<Value> = serde_json::from_str(&output).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0]["id"].as_str().unwrap().contains("new-lesson"));
+        assert!(!output.contains("disabled-lesson"));
+        assert!(
+            !registry
+                .inspect_instance(&disabled.instance_id)
+                .unwrap()
+                .enabled
+        );
+        assert!(registry.activate_exact(&disabled.qualified_name).is_err());
+        assert!(registry.active_refs().is_empty());
+    }
+
+    #[test]
+    fn skill_search_refresh_rereads_background_generation_state_before_restoring() {
+        let temp = tempfile::tempdir().unwrap();
+        let old_root = temp.path().join("old-generation");
+        let new_root = temp.path().join("new-generation");
+        write_portable_skill(&old_root, "recovery", "Publication recovery");
+        let roots = vec![
+            SkillDiscoveryRoot::new(SkillSourceScope::User, &old_root, "old-generation"),
+            SkillDiscoveryRoot::new(SkillSourceScope::User, &new_root, "new-generation"),
+        ];
+        let mut registry = SkillRegistry::discover_portable(roots.clone(), &[]);
+        let old = registry.inspect_instance("recovery").unwrap().clone();
+        let state = temp.path().join("state.json");
+        let old_record =
+            |enabled| serde_json::json!({"digest":old.content_digest,"enabled":enabled});
+        fs::write(
+            &state,
+            serde_json::to_vec(&serde_json::json!({
+                "records": BTreeMap::from([(old.instance_id.clone(), old_record(true))]),
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        registry.apply_exact_state_file(&state);
+        registry.refresh_for_search();
+        let query = || SkillSearchRequest {
+            query: "publication recovery".into(),
+            limit: Some(5),
+        };
+        let initial: Vec<Value> =
+            serde_json::from_str(&registry.search_for_model(query()).unwrap()).unwrap();
+        assert_eq!(initial.len(), 1);
+        assert_eq!(initial[0]["instance_id"], old.instance_id);
+
+        write_portable_skill(&new_root, "recovery", "Publication recovery");
+        let published = SkillRegistry::discover_portable(roots, &[]);
+        let new = published
+            .instances()
+            .find(|instance| instance.instance_id != old.instance_id)
+            .unwrap()
+            .clone();
+        fs::write(
+            &state,
+            serde_json::to_vec(&serde_json::json!({
+                "records": BTreeMap::from([
+                    (old.instance_id.clone(), old_record(false)),
+                    (new.instance_id.clone(), serde_json::json!({
+                        "digest":new.content_digest,"enabled":true,
+                    })),
+                ]),
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        registry.refresh_for_search();
+        let updated: Vec<Value> =
+            serde_json::from_str(&registry.search_for_model(query()).unwrap()).unwrap();
+        assert_eq!(updated.len(), 1);
+        assert_eq!(updated[0]["instance_id"], new.instance_id);
+        assert!(registry.activate_exact(&old.qualified_name).is_err());
+        assert!(!registry.inspect_instance(&old.instance_id).unwrap().enabled);
+        assert!(registry.inspect_instance(&new.instance_id).unwrap().enabled);
+        fs::remove_file(&state).unwrap();
+        registry.refresh_for_search();
+        let fallback: Vec<Value> =
+            serde_json::from_str(&registry.search_for_model(query()).unwrap()).unwrap();
+        assert_eq!(fallback, updated);
+        assert!(registry.activate_exact(&old.qualified_name).is_err());
+        assert!(registry.active_refs().is_empty());
     }
 
     #[test]

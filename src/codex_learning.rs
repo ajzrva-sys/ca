@@ -10742,6 +10742,7 @@ mod tests {
     #[test]
     fn current_conversation_excludes_tools_thinking_and_incomplete_assistant_work() {
         let message = |role, content: &str, tool_calls| crate::app::Message {
+            retrieved_spans: Some(Vec::new()),
             role,
             content: content.into(),
             tool_calls,
@@ -11532,6 +11533,7 @@ mod tests {
             "test",
             vec![
                 crate::app::Message {
+                    retrieved_spans: Some(Vec::new()),
                     role: crate::app::Role::User,
                     content: "check the transfer again".into(),
                     tool_calls: None,
@@ -11540,14 +11542,18 @@ mod tests {
                     timestamp: now,
                 },
                 crate::app::Message {
+                    retrieved_spans: Some(Vec::new()),
                     role: crate::app::Role::Assistant,
                     content: "transfer is healthy".into(),
                     tool_calls: Some(vec![crate::app::ToolCall {
+                        output_source: None,
+                        arguments_retrieved_spans: Vec::new(),
                         id: "safe-action".into(),
                         name: "shell".into(),
                         arguments: r#"{"command":"ssh bsd check-rsync","cwd":"/tmp/work"}"#.into(),
                         status: crate::app::ToolStatus::Done,
                         output: Some("private host output".into()),
+                        started_at: None,
                     }]),
                     thinking: Some("private reasoning".into()),
                     response_items: Vec::new(),
@@ -11598,6 +11604,7 @@ mod tests {
         let now = Utc::now();
         let messages = (0..130)
             .map(|index| crate::app::Message {
+                retrieved_spans: Some(Vec::new()),
                 role: if index % 2 == 0 {
                     crate::app::Role::User
                 } else {
@@ -11646,6 +11653,7 @@ mod tests {
             "test",
             vec![
                 crate::app::Message {
+                    retrieved_spans: Some(Vec::new()),
                     role: crate::app::Role::User,
                     content: "native request".into(),
                     tool_calls: None,
@@ -11654,6 +11662,7 @@ mod tests {
                     timestamp: now,
                 },
                 crate::app::Message {
+                    retrieved_spans: Some(Vec::new()),
                     role: crate::app::Role::Assistant,
                     content: "native conclusion".into(),
                     tool_calls: None,
@@ -11705,6 +11714,7 @@ mod tests {
             "test",
             vec![
                 crate::app::Message {
+                    retrieved_spans: Some(Vec::new()),
                     role: crate::app::Role::User,
                     content: "repeat this workflow".into(),
                     tool_calls: None,
@@ -11713,6 +11723,7 @@ mod tests {
                     timestamp: now,
                 },
                 crate::app::Message {
+                    retrieved_spans: Some(Vec::new()),
                     role: crate::app::Role::Assistant,
                     content: "workflow complete".into(),
                     tool_calls: None,
@@ -11774,6 +11785,7 @@ models = ["gpt-5.6-terra"]
             "test",
             vec![
                 crate::app::Message {
+                    retrieved_spans: Some(Vec::new()),
                     role: crate::app::Role::User,
                     content: "repeat the registered workflow".into(),
                     tool_calls: None,
@@ -11782,6 +11794,7 @@ models = ["gpt-5.6-terra"]
                     timestamp: now,
                 },
                 crate::app::Message {
+                    retrieved_spans: Some(Vec::new()),
                     role: crate::app::Role::Assistant,
                     content: "registered workflow complete".into(),
                     tool_calls: None,
@@ -11845,6 +11858,7 @@ models = ["gpt-5.6-terra"]
             "test",
             vec![
                 crate::app::Message {
+                    retrieved_spans: Some(Vec::new()),
                     role: crate::app::Role::User,
                     content: "keep this session".into(),
                     tool_calls: None,
@@ -11853,6 +11867,7 @@ models = ["gpt-5.6-terra"]
                     timestamp: now,
                 },
                 crate::app::Message {
+                    retrieved_spans: Some(Vec::new()),
                     role: crate::app::Role::Assistant,
                     content: "kept session complete".into(),
                     tool_calls: None,
@@ -11869,6 +11884,7 @@ models = ["gpt-5.6-terra"]
             "test",
             vec![
                 crate::app::Message {
+                    retrieved_spans: Some(Vec::new()),
                     role: crate::app::Role::User,
                     content: "delete this session".into(),
                     tool_calls: None,
@@ -11877,6 +11893,7 @@ models = ["gpt-5.6-terra"]
                     timestamp: now,
                 },
                 crate::app::Message {
+                    retrieved_spans: Some(Vec::new()),
                     role: crate::app::Role::Assistant,
                     content: "removed session complete".into(),
                     tool_calls: None,
@@ -11971,6 +11988,7 @@ models = ["gpt-5.6-terra"]
             "test",
             vec![
                 crate::app::Message {
+                    retrieved_spans: Some(Vec::new()),
                     role: crate::app::Role::User,
                     content: "completed request".into(),
                     tool_calls: None,
@@ -11979,6 +11997,7 @@ models = ["gpt-5.6-terra"]
                     timestamp: now,
                 },
                 crate::app::Message {
+                    retrieved_spans: Some(Vec::new()),
                     role: crate::app::Role::Assistant,
                     content: "completed conclusion".into(),
                     tool_calls: None,
@@ -11987,6 +12006,7 @@ models = ["gpt-5.6-terra"]
                     timestamp: now,
                 },
                 crate::app::Message {
+                    retrieved_spans: Some(Vec::new()),
                     role: crate::app::Role::User,
                     content: "unfinished private request".into(),
                     tool_calls: None,
@@ -12004,6 +12024,7 @@ models = ["gpt-5.6-terra"]
             "test",
             vec![
                 crate::app::Message {
+                    retrieved_spans: Some(Vec::new()),
                     role: crate::app::Role::User,
                     content: "private email body".into(),
                     tool_calls: None,
@@ -12012,14 +12033,18 @@ models = ["gpt-5.6-terra"]
                     timestamp: now,
                 },
                 crate::app::Message {
+                    retrieved_spans: Some(Vec::new()),
                     role: crate::app::Role::Assistant,
                     content: "private email conclusion".into(),
                     tool_calls: Some(vec![crate::app::ToolCall {
+                        output_source: None,
+                        arguments_retrieved_spans: Vec::new(),
                         id: "email".into(),
                         name: "email_send".into(),
                         arguments: "{}".into(),
                         status: crate::app::ToolStatus::Done,
                         output: Some("private email output".into()),
+                        started_at: None,
                     }]),
                     thinking: None,
                     response_items: Vec::new(),
@@ -12976,6 +13001,7 @@ models = ["gpt-5.6-terra"]
         let now = Utc::now();
         let messages = vec![
             crate::app::Message {
+                retrieved_spans: Some(Vec::new()),
                 role: crate::app::Role::User,
                 content: "Across projects, preserve deterministic evidence.".into(),
                 tool_calls: None,
@@ -12984,6 +13010,7 @@ models = ["gpt-5.6-terra"]
                 timestamp: now,
             },
             crate::app::Message {
+                retrieved_spans: Some(Vec::new()),
                 role: crate::app::Role::Assistant,
                 content: "Understood.".into(),
                 tool_calls: None,
@@ -13800,6 +13827,7 @@ models = ["gpt-5.6-terra"]
                 "test",
                 vec![
                     crate::app::Message {
+                        retrieved_spans: Some(Vec::new()),
                         role: crate::app::Role::User,
                         content: request.into(),
                         tool_calls: None,
@@ -13808,14 +13836,18 @@ models = ["gpt-5.6-terra"]
                         timestamp: now,
                     },
                     crate::app::Message {
+                        retrieved_spans: Some(Vec::new()),
                         role: crate::app::Role::Assistant,
                         content: "The transfer state was reported.".into(),
                         tool_calls: Some(vec![crate::app::ToolCall {
+                            output_source: None,
+                            arguments_retrieved_spans: Vec::new(),
                             id: Uuid::new_v4().to_string(),
                             name: "shell".into(),
                             arguments: r#"{"command":"ssh bsd check-rsync"}"#.into(),
                             status: crate::app::ToolStatus::Done,
                             output: Some("private host output".into()),
+                            started_at: None,
                         }]),
                         thinking: Some("private reasoning".into()),
                         response_items: Vec::new(),

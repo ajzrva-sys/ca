@@ -82,6 +82,7 @@ pub fn plain_arguments(args: &Value) -> Value {
     if let Some(object) = args.as_object_mut() {
         object.remove(TOKEN);
         object.remove(PREVIEW);
+        object.remove("_ca_private_batch");
     }
     args
 }
@@ -210,6 +211,21 @@ pub async fn prepare_with_authority(
     sandbox: crate::sandbox::SandboxMode,
     authorize: impl Fn(&Value) -> bool,
 ) -> Result<(), String> {
+    if matches!(
+        name,
+        "write_file" | "edit_file" | "apply_patch" | "hashline_edit" | "delete_file"
+    ) {
+        if let Some(context) = crate::privacy::current()
+            .filter(|context| context.enabled() && !context.filename_only())
+        {
+            let name = name.to_string();
+            let original = args.clone();
+            *args =
+                tokio::task::spawn_blocking(move || context.prepare_edit_ticket(&name, &original))
+                    .await
+                    .map_err(|_| "Protected edit worker stopped")??;
+        }
+    }
     if !matches!(
         name,
         "write_file" | "edit_file" | "apply_patch" | "hashline_edit"

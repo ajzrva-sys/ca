@@ -122,14 +122,18 @@ pub struct ModelContent {
     blocks: Vec<ModelContentBlock>,
     prunable_tool_result: bool,
     tool_success: Option<bool>,
+    retrieved_spans: Vec<Option<Vec<crate::retrieved_content::RetrievedSpan>>>,
+    authored_id: Option<String>,
 }
 
 impl ModelContent {
     pub fn text(text: impl Into<String>) -> Self {
         Self {
             blocks: vec![ModelContentBlock::Text(text.into())],
+            retrieved_spans: vec![Some(Vec::new())],
             prunable_tool_result: false,
             tool_success: None,
+            authored_id: None,
         }
     }
 
@@ -137,21 +141,285 @@ impl ModelContent {
         let mut blocks = vec![ModelContentBlock::Text(text.into())];
         blocks.extend(images.iter().cloned().map(ModelContentBlock::Image));
         Self {
+            retrieved_spans: vec![Some(Vec::new()); blocks.len()],
             blocks,
             prunable_tool_result: false,
             tool_success: None,
+            authored_id: None,
         }
     }
 
     pub fn image_from_tool(call_id: &str, image: ModelImage) -> Self {
         Self {
+            retrieved_spans: vec![Some(Vec::new()); 2],
             prunable_tool_result: false,
             tool_success: Some(true),
+            authored_id: None,
             blocks: vec![
                 ModelContentBlock::Text(format!("Image returned by view_image call {call_id}.")),
                 ModelContentBlock::Image(image),
             ],
         }
+    }
+
+    /// Annotate source bytes, keeping the canonical/local text untouched.
+    pub(crate) fn with_authored_id(mut self, id: String) -> Self {
+        self.authored_id = Some(id);
+        self
+    }
+    pub(crate) fn authored_id(&self) -> Option<&str> {
+        self.authored_id.as_deref()
+    }
+    pub(crate) fn authored_text(&self) -> Result<String, String> {
+        let mut output = String::new();
+        for (index, block) in self.blocks.iter().enumerate() {
+            if let ModelContentBlock::Text(text) = block {
+                let mut offset = 0;
+                for span in self
+                    .retrieved_spans
+                    .get(index)
+                    .and_then(Option::as_deref)
+                    .unwrap_or_default()
+                {
+                    if span.start < offset
+                        || span.end > text.len()
+                        || !text.is_char_boundary(span.start)
+                        || !text.is_char_boundary(span.end)
+                    {
+                        return Err("private authored ranges are invalid".into());
+                    }
+                    output.push_str(&text[offset..span.start]);
+                    offset = span.end;
+                }
+                output.push_str(&text[offset..]);
+                output.push('\n');
+            }
+        }
+        Ok(output.trim_end_matches('\n').into())
+    }
+    pub(crate) fn project_authored(
+        &self,
+        strip_sources: bool,
+        project: impl Fn(&str) -> String,
+    ) -> Result<Self, String> {
+        let mut next = self.clone();
+        next.blocks.clear();
+        next.retrieved_spans.clear();
+        for (index, block) in self.blocks.iter().enumerate() {
+            match block {
+                ModelContentBlock::Image(_) if strip_sources => {}
+                ModelContentBlock::Image(image) => {
+                    next.blocks.push(ModelContentBlock::Image(image.clone()));
+                    next.retrieved_spans.push(Some(Vec::new()));
+                }
+                ModelContentBlock::Text(text) => {
+                    let mut output = String::new();
+                    let mut spans = Vec::new();
+                    let mut offset = 0;
+                    for span in self
+                        .retrieved_spans
+                        .get(index)
+                        .and_then(Option::as_deref)
+                        .unwrap_or_default()
+                    {
+                        if span.start < offset
+                            || span.end > text.len()
+                            || !text.is_char_boundary(span.start)
+                            || !text.is_char_boundary(span.end)
+                        {
+                            return Err("private authored ranges are invalid".into());
+                        }
+                        output.push_str(&project(&text[offset..span.start]));
+                        if !strip_sources {
+                            let start = output.len();
+                            output.push_str(&text[span.start..span.end]);
+                            spans.push(crate::retrieved_content::RetrievedSpan {
+                                source: span.source.clone(),
+                                start,
+                                end: output.len(),
+                            });
+                        }
+                        offset = span.end;
+                    }
+                    output.push_str(&project(&text[offset..]));
+                    next.blocks.push(ModelContentBlock::Text(output));
+                    next.retrieved_spans.push(Some(spans));
+                }
+            }
+        }
+        Ok(next)
+    }
+
+    /// Annotate source bytes, keeping the canonical/local text untouched.
+    pub fn with_retrieved_spans(
+        mut self,
+        spans: Vec<crate::retrieved_content::RetrievedSpan>,
+    ) -> Self {
+        if let Some(metadata) = self.retrieved_spans.first_mut() {
+            *metadata = Some(spans);
+        }
+        self
+    }
+
+    pub(crate) fn with_source_receipt(mut self, source: Option<String>) -> Self {
+        if let (Some(source), Some(ModelContentBlock::Text(text)), Some(metadata)) = (
+            source,
+            self.blocks.first(),
+            self.retrieved_spans.first_mut(),
+        ) {
+            *metadata = Some(vec![crate::retrieved_content::RetrievedSpan {
+                start: 0,
+                end: text.len(),
+                source: Some(source),
+            }]);
+        }
+        self
+    }
+
+    pub(crate) fn text_retrieved_spans(
+        &self,
+    ) -> Option<Vec<crate::retrieved_content::RetrievedSpan>> {
+        self.as_str()?;
+        self.retrieved_spans.first().cloned().flatten()
+    }
+
+    pub(crate) fn source_receipt(&self) -> Option<String> {
+        let text = self.as_str()?;
+        let spans = self.retrieved_spans.first()?.as_ref()?;
+        let [span] = spans.as_slice() else {
+            return None;
+        };
+        (span.start == 0 && span.end == text.len())
+            .then(|| span.source.clone())
+            .flatten()
+    }
+
+    /// Append host-authored directions without dropping source annotations.
+    /// Existing spans remain subject to validation during request projection.
+    pub(crate) fn append_authored(&self, suffix: &str) -> Self {
+        let mut content = self.clone();
+        if let Some(text) = content.as_text_mut() {
+            text.push_str(suffix);
+        }
+        content
+    }
+
+    pub fn with_legacy_provenance(mut self) -> Self {
+        self.retrieved_spans.fill(None);
+        self
+    }
+
+    pub fn project_retrieved(
+        &self,
+        filter: &crate::provider_filter::ProviderFilter,
+    ) -> Result<Self, crate::agent::stream::ProviderError> {
+        let mut projected = self.clone();
+        for (index, block) in projected.blocks.iter_mut().enumerate() {
+            match block {
+                ModelContentBlock::Text(text) => {
+                    let metadata = self.retrieved_spans.get(index).and_then(Option::as_deref);
+                    let spans = crate::retrieved_content::checked_spans(
+                        text,
+                        metadata,
+                        filter.substitutes_retrieved(),
+                    )?;
+                    let mut result = String::new();
+                    let mut offset = 0;
+                    for span in spans {
+                        filter.admit_outbound(&text.as_bytes()[span.start..span.end])?;
+                        result.push_str(&text[offset..span.start]);
+                        result.push_str(&filter.encode_retrieved(&text[span.start..span.end]));
+                        offset = span.end;
+                    }
+                    result.push_str(&text[offset..]);
+                    *text = result;
+                }
+                ModelContentBlock::Image(_) if filter.replaces_images() => {
+                    *block = ModelContentBlock::Text("[image]".into());
+                }
+                ModelContentBlock::Image(_) => {}
+            }
+        }
+        projected.retrieved_spans.fill(Some(Vec::new()));
+        Ok(projected)
+    }
+
+    /// A strict projection consumes host-owned source ranges before adapter
+    /// lowering. Unclassified tool payloads are entirely project-origin data.
+    pub(crate) fn project_privacy(
+        &self,
+        context: &crate::privacy::Context,
+        tool_result: bool,
+    ) -> Result<Self, String> {
+        let mut projected = self.clone();
+        for (index, block) in projected.blocks.iter_mut().enumerate() {
+            match block {
+                ModelContentBlock::Image(_)
+                    if context.policy().default_action != crate::privacy::policy::Action::Allow =>
+                {
+                    *block = ModelContentBlock::Text("[image]".into())
+                }
+                ModelContentBlock::Image(_) => {}
+                ModelContentBlock::Text(text) => {
+                    if tool_result {
+                        let metadata = self.retrieved_spans.get(index).and_then(Option::as_deref);
+                        let spans =
+                            crate::retrieved_content::checked_spans(text, metadata, true)
+                                .map_err(|_| "Privacy source ranges are unavailable or invalid")?;
+                        let mut result = String::new();
+                        let mut offset = 0;
+                        for span in spans {
+                            if offset < span.start {
+                                result.push_str(
+                                    &context.project_retrieved(&text[offset..span.start], None)?,
+                                );
+                            }
+                            result.push_str(&context.project_retrieved(
+                                &text[span.start..span.end],
+                                span.source.as_deref(),
+                            )?);
+                            offset = span.end;
+                        }
+                        if offset < text.len() {
+                            result.push_str(&context.project_retrieved(&text[offset..], None)?);
+                        }
+                        *text = result;
+                        if self.tool_success == Some(false) {
+                            text.insert_str(0, "[tool failed]\n");
+                        }
+                    } else {
+                        let metadata = self.retrieved_spans.get(index).and_then(Option::as_deref);
+                        let spans =
+                            crate::retrieved_content::checked_spans(text, metadata, true)
+                                .map_err(|_| "Privacy source ranges are unavailable or invalid")?;
+                        let mut result = String::new();
+                        let mut offset = 0;
+                        for span in spans {
+                            result.push_str(&text[offset..span.start]);
+                            result.push_str(&context.project_retrieved(
+                                &text[span.start..span.end],
+                                span.source.as_deref(),
+                            )?);
+                            offset = span.end;
+                        }
+                        result.push_str(&text[offset..]);
+                        *text = result;
+                    }
+                }
+            }
+        }
+        projected.retrieved_spans.fill(Some(Vec::new()));
+        Ok(projected)
+    }
+
+    pub(crate) fn mask_privacy(&self, context: &crate::privacy::Context) -> Result<Self, String> {
+        let mut projected = self.clone();
+        for block in &mut projected.blocks {
+            if let ModelContentBlock::Text(text) = block {
+                *text = context.mask_known(text)?;
+            }
+        }
+        Ok(projected)
     }
 
     pub(crate) fn with_prunable_tool_result(mut self, eligible: bool) -> Self {
@@ -320,6 +588,32 @@ pub fn strip_persistence_markers(mut text: String, images: &[ModelImage]) -> Str
     text
 }
 
+/// Persistence markers form a removable suffix. Validate provenance against
+/// the original text before clipping ranges to the remaining live prefix.
+pub(crate) fn strip_persistence_markers_with_spans(
+    text: String,
+    images: &[ModelImage],
+    spans: &[crate::retrieved_content::RetrievedSpan],
+) -> Result<
+    (String, Vec<crate::retrieved_content::RetrievedSpan>),
+    crate::agent::stream::ProviderError,
+> {
+    crate::retrieved_content::validate_spans(&text, spans)?;
+    let text = strip_persistence_markers(text, images);
+    let spans = spans
+        .iter()
+        .filter_map(|span| {
+            let end = span.end.min(text.len());
+            (span.start < end).then_some(crate::retrieved_content::RetrievedSpan {
+                source: (end == span.end).then(|| span.source.clone()).flatten(),
+                start: span.start,
+                end,
+            })
+        })
+        .collect();
+    Ok((text, spans))
+}
+
 fn validate_dimensions(width: u32, height: u32) -> Result<(), String> {
     let pixels = u64::from(width).saturating_mul(u64::from(height));
     if width == 0 || height == 0 {
@@ -354,6 +648,86 @@ fn normalize_dynamic_image(image: image::DynamicImage) -> Result<ModelImage, Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retrieved_projection_keeps_authored_text_and_the_original_content() {
+        let filter = crate::provider_filter::ProviderFilter::compile(
+            &crate::provider_filter::ProviderFilterConfig {
+                enabled: true,
+                page_stand_in: crate::provider_filter::PageStandIn::Latin,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let raw = "Read this: SecretCanary then explain.";
+        let start = raw.find("SecretCanary").unwrap();
+        let content = ModelContent::text(raw).with_retrieved_spans(vec![
+            crate::retrieved_content::RetrievedSpan {
+                source: None,
+                start,
+                end: start + "SecretCanary".len(),
+            },
+        ]);
+        let projected = content.project_retrieved(&filter).unwrap();
+        assert_eq!(content.as_str(), Some(raw));
+        let sent = projected.as_str().unwrap();
+        assert!(sent.starts_with("Read this: "));
+        assert!(sent.ends_with(" then explain."));
+        assert!(!sent.contains("SecretCanary"));
+        assert_eq!(projected.project_retrieved(&filter).unwrap(), projected);
+        let extended = content.append_authored(" Authored suffix.");
+        let extended_projection = extended.project_retrieved(&filter).unwrap();
+        assert!(extended_projection
+            .as_str()
+            .unwrap()
+            .ends_with(" Authored suffix."));
+        assert!(!extended_projection
+            .as_str()
+            .unwrap()
+            .contains("SecretCanary"));
+        assert_eq!(content.as_str(), Some(raw));
+        let legacy = ModelContent::text("look\n\n--- Attached file: a ---\nbody\n--- End file ---")
+            .with_legacy_provenance();
+        assert!(legacy.project_retrieved(&filter).is_err());
+        assert!(ModelContent::text(raw)
+            .with_retrieved_spans(vec![crate::retrieved_content::RetrievedSpan {
+                source: None,
+                start: 1,
+                end: usize::MAX
+            }])
+            .project_retrieved(&filter)
+            .is_err());
+    }
+
+    #[test]
+    fn retrieved_projection_replaces_images_when_substitution_is_active() {
+        let image = RawClipboardImage::new(1, 1, vec![0, 0, 0, 255])
+            .unwrap()
+            .normalize()
+            .unwrap();
+        let content = ModelContent::multimodal("authored prompt", &[image]);
+        let filter = crate::provider_filter::ProviderFilter::compile(
+            &crate::provider_filter::ProviderFilterConfig {
+                enabled: true,
+                page_stand_in: crate::provider_filter::PageStandIn::Latin,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let projected = content.project_retrieved(&filter).unwrap();
+        assert!(!projected.has_images());
+        assert!(content.has_images());
+        assert_eq!(
+            projected.blocks(),
+            &[
+                ModelContentBlock::Text("authored prompt".into()),
+                ModelContentBlock::Text("[image]".into())
+            ]
+        );
+        let disabled =
+            crate::provider_filter::ProviderFilter::compile(&Default::default()).unwrap();
+        assert_eq!(content.project_retrieved(&disabled).unwrap(), content);
+    }
 
     fn crc32(bytes: &[u8]) -> u32 {
         let mut crc = 0xffff_ffff_u32;
@@ -427,6 +801,59 @@ mod tests {
             strip_persistence_markers(canonical.clone(), &[first, second]),
             "inspect"
         );
+        assert!(canonical.contains("unavailable after this process"));
+    }
+
+    #[test]
+    fn image_marker_removal_clips_only_valid_suffix_provenance() {
+        let image = normalize_rgba(1, 1, vec![1, 2, 3, 255]).unwrap();
+        let canonical = format!("inspect SOURCE\n\n{}", image.unavailable_marker());
+        let source = crate::retrieved_content::RetrievedSpan {
+            source: None,
+            start: 8,
+            end: 14,
+        };
+        let marker = crate::retrieved_content::RetrievedSpan {
+            source: None,
+            start: 14,
+            end: canonical.len(),
+        };
+        let (live, spans) = strip_persistence_markers_with_spans(
+            canonical.clone(),
+            std::slice::from_ref(&image),
+            &[source.clone(), marker],
+        )
+        .unwrap();
+        assert_eq!(live, "inspect SOURCE");
+        assert_eq!(spans, [source]);
+        let (_, crossing) = strip_persistence_markers_with_spans(
+            canonical.clone(),
+            std::slice::from_ref(&image),
+            &[crate::retrieved_content::RetrievedSpan {
+                source: None,
+                start: 8,
+                end: canonical.len(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(
+            crossing,
+            [crate::retrieved_content::RetrievedSpan {
+                source: None,
+                start: 8,
+                end: 14
+            }]
+        );
+        assert!(strip_persistence_markers_with_spans(
+            canonical.clone(),
+            &[image],
+            &[crate::retrieved_content::RetrievedSpan {
+                source: None,
+                start: 8,
+                end: canonical.len() + 1
+            }],
+        )
+        .is_err());
         assert!(canonical.contains("unavailable after this process"));
     }
 

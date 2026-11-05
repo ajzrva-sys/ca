@@ -45,6 +45,10 @@ impl GuidanceInputs {
         Ok(())
     }
 
+    fn model_prompt(&self) -> Result<crate::image_content::ModelContent> {
+        model_prompt_with_fields(self.prompt()?, &["evidence", "target_files"])
+    }
+
     fn prompt(&self) -> Result<String> {
         let target = self
             .cases
@@ -63,6 +67,41 @@ impl GuidanceInputs {
             }))?
         ))
     }
+}
+
+/// Annotate selected top-level data fields in the canonical JSON payload.
+/// Fixed directions and the authored baseline/task fields remain readable.
+pub(crate) fn model_prompt_with_fields(
+    prompt: String,
+    retrieved_fields: &[&str],
+) -> Result<crate::image_content::ModelContent> {
+    let (directions, payload) = prompt
+        .split_once('\n')
+        .context("generation prompt has no payload")?;
+    let value: serde_json::Value = serde_json::from_str(payload)?;
+    let fields = value
+        .as_object()
+        .context("generation payload is not an object")?;
+    let mut text = format!("{directions}\n{{");
+    let mut spans = Vec::new();
+    for (index, (key, value)) in fields.iter().enumerate() {
+        if index > 0 {
+            text.push(',');
+        }
+        text.push_str(&serde_json::to_string(key)?);
+        text.push(':');
+        let encoded = serde_json::to_string(value)?;
+        if retrieved_fields.contains(&key.as_str()) {
+            crate::retrieved_content::append(&mut text, &mut spans, &encoded);
+        } else {
+            text.push_str(&encoded);
+        }
+    }
+    text.push('}');
+    if text != prompt {
+        bail!("generation payload is not in canonical form");
+    }
+    Ok(crate::image_content::ModelContent::text(text).with_retrieved_spans(spans))
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -301,7 +340,7 @@ pub async fn generate_guidance(
     }
     let backend =
         BudgetedBackend::new(client, vault.clone(), plan.clone(), inputs.provider.clone())?;
-    let prompt = inputs.prompt()?;
+    let prompt = inputs.model_prompt()?;
     let mut journal = GenerationJournal {
         inputs,
         inputs_digest,
@@ -324,7 +363,7 @@ pub async fn generate_guidance(
         .run(async {
             let messages = [ChatMessage {
                 role: "user".into(),
-                content: crate::image_content::ModelContent::text(prompt),
+                content: prompt,
                 tool_calls: None,
                 tool_call_id: None,
                 response_items: Vec::new(),
@@ -455,6 +494,27 @@ pub(crate) mod tests {
             }
         }
         assert!(!inputs.prompt().unwrap().contains("HELD_OUT_SECRET"));
+        inputs
+            .evidence
+            .insert("task:event".into(), "PRIVATE_GENERATION_EVIDENCE".into());
+        let model = inputs.model_prompt().unwrap();
+        let filter = crate::provider_filter::ProviderFilter::compile(
+            &crate::provider_filter::ProviderFilterConfig {
+                enabled: true,
+                page_stand_in: crate::provider_filter::PageStandIn::Latin,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let projected = model.project_retrieved(&filter).unwrap();
+        let sent = projected.as_str().unwrap();
+        assert!(sent.starts_with("Propose one reusable change to coding-agent guidance."));
+        assert!(!sent.contains("PRIVATE_GENERATION_EVIDENCE"));
+        assert!(sent.contains(&serde_json::to_string(&inputs.baseline_instructions).unwrap()));
+        assert!(model
+            .as_str()
+            .unwrap()
+            .contains("PRIVATE_GENERATION_EVIDENCE"));
         proposal.evidence_ids.push("invented:event".into());
         assert!(proposal.harness(&inputs, &plan).is_err());
         proposal.evidence_ids = vec!["task:event".into(), "task:event".into()];
