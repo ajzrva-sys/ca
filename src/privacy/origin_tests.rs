@@ -95,6 +95,7 @@ async fn privacy_equal_native_results_keep_distinct_origins_through_session_resu
         .iter()
         .enumerate()
         .map(|(index, result)| ToolCall {
+            observation: None,
             output_source: result.source_for(result.model_text()),
             id: format!("read-{index}"),
             name: "read_file".into(),

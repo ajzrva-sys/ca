@@ -114,6 +114,7 @@ pub struct ResourceFieldSpec {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolHandler {
     ReadFile,
+    Infer,
     ReadPdf,
     ViewImage,
     Browser,
@@ -1228,6 +1229,9 @@ pub(crate) mod arguments {
     #[derive(Deserialize, JsonSchema)]
     #[serde(deny_unknown_fields)]
     pub(super) struct SpawnAgentArgs {
+        /// Optional {path, source_sha256, start_line, end_line, context, checks:[{argv,cwd,timeout_secs}], max_attempts<=3}. Include exact edit_file/run_command grants; omit output_schema.
+        #[schemars(with = "Option<crate::narrow_worker::RepairContract>")]
+        repair_contract: Option<Value>,
         task: String,
         task_id: Option<String>,
         /// Explicit tool grants. Use [] for a planning/review child with no tools.
@@ -1248,6 +1252,26 @@ pub(crate) mod arguments {
         output_schema: Option<Value>,
         /// Optional dedicated Git worktree. Shared preserves existing behavior.
         isolation: Option<crate::agent::subagent::AgentIsolation>,
+    }
+    #[derive(Deserialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    struct InferBudgetArgs {
+        #[schemars(range(min = 1, max = 2))]
+        max_requests: Option<u64>,
+        #[schemars(range(min = 1, max = 90))]
+        timeout_secs: Option<u64>,
+    }
+    #[derive(Deserialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    pub(super) struct InferArgs {
+        task: String,
+        /// Immutable owner-scoped log byte slices: artifact_id, stream (stdout/stderr), start, end.
+        context_refs: Vec<crate::inference_artifacts::ArtifactSlice>,
+        output_schema: Value,
+        /// Finite request count (max 2) and runtime seconds (max 90).
+        budget: Option<InferBudgetArgs>,
+        /// Optional exact current configured route identity.
+        route: Option<AgentRouteArgs>,
     }
     #[derive(Deserialize, JsonSchema)]
     #[serde(deny_unknown_fields)]
@@ -1892,10 +1916,20 @@ fn builtin_specs() -> Vec<ToolSpec> {
             vec![ToolProfile::Main, ToolProfile::Subagent]
         ),
         spec!(
+            Infer,
+            InferArgs,
+            "infer",
+            "Answer one bounded question over immutable stored log slices and return a schema-validated value with trace and usage. Receives only explicit context; no workspace tools. Use artifact references from command results. Current provider/model by default; at most one schema repair within the finite budget",
+            ReadOnly,
+            [],
+            [],
+            vec![ToolProfile::Main, ToolProfile::Subagent]
+        ),
+        spec!(
             Task,
             TaskArgs,
             "task",
-            "Use explore or plan for an independent bounded read-only investigation, or general for granted coding work. Use exactly an available name: explore, plan, or general. Use list_agent_routes to discover configured provider/model identities, then set route to select an exact child provider/model independently of the parent; this bypasses automatic cost routing. Otherwise omit complexity to inherit the current provider/model or configured delegation default. Set complexity only when the user explicitly requests automatic inter-provider cost routing; route and complexity cannot be combined",
+            "For a known-target repair with fixed checks, use spawn_agent with repair_contract and explicit grants. Use explore or plan for an independent bounded read-only investigation, or general for granted coding work. Use exactly an available name: explore, plan, or general. Use list_agent_routes to discover configured provider/model identities, then set route to select an exact child provider/model independently of the parent; this bypasses automatic cost routing. Otherwise omit complexity to inherit the current provider/model or configured delegation default. Set complexity only when the user explicitly requests automatic inter-provider cost routing; route and complexity cannot be combined",
             Mutating,
             [Subagent],
             [],
@@ -1905,7 +1939,7 @@ fn builtin_specs() -> Vec<ToolSpec> {
             SpawnAgent,
             SpawnAgentArgs,
             "spawn_agent",
-            "Proactively spawn a useful independent exploration, implementation, or review task and keep working concurrently. Supply exact registered tools, for example [read_file, search_files, glob, list_dir] for read-only exploration; await and integrate its evidence before finishing. Use list_agent_routes to discover configured provider/model identities, then set route to select an exact child provider/model independently of the parent; this bypasses automatic cost routing. Otherwise omit complexity to inherit the current provider/model or configured delegation default. Set complexity only when the user explicitly requests automatic inter-provider cost routing; route and complexity cannot be combined",
+            "For a localized repair with a known target and pinned checks, prefer repair_contract: the host applies the returned replacement, runs checks and stops on verified success. Otherwise proactively spawn a useful independent exploration, implementation, or review task and keep working concurrently. Supply exact registered tools, for example [read_file, search_files, glob, list_dir] for read-only exploration; await and integrate its evidence before finishing. Use list_agent_routes to discover configured provider/model identities, then set route to select an exact child provider/model independently of the parent; this bypasses automatic cost routing. Otherwise omit complexity to inherit the current provider/model or configured delegation default. Set complexity only when the user explicitly requests automatic inter-provider cost routing; route and complexity cannot be combined",
             Mutating,
             [Subagent],
             [],
@@ -2522,9 +2556,13 @@ mod tests {
             assert_eq!(spec.origin, ToolOrigin::BuiltIn);
             assert_eq!(spec.schema["type"], "object", "{} schema", spec.name);
         }
-        assert_eq!(names.len(), 104);
+        assert_eq!(names.len(), 105);
 
         let valid_arguments = [
+            (
+                "infer",
+                json!({"task":"classify","context_refs":[{"artifact_id":"00000000-0000-0000-0000-000000000000-0000000000000000000000000000000000000000000000000000000000000000","stream":"stderr","start":0,"end":12}],"output_schema":{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]},"budget":{"max_requests":2,"timeout_secs":30}}),
+            ),
             ("search_tools", json!({"query":"agents","limit":5})),
             ("list_local_automations", json!({"limit":25,"offset":0})),
             ("propose_automation", json!({"definition":{}})),
@@ -2924,12 +2962,23 @@ mod tests {
     #[test]
     fn profiles_mutations_capabilities_and_resources_are_centralized() {
         let registry = ToolRegistry::builtins();
-        assert_eq!(registry.definitions(ToolProfile::Main).len(), 98);
+        assert_eq!(registry.definitions(ToolProfile::Main).len(), 99);
         let main_names: HashSet<String> = registry
             .definitions(ToolProfile::Main)
             .into_iter()
             .map(|definition| definition.function.name)
             .collect();
+        assert!(main_names.contains("infer"));
+        let inference = registry.get("infer").unwrap();
+        assert_eq!(inference.mutation, ToolMutation::ReadOnly);
+        assert_eq!(inference.concurrency, ToolConcurrency::Serial);
+        assert_eq!(
+            inference.privacy,
+            crate::privacy::tool_contract::ToolPrivacy::Local
+        );
+        assert!(inference.profiles.contains(&ToolProfile::Subagent));
+        assert!(!inference.profiles.contains(&ToolProfile::Plan));
+        assert!(registry.validate("infer", &json!({})).is_err());
         assert!(main_names.contains("request_user_input"));
         assert!(main_names.contains("propose_memory"));
         assert!(main_names.contains("propose_automation"));

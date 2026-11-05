@@ -138,6 +138,8 @@ pub struct AgentSpawnRequest {
     pub purpose: AgentRunPurpose,
     /// Optional bounded JSON Schema for the child's final value.
     pub output_contract: Option<crate::headless_contract::StructuredOutputContract>,
+    /// Explicit single-target repair; its source is frozen by managed admission.
+    pub(crate) repair_contract: Option<crate::narrow_worker::RepairContract>,
     /// Shared workspace is the compatibility default; worktree isolation is
     /// created by the manager before child admission.
     pub isolation: AgentIsolation,
@@ -466,6 +468,7 @@ pub struct AgentSnapshot {
     pub result_summary: Option<String>,
     pub result_sha256: Option<String>,
     pub structured_result: Option<serde_json::Value>,
+    pub narrow_repair: Option<crate::narrow_worker::NarrowRepairResult>,
     pub structured_repair_attempted: bool,
     pub spill: Option<AgentSpillReceipt>,
     pub worktree: Option<AgentWorktreeReceipt>,
@@ -557,6 +560,9 @@ pub enum RunnerEvent {
         batch: crate::undo::FileMutationBatchReceipt,
         started_at: Option<DateTime<Utc>>,
     },
+    NarrowRepairVerified(crate::narrow_worker::NarrowRepairResult),
+    NarrowRepairApplied(crate::narrow_worker::NarrowRepairResult),
+    NarrowRepairUsage(crate::narrow_worker::RepairUsage),
     HarnessPrepared {
         snapshot: crate::harness_registry::ComponentSnapshot,
         model: String,
@@ -712,6 +718,14 @@ impl AgentRunner for ProviderAgentRunner {
                     .reroute(usage_kind, &route.provider, &route.model)
             },
         );
+        crate::inference::bind_owner(context.job_owner, client.clone(), usage_recorder.reroute(crate::usage::UsageKind::Inference, client.provider_id(), client.model_id()));
+        crate::inference::bind_graph_budget_with_pricing(context.job_owner, context.graph_budget.clone(), self.pricing.get(&format!("{}/{}", client.provider_id(), client.model_id())).cloned());
+        let mut repair = context.request.repair_contract.clone().map(crate::narrow_worker::RepairState::new).transpose()?;
+        let output_contract = if repair.is_some() {
+            Some(crate::narrow_worker::RepairContract::output_contract()?)
+        } else {
+            context.request.output_contract.clone()
+        };
         let registry = crate::agent::registry::ToolRegistry::builtins();
         let workspace = context.request.workspace.clone();
         let granted: std::collections::HashSet<_> = context
@@ -748,17 +762,17 @@ impl AgentRunner for ProviderAgentRunner {
         .map_err(|error| format!("tool selection failed: {error}"))?
         .into_definitions();
         let discovery = crate::tool_discovery::ToolDiscoverySession::default();
-        let active_skills = self
+        let active_skills = if repair.is_some() { String::new() } else { self
             .skills
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
-            .active_prompt();
-        let task_skills = self
+            .active_prompt() };
+        let task_skills = if repair.is_some() { String::new() } else { self
             .task_skill_snapshot
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
-            .clone();
-        let structured_instruction = context.request.output_contract.as_ref().map_or(
+            .clone() };
+        let structured_instruction = output_contract.as_ref().map_or(
             String::new(),
             |_| {
                 "\nA structured result is required. Finish by calling report_structured_output exactly once as the sole final tool call.".into()
@@ -776,6 +790,10 @@ impl AgentRunner for ProviderAgentRunner {
         );
         system_content.push_str(&active_skills);
         system_content.push_str(&task_skills);
+        if let Some(repair) = &repair {
+            system_content.push_str("\nYou only supply a replacement or diagnosis. Do not choose tools, paths, edits or verification commands.\n");
+            crate::retrieved_content::append(&mut system_content, &mut summary_spans, &repair.prompt());
+        }
         let mut messages = vec![
             ChatMessage {
                 role: "system".into(),
@@ -796,9 +814,10 @@ impl AgentRunner for ProviderAgentRunner {
         ];
         let owner = context.job_owner;
         let mut structured_repair_attempted = false;
+        let mut repair_usage = crate::narrow_worker::RepairUsage::default();
         for turn in 0..context.limits.max_turns {
-            let mut tools = discovery.advertise(authorized_tools.clone(), &self.tool_policy);
-            if let Some(contract) = &context.request.output_contract {
+            let mut tools = if repair.is_some() { Vec::new() } else { discovery.advertise(authorized_tools.clone(), &self.tool_policy) };
+            if let Some(contract) = &output_contract {
                 tools.push(contract.tool_definition());
             }
             let advertised_tool_names = tools
@@ -823,6 +842,7 @@ impl AgentRunner for ProviderAgentRunner {
                 tools.clone(),
                 crate::agent::client::ChatRequestOptions::default(),
             )
+            .with_structured_output(output_contract.as_ref())
             .with_prompt_cache(
                 crate::request::PromptCacheScope::agent(context.id.0),
                 messages
@@ -875,6 +895,10 @@ impl AgentRunner for ProviderAgentRunner {
                     return Err(error);
                 }
             };
+            repair_usage.observe(assembled.usage.as_ref());
+            if repair.is_some() {
+                let _ = context.events.send(RunnerEvent::NarrowRepairUsage(repair_usage.clone()));
+            }
             if let Some(budget) = &context.graph_budget {
                 let pricing =
                     self.pricing
@@ -931,7 +955,7 @@ impl AgentRunner for ProviderAgentRunner {
                 response_items: assembled.response_items,
             });
             if calls.is_empty() {
-                if context.request.output_contract.is_none() {
+                if output_contract.is_none() {
                     cleanup_owned_jobs(owner).await;
                     return Ok(assembled.content);
                 }
@@ -955,7 +979,7 @@ impl AgentRunner for ProviderAgentRunner {
                 });
                 continue;
             }
-            if let Some(contract) = &context.request.output_contract {
+            if let Some(contract) = &output_contract {
                 if !calls
                     .iter()
                     .any(|(_, name, _, _)| name == crate::headless_contract::STRUCTURED_OUTPUT_TOOL)
@@ -971,6 +995,27 @@ impl AgentRunner for ProviderAgentRunner {
                     };
                     match validation {
                         Ok(value) => {
+                            if let Some(repair) = &mut repair {
+                                match apply_narrow_replacement(self, &mut context, repair, &value, turn as u64, &repair_usage).await? {
+                                    NarrowOutcome::Complete(receipt) => {
+                                        let summary = serde_json::to_string(&receipt).map_err(|error| error.to_string())?;
+                                        let _ = context.events.send(RunnerEvent::NarrowRepairVerified(*receipt));
+                                        cleanup_owned_jobs(owner).await;
+                                        return Ok(summary);
+                                    }
+                                    NarrowOutcome::Retry(diagnostic) => {
+                                        let feedback = format!("Host verification failed for the current target. This supersedes earlier verification.\n{diagnostic}\n{}", repair.prompt());
+                                        messages.push(ChatMessage {
+                                            role: "tool".into(),
+                                            content: crate::image_content::ModelContent::text(feedback.clone()).with_retrieved_spans(crate::retrieved_content::full_span(&feedback)),
+                                            tool_calls: None,
+                                            tool_call_id: Some(calls[0].0.clone()),
+                                            response_items: Vec::new(),
+                                        });
+                                        continue;
+                                    }
+                                }
+                            }
                             cleanup_owned_jobs(owner).await;
                             return serde_json::to_string(&value).map_err(|error| {
                                 format!("structured output encoding failed: {error}")
@@ -1285,6 +1330,9 @@ impl AgentRunner for ProviderAgentRunner {
                             result.model_text(),
                         ))
                         .with_source_receipt(result.source_for(result.model_text()))
+                        .with_context_observation(crate::context_observation::bind_native_result(
+                            &name, &raw_arguments, result.model_text(),
+                        ))
                         .with_prunable_tool_result(crate::context_pruning::qualified_result(
                             &name,
                             &raw_arguments,
@@ -1332,6 +1380,272 @@ impl AgentRunner for ProviderAgentRunner {
             Some(registry.viewable_instance_ids()),
         )
     }
+}
+
+enum NarrowOutcome {
+    Complete(Box<crate::narrow_worker::NarrowRepairResult>),
+    Retry(String),
+}
+
+async fn freeze_repair_contract(request: &mut AgentSpawnRequest) -> Result<(), String> {
+    if let Some(contract) = request.repair_contract.take() {
+        let workspace = request.workspace.clone();
+        let grants = request.grants.clone();
+        request.repair_contract = Some(
+            tokio::task::spawn_blocking(move || contract.freeze(&workspace, &grants))
+                .await
+                .map_err(|_| "repair admission worker stopped".to_string())??,
+        );
+    }
+    Ok(())
+}
+
+async fn narrow_host_tool(
+    runner: &ProviderAgentRunner,
+    context: &mut AgentRunContext,
+    name: &str,
+    arguments: &serde_json::Value,
+    timeout_secs: u64,
+    turn: u64,
+) -> Result<crate::agent::registry::ToolExecutionResult, String> {
+    let decision = child_permission_decision(
+        runner,
+        context.frozen_policy.as_deref(),
+        &context.request.workspace,
+        context.id,
+        name,
+        arguments,
+    )?;
+    if decision == crate::approval::BrokerDecision::DeniedByRule {
+        return Err(format!("narrow repair {name} denied by permission policy"));
+    }
+    let policy_prompt = matches!(
+        decision,
+        crate::approval::BrokerDecision::ExplicitPrompt
+            | crate::approval::BrokerDecision::NetworkPrompt
+    );
+    if policy_prompt {
+        if runner
+            .manager_link
+            .get()
+            .and_then(std::sync::Weak::upgrade)
+            .is_some_and(|manager| {
+                manager
+                    .headless_noninteractive
+                    .load(std::sync::atomic::Ordering::Acquire)
+            })
+        {
+            return Err(format!(
+                "headless narrow repair {name} requires interactive approval"
+            ));
+        }
+        if !await_child_approval(
+            context,
+            format!("permission policy requires approval for narrow repair {name}"),
+        )
+        .await?
+        {
+            return Err(format!("narrow repair {name} denied by parent approval"));
+        }
+    }
+    if let Some(budget) = &context.graph_budget {
+        budget
+            .reserve_tool_call()
+            .map_err(|limit| format!("agent graph autonomy budget exhausted: {limit:?}"))?;
+    }
+    let _ = context
+        .events
+        .send(RunnerEvent::ToolStarted { name: name.into() });
+    let mut bounded_runner = runner.clone();
+    bounded_runner.command_timeout_secs = timeout_secs.min(runner.command_timeout_secs).max(1);
+    let native_context = ChildToolContext {
+        runner: &bounded_runner,
+        id: context.id,
+        owner: context.job_owner,
+        grant: &context.request.grants,
+        workspace: &context.request.workspace,
+        policy_approved: policy_prompt,
+        frozen_policy: context.frozen_policy.as_deref(),
+    };
+    let arguments = if let Some(privacy) = crate::privacy::for_owner(context.job_owner) {
+        // These arguments were assembled by the frozen host contract, rather
+        // than authored by the provider. Check their native authority before
+        // adapting only the typed path to the ordinary privacy/ticket boundary.
+        let mut native = match prepare_child_tool(&native_context, name, arguments) {
+            Ok(prepared) => prepared.arguments,
+            Err(result) => return Ok(*result),
+        };
+        let field = match name {
+            "edit_file" => "path",
+            "run_command" => "cwd",
+            _ => return Err("unsupported narrow host tool".into()),
+        };
+        let workspace = context.request.workspace.clone();
+        match tokio::task::spawn_blocking(move || -> Result<serde_json::Value, String> {
+            privacy.authorize_tool_roots(&workspace)?;
+            let path = native[field]
+                .as_str()
+                .ok_or("narrow host invocation has no prepared path")?;
+            if field == "path" {
+                let source = native["old_string"]
+                    .as_str()
+                    .ok_or("narrow host edit has no frozen source")?;
+                let path = std::path::Path::new(path);
+                let relative = path
+                    .strip_prefix(privacy.workspace())
+                    .unwrap_or(path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                // The worker received this host-owned frozen/current source.
+                // Bind that view, never a newer disk read. Ordinary ticket
+                // preparation and consumption still reject digest/policy drift.
+                privacy.project_source(&relative, source)?;
+            }
+            if privacy.filenames_enabled() {
+                let reference = privacy.project_filename_path(std::path::Path::new(path))?;
+                native[field] = serde_json::Value::String(reference);
+            }
+            // Preserve command and source strings for the existing literal /
+            // source-spelling restoration and final native authority checks.
+            Ok(native)
+        })
+        .await
+        {
+            Ok(Ok(arguments)) => arguments,
+            Ok(Err(error)) => {
+                return Ok(crate::agent::registry::ToolExecutionResult::Failure(error));
+            }
+            Err(_) => {
+                return Err("narrow host filename preparation worker stopped".into());
+            }
+        }
+    } else {
+        arguments.clone()
+    };
+    let result = tokio::select! {
+        _ = wait_cancelled(context.cancelled.clone()) => return Err("cancelled".into()),
+        result = async {
+            if name == "edit_file" {
+                execute_child_exact_range_edit(native_context, &arguments).await
+            } else {
+                execute_child_tool(native_context, name, &arguments).await
+            }
+        } => result,
+    };
+    if let Some(mutation) = result.mutation_batch() {
+        let _ = context.events.send(RunnerEvent::Mutation(mutation.clone()));
+    }
+    let _ = context.events.send(RunnerEvent::ToolEvidence {
+        turn,
+        call_id: format!("host-repair-{turn}-{name}"),
+        name: name.into(),
+        succeeded: result.is_success(),
+        denied: matches!(
+            &result,
+            crate::agent::registry::ToolExecutionResult::Denied(_)
+        ),
+        output: crate::learning::sanitized_learning_text(result.persistent_text())
+            .unwrap_or_else(|| "[private evidence omitted]".into())
+            .chars()
+            .take(1024)
+            .collect(),
+    });
+    let _ = context.events.send(RunnerEvent::ToolCompleted {
+        name: name.into(),
+        succeeded: result.is_success(),
+    });
+    if let Some(budget) = &context.graph_budget {
+        budget
+            .retain_output(result.model_text().len())
+            .map_err(|limit| format!("agent graph autonomy budget exhausted: {limit:?}"))?;
+        if !result.is_success() {
+            budget
+                .observe_tool_failure()
+                .map_err(|limit| format!("agent graph autonomy budget exhausted: {limit:?}"))?;
+        }
+    }
+    Ok(result)
+}
+
+async fn apply_narrow_replacement(
+    runner: &ProviderAgentRunner,
+    context: &mut AgentRunContext,
+    repair: &mut crate::narrow_worker::RepairState,
+    value: &serde_json::Value,
+    turn: u64,
+    usage: &crate::narrow_worker::RepairUsage,
+) -> Result<NarrowOutcome, String> {
+    repair.validate_current()?;
+    let arguments = repair.edit_arguments(value)?;
+    let result = narrow_host_tool(
+        runner,
+        context,
+        "edit_file",
+        &arguments,
+        runner.command_timeout_secs,
+        turn,
+    )
+    .await?;
+    if !result.is_success() {
+        return Err(format!(
+            "narrow repair edit did not complete: {}",
+            result.model_text()
+        ));
+    }
+    repair.accept_mutation(&result)?;
+    let _ = context.events.send(RunnerEvent::NarrowRepairApplied(
+        repair.applied_result(usage.clone())?,
+    ));
+    let mut receipts = Vec::new();
+    let mut diagnostic = None;
+    for check in repair.contract.checks.clone() {
+        repair.validate_current()?;
+        let arguments = serde_json::json!({"command":crate::narrow_worker::render_command(&check.argv), "cwd":check.cwd.as_deref().unwrap_or("."), "background":false});
+        let result = narrow_host_tool(
+            runner,
+            context,
+            "run_command",
+            &arguments,
+            check.timeout_secs,
+            turn,
+        )
+        .await?;
+        let Some(observation) = result.command_observation() else {
+            return Err(format!(
+                "pinned repair check has no terminal execution evidence: {}",
+                result.model_text()
+            ));
+        };
+        let exit_code = match observation.status {
+            crate::jobs::JobStatus::Completed { exit_code }
+            | crate::jobs::JobStatus::Failed {
+                exit_code: Some(exit_code),
+            } => exit_code,
+            status => return Err(format!("pinned repair check did not complete: {status:?}")),
+        };
+        receipts.push(crate::narrow_worker::RepairCheckEvidence::observed(
+            &observation.command,
+            exit_code,
+        ));
+        repair.validate_current()?;
+        if exit_code != 0 {
+            diagnostic = Some(result.model_text().chars().take(8192).collect::<String>());
+            break;
+        }
+    }
+    if let Some(diagnostic) = diagnostic {
+        if repair.attempts >= repair.contract.max_attempts {
+            return Err(format!(
+                "narrow repair exhausted {} attempts; current verification failed:\n{diagnostic}",
+                repair.contract.max_attempts
+            ));
+        }
+        return Ok(NarrowOutcome::Retry(diagnostic));
+    }
+    cleanup_owned_jobs(context.job_owner).await;
+    Ok(NarrowOutcome::Complete(Box::new(
+        repair.receipt(receipts, usage.clone())?,
+    )))
 }
 
 fn resolve_policy_prompt(
@@ -1609,6 +1923,10 @@ async fn execute_nested_spawn_with_provenance(
         route: route.clone(),
         purpose: context.request.purpose,
         output_contract,
+        repair_contract: match crate::narrow_worker::parse(arguments) {
+            Ok(contract) => contract,
+            Err(error) => return crate::agent::registry::ToolExecutionResult::Failure(error),
+        },
         isolation,
     };
     let origin = if context.graph_budget.is_some() {
@@ -1943,6 +2261,24 @@ async fn execute_child_tool(
     name: &str,
     arguments: &serde_json::Value,
 ) -> crate::agent::registry::ToolExecutionResult {
+    execute_child_tool_with_formatting(context, name, arguments, true).await
+}
+
+/// A narrow contract owns exact replacement bytes. Applying a whole-file
+/// formatter here could publish changes outside its frozen range.
+async fn execute_child_exact_range_edit(
+    context: ChildToolContext<'_>,
+    arguments: &serde_json::Value,
+) -> crate::agent::registry::ToolExecutionResult {
+    execute_child_tool_with_formatting(context, "edit_file", arguments, false).await
+}
+
+async fn execute_child_tool_with_formatting(
+    context: ChildToolContext<'_>,
+    name: &str,
+    arguments: &serde_json::Value,
+    configured_formatting: bool,
+) -> crate::agent::registry::ToolExecutionResult {
     let arguments = if let Some(privacy) = crate::privacy::for_owner(context.owner) {
         let name = name.to_string();
         let args = arguments.clone();
@@ -1968,16 +2304,18 @@ async fn execute_child_tool(
         Ok(prepared) => prepared,
         Err(result) => return *result,
     };
-    if let Err(error) = crate::formatting::prepare_with_authority(
-        name,
-        &mut prepared.arguments,
-        context.workspace,
-        context.runner.sandbox_mode,
-        |invocation| prepare_child_tool(&context, "run_command", invocation).is_ok(),
-    )
-    .await
-    {
-        return crate::agent::registry::ToolExecutionResult::Failure(error);
+    if configured_formatting {
+        if let Err(error) = crate::formatting::prepare_with_authority(
+            name,
+            &mut prepared.arguments,
+            context.workspace,
+            context.runner.sandbox_mode,
+            |invocation| prepare_child_tool(&context, "run_command", invocation).is_ok(),
+        )
+        .await
+        {
+            return crate::agent::registry::ToolExecutionResult::Failure(error);
+        }
     }
     let runner = context.runner;
     crate::agent::tools::execute_prepared_tool_in_workspace_policy_owned_with_skills(
@@ -2100,6 +2438,10 @@ fn native_agent_control(
             AgentStatus::TimedOut => NativeAgentStatus::TimedOut,
             AgentStatus::Interrupted => NativeAgentStatus::Interrupted,
         },
+        narrow_repair: snapshot
+            .narrow_repair
+            .as_ref()
+            .map(|receipt| receipt.native_control(snapshot.status == AgentStatus::Completed)),
     }
 }
 
@@ -2118,6 +2460,7 @@ fn native_batch_control(
             } else {
                 NativeAgentStatus::Running
             },
+            narrow_repair: None,
         }),
     }
 }
@@ -2302,6 +2645,10 @@ pub async fn execute_manager_tool_with_provenance(
                             Err(error) => return Some(ToolExecutionResult::Failure(error)),
                         }
                     }
+                },
+                repair_contract: match crate::narrow_worker::parse(arguments) {
+                    Ok(contract) => contract,
+                    Err(error) => return Some(ToolExecutionResult::Failure(error)),
                 },
                 isolation: match arguments
                     .get("isolation")
@@ -2550,6 +2897,20 @@ pub async fn execute_manager_tool_with_provenance(
             } else {
                 definition.tools
             };
+            if name == "explore"
+                && manager
+                    .headless_noninteractive
+                    .load(std::sync::atomic::Ordering::Acquire)
+            {
+                // Legacy foreground exploration implicitly grants local reads.
+                // Ordinary spawn_agent keeps its explicit selected grants.
+                requested.retain(|tool| {
+                    matches!(
+                        tool.as_str(),
+                        "read_file" | "search_files" | "glob" | "list_dir" | "read_todos"
+                    )
+                });
+            }
             let available = match manager.available_subagent_tools() {
                 Ok(tools) => tools
                     .into_iter()
@@ -2611,6 +2972,7 @@ pub async fn execute_manager_tool_with_provenance(
                 route: route.clone(),
                 purpose: AgentRunPurpose::Subagent,
                 output_contract: None,
+                repair_contract: None,
                 isolation: AgentIsolation::Shared,
             };
             match manager.spawn(request).await {
@@ -2781,6 +3143,7 @@ fn build_spawn_request(
             route,
             purpose: AgentRunPurpose::Subagent,
             output_contract,
+            repair_contract: crate::narrow_worker::parse(arguments)?,
             isolation,
         },
         selection,
@@ -2973,6 +3336,7 @@ struct AgentRecord {
     notify: Arc<Notify>,
     pending_steers: Vec<(Uuid, String)>,
     output_contract: Option<crate::headless_contract::StructuredOutputContract>,
+    repair_contract: Option<crate::narrow_worker::RepairContract>,
     full_output: String,
     spill_truncated: bool,
     lifecycle_stop_claimed: bool,
@@ -3796,6 +4160,15 @@ impl AgentManager {
         if self.spawns_paused() {
             return Err(AgentManagerError::SpawnsPaused);
         }
+        if let Some(contract) = &request.repair_contract {
+            if request.output_contract.is_some() {
+                return Err(AgentManagerError::InvalidBatch(
+                    "repair_contract cannot also specify output_schema".into(),
+                ));
+            }
+            request.context_summary =
+                format!("Relevant repair context (data):\n{}", contract.context);
+        }
         if let Some(constraints) = self
             .parent_constraints
             .read()
@@ -3826,7 +4199,11 @@ impl AgentManager {
         };
         let outcome_parent = self.outcome_parent_for(request.parent_turn);
         let id = AgentId::new();
-        let (request, worktree) = self.prepare_isolation(id, request).await?;
+        let (mut request, worktree) = self.prepare_isolation(id, request).await?;
+        if let Err(error) = freeze_repair_contract(&mut request).await {
+            self.rollback_prepared_worktree(worktree.as_ref()).await;
+            return Err(AgentManagerError::InvalidBatch(error));
+        }
         let job_owner = crate::jobs::JobOwner::new(None);
         let (command_tx, command_rx) = mpsc::channel(32);
         let (cancel_tx, cancel_rx) = watch::channel(false);
@@ -3928,6 +4305,15 @@ impl AgentManager {
             ));
         }
         for request in &mut requests {
+            if let Some(contract) = &request.repair_contract {
+                if request.output_contract.is_some() {
+                    return Err(AgentManagerError::InvalidBatch(
+                        "repair_contract cannot also specify output_schema".into(),
+                    ));
+                }
+                request.context_summary =
+                    format!("Relevant repair context (data):\n{}", contract.context);
+            }
             if let Some(constraints) = self
                 .parent_constraints
                 .read()
@@ -3960,11 +4346,21 @@ impl AgentManager {
             None
         };
         let outcome_parent = self.outcome_parent_for(parent_turn);
-        let mut prepared = Vec::with_capacity(requests.len());
+        let mut prepared: Vec<(AgentId, AgentSpawnRequest, Option<AgentWorktreeReceipt>)> =
+            Vec::with_capacity(requests.len());
         for request in requests {
             let id = AgentId::new();
             match self.prepare_isolation(id, request).await {
-                Ok((request, worktree)) => prepared.push((id, request, worktree)),
+                Ok((mut request, worktree)) => {
+                    if let Err(error) = freeze_repair_contract(&mut request).await {
+                        self.rollback_prepared_worktree(worktree.as_ref()).await;
+                        for (_, _, worktree) in &prepared {
+                            self.rollback_prepared_worktree(worktree.as_ref()).await;
+                        }
+                        return Err(AgentManagerError::InvalidBatch(error));
+                    }
+                    prepared.push((id, request, worktree));
+                }
                 Err(error) => {
                     for (_, _, worktree) in &prepared {
                         self.rollback_prepared_worktree(worktree.as_ref()).await;
@@ -4152,6 +4548,11 @@ impl AgentManager {
     ) -> Result<(AgentSpawnRequest, Option<AgentWorktreeReceipt>), AgentManagerError> {
         if request.isolation == AgentIsolation::Shared {
             return Ok((request, None));
+        }
+        if let Some(contract) = &mut request.repair_contract {
+            contract
+                .make_worktree_relative(&request.workspace, &request.grants)
+                .map_err(AgentManagerError::Worktree)?;
         }
         let store = self
             .worktree_store
@@ -4573,6 +4974,29 @@ impl AgentManager {
         };
         match event {
             RunnerEvent::Mutation(_) | RunnerEvent::AggregateMutation { .. } => unreachable!(),
+            RunnerEvent::NarrowRepairVerified(receipt) => {
+                if record
+                    .repair_contract
+                    .as_ref()
+                    .is_some_and(|contract| receipt.matches_contract(contract))
+                {
+                    record.snapshot.narrow_repair = Some(receipt);
+                }
+            }
+            RunnerEvent::NarrowRepairApplied(receipt) => {
+                if record
+                    .repair_contract
+                    .as_ref()
+                    .is_some_and(|contract| receipt.matches_admission(contract))
+                {
+                    record.snapshot.narrow_repair = Some(receipt);
+                }
+            }
+            RunnerEvent::NarrowRepairUsage(usage) => {
+                if let Some(receipt) = &mut record.snapshot.narrow_repair {
+                    receipt.observe_usage(usage);
+                }
+            }
             RunnerEvent::Phase(phase) => record.snapshot.phase = phase,
             RunnerEvent::HarnessPrepared {
                 snapshot,
@@ -4771,6 +5195,11 @@ impl AgentManager {
             .as_ref()
             .map(|worktree| worktree.id);
         record.snapshot.status = status;
+        if record.snapshot.status != AgentStatus::Completed {
+            if let Some(receipt) = &mut record.snapshot.narrow_repair {
+                receipt.mark_unverified();
+            }
+        }
         record.snapshot.phase = AgentExecutionPhase::Finished;
         record.snapshot.result_summary = (!full_summary.is_empty()).then(|| {
             let mut value = full_summary;
@@ -5272,6 +5701,10 @@ fn insert_agent_record(
                 result_summary: None,
                 result_sha256: None,
                 structured_result: None,
+                narrow_repair: request
+                    .repair_contract
+                    .as_ref()
+                    .and_then(|contract| contract.unverified_result().ok()),
                 structured_repair_attempted: false,
                 spill: None,
                 worktree,
@@ -5289,6 +5722,7 @@ fn insert_agent_record(
             notify,
             pending_steers: Vec::new(),
             output_contract: request.output_contract.clone(),
+            repair_contract: request.repair_contract.clone(),
             full_output: String::new(),
             spill_truncated: false,
             lifecycle_stop_claimed: false,
@@ -6912,6 +7346,7 @@ mod manager_tests {
             route: None,
             purpose: AgentRunPurpose::Subagent,
             output_contract: None,
+            repair_contract: None,
             isolation: AgentIsolation::Shared,
         }
     }
@@ -7196,6 +7631,21 @@ mod manager_tests {
     async fn run_structured_provider(
         bodies: Vec<String>,
     ) -> (Result<String, String>, Vec<String>, Vec<String>) {
+        run_structured_provider_request(bodies, None).await
+    }
+
+    async fn run_structured_provider_request(
+        bodies: Vec<String>,
+        managed_request: Option<AgentSpawnRequest>,
+    ) -> (Result<String, String>, Vec<String>, Vec<String>) {
+        run_structured_provider_request_with_control_probe(bodies, managed_request, false).await
+    }
+
+    async fn run_structured_provider_request_with_control_probe(
+        bodies: Vec<String>,
+        managed_request: Option<AgentSpawnRequest>,
+        control_probe: bool,
+    ) -> (Result<String, String>, Vec<String>, Vec<String>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -7234,7 +7684,8 @@ mod manager_tests {
                 &provider,
                 "model",
                 crate::request::RequestStore::default(),
-            ),
+            )
+            .with_privacy_context(crate::privacy::current()),
             route_clients: AgentRouteClients::default(),
             sandbox_mode: crate::sandbox::SandboxMode::PolicyOnly,
             command_timeout_secs: 1,
@@ -7262,20 +7713,87 @@ mod manager_tests {
         let (events, mut event_rx) = mpsc::unbounded_channel();
         let mut agent_request = request("structured provider", Uuid::new_v4());
         agent_request.output_contract = Some(object_contract());
-        let result = runner
-            .run(AgentRunContext {
-                id: AgentId::new(),
-                request: agent_request,
-                limits: AgentLimits::default(),
-                commands,
-                pending_steers: VecDeque::new(),
-                cancelled,
-                events,
-                job_owner: crate::jobs::JobOwner::new(None),
-                graph_budget: None,
-                frozen_policy: None,
-            })
-            .await;
+        let result = if let Some(request) = managed_request {
+            let probe_client = runner.client.clone();
+            let workspace = request.workspace.clone();
+            let manager = AgentManager::new(Arc::new(runner), AgentLimits::default());
+            let id = manager.spawn(request).await.unwrap();
+            let snapshot = manager.await_agent(id).await.unwrap();
+            if control_probe {
+                let work = Arc::new(std::sync::Mutex::new(crate::work::WorkState::default()));
+                let control = crate::privacy::scope(
+                    probe_client.privacy_context(),
+                    execute_manager_tool(
+                        "await_agent",
+                        &json!({"agent_id":id.to_string()}),
+                        &manager,
+                        &work,
+                        &workspace,
+                    ),
+                )
+                .await
+                .unwrap();
+                assert!(control.is_success(), "{control:?}");
+                let source = control.source_for(control.model_text());
+                let probe = crate::request::PreparedModelRequest::new(
+                    crate::request::RequestKind::ToolContinuation,
+                    "local",
+                    "model",
+                    vec![
+                        crate::agent::client::ChatMessage {
+                            role: "assistant".into(),
+                            content: crate::image_content::ModelContent::text(""),
+                            tool_calls: Some(vec![crate::agent::client::ToolCallMsg {
+                                id: "await-control-probe".into(),
+                                call_type: "function".into(),
+                                function: crate::agent::client::FunctionCall {
+                                    name: "await_agent".into(),
+                                    arguments: json!({"agent_id":id.to_string()}).to_string(),
+                                    arguments_retrieved_spans: Vec::new(),
+                                },
+                            }]),
+                            tool_call_id: None,
+                            response_items: Vec::new(),
+                        },
+                        crate::agent::client::ChatMessage {
+                            role: "tool".into(),
+                            content: crate::image_content::ModelContent::text(control.model_text())
+                                .with_source_receipt(source)
+                                .with_tool_result_status(true),
+                            tool_calls: None,
+                            tool_call_id: Some("await-control-probe".into()),
+                            response_items: Vec::new(),
+                        },
+                    ],
+                    vec![],
+                    Default::default(),
+                );
+                let mut stream = probe_client.stream_prepared(&probe).await.unwrap();
+                crate::agent::stream::consume_stream(&mut stream, |_| {})
+                    .await
+                    .unwrap();
+            }
+            if snapshot.status == AgentStatus::Completed {
+                Ok(snapshot.result_summary.unwrap_or_default())
+            } else {
+                Err(snapshot.result_summary.unwrap_or_default())
+            }
+        } else {
+            runner
+                .run(AgentRunContext {
+                    id: AgentId::new(),
+                    request: agent_request,
+                    limits: AgentLimits::default(),
+                    commands,
+                    pending_steers: VecDeque::new(),
+                    cancelled,
+                    events,
+                    job_owner: crate::jobs::JobOwner::new(None),
+                    graph_budget: None,
+                    frozen_policy: None,
+                })
+                .await
+        };
         server.await.unwrap();
         let mut activity = Vec::new();
         while let Ok(event) = event_rx.try_recv() {
@@ -7288,8 +7806,11 @@ mod manager_tests {
     }
 
     fn structured_tool_sse(answer: serde_json::Value) -> String {
-        let arguments =
-            serde_json::to_string(&serde_json::json!({"value": {"answer": answer}})).unwrap();
+        structured_value_sse(serde_json::json!({"answer":answer}))
+    }
+
+    fn structured_value_sse(value: serde_json::Value) -> String {
+        let arguments = serde_json::to_string(&serde_json::json!({"value":value})).unwrap();
         format!(
             "data: {}\n\ndata: [DONE]\n\n",
             serde_json::json!({
@@ -7344,6 +7865,616 @@ mod manager_tests {
                 .count(),
             1
         );
+    }
+
+    fn narrow_request(root: &std::path::Path, maximum: u8) -> AgentSpawnRequest {
+        let root = root.canonicalize().unwrap();
+        let source = std::fs::read_to_string(root.join("target.txt")).unwrap();
+        let mut request = request(
+            "Replace the incorrect middle line with fixed",
+            Uuid::new_v4(),
+        );
+        request.workspace =
+            crate::workspace::WorkspaceContext::from_primary(root.clone(), root.clone());
+        request.context_summary = "UNRELATED_TRANSCRIPT_CANARY".into();
+        request.grants.tools = vec!["edit_file".into(), "run_command".into()];
+        request.grants.path_scopes = vec![root.to_string_lossy().into_owned()];
+        request.grants.command_scopes = vec!["/usr/bin/grep -q fixed target.txt".into()];
+        request.repair_contract = Some(
+            serde_json::from_value(serde_json::json!({
+                "path":"target.txt", "source_sha256":crate::narrow_worker::digest(&source),
+                "start_line":2,"end_line":2,"context":"Known middle-line repair",
+                "checks":[{"argv":["/usr/bin/grep","-q","fixed","target.txt"],"timeout_secs":1}],
+                "max_attempts":maximum
+            }))
+            .unwrap(),
+        );
+        request
+    }
+
+    #[tokio::test]
+    async fn narrow_worker_managed_repairs_verify_retry_and_stop_at_first_success() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("target.txt"), "prefix\nbad\nsuffix\n").unwrap();
+        let (result, requests, _) = run_structured_provider_request(vec![
+            structured_value_sse(serde_json::json!({"status":"replacement","replacement":"still wrong\n","diagnosis":""})),
+            structured_value_sse(serde_json::json!({"status":"replacement","replacement":"fixed\n","diagnosis":""})),
+        ], Some(narrow_request(temp.path(), 3))).await;
+        let receipt: serde_json::Value = serde_json::from_str(&result.unwrap()).unwrap();
+        assert_eq!(receipt["status"], "complete");
+        assert_eq!(receipt["attempts"], 2);
+        assert_eq!(receipt["checks"][0]["exit_code"], 0);
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("target.txt")).unwrap(),
+            "prefix\nfixed\nsuffix\n"
+        );
+        assert_eq!(requests.len(), 2);
+        for request in &requests {
+            assert!(!request.contains("UNRELATED_TRANSCRIPT_CANARY"));
+            let body: serde_json::Value =
+                serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+            let tools = body["tools"].as_array().unwrap();
+            assert_eq!(tools.len(), 1);
+            assert_eq!(tools[0]["function"]["name"], "report_structured_output");
+        }
+        assert!(requests[1].contains("Host verification failed for the current target"));
+        assert!(requests[1].contains("still wrong"));
+    }
+
+    #[test]
+    fn narrow_worker_host_native_edit_retains_filename_privacy_and_mutation_receipt() {
+        let settings = crate::provider_filter::ProviderFilterConfig {
+            enabled: true,
+            structural: true,
+            hide: crate::provider_filter::FilterHide {
+                filenames: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        crate::provider_filter::with_test_filter(&settings, || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let temporary = tempfile::tempdir().unwrap();
+                    let root = temporary.path().join("workspace");
+                    std::fs::create_dir(&root).unwrap();
+                    let root = root.canonicalize().unwrap();
+                    let path = root.join("target.txt");
+                    let original = "protected prefix\nbad\nprotected suffix\n";
+                    let intended = "protected prefix\nfixed\nprotected suffix\n";
+                    std::fs::write(&path, original).unwrap();
+                    let privacy = crate::privacy::Context::open(
+                        temporary.path().join("profile"),
+                        root.clone(),
+                        Uuid::new_v4(),
+                        None,
+                    )
+                    .unwrap();
+                    privacy.allow_ephemeral();
+                    assert!(privacy.enabled());
+                    crate::privacy::scope(Some(privacy), async {
+                        let mut child = narrow_request(&root, 3);
+                        child.repair_contract.as_mut().unwrap().checks[0].cwd =
+                            Some(root.to_string_lossy().into_owned());
+                        freeze_repair_contract(&mut child).await.unwrap();
+                        let mut repair = crate::narrow_worker::RepairState::new(
+                            child.repair_contract.clone().unwrap(),
+                        )
+                        .unwrap();
+                        let arguments = repair
+                            .edit_arguments(&json!({
+                                "status":"replacement", "replacement":"fixed\n", "diagnosis":""
+                            }))
+                            .unwrap();
+                        assert_eq!(arguments["path"], path.to_str().unwrap());
+                        let runner = permission_test_runner();
+                        let policy = Arc::new(FrozenChildPolicy {
+                            approval: crate::app::ApprovalMode::RunEverything,
+                            approval_rules: Vec::new(),
+                            permission_rules: Vec::new(),
+                            session_grants: Vec::new(),
+                        });
+                        let (_command_tx, commands) = mpsc::channel(1);
+                        let (_cancel_tx, cancelled) = watch::channel(false);
+                        let (events, _event_rx) = mpsc::unbounded_channel();
+                        let mut context = AgentRunContext {
+                            id: AgentId::new(),
+                            request: child,
+                            limits: AgentLimits::default(),
+                            commands,
+                            pending_steers: VecDeque::new(),
+                            cancelled,
+                            events,
+                            job_owner: crate::jobs::JobOwner::new(None),
+                            graph_budget: None,
+                            frozen_policy: Some(policy),
+                        };
+                        // Provider-authored native paths must still fail at the
+                        // filename boundary; only the host-owned repair adapts.
+                        let ordinary = execute_child_tool(
+                            ChildToolContext {
+                                runner: &runner,
+                                id: context.id,
+                                owner: context.job_owner,
+                                grant: &context.request.grants,
+                                workspace: &context.request.workspace,
+                                policy_approved: false,
+                                frozen_policy: context.frozen_policy.as_deref(),
+                            },
+                            "edit_file",
+                            &arguments,
+                        )
+                        .await;
+                        assert!(!ordinary.is_success());
+                        assert!(ordinary
+                            .model_text()
+                            .contains("complete discovered filename alias"));
+                        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+                        let drifted_source = format!("{original}newer exterior\n");
+                        std::fs::write(&path, &drifted_source).unwrap();
+                        let drifted =
+                            narrow_host_tool(&runner, &mut context, "edit_file", &arguments, 1, 1)
+                                .await
+                                .unwrap();
+                        assert!(!drifted.is_success());
+                        assert!(drifted.model_text().contains("changed"), "{drifted:?}");
+                        assert_eq!(std::fs::read_to_string(&path).unwrap(), drifted_source);
+                        std::fs::write(&path, original).unwrap();
+                        let result =
+                            narrow_host_tool(&runner, &mut context, "edit_file", &arguments, 1, 1)
+                                .await
+                                .unwrap();
+                        assert!(result.is_success(), "{result:?}");
+                        repair.accept_mutation(&result).unwrap();
+                        repair.validate_current().unwrap();
+                        assert_eq!(repair.attempts, 1);
+                        assert_eq!(std::fs::read_to_string(&path).unwrap(), intended);
+                        let check = &repair.contract.checks[0];
+                        let check_arguments = json!({
+                            "command":crate::narrow_worker::render_command(&check.argv),
+                            "cwd":check.cwd, "background":false
+                        });
+                        assert_eq!(check_arguments["cwd"], root.to_str().unwrap());
+                        let checked = narrow_host_tool(
+                            &runner,
+                            &mut context,
+                            "run_command",
+                            &check_arguments,
+                            1,
+                            1,
+                        )
+                        .await
+                        .unwrap();
+                        assert!(checked.is_success(), "{checked:?}");
+                        assert!(matches!(
+                            checked.command_observation().unwrap().status,
+                            crate::jobs::JobStatus::Completed { exit_code: 0 }
+                        ));
+                        repair.validate_current().unwrap();
+                        assert_eq!(std::fs::read_to_string(&path).unwrap(), intended);
+                    })
+                    .await;
+                });
+        });
+    }
+
+    #[test]
+    fn narrow_worker_managed_private_source_establishes_host_view_without_model_read() {
+        for filenames in [true, false] {
+            let settings = crate::provider_filter::ProviderFilterConfig {
+                enabled: true,
+                structural: true,
+                hide: crate::provider_filter::FilterHide {
+                    filenames,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            crate::provider_filter::with_test_filter(&settings, || {
+                tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let temporary = tempfile::tempdir().unwrap();
+                    let root = temporary.path().join("workspace");
+                    std::fs::create_dir(&root).unwrap();
+                    let root = root.canonicalize().unwrap();
+                    let original = "SECRET = 'PrivateLiteral317'\nVALUE = 0\nASSET = 'PrivateAsset317.txt'\n";
+                    let intended = original.replacen("VALUE = 0", "VALUE = 1", 1);
+                    let path = root.join("target.py");
+                    std::fs::write(&path, original).unwrap();
+                    std::fs::write(root.join("PrivateAsset317.txt"), "protected asset").unwrap();
+                    let privacy = crate::privacy::Context::open(
+                        temporary.path().join("profile"),
+                        root.clone(),
+                        Uuid::new_v4(),
+                        None,
+                    )
+                    .unwrap();
+                    privacy.allow_ephemeral();
+                    privacy.save_policy(crate::privacy::policy::Policy {
+                        enabled: true,
+                        ..privacy.policy()
+                    }).unwrap();
+                    assert!(privacy.enabled());
+                    assert_eq!(privacy.filenames_enabled(), filenames);
+                    let mut child = request("Set only VALUE to one", Uuid::new_v4());
+                    child.workspace = crate::workspace::WorkspaceContext::from_primary(
+                        root.clone(),
+                        root.clone(),
+                    );
+                    let argv = vec![
+                        "/usr/bin/grep".to_string(),
+                        "-q".into(),
+                        "VALUE = 1".into(),
+                        "target.py".into(),
+                    ];
+                    child.grants.tools = vec!["edit_file".into(), "run_command".into()];
+                    child.grants.path_scopes = vec![root.to_string_lossy().into_owned()];
+                    child.grants.command_scopes = vec![crate::narrow_worker::render_command(&argv)];
+                    child.repair_contract = Some(
+                        serde_json::from_value(json!({
+                            "path":"target.py", "source_sha256":crate::narrow_worker::digest(original),
+                            "start_line":2, "end_line":2, "context":"Set VALUE to one",
+                            "checks":[{"argv":argv,"cwd":root,"timeout_secs":3}],
+                            "max_attempts":3
+                        }))
+                        .unwrap(),
+                    );
+                    // No read or projection is pre-populated. The actual managed
+                    // runner supplies the frozen range and accepts one report.
+                    let (result, requests, _) = crate::privacy::scope(
+                        Some(privacy),
+                        run_structured_provider_request(
+                            vec![structured_value_sse(json!({
+                                "status":"replacement","replacement":"VALUE = 1\n","diagnosis":""
+                            }))],
+                            Some(child),
+                        ),
+                    )
+                    .await;
+                    let receipt: serde_json::Value =
+                        serde_json::from_str(&result.unwrap()).unwrap();
+                    assert_eq!(receipt["status"], "complete");
+                    assert_eq!(receipt["attempts"], 1);
+                    assert_eq!(receipt["checks"][0]["exit_code"], 0);
+                    assert_eq!(requests.len(), 1);
+                    let body: serde_json::Value = serde_json::from_str(
+                        requests[0].split_once("\r\n\r\n").unwrap().1,
+                    )
+                    .unwrap();
+                    assert_eq!(body["tools"].as_array().unwrap().len(), 1);
+                    assert_eq!(body["tools"][0]["function"]["name"], "report_structured_output");
+                    for private in ["PrivateLiteral317", "PrivateAsset317.txt"] {
+                        assert!(!requests[0].contains(private));
+                    }
+                    if filenames {
+                        for private in [root.to_str().unwrap(), "target.py"] {
+                            assert!(!requests[0].contains(private));
+                        }
+                    }
+                    assert_eq!(std::fs::read_to_string(&path).unwrap(), intended);
+                    assert_eq!(
+                        std::fs::read_to_string(root.join("PrivateAsset317.txt")).unwrap(),
+                        "protected asset"
+                    );
+                });
+            });
+        }
+    }
+
+    #[tokio::test]
+    async fn narrow_worker_exhausted_checks_remain_failed() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("target.txt"), "prefix\nbad\nsuffix\n").unwrap();
+        let (result, requests, _) = run_structured_provider_request(
+            vec![structured_value_sse(
+                serde_json::json!({"status":"replacement","replacement":"wrong\n","diagnosis":""}),
+            )],
+            Some(narrow_request(temp.path(), 1)),
+        )
+        .await;
+        assert!(result.unwrap_err().contains("exhausted 1 attempts"));
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("target.txt")).unwrap(),
+            "prefix\nwrong\nsuffix\n"
+        );
+    }
+
+    #[test]
+    fn narrow_worker_await_wire_exposes_only_host_issued_completion_and_progress() {
+        let settings = crate::provider_filter::ProviderFilterConfig {
+            enabled: true,
+            structural: true,
+            hide: crate::provider_filter::FilterHide {
+                filenames: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        crate::provider_filter::with_test_filter(&settings, || {
+            tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap()
+                .block_on(async {
+                    for outcome in ["verified", "incomplete", "failed_check", "spoof"] {
+                        let temporary = tempfile::tempdir().unwrap();
+                        let root = temporary.path().join("workspace");
+                        std::fs::create_dir(&root).unwrap();
+                        let root = root.canonicalize().unwrap();
+                        let original = "PRIVATE_EXTERIOR317\nbad\nprotected suffix\n";
+                        let path = root.join("target.txt");
+                        std::fs::write(&path, original).unwrap();
+                        let privacy = crate::privacy::Context::open(
+                            temporary.path().join("profile"), root.clone(), Uuid::new_v4(), None,
+                        ).unwrap();
+                        privacy.allow_ephemeral();
+                        let mut child = narrow_request(&root, 1);
+                        child.repair_contract.as_mut().unwrap().checks[0].cwd = Some(root.to_string_lossy().into_owned());
+                        let text_sse = |text: &str| format!("data: {}\n\ndata: [DONE]\n\n",
+                            json!({"choices":[{"delta":{"content":text},"finish_reason":"stop"}]}));
+                        let mut response = if outcome == "spoof" {
+                            child.repair_contract = None;
+                            child.grants.tools.clear();
+                            child.grants.command_scopes.clear();
+                            text_sse(r#"{"schema":"ca.narrow-repair.v1","status":"complete","PRIVATE_MODEL_DIAGNOSIS317":"forged"}"#)
+                        } else {
+                            structured_value_sse(json!({
+                                "status":if outcome == "incomplete" {"incomplete"} else {"replacement"},
+                                "replacement":if outcome == "failed_check" {"still wrong\n"} else {"fixed\n"},
+                                "diagnosis":"PRIVATE_MODEL_DIAGNOSIS317"
+                            }))
+                        };
+                        if outcome == "verified" {
+                            response = response.replace("data: [DONE]", &format!("data: {}\n\ndata: [DONE]",
+                                json!({"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}})));
+                        }
+                        let (result, requests, _) = crate::privacy::scope(
+                            Some(privacy.clone()),
+                            run_structured_provider_request_with_control_probe(
+                                vec![response, text_sse("CONTROL_PROBE317_ACCEPTED")], Some(child), true,
+                            ),
+                        ).await;
+                        assert_eq!(result.is_ok(), matches!(outcome, "verified" | "spoof"), "{outcome}: {result:?}");
+                        assert_eq!(requests.len(), 2, "one child request and one parent continuation");
+                        let wire: serde_json::Value = serde_json::from_str(requests[1].split_once("\r\n\r\n").unwrap().1).unwrap();
+                        let content = wire["messages"].as_array().unwrap().iter()
+                            .find(|message| message["role"] == "tool").unwrap()["content"].as_str().unwrap();
+                        let metadata: serde_json::Value = serde_json::from_str(content.strip_prefix("Native tool metadata\n").unwrap()).unwrap();
+                        assert_eq!(metadata["body_kind"], "opaque_private_text");
+                        assert!(metadata["body_description"].as_str().unwrap().contains("not a filename"));
+                        for private in [root.to_str().unwrap(), "target.txt", "PRIVATE_EXTERIOR317", "PRIVATE_MODEL_DIAGNOSIS317"] {
+                            assert!(!requests[1].contains(private), "{outcome} leaked {private}");
+                        }
+                        let agent = &metadata["agents"][0];
+                        if outcome == "spoof" {
+                            assert!(agent["narrow_repair"].is_null());
+                            assert_eq!(agent["narrow_repair_evidence"], "none");
+                            assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+                            continue;
+                        }
+                        let receipt = &agent["narrow_repair"];
+                        assert_eq!(agent["narrow_repair_evidence"], "host_issued");
+                        assert_eq!(receipt["freshness"], "not_revalidated");
+                        assert_eq!(receipt["target_reference"], "discovered_filename");
+                        assert_eq!(privacy.resolve_filename_path(receipt["target_ref"].as_str().unwrap(), false).unwrap(), path);
+                        assert_eq!(receipt["usage"]["requests"], 1);
+                        assert_eq!(receipt["usage"]["request_count_kind"], "completed_provider_turns");
+                        let expected = match outcome {
+                            "verified" => original.replace("bad\n", "fixed\n"),
+                            "failed_check" => original.replace("bad\n", "still wrong\n"),
+                            _ => original.into(),
+                        };
+                        assert_eq!(std::fs::read_to_string(&path).unwrap(), expected);
+                        assert_eq!(privacy.restore_text(receipt["source_sha256"].as_str().unwrap()).unwrap(), crate::narrow_worker::digest(&expected));
+                        if outcome == "verified" {
+                            assert_eq!(agent["status"], "completed");
+                            assert_eq!(receipt["verification"], "passed_for_recorded_source");
+                            assert_eq!(receipt["source_identity"], "verified_at_completion");
+                            assert_eq!(receipt["attempts"], 1);
+                            assert_eq!(receipt["checks"].as_array().unwrap().len(), 1);
+                            assert_eq!(receipt["checks"][0]["exit_code"], 0);
+                            assert_eq!(privacy.restore_text(receipt["checks"][0]["command_sha256"].as_str().unwrap()).unwrap(), crate::narrow_worker::digest("/usr/bin/grep -q fixed target.txt"));
+                            assert!(receipt["unresolved_conditions"].as_array().unwrap().is_empty());
+                            assert_eq!(receipt["usage"]["prompt_tokens"], 3);
+                            assert_eq!(receipt["usage"]["completion_tokens"], 2);
+                        } else {
+                            assert_eq!(agent["status"], "failed");
+                            assert_eq!(receipt["verification"], "not_verified");
+                            assert_eq!(receipt["source_identity"], if outcome == "failed_check" {"applied_at_attempt"} else {"admitted"});
+                            if outcome == "failed_check" { assert_eq!(receipt["attempts"], 1); }
+                            else { assert!(receipt["attempts"].is_null()); }
+                            assert!(receipt["checks"].as_array().unwrap().is_empty());
+                            assert_eq!(receipt["unresolved_conditions"], json!(["not_verified"]));
+                            assert!(receipt["usage"]["prompt_tokens"].is_null());
+                            assert!(receipt["usage"]["completion_tokens"].is_null());
+                        }
+                    }
+                });
+        });
+    }
+
+    #[tokio::test]
+    async fn narrow_worker_incomplete_diagnosis_never_edits() {
+        let temp = tempfile::tempdir().unwrap();
+        let original = "prefix\nbad\nsuffix\n";
+        std::fs::write(temp.path().join("target.txt"), original).unwrap();
+        let (result, requests, _) = run_structured_provider_request(
+            vec![structured_value_sse(serde_json::json!({"status":"incomplete","replacement":"","diagnosis":"The defect is in a different function"}))],
+            Some(narrow_request(temp.path(), 3)),
+        ).await;
+        assert!(result.unwrap_err().contains("different function"));
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("target.txt")).unwrap(),
+            original
+        );
+    }
+
+    #[tokio::test]
+    async fn narrow_worker_admission_rejects_stale_source_and_missing_check_grants() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("target.txt"), "prefix\nbad\nsuffix\n").unwrap();
+        let manager = AgentManager::new(Arc::new(FakeRunner), AgentLimits::default());
+        let request = narrow_request(temp.path(), 3);
+        std::fs::write(temp.path().join("target.txt"), "prefix\nnewer\nsuffix\n").unwrap();
+        assert!(manager
+            .spawn(request)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("digest changed"));
+        let mut request = narrow_request(temp.path(), 3);
+        request.grants.command_scopes.clear();
+        assert!(manager
+            .spawn(request)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("command scope"));
+        assert!(manager.list().await.is_empty());
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("target.txt")).unwrap(),
+            "prefix\nnewer\nsuffix\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn narrow_worker_exact_edit_skips_enabled_formatter_before_publication() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let path = root.join("target.txt");
+        let original = "prefix\nbad\nsuffix\n";
+        let intended = "prefix\nfixed\nsuffix\n";
+        std::fs::write(&path, original).unwrap();
+        let workspace =
+            crate::workspace::WorkspaceContext::from_primary(root.clone(), root.clone());
+        let grant = AgentGrant {
+            tools: vec!["edit_file".into()],
+            workspace_root_ids: Vec::new(),
+            path_scopes: vec![root.to_string_lossy().into_owned()],
+            command_scopes: Vec::new(),
+            network: false,
+        };
+        let runner = permission_test_runner();
+        let arguments =
+            serde_json::json!({"path":path,"old_string":original,"new_string":intended});
+        let config = crate::formatting::FormatterConfig {
+            enabled: true,
+            presets: Vec::new(),
+            custom: vec![crate::formatting::FormatterRule {
+                extensions: vec!["txt".into()],
+                command: vec!["/usr/bin/sed".into(), "s/^prefix$/OUTSIDE_TARGET/".into()],
+            }],
+        };
+        crate::formatting::with_test_config(config, async {
+            // Establish that this enabled formatter would change protected bytes.
+            let mut formatted = arguments.clone();
+            crate::formatting::prepare_with_authority(
+                "edit_file",
+                &mut formatted,
+                &workspace,
+                crate::sandbox::SandboxMode::PolicyOnly,
+                |_| true,
+            )
+            .await
+            .unwrap();
+            assert!(formatted["_ca_edit_preview"]
+                .as_str()
+                .unwrap()
+                .contains("OUTSIDE_TARGET"));
+            drop(crate::formatting::consume("edit_file", &formatted).unwrap());
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+            let result = execute_child_exact_range_edit(
+                ChildToolContext {
+                    runner: &runner,
+                    id: AgentId::new(),
+                    owner: crate::jobs::JobOwner::new(None),
+                    grant: &grant,
+                    workspace: &workspace,
+                    policy_approved: false,
+                    frozen_policy: None,
+                },
+                &arguments,
+            )
+            .await;
+            assert!(result.is_success(), "{result:?}");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), intended);
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn narrow_worker_isolation_rebases_restored_absolute_target_and_check_cwd() {
+        let repository = tempfile::tempdir().unwrap();
+        for args in [
+            vec!["init"],
+            vec!["config", "user.email", "test@example.invalid"],
+            vec!["config", "user.name", "Test"],
+        ] {
+            assert!(std::process::Command::new("git")
+                .args(args)
+                .current_dir(repository.path())
+                .status()
+                .unwrap()
+                .success());
+        }
+        std::fs::write(
+            repository.path().join("target.txt"),
+            "prefix\nbad\nsuffix\n",
+        )
+        .unwrap();
+        for args in [vec!["add", "target.txt"], vec!["commit", "-m", "base"]] {
+            assert!(std::process::Command::new("git")
+                .args(args)
+                .current_dir(repository.path())
+                .status()
+                .unwrap()
+                .success());
+        }
+        let manager = AgentManager::new(Arc::new(WorkspaceRunner), AgentLimits::default());
+        let owned = tempfile::tempdir().unwrap();
+        manager.set_worktree_store(Some(crate::worktree::WorktreeStore::new(
+            owned.path(),
+            true,
+        )));
+        let mut request = narrow_request(repository.path(), 3);
+        let original_root = repository.path().canonicalize().unwrap();
+        let contract = request.repair_contract.as_mut().unwrap();
+        contract.path = original_root
+            .join("target.txt")
+            .to_string_lossy()
+            .into_owned();
+        contract.checks[0].cwd = Some(original_root.to_string_lossy().into_owned());
+        request.isolation = AgentIsolation::Worktree;
+        let id = manager.spawn(request).await.unwrap();
+        let snapshot = manager.await_agent(id).await.unwrap();
+        assert_eq!(snapshot.status, AgentStatus::Completed);
+        let worktree = snapshot.worktree.unwrap();
+        assert_ne!(worktree.path, original_root);
+        assert_eq!(
+            std::fs::read_to_string(worktree.path.join("target.txt")).unwrap(),
+            "prefix\nbad\nsuffix\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(original_root.join("target.txt")).unwrap(),
+            "prefix\nbad\nsuffix\n"
+        );
+        let mut outside_scope = narrow_request(repository.path(), 3);
+        outside_scope.grants.path_scopes = vec![original_root
+            .join("other.txt")
+            .to_string_lossy()
+            .into_owned()];
+        outside_scope.isolation = AgentIsolation::Worktree;
+        assert!(manager
+            .spawn(outside_scope)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("original inherited path scope"));
     }
 
     #[tokio::test]
@@ -9561,6 +10692,7 @@ mod manager_tests {
                 route: None,
                 purpose: AgentRunPurpose::Subagent,
                 output_contract: None,
+                repair_contract: None,
                 isolation: AgentIsolation::Shared,
             },
             limits,
@@ -9706,6 +10838,67 @@ mod manager_tests {
             .model_text()
             .contains("explicit valid non-agent tool grants"));
         assert_eq!(manager.list().await.len(), 1);
+        manager.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn headless_named_explore_keeps_local_defaults_and_explicit_workers_keep_grants() {
+        let manager = AgentManager::new(Arc::new(FakeRunner), AgentLimits::default());
+        manager.allow_headless_granted_workers();
+        let work = Arc::new(std::sync::Mutex::new(crate::work::WorkState::default()));
+        let temporary = tempfile::tempdir().unwrap();
+        let workspace = crate::workspace::WorkspaceContext::discover(temporary.path()).unwrap();
+        let named = execute_manager_tool(
+            "task",
+            &json!({"subagent_name":"explore", "prompt":"done"}),
+            &manager,
+            &work,
+            &workspace,
+        )
+        .await
+        .unwrap();
+        assert!(named.is_success(), "{named:?}");
+        let children = manager.list().await;
+        assert_eq!(children.len(), 1);
+        let tools = children[0]
+            .grants
+            .tools
+            .iter()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            tools,
+            std::collections::BTreeSet::from([
+                "glob",
+                "list_dir",
+                "read_file",
+                "read_todos",
+                "search_files"
+            ])
+        );
+        assert!(!children[0].grants.network);
+        let explicit = execute_manager_tool(
+            "spawn_agent",
+            &json!({"task":"done", "tools":["edit_file","run_command","web_search"],
+                "commands":["/usr/bin/true"]}),
+            &manager,
+            &work,
+            &workspace,
+        )
+        .await
+        .unwrap();
+        assert!(explicit.is_success(), "{explicit:?}");
+        let children = manager.list().await;
+        let granted = children
+            .iter()
+            .find(|child| child.grants.tools.iter().any(|tool| tool == "edit_file"))
+            .unwrap();
+        assert_eq!(
+            granted.grants.tools,
+            ["edit_file", "run_command", "web_search"]
+        );
+        assert_eq!(granted.grants.command_scopes, ["/usr/bin/true"]);
+        assert!(!granted.grants.network);
         manager.shutdown().await;
     }
 

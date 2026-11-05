@@ -539,6 +539,7 @@ pub struct JobInfo {
     pub id: JobId,
     pub command: String,
     pub cwd: String,
+    pub protected_sources: bool,
     pub status: JobStatus,
     pub elapsed: Duration,
     pub stdout: String,
@@ -546,6 +547,8 @@ pub struct JobInfo {
     pub stdout_omitted_bytes: usize,
     pub stderr_omitted_bytes: usize,
     pub background: bool,
+    /// Immutable original output, independent of the bounded display buffers.
+    pub log_artifact: Option<crate::inference_artifacts::JobLogArtifact>,
 }
 
 impl JobInfo {
@@ -677,6 +680,8 @@ struct JobRecord {
     readers_notify: Notify,
     temporary_directory: std::path::PathBuf,
     independent_process_group: bool,
+    log_capture: Option<crate::inference_artifacts::JobLogCapture>,
+    log_capture_error: Option<String>,
 }
 
 #[derive(Debug)]
@@ -940,6 +945,9 @@ impl JobManager {
         origin: JobOrigin,
     ) -> Result<JobId, String> {
         let mut command = command.into();
+        // Native job identity remains the admitted invocation; only physical
+        // execution receives the private-copy paths and diagnostic prefix.
+        let admitted_command = command.clone();
         let mut cwd = cwd.into();
         let mut roots = roots;
         if origin == JobOrigin::ModelTool {
@@ -1104,9 +1112,23 @@ impl JobManager {
                 }
             }
         }
+        let capture = match crate::inference_artifacts::ArtifactStore::for_owner(owner) {
+            Ok(store) => match execution_policy.retained_output_limit() {
+                Some(limit) => store.begin_capture_limit(limit).await,
+                None => store.begin_capture().await,
+            },
+            Err(error) => Err(error),
+        };
+        let (mut log_capture, log_capture_error) = match capture {
+            Ok(capture) => (Some(capture), None),
+            Err(error) => (None, Some(error)),
+        };
         let mut child = match process.spawn() {
             Ok(child) => child,
             Err(error) => {
+                if let Some(capture) = log_capture.take() {
+                    capture.discard_unstarted().await;
+                }
                 discard_unused_job_temp(&temporary_directory);
                 return Err(format!("Error running command: {error}"));
             }
@@ -1132,7 +1154,7 @@ impl JobManager {
             });
         let record = Arc::new(JobRecord {
             state: Mutex::new(JobState {
-                command,
+                command: admitted_command,
                 cwd,
                 status: JobStatus::Running,
                 started_at: Instant::now(),
@@ -1157,6 +1179,8 @@ impl JobManager {
             readers_notify: Notify::new(),
             temporary_directory,
             independent_process_group: !WORKER_CONTAINMENT.load(Ordering::Acquire),
+            log_capture,
+            log_capture_error,
         });
         self.inner.jobs.lock().await.insert(id, record.clone());
         let _ = self.inner.events.send(JobEvent::Started(id));
@@ -1183,10 +1207,22 @@ impl JobManager {
                         }
                         break;
                     }
-                    Err(_) => break,
+                    Err(_) => {
+                        if let Some(capture) = &record.log_capture {
+                            capture.mark_read_error().await;
+                        }
+                        break;
+                    }
                     Ok(count) => count,
                 };
                 let text = String::from_utf8_lossy(&chunk[..count]).into_owned();
+                if let Some(capture) = &record.log_capture {
+                    let stream = match stream {
+                        JobStream::Stdout => crate::inference_artifacts::LogStream::Stdout,
+                        JobStream::Stderr => crate::inference_artifacts::LogStream::Stderr,
+                    };
+                    capture.append(stream, &chunk[..count]).await;
+                }
                 let mut state = record.state.lock().await;
                 match stream {
                     JobStream::Stdout => state.stdout.push(&chunk[..count]),
@@ -1246,6 +1282,9 @@ impl JobManager {
                     }
                     Ok(None) => {}
                     Err(_) => {
+                        if let Some(capture) = &record.log_capture {
+                            capture.mark_read_error().await;
+                        }
                         set_terminal_status(
                             &inner,
                             id,
@@ -1782,6 +1821,7 @@ async fn snapshot_record(id: JobId, record: &JobRecord) -> JobInfo {
         id,
         command: state.command.clone(),
         cwd: state.cwd.clone(),
+        protected_sources: state.protected_sources,
         status: state.status,
         elapsed: state
             .finished_at
@@ -1792,6 +1832,19 @@ async fn snapshot_record(id: JobId, record: &JobRecord) -> JobInfo {
         stdout_omitted_bytes: state.stdout.omitted_bytes(),
         stderr_omitted_bytes: state.stderr.omitted_bytes(),
         background: state.background,
+        log_artifact: match &record.log_capture {
+            Some(capture) => capture.receipt().await,
+            None => record.log_capture_error.as_ref().map(|error| {
+                crate::inference_artifacts::JobLogArtifact {
+                    artifact_id: String::new(),
+                    stdout_bytes: 0,
+                    stderr_bytes: 0,
+                    total_bytes: 0,
+                    complete: false,
+                    error: Some(error.clone()),
+                }
+            }),
+        },
     }
 }
 
@@ -1804,6 +1857,9 @@ async fn ensure_owner(record: &JobRecord, owner: JobOwner) -> Result<(), String>
 }
 
 async fn set_terminal_status(inner: &Inner, id: JobId, record: &JobRecord, status: JobStatus) {
+    if let Some(capture) = &record.log_capture {
+        capture.finish_terminal(status).await;
+    }
     let mut state = record.state.lock().await;
     state.status = status;
     if state.protected_sources && matches!(status, JobStatus::Failed { .. }) {
@@ -1933,6 +1989,85 @@ impl BoundedText {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn privacy_command_workspace_retains_admitted_invocation_and_terminal_evidence() {
+        let settings = crate::provider_filter::ProviderFilterConfig {
+            enabled: true,
+            hide: crate::provider_filter::FilterHide {
+                filenames: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        crate::provider_filter::with_test_filter(&settings, || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let temporary = tempfile::tempdir().unwrap();
+                    let workspace = temporary.path().join("project");
+                    std::fs::create_dir(&workspace).unwrap();
+                    let workspace = workspace.canonicalize().unwrap();
+                    let source = workspace.join("source.txt");
+                    std::fs::write(&source, "protected-original317\n").unwrap();
+                    let session = Uuid::new_v4();
+                    let context = crate::privacy::Context::open(
+                        temporary.path().join("profile"),
+                        workspace.clone(),
+                        session,
+                        None,
+                    )
+                    .unwrap();
+                    context.allow_ephemeral();
+                    let owner = JobOwner::new(Some(session));
+                    let manager = JobManager::new();
+                    // The relative write belongs to the disposable copy. The
+                    // original project remains protected by the same sandbox.
+                    let admitted = "printf '%s\\n' EXECUTED_BODY317; /bin/cat source.txt; printf changed-copy317 > source.txt; exit 101";
+                    let id = manager
+                        .start_sandboxed_owned_with_policy_and_origin(
+                            admitted,
+                            workspace.to_string_lossy(),
+                            false,
+                            Duration::from_secs(5),
+                            vec![workspace.clone()],
+                            false,
+                            crate::sandbox::SandboxMode::Off,
+                            owner,
+                            JobExecutionPolicy::default(),
+                            JobOrigin::ModelTool,
+                        )
+                        .await
+                        .unwrap();
+                    let job = manager.await_job_owned(id, owner).await.unwrap();
+                    assert_eq!(
+                        job.status,
+                        JobStatus::Failed {
+                            exit_code: Some(101)
+                        }
+                    );
+                    assert!(job.stdout.starts_with("command_source_generation: "));
+                    assert!(job.stdout.contains("command_artifact_directory: __CA_PATH_"));
+                    assert!(job.stdout.contains("EXECUTED_BODY317\nprotected-original317\n"));
+                    assert_ne!(std::path::Path::new(&job.cwd), workspace);
+                    assert_eq!(
+                        std::fs::read_to_string(std::path::Path::new(&job.cwd).join("source.txt"))
+                            .unwrap(),
+                        "changed-copy317"
+                    );
+                    assert_eq!(
+                        std::fs::read_to_string(&source).unwrap(),
+                        "protected-original317\n"
+                    );
+                    assert!(job.log_artifact.as_ref().unwrap().complete);
+                    assert_eq!(job.command, admitted);
+                    manager.shutdown().await;
+                });
+        });
+    }
 
     #[cfg(target_os = "macos")]
     #[tokio::test]
@@ -3051,6 +3186,7 @@ mod tests {
             id: JobId::new(),
             command: "large".into(),
             cwd: "/tmp".into(),
+            protected_sources: false,
             status: JobStatus::Failed { exit_code: Some(1) },
             elapsed: Duration::ZERO,
             stdout: format!("OUT-HEAD{}OUT-TAIL", "o".repeat(8_000)),
@@ -3058,6 +3194,7 @@ mod tests {
             stdout_omitted_bytes: 0,
             stderr_omitted_bytes: 0,
             background: false,
+            log_artifact: None,
         };
         let output = info.formatted_output();
         assert!(output.len() <= 4 * 1024);

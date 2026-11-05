@@ -200,6 +200,7 @@ impl LoopObservation {
             command_observation: result.command_observation().cloned(),
         };
         let call = crate::app::ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: String::new(),
@@ -797,6 +798,7 @@ mod tests {
     #[test]
     fn successful_mutation_receipt_marks_edit_as_changed() {
         let call = crate::app::ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call-1".into(),

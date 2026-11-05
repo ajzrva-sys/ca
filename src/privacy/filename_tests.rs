@@ -194,6 +194,253 @@ fn assert_private_names_absent(body: &Value) {
 }
 
 #[test]
+fn filename_reasoning_effort_controls_are_exact_enums_only_at_protocol_locations() {
+    crate::provider_filter::with_test_filter(&config(), || {
+        let fixture = fixture();
+        let canonical = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+        let private_controls = fixture.workspace.join("private_controls");
+        std::fs::create_dir(&private_controls).unwrap();
+        for value in canonical {
+            std::fs::write(private_controls.join(value), "private filename").unwrap();
+        }
+        let unknown = ["ultra", "x_high", "HIGH", " high "];
+        for value in unknown {
+            std::fs::write(fixture.workspace.join(value), "private filename").unwrap();
+        }
+        fixture.context.refresh_filenames().unwrap();
+        let revision = fixture.context.policy().revision;
+        let fingerprint = fixture.context.policy_fingerprint();
+        for value in canonical {
+            for body in [
+                json!({"model":"model","reasoning_effort":value,"messages":[]}),
+                json!({"model":"model","reasoning":{"effort":value},"input":[]}),
+            ] {
+                fixture
+                    .context
+                    .validate_wire(&serde_json::to_vec(&body).unwrap(), revision, &fingerprint)
+                    .unwrap();
+            }
+            for body in [
+                json!({"data":{"reasoning_effort":value}}),
+                json!({"data":{"reasoning":{"effort":value}}}),
+                json!({"messages":[{"role":"user","content":value}]}),
+                json!({"input":[{"type":"function_call","name":"read_file","call_id":"public-call","arguments":json!({"path":value}).to_string()}]}),
+            ] {
+                assert!(fixture
+                    .context
+                    .validate_wire(&serde_json::to_vec(&body).unwrap(), revision, &fingerprint)
+                    .is_err());
+            }
+        }
+        for value in unknown {
+            for body in [
+                json!({"reasoning_effort":value}),
+                json!({"reasoning":{"effort":value}}),
+            ] {
+                assert!(fixture
+                    .context
+                    .validate_wire(&serde_json::to_vec(&body).unwrap(), revision, &fingerprint)
+                    .is_err());
+            }
+        }
+    });
+}
+
+#[test]
+fn filename_host_guidance_is_exact_protocol_control_and_keeps_dynamic_prefix_private() {
+    crate::provider_filter::with_test_filter(&config(), || {
+        let fixture = fixture();
+        std::fs::write(fixture.workspace.join("discovered"), "private filename").unwrap();
+        std::fs::write(
+            fixture.workspace.join("PrivateDescriptionPrefix317.txt"),
+            "private filename",
+        )
+        .unwrap();
+        fixture.context.refresh_filenames().unwrap();
+        let mut definitions = tools();
+        definitions[0].function.description = "Read PrivateDescriptionPrefix317.txt safely.".into();
+        let mut request = PreparedModelRequest::new(
+            RequestKind::MainTurn,
+            "filename-test",
+            "model",
+            vec![message("user", "PublicTask")],
+            definitions,
+            Default::default(),
+        );
+        let revision = fixture.context.prepare_request(&mut request).unwrap();
+        let fingerprint = fixture.context.policy_fingerprint();
+        let description = request.tools[0].function.description.clone();
+        let schema = request.tools[0].function.parameters.clone();
+        assert!(!description.contains("PrivateDescriptionPrefix317.txt"));
+        assert!(description.contains("complete discovered filename references"));
+        assert_ne!(
+            fixture.context.mask_known("discovered").unwrap(),
+            "discovered"
+        );
+        for body in [
+            json!({"tools":[{"type":"function","function":{"name":"read_file","description":description,"parameters":schema}}]}),
+            json!({"tools":[{"type":"function","name":"read_file","description":description,"parameters":schema}]}),
+            json!({"tools":[{"name":"read_file","description":description,"input_schema":schema}]}),
+            json!({"tools":[{"functionDeclarations":[{"name":"read_file","description":description,"parameters":schema}]}]}),
+        ] {
+            fixture
+                .context
+                .validate_wire(&serde_json::to_vec(&body).unwrap(), revision, &fingerprint)
+                .unwrap();
+        }
+        let suffix = &description[description
+            .find(" Use complete discovered filename references")
+            .unwrap()..];
+        for body in [
+            json!({"messages":[{"role":"user","content":description}]}),
+            json!({"data":{"description":description}}),
+            json!({"input":[{"type":"function_call","name":"read_file","call_id":"public-call","arguments":json!({"path":fixture.alias}).to_string(),"description":description}]}),
+            json!({"tools":[{"type":"function","function":{"name":"read_file","description":format!("PrivateDescriptionPrefix317.txt{suffix}"),"parameters":schema}}]}),
+            json!({"tools":[{"type":"function","function":{"name":"read_file","description":description.replace("complete discovered", "changed discovered"),"parameters":schema}}]}),
+            json!({"tools":[{"type":"function","function":{"name":"custom_reader","description":description,"parameters":schema}}]}),
+        ] {
+            assert!(fixture
+                .context
+                .validate_wire(&serde_json::to_vec(&body).unwrap(), revision, &fingerprint)
+                .is_err());
+        }
+    });
+}
+
+#[test]
+fn hrs317_system_evidence_guidance_keeps_public_controls_only_in_system_envelopes() {
+    crate::provider_filter::with_test_filter(&config(), || {
+        let fixture = fixture();
+        std::fs::write(fixture.workspace.join("1"), "private filename").unwrap();
+        fixture.context.refresh_filenames().unwrap();
+        let guide = crate::context_pruning::EVIDENCE_GUIDANCE;
+        assert_ne!(fixture.context.mask_known(guide).unwrap(), guide);
+        let revision = fixture.context.policy().revision;
+        let fingerprint = fixture.context.policy_fingerprint();
+        for body in [
+            json!({"messages":[{"role":"system","content":guide}]}),
+            json!({"input":[{"role":"system","content":[{"type":"input_text","text":guide}]}]}),
+            json!({"system":[{"type":"text","text":guide}]}),
+            json!({"systemInstruction":{"parts":[{"text":guide}]}}),
+        ] {
+            fixture
+                .context
+                .validate_wire(&serde_json::to_vec(&body).unwrap(), revision, &fingerprint)
+                .unwrap();
+        }
+        for body in [
+            json!({"messages":[{"role":"user","content":guide}]}),
+            json!({"input":[{"role":"user","content":[{"type":"input_text","text":guide}]}]}),
+            json!({"messages":[{"role":"system","content":format!("{guide} 1")}]}),
+            json!({"system":[{"type":"text","text":format!("1 {guide}")}]}),
+            json!({"systemInstruction":{"parts":[{"text":format!("{guide} 1")}]}}),
+        ] {
+            assert!(fixture
+                .context
+                .validate_wire(&serde_json::to_vec(&body).unwrap(), revision, &fingerprint)
+                .is_err());
+        }
+        let mut request = PreparedModelRequest::new(
+            RequestKind::Headless,
+            "filename-test",
+            "model",
+            vec![message("system", guide), message("user", guide)],
+            tools(),
+            Default::default(),
+        );
+        fixture.context.prepare_request(&mut request).unwrap();
+        assert_eq!(request.messages[0].content.as_str(), Some(guide));
+        assert_ne!(request.messages[1].content.as_str(), Some(guide));
+    });
+}
+
+#[test]
+fn hrs317_artifact_listing_projects_only_native_rows_before_authored_notes() {
+    crate::provider_filter::with_test_filter(&config(), || {
+        let fixture = fixture();
+        let view = fixture
+            .context
+            .prepare_command_workspace(
+                "true",
+                fixture.workspace.to_str().unwrap(),
+                std::slice::from_ref(&fixture.workspace),
+            )
+            .unwrap();
+        let workspace = crate::workspace::WorkspaceContext::discover(&fixture.workspace).unwrap();
+        let arguments = json!({"path":view.artifact_directory});
+        let native_arguments = json!({"path":view.cwd});
+        let named = "[CA evidence: real file]";
+        std::fs::write(std::path::Path::new(&view.cwd).join(named), "bytes").unwrap();
+        let raw = format!("{PRIVATE_DIR}/\n{named}");
+        crate::context_observation::capture_native_execution_scoped(
+            "list_dir",
+            &native_arguments,
+            &raw,
+            true,
+            &workspace,
+            None,
+            Some(&fixture.context),
+        )
+        .unwrap();
+        let observation = crate::context_observation::bind_native_result(
+            "list_dir",
+            &arguments.to_string(),
+            &raw,
+        )
+        .unwrap();
+        let mut assistant = message("assistant", "List the command artifact");
+        assistant.tool_calls = Some(vec![ToolCallMsg {
+            id: "artifact-list".into(),
+            call_type: "function".into(),
+            function: FunctionCall {
+                name: "list_dir".into(),
+                arguments: arguments.to_string(),
+                arguments_retrieved_spans: vec![],
+            },
+        }]);
+        let mut tool = message("tool", &raw);
+        tool.tool_call_id = Some("artifact-list".into());
+        tool.content = tool.content.with_context_observation(Some(observation));
+        let mut request = PreparedModelRequest::new(
+            RequestKind::ToolContinuation,
+            "filename-test",
+            "model",
+            vec![assistant, tool],
+            vec![],
+            Default::default(),
+        );
+        assert!(request.messages[1]
+            .content
+            .as_str()
+            .unwrap()
+            .contains("command-copy artifact"));
+        fixture.context.prepare_request(&mut request).unwrap();
+        let projected = request.messages[1].content.as_str().unwrap();
+        assert!(projected.starts_with("__CA_PATH_"));
+        assert!(!projected.contains(PRIVATE_DIR));
+        assert!(projected.contains("command-copy artifact"));
+        assert!(fixture
+            .context
+            .resolve_filename_path("__CA_PATH_unknown__", false)
+            .is_err());
+        // A real filename resembling a note is projected as a second native row.
+        assert!(projected
+            .lines()
+            .take(2)
+            .all(|row| row.starts_with("__CA_PATH_")));
+        assert!(!projected.contains(named));
+        let second = projected.lines().nth(1).unwrap();
+        assert_eq!(
+            fixture
+                .context
+                .resolve_filename_path(second, false)
+                .unwrap(),
+            std::path::Path::new(&view.cwd).join(named)
+        );
+    });
+}
+
+#[test]
 fn filename_final_transport_all_four_protocols_hides_continuation_history() {
     crate::provider_filter::with_test_filter(&config(), || {
         tokio::runtime::Builder::new_current_thread()

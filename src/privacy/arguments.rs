@@ -11,9 +11,46 @@ struct Schema<'a> {
     node: &'a Value,
     tool: &'static str,
     mode_control: bool,
+    position: ControlPosition,
+}
+
+#[derive(Clone, Copy)]
+enum ControlPosition {
+    Data,
+    InferRoot,
+    InferRefs,
+    InferRef,
+    InferBudget,
+    InferOffset,
+    InferRequests,
+    InferTimeout,
+    RepairRoot,
+    RepairAttempts,
+    RepairBatchRoot,
+    RepairBatchTasks,
+    RepairBatchTask,
+    CargoRoot(usize),
+    CargoValue(usize),
+    CargoFindings(usize),
+    CargoFinding(usize),
+    CargoIndex(usize),
 }
 
 impl<'a> Schema<'a> {
+    fn public_scalar(self, value: &Value) -> bool {
+        let Some(number) = value.as_u64() else {
+            return false;
+        };
+        match self.position {
+            ControlPosition::InferOffset => true,
+            ControlPosition::InferRequests => (1..=2).contains(&number),
+            ControlPosition::InferTimeout => (1..=90).contains(&number),
+            ControlPosition::RepairAttempts => (1..=3).contains(&number),
+            ControlPosition::CargoIndex(count) => number < count as u64,
+            _ => false,
+        }
+    }
+
     fn public_value(self, value: &Value) -> bool {
         fn accepts(root: &Value, node: &Value, value: &Value, depth: usize) -> bool {
             if depth > MAX_DEPTH {
@@ -55,6 +92,31 @@ impl<'a> Schema<'a> {
             mode_control: self.tool == "switch_mode"
                 && std::ptr::eq(self.node, self.root)
                 && name == "mode",
+            position: match (self.position, name) {
+                (_, "repair_contract")
+                    if self.tool == "spawn_agent" && std::ptr::eq(self.node, self.root) =>
+                {
+                    ControlPosition::RepairRoot
+                }
+                (ControlPosition::RepairRoot, "max_attempts") => ControlPosition::RepairAttempts,
+                (ControlPosition::RepairBatchRoot, "tasks") => ControlPosition::RepairBatchTasks,
+                (ControlPosition::RepairBatchTask, "repair_contract") => {
+                    ControlPosition::RepairRoot
+                }
+                (ControlPosition::InferRoot, "context_refs") => ControlPosition::InferRefs,
+                (ControlPosition::InferRoot, "budget") => ControlPosition::InferBudget,
+                (ControlPosition::InferRef, "start" | "end") => ControlPosition::InferOffset,
+                (ControlPosition::InferBudget, "max_requests") => ControlPosition::InferRequests,
+                (ControlPosition::InferBudget, "timeout_secs") => ControlPosition::InferTimeout,
+                (ControlPosition::CargoRoot(count), "value") => ControlPosition::CargoValue(count),
+                (ControlPosition::CargoValue(count), "findings") => {
+                    ControlPosition::CargoFindings(count)
+                }
+                (ControlPosition::CargoFinding(count), "evidence_index") => {
+                    ControlPosition::CargoIndex(count)
+                }
+                _ => ControlPosition::Data,
+            },
         })
     }
 
@@ -66,6 +128,7 @@ impl<'a> Schema<'a> {
                 node,
                 tool: self.tool,
                 mode_control: false,
+                position: ControlPosition::Data,
             })
     }
 
@@ -75,6 +138,12 @@ impl<'a> Schema<'a> {
             node,
             tool: self.tool,
             mode_control: false,
+            position: match self.position {
+                ControlPosition::InferRefs => ControlPosition::InferRef,
+                ControlPosition::RepairBatchTasks => ControlPosition::RepairBatchTask,
+                ControlPosition::CargoFindings(count) => ControlPosition::CargoFinding(count),
+                _ => ControlPosition::Data,
+            },
         })
     }
 }
@@ -128,6 +197,13 @@ fn builtin_schema(name: Option<&str>) -> Option<Schema<'static>> {
         node: &spec.schema,
         tool: spec.name.as_str(),
         mode_control: false,
+        position: if spec.name.as_str() == "infer" {
+            ControlPosition::InferRoot
+        } else if spec.name.as_str() == "spawn_agent_batch" {
+            ControlPosition::RepairBatchRoot
+        } else {
+            ControlPosition::Data
+        },
     })
 }
 
@@ -192,6 +268,51 @@ pub(super) fn project(context: &Context, name: &str, value: &mut Value) -> Resul
     project_node(context, builtin_schema(Some(name)), value, false, 0)
 }
 
+pub(super) fn project_report(
+    context: &Context,
+    schema: &Value,
+    value: &mut Value,
+) -> Result<(), String> {
+    project_node(
+        context,
+        Some(Schema {
+            root: schema,
+            node: schema,
+            tool: crate::headless_contract::STRUCTURED_OUTPUT_TOOL,
+            mode_control: false,
+            position: ControlPosition::Data,
+        }),
+        value,
+        false,
+        0,
+    )
+}
+
+pub(super) fn project_contract_report(
+    context: &Context,
+    contract: &crate::headless_contract::StructuredOutputContract,
+    value: &mut Value,
+) -> Result<(), String> {
+    let definition = contract.tool_definition();
+    let schema = &definition.function.parameters;
+    let Some(count) = contract.native_evidence_count() else {
+        return project_report(context, schema, value);
+    };
+    project_node(
+        context,
+        Some(Schema {
+            root: schema,
+            node: schema,
+            tool: crate::headless_contract::STRUCTURED_OUTPUT_TOOL,
+            mode_control: false,
+            position: ControlPosition::CargoRoot(count),
+        }),
+        value,
+        false,
+        0,
+    )
+}
+
 fn project_node(
     context: &Context,
     schema: Option<Schema<'_>>,
@@ -210,7 +331,13 @@ fn project_node(
                 let declared = schema.and_then(|schema| schema.field(key));
                 check_key(context, key, declared.is_some())?;
                 let next = declared.or_else(|| schema.and_then(Schema::additional));
-                let control = declared.is_some() && scalar_control(key);
+                let control = declared.is_some_and(|schema| {
+                    schema.public_scalar(value)
+                        || (!matches!(
+                            schema.tool,
+                            "infer" | crate::headless_contract::STRUCTURED_OUTPUT_TOOL
+                        ) && scalar_control(key))
+                });
                 project_node(context, next, value, control, depth + 1)?;
             }
         }
@@ -235,6 +362,51 @@ pub(super) fn validate(context: &Context, name: Option<&str>, value: &Value) -> 
     validate_node(context, builtin_schema(name), value, false, 0)
 }
 
+pub(super) fn validate_report(
+    context: &Context,
+    schema: &Value,
+    value: &Value,
+) -> Result<(), String> {
+    validate_node(
+        context,
+        Some(Schema {
+            root: schema,
+            node: schema,
+            tool: crate::headless_contract::STRUCTURED_OUTPUT_TOOL,
+            mode_control: false,
+            position: ControlPosition::Data,
+        }),
+        value,
+        false,
+        0,
+    )
+}
+
+pub(super) fn validate_contract_report(
+    context: &Context,
+    contract: &crate::headless_contract::StructuredOutputContract,
+    value: &Value,
+) -> Result<(), String> {
+    let definition = contract.tool_definition();
+    let schema = &definition.function.parameters;
+    let Some(count) = contract.native_evidence_count() else {
+        return validate_report(context, schema, value);
+    };
+    validate_node(
+        context,
+        Some(Schema {
+            root: schema,
+            node: schema,
+            tool: crate::headless_contract::STRUCTURED_OUTPUT_TOOL,
+            mode_control: false,
+            position: ControlPosition::CargoRoot(count),
+        }),
+        value,
+        false,
+        0,
+    )
+}
+
 fn validate_node(
     context: &Context,
     schema: Option<Schema<'_>>,
@@ -257,7 +429,13 @@ fn validate_node(
                 let declared = schema.and_then(|schema| schema.field(key));
                 check_key(context, key, declared.is_some())?;
                 let next = declared.or_else(|| schema.and_then(Schema::additional));
-                let control = declared.is_some() && scalar_control(key);
+                let control = declared.is_some_and(|schema| {
+                    schema.public_scalar(value)
+                        || (!matches!(
+                            schema.tool,
+                            "infer" | crate::headless_contract::STRUCTURED_OUTPUT_TOOL
+                        ) && scalar_control(key))
+                });
                 validate_node(context, next, value, control, depth + 1)?;
             }
         }

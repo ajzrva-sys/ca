@@ -433,6 +433,7 @@ fn import_message(
             )));
         }
         imported_calls.push(ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: sanitize(&call.id),
@@ -742,6 +743,7 @@ mod tests {
         let sentinel = "portable-private-email-sentinel";
         let mut source = resolved_session();
         source.messages[1].tool_calls = Some(vec![ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "email-call".into(),
@@ -788,6 +790,7 @@ mod tests {
     fn import_rejects_unresolved_or_executable_message_state() {
         let mut source = resolved_session();
         source.messages[1].tool_calls = Some(vec![ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call-1".into(),
@@ -818,6 +821,7 @@ mod tests {
         let mut source = resolved_session();
         source.messages[1].tool_calls = Some(vec![
             ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: "duplicate".into(),
@@ -828,6 +832,7 @@ mod tests {
                 started_at: None,
             },
             ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: "duplicate".into(),
@@ -906,6 +911,7 @@ mod tests {
     fn markdown_is_bounded_and_labels_roles_and_tool_results() {
         let mut source = resolved_session();
         source.messages[1].tool_calls = Some(vec![ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call-1".into(),

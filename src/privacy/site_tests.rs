@@ -34,6 +34,45 @@ fn configured(run: impl FnOnce()) {
 }
 
 #[test]
+fn filename_census_only_changes_invalidate_cached_plaintext_and_private_revision() {
+    configured(|| {
+        let (_root, workspace, context) = site();
+        std::fs::create_dir_all(workspace.join("target/deep")).unwrap();
+        context.refresh_filenames().unwrap();
+        let text = format!("LaterPrivate317.rs {}", "unchanged context ".repeat(1024));
+        assert_eq!(context.mask_known(&text).unwrap(), text);
+        let before = context
+            .state
+            .lock()
+            .unwrap()
+            .filenames
+            .as_ref()
+            .unwrap()
+            .snapshot();
+        let revision = context.private_revision();
+        std::fs::write(workspace.join("target/deep/LaterPrivate317.rs"), "source").unwrap();
+        context.refresh_filenames().unwrap();
+        assert_eq!(
+            context
+                .state
+                .lock()
+                .unwrap()
+                .filenames
+                .as_ref()
+                .unwrap()
+                .snapshot(),
+            before,
+            "new unvisited basename stays process-only"
+        );
+        assert!(context.private_revision() > revision);
+        assert!(!context
+            .mask_known(&text)
+            .unwrap()
+            .contains("LaterPrivate317.rs"));
+    });
+}
+
+#[test]
 fn whole_site_standalone_css_and_javascript_mask_data_preserve_logic() {
     configured(|| {
         let (_root, workspace, context) = site();
@@ -557,8 +596,8 @@ fn whole_site_new_root_directory_keeps_disclosed_leaf_history_stable() {
             serde_json::to_value(&after.messages).unwrap(),
             serde_json::to_value(&before.messages).unwrap()
         );
-        let state = context.state.lock().unwrap();
-        let names = state.filenames.as_ref().unwrap();
+        let mut state = context.state.lock().unwrap();
+        let names = state.filenames.as_mut().unwrap();
         let alias = names.project_path("newsite").unwrap();
         assert_eq!(
             names.resolve_path(&alias).unwrap(),
@@ -657,5 +696,140 @@ fn whole_site_native_write_preview_is_stable_when_corrected_html_is_read() {
                 assert_eq!(after_read, before_read, "final HTML read rewrote the already sent native write preview");
             }).await;
         });
+    });
+}
+
+#[test]
+fn same_route_issued_tool_arguments_share_request_only_privacy_projection() {
+    configured(|| {
+        let (_root, workspace, context) = site();
+        std::fs::create_dir_all(workspace.join("target/debug/build/out")).unwrap();
+        context.refresh_filenames().unwrap();
+        let raw = json!({"task":"Ignore synthetic padding and outer Cargo build-script failure.","tools":["read_file","search_files"],"route":{"provider":"openai-codex","model":"gpt-6.1-sol"}}).to_string();
+        let source = crate::agent::stream::ProviderStateSourceV1::for_test(
+            "site-test",
+            crate::agent::ProviderProtocol::OpenAiResponses,
+        );
+        let mut message = site_message("assistant", String::new());
+        message.tool_calls = Some(vec![crate::agent::client::ToolCallMsg {
+            id: "call-replay".into(),
+            call_type: "function".into(),
+            function: crate::agent::client::FunctionCall {
+                name: "spawn_agent".into(),
+                arguments: raw.clone(),
+                arguments_retrieved_spans: vec![],
+            },
+        }]);
+        message.response_items.push(crate::agent::stream::ProviderResponseItem::ResponsesOutput {
+            source: source.clone(), output_index: 0, privacy_prefix_sha256: None,
+            item: json!({"id":"fc-replay","type":"function_call","call_id":"call-replay","name":"spawn_agent","arguments":raw,"status":"completed"}),
+        });
+        let mut request = site_request(vec![message]);
+        request.runtime_source = Some(source);
+        let canonical = request.clone();
+        for field in ["call_id", "name", "arguments"] {
+            let mut tampered = canonical.clone();
+            let crate::agent::stream::ProviderResponseItem::ResponsesOutput { item, .. } =
+                &mut tampered.messages[0].response_items[0]
+            else {
+                unreachable!()
+            };
+            item[field] = "mismatch".into();
+            assert!(
+                context.prepare_request(&mut tampered).is_err(),
+                "accepted tampered {field}"
+            );
+        }
+        context.prepare_request(&mut request).unwrap();
+        let projected = &request.messages[0].tool_calls.as_ref().unwrap()[0]
+            .function
+            .arguments;
+        let crate::agent::stream::ProviderResponseItem::ResponsesOutput { item, .. } =
+            &request.messages[0].response_items[0]
+        else {
+            unreachable!()
+        };
+        assert_eq!(item["arguments"].as_str(), Some(projected.as_str()));
+        assert_eq!(item["call_id"], "call-replay");
+        assert_eq!(item["name"], "spawn_agent");
+        assert!(projected.contains("outer"), "out is not the filename outer");
+        assert!(!projected.contains("build-script"));
+        assert_eq!(
+            canonical.messages[0].tool_calls.as_ref().unwrap()[0]
+                .function
+                .arguments,
+            raw
+        );
+        let source = request.runtime_source.as_ref().unwrap();
+        crate::agent::provider::response_output_items_for_replay(&request.messages[0], source)
+            .unwrap();
+    });
+}
+
+#[test]
+fn repair_contract_has_typed_controls_despite_filename_collisions() {
+    configured(|| {
+        let (_root, workspace, context) = site();
+        for name in ["out", "3", "target.py"] {
+            std::fs::write(workspace.join(name), "private").unwrap();
+        }
+        context.refresh_filenames().unwrap();
+        let path = context.mask_known("target.py").unwrap();
+        let mut message = site_message("assistant", String::new());
+        message.tool_calls = Some(vec![crate::agent::client::ToolCallMsg {
+            id: "repair-controls".into(), call_type: "function".into(),
+            function: crate::agent::client::FunctionCall {
+                name: "spawn_agent".into(), arguments_retrieved_spans: vec![],
+                arguments: json!({"task":"Fix the admitted line", "tools":["edit_file","run_command"], "repair_contract":{"path":path,"source_sha256":"a".repeat(64),"start_line":2,"end_line":2,"context":"known source","checks":[{"argv":["/usr/bin/true"],"cwd":".","timeout_secs":10}],"max_attempts":3}}).to_string(),
+            },
+        }]);
+        let mut request = site_request(vec![message]);
+        request.tools.push(
+            crate::agent::registry::ToolRegistry::builtins()
+                .get("spawn_agent")
+                .unwrap()
+                .definition(),
+        );
+        context.prepare_request(&mut request).unwrap();
+        let args: serde_json::Value = serde_json::from_str(
+            &request.messages[0].tool_calls.as_ref().unwrap()[0]
+                .function
+                .arguments,
+        )
+        .unwrap();
+        assert_eq!(args["repair_contract"]["max_attempts"], 3);
+        assert_eq!(args["repair_contract"]["checks"][0]["timeout_secs"], 10);
+        let mut batch = site_message("assistant", String::new());
+        batch.tool_calls = Some(vec![crate::agent::client::ToolCallMsg {
+            id: "batch-repair-controls".into(),
+            call_type: "function".into(),
+            function: crate::agent::client::FunctionCall {
+                name: "spawn_agent_batch".into(),
+                arguments_retrieved_spans: vec![],
+                arguments: json!({"tasks":[args]}).to_string(),
+            },
+        }]);
+        let mut batch_request = site_request(vec![batch]);
+        batch_request.tools.push(
+            crate::agent::registry::ToolRegistry::builtins()
+                .get("spawn_agent_batch")
+                .unwrap()
+                .definition(),
+        );
+        context.prepare_request(&mut batch_request).unwrap();
+        let batch_args: serde_json::Value = serde_json::from_str(
+            &batch_request.messages[0].tool_calls.as_ref().unwrap()[0]
+                .function
+                .arguments,
+        )
+        .unwrap();
+        assert_eq!(batch_args["tasks"][0]["repair_contract"]["max_attempts"], 3);
+        let mut private_data = json!({"max_attempts":3});
+        assert!(super::arguments::project_report(
+            &context,
+            &json!({"type":"object","properties":{"max_attempts":{"type":"integer"}}}),
+            &mut private_data
+        )
+        .is_err());
     });
 }

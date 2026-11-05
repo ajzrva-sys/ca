@@ -1117,6 +1117,7 @@ mod tests {
             role: Role::Assistant,
             content: "".into(),
             tool_calls: Some(vec![ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: "c1".into(),
@@ -1199,6 +1200,7 @@ mod tests {
             role: Role::Assistant,
             content: "".into(),
             tool_calls: Some(vec![ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: "c1".into(),

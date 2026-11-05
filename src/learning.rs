@@ -11293,6 +11293,7 @@ mod tests {
     fn procedural_action_projection_keeps_status_and_recovery_without_output() {
         let calls = vec![
             crate::app::ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: "first".into(),
@@ -11303,6 +11304,7 @@ mod tests {
                 started_at: None,
             },
             crate::app::ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: "second".into(),
@@ -12467,6 +12469,7 @@ mod tests {
         let eligible_id = eligible.id;
         eligible.messages[1].tool_calls = Some(vec![
             crate::app::ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: "safe-command".into(),
@@ -12477,6 +12480,7 @@ mod tests {
                 started_at: None,
             },
             crate::app::ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: "safe-write-shape".into(),
@@ -12487,6 +12491,7 @@ mod tests {
                 started_at: None,
             },
             crate::app::ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: "secret-command".into(),
@@ -12515,6 +12520,7 @@ mod tests {
             "private email body and recipient should never be learned",
         );
         private_email.messages[1].tool_calls = Some(vec![crate::app::ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "email-call".into(),

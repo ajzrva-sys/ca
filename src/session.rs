@@ -589,6 +589,12 @@ pub struct SessionV4 {
     pub branch_handoffs: crate::branches::BranchHandoffLedger,
     pub messages: Vec<Message>,
     pub context_checkpoint: Option<ContextCheckpoint>,
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "crate::request::deserialize_host_contexts"
+    )]
+    pub host_contexts: Vec<crate::request::HostContextFrame>,
     #[serde(default)]
     pub queued_inputs: Vec<crate::queue::PendingInput>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -656,6 +662,7 @@ impl SessionV4 {
             branch_handoffs: crate::branches::BranchHandoffLedger::default(),
             messages,
             context_checkpoint: None,
+            host_contexts: Vec::new(),
             queued_inputs: Vec::new(),
             service_inbox: None,
             fallback_provenance: Vec::new(),
@@ -1844,6 +1851,7 @@ impl SessionStore {
         let scope = self.access.scope();
         let _ = std::fs::remove_dir_all(scope.join("recovery").join(expected_uuid.to_string()));
         let _ = crate::privacy::store::AliasRegistry::delete(scope, expected_uuid);
+        let _ = crate::inference_artifacts::purge_session(expected_uuid);
     }
 
     pub fn delete_retention_batch(
@@ -2136,6 +2144,7 @@ pub fn branch_in_memory(
     branch.workspace_roots = source.workspace_roots.clone();
     branch.active_skills = source.active_skills.clone();
     branch.persistent_skill_refs = source.persistent_skill_refs.clone();
+    branch.host_contexts = source.host_contexts.clone();
     branch.work_state = if through_message_count == source.messages.len() {
         source.work_state.fork_full()
     } else {
@@ -3293,6 +3302,7 @@ fn convert_v1(legacy: SessionV1, storage_key: &str) -> SessionV2 {
                     calls
                         .into_iter()
                         .map(|call| ToolCall {
+                            observation: None,
                             output_source: None,
                             arguments_retrieved_spans: Vec::new(),
                             id: call.id,
@@ -3316,6 +3326,7 @@ fn convert_v1(legacy: SessionV1, storage_key: &str) -> SessionV2 {
             })
             .collect(),
         context_checkpoint: None,
+        host_contexts: Vec::new(),
         queued_inputs: Vec::new(),
         service_inbox: None,
         fallback_provenance: Vec::new(),
@@ -3648,6 +3659,7 @@ mod tests {
         let sentinel = "direct-session-private-email-sentinel";
         let mut assistant = message(Role::Assistant, "", 1);
         assistant.tool_calls = Some(vec![ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "email-call".into(),
@@ -4064,6 +4076,7 @@ mod tests {
                 let store = SessionStore::new(root.path().join("profile/sessions"));
                 let mut completed = message(Role::Assistant, "Completed native read", 1);
                 completed.tool_calls = Some(vec![ToolCall {
+                    observation: None,
                     output_source: None,
                     arguments_retrieved_spans: Vec::new(),
                     id: "completed-read-once".into(),
@@ -5605,6 +5618,7 @@ mod tests {
                 role: Role::Assistant,
                 content: "calling tool".into(),
                 tool_calls: Some(vec![ToolCall {
+                    observation: None,
                     output_source: None,
                     arguments_retrieved_spans: Vec::new(),
                     id: "call-1".into(),

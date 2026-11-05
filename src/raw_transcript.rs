@@ -230,6 +230,7 @@ mod tests {
         }];
         assistant.tool_calls = Some(vec![
             ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: "call-1".into(),
@@ -240,6 +241,7 @@ mod tests {
                 started_at: None,
             },
             ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: "call-2".into(),
@@ -320,6 +322,7 @@ mod tests {
     fn raw_transcript_bounds_untrusted_tool_names_by_unicode_scalars() {
         let mut assistant = message(Role::Assistant, "done");
         assistant.tool_calls = Some(vec![ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call".into(),

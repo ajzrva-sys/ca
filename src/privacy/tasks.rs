@@ -643,7 +643,7 @@ fn dispatch(context: &Arc<Context>, operation: &str, value: Value) -> Result<Val
                         .lock()
                         .unwrap_or_else(|p| p.into_inner())
                         .filenames
-                        .as_ref()
+                        .as_mut()
                         .ok_or("Filename mappings are unavailable")?
                         .matching_files(root, pattern)?;
                     args.criteria.name_glob = None;

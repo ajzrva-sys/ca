@@ -90,7 +90,7 @@ pub struct AgentArtifactPredicateV1 {
     pub must_change: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AgentClosedCommandPredicateV1 {
     pub argv: Vec<String>,
@@ -2143,6 +2143,157 @@ pub fn task_completion_verified(
         && verification_receipt_valid(binding, task.id, definition, attempt)
 }
 
+/// Explanatory data only: this does not change graph completion or admission.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AgentVerificationExplanationV1 {
+    pub schema: &'static str,
+    pub task_id: TaskId,
+    pub status: &'static str,
+    pub inspected_source_revision_sha256: Option<String>,
+    pub reasons: Vec<AgentVerificationReasonV1>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AgentVerificationReasonV1 {
+    pub condition: &'static str,
+    pub expected: Option<String>,
+    pub observed: Option<String>,
+    pub gate_sha256: Option<String>,
+}
+
+/// `current_workspace` must be freshly captured by the host. Omitting it makes
+/// current-disk freshness explicitly unknown even when a historical receipt passes.
+pub fn explain_task_verification(
+    binding: Option<AgentGraphVerificationBindingV1>,
+    task: &crate::work::PlanTask,
+    current_workspace: Option<&AgentWorkspaceSnapshotV1>,
+) -> AgentVerificationExplanationV1 {
+    let mut explanation = AgentVerificationExplanationV1 {
+        schema: "ca.verification-explanation.v1",
+        task_id: task.id,
+        status: "missing",
+        inspected_source_revision_sha256: current_workspace
+            .map(|snapshot| snapshot.source_revision_sha256.clone()),
+        reasons: Vec::new(),
+    };
+    let mut reason = |condition, expected, observed, gate_sha256| {
+        explanation.reasons.push(AgentVerificationReasonV1 {
+            condition,
+            expected,
+            observed,
+            gate_sha256,
+        });
+    };
+    let Some(attempt) = task.agent_runtime.attempts.last() else {
+        reason(
+            "attempt_missing",
+            Some("completed host-observed attempt".into()),
+            None,
+            None,
+        );
+        return explanation;
+    };
+    let Some(receipt) = attempt.verification_receipt.as_ref() else {
+        reason(
+            "receipt_missing",
+            Some("current verification receipt".into()),
+            None,
+            None,
+        );
+        return explanation;
+    };
+    if let Some(binding) = binding {
+        if receipt.configuration_revision != Some(binding.configuration_revision) {
+            reason(
+                "configuration_revision",
+                Some(binding.configuration_revision.to_string()),
+                receipt
+                    .configuration_revision
+                    .map(|revision| revision.to_string()),
+                None,
+            );
+        }
+        if receipt.approved_revision != Some(binding.approved_revision) {
+            reason(
+                "approval_revision",
+                Some(binding.approved_revision.to_string()),
+                receipt
+                    .approved_revision
+                    .map(|revision| revision.to_string()),
+                None,
+            );
+        }
+        if receipt.plan_id != Some(binding.plan_id) {
+            reason(
+                "plan_identity",
+                Some(binding.plan_id.to_string()),
+                receipt.plan_id.map(|plan| plan.to_string()),
+                None,
+            );
+        }
+    } else {
+        reason(
+            "graph_binding_missing",
+            Some("current plan and approval binding".into()),
+            None,
+            None,
+        );
+    }
+    for check in receipt.checks.iter().filter(|check| !check.satisfied) {
+        reason(
+            "evidence_unsatisfied",
+            Some("satisfied".into()),
+            Some("unsatisfied".into()),
+            Some(check.gate_sha256.clone()),
+        );
+    }
+    if let Some(current) = current_workspace {
+        let recorded = attempt
+            .host_verification
+            .as_ref()
+            .map(|verification| &verification.finished);
+        if recorded.is_none_or(|recorded| {
+            recorded.workspace_identity_sha256 != current.workspace_identity_sha256
+                || recorded.source_revision_sha256 != current.source_revision_sha256
+        }) {
+            reason(
+                "workspace_revision",
+                Some(current.source_revision_sha256.clone()),
+                recorded.map(|recorded| recorded.source_revision_sha256.clone()),
+                None,
+            );
+            explanation.status = "historical";
+        }
+    } else {
+        reason(
+            "current_workspace_uninspected",
+            Some("fresh host workspace snapshot".into()),
+            None,
+            None,
+        );
+        explanation.status = "unknown";
+    }
+    let valid = task.agent.as_ref().is_some_and(|definition| {
+        verification_receipt_valid(binding, task.id, definition, attempt)
+    });
+    if !valid {
+        explanation.reasons.push(AgentVerificationReasonV1 {
+            condition: "receipt_binding_invalid",
+            expected: Some(
+                "receipt bound to this task, attempt, agent, contract and terminal event".into(),
+            ),
+            observed: None,
+            gate_sha256: None,
+        });
+        explanation.status = "invalid";
+    } else if receipt.disposition != AgentVerificationDisposition::Pass {
+        explanation.status = "unsatisfied";
+    } else if explanation.reasons.is_empty() {
+        explanation.status = "verified";
+    }
+    explanation
+}
+
 pub fn bounded_summary(value: &str) -> String {
     let value = crate::terminal_text::sanitize_terminal_text(value);
     if value.len() <= MAX_ATTEMPT_SUMMARY_BYTES {
@@ -2465,6 +2616,89 @@ mod tests {
             finished: snapshot,
             observations: Vec::new(),
         }
+    }
+
+    #[test]
+    fn hrs317_explanations_distinguish_historical_missing_and_current_evidence() {
+        let task_id = id(1);
+        let definition = parse(&[task_id], vec![input(task_id, &[])])
+            .unwrap()
+            .remove(&task_id)
+            .unwrap();
+        let now = DateTime::from_timestamp(3, 0).unwrap();
+        let mut task = crate::work::PlanTask {
+            id: task_id,
+            title: "task".into(),
+            status: crate::work::TaskStatus::Completed,
+            owner: None,
+            blocked_reason: None,
+            created_at: now,
+            updated_at: now,
+            evidence: vec![],
+            agent: Some(definition.clone()),
+            agent_runtime: AgentTaskRuntime::default(),
+            source_task_id: None,
+        };
+        assert_eq!(
+            explain_task_verification(Some(binding()), &task, None).status,
+            "missing"
+        );
+        let host = stable_host_verification();
+        let agent = Uuid::from_u128(11);
+        let receipt = verify_agent_attempt_with_host(
+            Some(binding()),
+            task_id,
+            &definition,
+            1,
+            agent,
+            AgentAttemptStatus::Completed,
+            Some(7),
+            Some("done"),
+            &["read_file".into()],
+            Some(&host),
+        );
+        task.agent_runtime.attempts.push(AgentTaskAttempt {
+            number: 1,
+            agent_id: Some(agent),
+            status: AgentAttemptStatus::Completed,
+            started_at: now,
+            finished_at: Some(now),
+            successful_tools: vec!["read_file".into()],
+            summary: Some("done".into()),
+            terminal_event_sequence: Some(7),
+            verification_receipt: Some(receipt),
+            workspace_snapshot: Some(host.started.clone()),
+            host_verification: Some(host.clone()),
+            handoff_outputs: vec![],
+            handoff_inputs: vec![],
+            budget_usage: AgentGraphBudgetUsageV1::default(),
+        });
+        assert_eq!(
+            explain_task_verification(Some(binding()), &task, None).status,
+            "unknown"
+        );
+        assert_eq!(
+            explain_task_verification(Some(binding()), &task, Some(&host.finished)).status,
+            "verified"
+        );
+        let mut changed = host.finished.clone();
+        changed.source_revision_sha256 = "3".repeat(64);
+        let report = explain_task_verification(Some(binding()), &task, Some(&changed));
+        assert_eq!(report.status, "historical");
+        assert!(report
+            .reasons
+            .iter()
+            .any(|reason| reason.condition == "workspace_revision"
+                && reason.expected == Some("3".repeat(64))
+                && reason.observed == Some("2".repeat(64))));
+        let mut revised = binding();
+        revised.configuration_revision += 1;
+        let report = explain_task_verification(Some(revised), &task, Some(&host.finished));
+        assert_eq!(report.status, "invalid");
+        assert!(report
+            .reasons
+            .iter()
+            .any(|reason| reason.condition == "configuration_revision"));
     }
 
     fn parse(

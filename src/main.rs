@@ -30,6 +30,7 @@ mod command_output;
 mod config;
 mod config_provenance;
 mod context;
+mod context_observation;
 mod context_pruning;
 mod dashboard_presence;
 mod dashboard_snapshot;
@@ -81,6 +82,8 @@ mod hooks;
 mod host_evidence;
 mod idle_learning;
 mod image_content;
+mod inference;
+mod inference_artifacts;
 mod interaction;
 mod jobs;
 mod json_compat;
@@ -107,6 +110,7 @@ mod model_catalog;
 mod model_preferences;
 mod monitor_automation;
 mod multi_run;
+mod narrow_worker;
 mod owned_tools;
 mod panes;
 mod permission;
@@ -2801,6 +2805,44 @@ fn list_models_and_exit(profile: &runtime::ActiveProfile) -> Result<()> {
     Ok(())
 }
 
+fn headless_child_bootstrap_policy(
+    cli: &CliArgs,
+    capabilities: runtime::RunCapabilities,
+    budgeted_automation: bool,
+    discovery: config::ToolDiscoveryMode,
+) -> (tool_selection::ToolSelectionPolicy, bool) {
+    const READ_ONLY_TOOLS: &[&str] = &[
+        "read_file",
+        "list_dir",
+        "search_files",
+        "glob",
+        "read_todos",
+        "blame",
+        "skill_view",
+    ];
+    let granted_workers = capabilities.subagents
+        && !cli.scheduled
+        && cli.launch_mode.is_none()
+        && !budgeted_automation;
+    let policy = if granted_workers {
+        cli.tool_policy.clone()
+    } else {
+        tool_selection::ToolSelectionPolicy::replacing(READ_ONLY_TOOLS)
+    };
+    (policy.with_discovery_mode(discovery), granted_workers)
+}
+
+fn configure_headless_child_worker_mode(
+    manager: &agent::subagent::AgentManager,
+    granted_workers: bool,
+) {
+    if granted_workers {
+        manager.allow_headless_granted_workers();
+    } else {
+        manager.enforce_headless_read_only();
+    }
+}
+
 async fn run_headless(cli: CliArgs) -> headless::HeadlessExit {
     let run_id = ca_automation::runtime::current_run_store()
         .and_then(|store| uuid::Uuid::parse_str(&store.context().run_id).ok())
@@ -3829,18 +3871,12 @@ async fn run_headless(cli: CliArgs) -> headless::HeadlessExit {
     } else {
         None
     };
-    const HEADLESS_CHILD_TOOLS: &[&str] = &[
-        "read_file",
-        "list_dir",
-        "search_files",
-        "glob",
-        "read_todos",
-        "blame",
-        "skill_view",
-    ];
-    let headless_child_policy =
-        tool_selection::ToolSelectionPolicy::replacing(HEADLESS_CHILD_TOOLS)
-            .with_discovery_mode(config.agent.tool_discovery);
+    let (headless_child_policy, headless_granted_workers) = headless_child_bootstrap_policy(
+        &cli,
+        capabilities,
+        automation_policy.is_some(),
+        config.agent.tool_discovery,
+    );
     let mut route_clients = Vec::new();
     for (provider_id, provider) in &config.providers {
         for route_model in &provider.models {
@@ -3900,7 +3936,7 @@ async fn run_headless(cli: CliArgs) -> headless::HeadlessExit {
         capabilities.skills,
         false,
     );
-    headless_agent_manager.enforce_headless_read_only();
+    configure_headless_child_worker_mode(&headless_agent_manager, headless_granted_workers);
     let _ = headless_agent_link.set(std::sync::Arc::downgrade(&headless_agent_manager));
     let delegation_router =
         pricing::PricingStore::for_paths(&base_runtime_paths, &cli.active_profile)
@@ -7472,7 +7508,7 @@ async fn run_tui(cli: CliArgs) -> Result<Option<String>> {
                                                     retrieved_spans: Some(Vec::new()),
                                                     role: Role::Assistant,
                                                     content: String::new(),
-                                                    tool_calls: Some(vec![ToolCall { output_source: None,
+                                                    tool_calls: Some(vec![ToolCall { observation: None, output_source: None,
                                                         arguments_retrieved_spans: Vec::new(),
                                                         id: format!("shell-{job_id}"),
                                                         name: "run_command".into(),
@@ -20302,6 +20338,7 @@ fn execute_command_action(
             state.live_agent_activity.clear();
             state.pending_agent_completions.clear();
             state.pending_job_completions.clear();
+            state.pending_log_analyses.clear();
             state.agent_activity_focus = None;
             state.expanded_blocks.clear();
             state.file_activity_presentations.clear();
@@ -28110,7 +28147,16 @@ fn apply_session_state(
     mut loaded: session::SessionV2,
     restore_workspace: bool,
 ) {
+    if let Err(error) = state
+        .request_store
+        .restore_host_contexts(loaded.id, loaded.host_contexts.clone())
+    {
+        state.status_message = Some(error);
+        return;
+    }
+
     invalidate_privacy_binding(state);
+    state.observations_pending_validation = true;
     state.reset_composer_history();
     state.workspace.clear_session_writes();
     state.job_list.clear();
@@ -28208,6 +28254,7 @@ fn apply_session_state(
     state.live_agent_activity.clear();
     state.pending_agent_completions.clear();
     state.pending_job_completions.clear();
+    state.pending_log_analyses.clear();
     state.agent_activity_focus = None;
     state.fallback_provenance = loaded.fallback_provenance.clone();
     state.artifact_ledger = loaded.artifacts.clone();
@@ -28506,6 +28553,7 @@ fn current_session_snapshot(state: &AppState) -> session::SessionV2 {
     current.transcript_annotations = state.transcript_annotations.clone();
     current.transcript_agent_summaries = state.transcript_agent_summaries.clone();
     current.context_checkpoint = state.context_checkpoint.clone();
+    current.host_contexts = state.request_store.host_contexts(current.id);
     current.queued_inputs = state.input_queue.persisted_items();
     current.fallback_provenance = state.fallback_provenance.clone();
     current.goal_state = state.goal_state.clone();
@@ -29346,6 +29394,12 @@ fn drain_pending_job_completion_message(state: &mut AppState) -> Option<Message>
             output.truncate(end);
             output.push_str("\n[… background job output truncated …]");
         }
+        if let Some(artifact) = &completion.log_artifact {
+            output.push_str(&format!(
+                "\nStored log: {}",
+                serde_json::to_string(artifact).unwrap_or_default()
+            ));
+        }
         let item = format!(
             "\n\njob={} status={} command={}\n{}",
             completion.id,
@@ -29358,6 +29412,9 @@ fn drain_pending_job_completion_message(state: &mut AppState) -> Option<Message>
             break;
         }
         content.push_str(&item);
+        if inference::eligible_build_log(&completion) {
+            state.pending_log_analyses.push(completion);
+        }
     }
     Some(Message {
         retrieved_spans: Some(if data_start < content.len() {
@@ -32759,6 +32816,7 @@ fn finalize_streamed_tool_calls(
             let (arguments, arguments_retrieved_spans) =
                 agent::stream::restored_tool_arguments_with_spans(&partial.arguments);
             ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans,
                 id: partial.id.unwrap_or_default(),
@@ -33335,6 +33393,57 @@ fn bind_interactive_recovery(state: &mut AppState) {
         if let Err(error) = manager.set_recovery_context(recovery.turn_id, recovery.clone()) {
             state.status_message = Some(format!("Child recovery ownership failed: {error}"));
         }
+    }
+}
+
+async fn revalidate_restored_observations(
+    messages: &[app::Message],
+    workspace: &workspace::WorkspaceContext,
+    privacy: Option<std::sync::Arc<privacy::Context>>,
+) {
+    let mut selections = std::collections::HashSet::new();
+    for call in messages
+        .iter()
+        .rev()
+        .flat_map(|message| message.tool_calls.iter().flatten().rev())
+    {
+        let Some(observation) = call.observation.as_ref() else {
+            continue;
+        };
+        if observation.live()
+            || observation.kind != context_observation::ObservationKind::Source
+            || !selections.insert(observation.selection_sha256.clone())
+        {
+            continue;
+        }
+        if selections.len() > 64 {
+            break;
+        }
+        let arguments = serde_json::from_str::<serde_json::Value>(&call.arguments).ok();
+        let translated = if let (Some(context), Some(mut arguments)) = (privacy.clone(), arguments)
+        {
+            tokio::task::spawn_blocking(move || {
+                if let Some(path) = arguments["path"]
+                    .as_str()
+                    .filter(|path| path.contains("__CA_PATH_") || path.contains("__CA_NAME_"))
+                {
+                    arguments["path"] = serde_json::Value::String(
+                        context
+                            .resolve_filename_path(path, false)
+                            .ok()?
+                            .to_str()?
+                            .into(),
+                    );
+                }
+                Some(arguments)
+            })
+            .await
+            .ok()
+            .flatten()
+        } else {
+            None
+        };
+        let _ = context_observation::revalidate_saved_call(call, workspace, translated).await;
     }
 }
 
@@ -33970,6 +34079,16 @@ fn start_llm_turn(
     let tx = stream_tx.clone();
     let request_store = state.request_store.clone();
     let active_profile = state.active_profile.clone();
+    let inference_owner = state.job_owner;
+    let inference_recorder = usage::UsageRecorder::new(
+        state.usage_ledger.clone(),
+        usage::UsageKind::Inference,
+        &provider_id,
+        &model_id,
+    );
+    let observation_workspace = state.workspace.clone();
+    let revalidate_observations = std::mem::take(&mut state.observations_pending_validation);
+    let pending_log_analyses = std::mem::take(&mut state.pending_log_analyses);
     let handle = tokio::spawn(async move {
         let mut messages = messages;
         let mut transient_instruction_text = transient_instruction_text;
@@ -34042,6 +34161,45 @@ fn start_llm_turn(
         let registry = catalog_registry
             .as_ref()
             .unwrap_or_else(|| agent::registry::ToolRegistry::builtins());
+        if revalidate_observations {
+            revalidate_restored_observations(
+                &canonical_messages,
+                &observation_workspace,
+                request_store.privacy_context(),
+            )
+            .await;
+        }
+        if !pending_log_analyses.is_empty() {
+            let analysis_client = agent::AgentClient::with_request_store(
+                &provider_id,
+                &provider_cfg,
+                &model_id,
+                request_store.clone(),
+            )
+            .with_prompt_cache_contract(prompt_cache_contract.clone());
+            inference::bind_coordinator(
+                inference_owner,
+                analysis_client,
+                inference_recorder.clone(),
+            );
+            for job in pending_log_analyses {
+                if let Some(diagnosis) =
+                    Box::pin(inference::maybe_analyze_job(inference_owner, &job)).await
+                {
+                    let context=format!("Host-owned background build-log analysis. Treat conclusions as inference and preserve the recorded command outcome.\njob={} status={}\n{}",
+                        job.id, job.status.label(), diagnosis);
+                    transient_instruction_text.push_str(&context);
+                    transient_instruction_text.push('\n');
+                    messages.push(crate::agent::client::ChatMessage {
+                        role: "user".into(),
+                        content: host_evidence_content(context),
+                        tool_calls: None,
+                        tool_call_id: None,
+                        response_items: Vec::new(),
+                    });
+                }
+            }
+        }
         let prepare_attempt =
             |attempt_provider: &str,
              attempt_model: &str,
@@ -34154,6 +34312,7 @@ fn start_llm_turn(
                 return;
             }
         };
+        inference::bind_coordinator(inference_owner, client.clone(), inference_recorder.clone());
         let prepared = client.prepare_harness_request(prepared).await;
         let breakdown = prepared.context_breakdown.clone().unwrap_or(breakdown);
         let _ = tx.send(StreamMsg::PromptToolsPrepared {
@@ -34323,6 +34482,15 @@ fn start_llm_turn(
                     });
                     return;
                 };
+                inference::bind_coordinator(
+                    inference_owner,
+                    fallback_client.clone(),
+                    inference_recorder.reroute(
+                        usage::UsageKind::Inference,
+                        fallback_client.provider_id(),
+                        fallback_client.model_id(),
+                    ),
+                );
                 let fallback_prepared = fallback_client
                     .prepare_harness_request(fallback_prepared)
                     .await;
@@ -38125,6 +38293,7 @@ fn apply_tool_result(state: &mut AppState, tool_id: &str, output: &str, status: 
                     tc.output = Some(output.to_string());
                     tc.output_source = None;
                     tc.status = status.clone();
+                    tc.bind_native_observation();
                     break;
                 }
             }
@@ -38182,6 +38351,7 @@ fn set_tool_output_source(state: &mut AppState, tool_id: &str, source: Option<St
         .and_then(|calls| calls.iter_mut().find(|call| call.id == tool_id))
     {
         call.output_source = source;
+        call.bind_native_observation();
     }
 }
 
@@ -40103,6 +40273,7 @@ async fn perform_multi_run_start(
             .map(|candidate| candidate.definition.route.clone())
             .ok_or_else(|| "candidate disappeared during start".to_string())?;
         let request = agent::subagent::AgentSpawnRequest {
+            repair_contract: None,
             task_retrieved_spans: Vec::new(),
             parent: None,
             parent_turn,
@@ -40915,6 +41086,7 @@ async fn perform_agent_graph_tick(
             tools.push("request_graph_clarification".into());
         }
         let request = agent::subagent::AgentSpawnRequest {
+            repair_contract: None,
             task_retrieved_spans: Vec::new(),
             parent: None,
             parent_turn: manager.current_parent_turn(),
@@ -42262,6 +42434,145 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[test]
+    fn hrs317_normal_headless_child_bootstrap_inherits_policy_and_keeps_closed_modes() {
+        let cli = CliArgs {
+            tool_policy: tool_selection::ToolSelectionPolicy::replacing(&[
+                "read_file",
+                "edit_file",
+                "run_command",
+            ])
+            .excluding("edit_file"),
+            ..Default::default()
+        };
+        let capabilities = runtime::RunCapabilities::for_profile(&runtime::ActiveProfile::Default);
+        let discovery = config::ToolDiscoveryMode::Eager;
+        let (policy, granted) =
+            headless_child_bootstrap_policy(&cli, capabilities, false, discovery);
+        assert!(
+            granted,
+            "ordinary headless workers need explicit inherited grants"
+        );
+        assert_eq!(
+            policy,
+            cli.tool_policy.clone().with_discovery_mode(discovery)
+        );
+        for (cli, capabilities, budgeted) in [
+            (
+                CliArgs {
+                    scheduled: true,
+                    ..cli.clone()
+                },
+                capabilities,
+                false,
+            ),
+            (
+                CliArgs {
+                    launch_mode: Some(LaunchMode::Plan),
+                    ..cli.clone()
+                },
+                capabilities,
+                false,
+            ),
+            (
+                CliArgs {
+                    launch_mode: Some(LaunchMode::Ask),
+                    ..cli.clone()
+                },
+                capabilities,
+                false,
+            ),
+            (cli.clone(), runtime::RunCapabilities::role_run(), false),
+            (cli.clone(), runtime::RunCapabilities::scheduled(), false),
+            (cli.clone(), capabilities, true),
+        ] {
+            let (policy, granted) =
+                headless_child_bootstrap_policy(&cli, capabilities, budgeted, discovery);
+            assert!(!granted);
+            assert!(!policy
+                .pinned_names()
+                .any(|tool| matches!(tool, "edit_file" | "run_command")));
+        }
+    }
+
+    #[tokio::test]
+    async fn hrs317_normal_headless_child_bootstrap_admits_only_explicit_parent_selected_grants() {
+        struct Runner;
+        #[async_trait::async_trait]
+        impl agent::subagent::AgentRunner for Runner {
+            async fn run(
+                &self,
+                _context: agent::subagent::AgentRunContext,
+            ) -> Result<String, String> {
+                Ok("bounded worker admitted".into())
+            }
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let workspace = workspace::WorkspaceContext::discover(directory.path()).unwrap();
+        let capabilities = runtime::RunCapabilities::for_profile(&runtime::ActiveProfile::Default);
+        for exclude_edit in [false, true] {
+            let mut cli = CliArgs {
+                tool_policy: tool_selection::ToolSelectionPolicy::replacing(&[
+                    "read_file",
+                    "edit_file",
+                    "run_command",
+                    "request_write_access",
+                ]),
+                ..Default::default()
+            };
+            if exclude_edit {
+                cli.tool_policy = cli.tool_policy.excluding("edit_file");
+            }
+            let (policy, granted) = headless_child_bootstrap_policy(
+                &cli,
+                capabilities,
+                false,
+                config::ToolDiscoveryMode::Eager,
+            );
+            let manager = agent::subagent::AgentManager::new_with_tool_policy(
+                Arc::new(Runner),
+                agent::subagent::AgentLimits::default(),
+                policy,
+                false,
+                false,
+            );
+            configure_headless_child_worker_mode(&manager, granted);
+            assert!(
+                !manager
+                    .available_tool_names()
+                    .unwrap()
+                    .iter()
+                    .any(|name| name == "request_write_access"),
+                "parent selection cannot widen the Subagent profile"
+            );
+            let work = Arc::new(Mutex::new(work::WorkState::default()));
+            let result = agent::subagent::execute_manager_tool(
+                "spawn_agent",
+                &serde_json::json!({
+                    "task":"bounded repair", "tools":["edit_file","run_command"],
+                    "commands":["/usr/bin/true"]
+                }),
+                &manager,
+                &work,
+                &workspace,
+            )
+            .await
+            .unwrap();
+            assert_eq!(result.is_success(), !exclude_edit, "{result:?}");
+            let records = manager.list().await;
+            assert_eq!(records.len(), usize::from(!exclude_edit));
+            if let Some(record) = records.first() {
+                assert_eq!(record.grants.command_scopes, ["/usr/bin/true"]);
+                assert!(!record.grants.network);
+                manager
+                    .await_agent_bounded(record.id, Some(2))
+                    .await
+                    .unwrap();
+            }
+            manager.shutdown().await;
+        }
+    }
+
+    #[test]
     fn detached_agent_completion_reenters_only_its_origin_as_host_owned_data() {
         let mut state = AppState::new(crate::context::ShellHistory::in_memory());
         let origin_turn = uuid::Uuid::new_v4();
@@ -42336,13 +42647,48 @@ mod tests {
     }
 
     #[test]
+    fn hrs317_background_build_completion_preserves_log_and_queues_analysis() {
+        let mut state = AppState::new(crate::context::ShellHistory::in_memory());
+        state.pending_job_completions.push_back(jobs::JobInfo {
+            id: jobs::JobId::new(),
+            command: "cargo build".into(),
+            cwd: "/tmp".into(),
+            protected_sources: false,
+            status: jobs::JobStatus::Failed {
+                exit_code: Some(101),
+            },
+            elapsed: std::time::Duration::from_secs(1),
+            stdout: "bounded original output".into(),
+            stderr: String::new(),
+            stdout_omitted_bytes: 90_000,
+            stderr_omitted_bytes: 0,
+            background: true,
+            log_artifact: Some(inference_artifacts::JobLogArtifact {
+                artifact_id: "host-issued-background-log".into(),
+                stdout_bytes: 90_000,
+                stderr_bytes: 0,
+                total_bytes: 90_000,
+                complete: true,
+                error: None,
+            }),
+        });
+        let message = drain_pending_job_completion_message(&mut state).unwrap();
+        assert!(message.content.contains("host-issued-background-log"));
+        assert!(message.content.contains("status=failed (101)"));
+        assert_eq!(state.pending_log_analyses.len(), 1);
+        assert_eq!(state.pending_log_analyses[0].command, "cargo build");
+    }
+
+    #[test]
     fn completed_background_jobs_are_batched_as_host_owned_data() {
         let mut state = AppState::new(crate::context::ShellHistory::in_memory());
         for command in ["first", "second"] {
             state.pending_job_completions.push_back(jobs::JobInfo {
+                log_artifact: None,
                 id: jobs::JobId::new(),
                 command: command.into(),
                 cwd: "/tmp".into(),
+                protected_sources: false,
                 status: jobs::JobStatus::Completed { exit_code: 0 },
                 elapsed: std::time::Duration::from_millis(10),
                 stdout: format!("{command}\u{1b}[31m done"),
@@ -43251,6 +43597,7 @@ mod tests {
             content: "canonical-local-original".into(),
             thinking: None,
             tool_calls: Some(vec![ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: "done".into(),
@@ -43308,6 +43655,7 @@ mod tests {
                 response_items: vec![],
                 timestamp: chrono::Utc::now(),
                 tool_calls: Some(vec![ToolCall {
+                    observation: None,
                     output_source: None,
                     arguments_retrieved_spans: vec![],
                     id: "completed-once".into(),
@@ -43413,6 +43761,7 @@ mod tests {
             timestamp: chrono::Utc::now(),
             response_items: vec![],
             tool_calls: Some(vec![ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: vec![],
                 id: "completed-once".into(),
@@ -43554,9 +43903,11 @@ mod tests {
                 updated_at: chrono::Utc::now(),
             });
         state.pending_job_completions.push_back(jobs::JobInfo {
+            log_artifact: None,
             id: jobs::JobId::new(),
             command: "completed-once".into(),
             cwd: "/tmp".into(),
+            protected_sources: false,
             status: jobs::JobStatus::Completed { exit_code: 0 },
             elapsed: std::time::Duration::ZERO,
             stdout: "completed job receipt".into(),
@@ -43911,6 +44262,7 @@ mod tests {
     ) -> crate::interaction::ToolBatchOutcome {
         execute_pending_tools_async_with_email(
             &[ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: "grant-export".into(),
@@ -49879,6 +50231,7 @@ model = "base"
                 role: Role::Assistant,
                 content: "I started checking.".into(),
                 tool_calls: Some(vec![ToolCall {
+                    observation: None,
                     output_source: None,
                     arguments_retrieved_spans: Vec::new(),
                     id: "unresolved".into(),
@@ -50157,6 +50510,7 @@ model = "base"
     #[test]
     fn unavailable_tool_recovery_marker_is_scoped_to_the_active_user_turn() {
         let recovered_call = || ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call-1".into(),
@@ -50205,6 +50559,7 @@ model = "base"
     #[test]
     fn unavailable_tool_generated_marker_requires_error_status_in_the_active_turn() {
         let mut call = ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "rejected".into(),
@@ -50279,6 +50634,7 @@ model = "base"
             role: Role::Assistant,
             content: String::new(),
             tool_calls: Some(vec![ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: "call-write".into(),
@@ -50372,6 +50728,7 @@ model = "base"
             content: "Partial answer remains visible.".into(),
             tool_calls: Some(vec![
                 ToolCall {
+                    observation: None,
                     output_source: None,
                     arguments_retrieved_spans: Vec::new(),
                     id: "completed".into(),
@@ -50382,6 +50739,7 @@ model = "base"
                     started_at: None,
                 },
                 ToolCall {
+                    observation: None,
                     output_source: None,
                     arguments_retrieved_spans: Vec::new(),
                     id: "interrupted".into(),
@@ -50625,6 +50983,7 @@ model = "base"
                 content: String::new(),
                 tool_calls: Some(vec![
                     ToolCall {
+                        observation: None,
                         output_source: None,
                         arguments_retrieved_spans: Vec::new(),
                         id: "delegated".into(),
@@ -50635,6 +50994,7 @@ model = "base"
                         started_at: None,
                     },
                     ToolCall {
+                        observation: None,
                         output_source: None,
                         arguments_retrieved_spans: Vec::new(),
                         id: "mutated".into(),
@@ -50645,6 +51005,7 @@ model = "base"
                         started_at: None,
                     },
                     ToolCall {
+                        observation: None,
                         output_source: None,
                         arguments_retrieved_spans: Vec::new(),
                         id: "denied".into(),
@@ -50747,6 +51108,7 @@ model = "base"
                 role: Role::Assistant,
                 content: String::new(),
                 tool_calls: Some(vec![ToolCall {
+                    observation: None,
                     output_source: None,
                     arguments_retrieved_spans: Vec::new(),
                     id: "delegated".into(),
@@ -51073,6 +51435,7 @@ model = "base"
                 role: Role::Assistant,
                 content: String::new(),
                 tool_calls: Some(vec![ToolCall {
+                    observation: None,
                     output_source: None,
                     arguments_retrieved_spans: Vec::new(),
                     id: "call-1".into(),
@@ -51426,7 +51789,7 @@ model = "base"
             );
             assert_eq!(
                 snapshot.schemas.len(),
-                52 + usize::from(crate::privilege::capability_available())
+                53 + usize::from(crate::privilege::capability_available())
             );
             assert!(snapshot
                 .schemas
@@ -53289,6 +53652,7 @@ model = "base"
 
         state.messages[1].content.clear();
         state.messages[1].tool_calls = Some(vec![ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "resolved".into(),
@@ -53552,6 +53916,7 @@ model = "base"
             role: Role::Assistant,
             content: String::new(),
             tool_calls: Some(vec![ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: "call-1".into(),
@@ -54681,6 +55046,7 @@ model = "base"
                 role: Role::Assistant,
                 content: String::new(),
                 tool_calls: Some(vec![ToolCall {
+                    observation: None,
                     output_source: None,
                     arguments_retrieved_spans: Vec::new(),
                     id: "tool-tail".into(),
@@ -54749,6 +55115,7 @@ model = "base"
             role: Role::Assistant,
             content: "answer\nwith spacing".into(),
             tool_calls: Some(vec![ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: "call-1".into(),
@@ -54818,6 +55185,7 @@ model = "base"
                 role: Role::Assistant,
                 content: "Visible **Markdown** answer".into(),
                 tool_calls: Some(vec![ToolCall {
+                    observation: None,
                     output_source: None,
                     arguments_retrieved_spans: Vec::new(),
                     id: "diff-call".into(),
@@ -55822,6 +56190,7 @@ tools = ["read_file", "search_files", "list_dir"]
         let rules = vec![config::ApprovalRule::DenyTool("write_file".into())];
 
         let tc_a = ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call_1".into(),
@@ -55832,6 +56201,7 @@ tools = ["read_file", "search_files", "list_dir"]
             started_at: None,
         };
         let tc_b = ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call_2".into(),
@@ -55954,6 +56324,7 @@ tools = ["read_file", "search_files", "list_dir"]
             role: Role::Assistant,
             content: String::new(),
             tool_calls: Some(vec![ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: "owned-read".into(),
@@ -56048,6 +56419,7 @@ tools = ["read_file", "search_files", "list_dir"]
         let path_alias = privacy.mask_known(path.to_str().unwrap()).unwrap();
         assert_ne!(path_alias.as_str(), path.to_str().unwrap());
         let write = ToolCall {
+            observation: None,
             output_source: None, arguments_retrieved_spans: Vec::new(),
             id: "owned-private-write".into(), name: "write_file".into(),
             arguments: serde_json::json!({"path":path_alias,"content":format!("{projected}PUBLIC_COMPLETION\n")}).to_string(),
@@ -56701,6 +57073,7 @@ tools = ["read_file", "search_files", "list_dir"]
         assert_eq!(turn.tool_calls.len(), 1);
         let assembled = &turn.tool_calls[0];
         let call = ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: assembled.arguments_retrieved_spans.clone(),
             id: assembled.id.clone(),
@@ -56956,6 +57329,7 @@ tools = ["read_file", "search_files", "list_dir"]
     async fn interactive_yolo_includes_network_in_the_command_decision() {
         let temp = tempfile::tempdir().unwrap();
         let call = ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call-network".into(),
@@ -57014,6 +57388,7 @@ tools = ["read_file", "search_files", "list_dir"]
         let temp = tempfile::tempdir().unwrap();
         let workspace = workspace::WorkspaceContext::discover(temp.path()).unwrap();
         let call = ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call-network-policy".into(),
@@ -57095,6 +57470,7 @@ tools = ["read_file", "search_files", "list_dir"]
         let workspace = workspace::WorkspaceContext::discover(temp.path()).unwrap();
         let target = temp.path().join("must-not-exist");
         let call = ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call-eval-drift".into(),
@@ -57151,7 +57527,7 @@ tools = ["read_file", "search_files", "list_dir"]
         let temp = tempfile::tempdir().unwrap();
         let workspace = workspace::WorkspaceContext::discover(temp.path()).unwrap();
         let calls = [
-            ToolCall { output_source: None,
+            ToolCall { observation: None, output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: "call-ssh-1".into(),
                 name: "run_command".into(),
@@ -57163,7 +57539,7 @@ tools = ["read_file", "search_files", "list_dir"]
                 output: None,
                 started_at: None,
 },
-            ToolCall { output_source: None,
+            ToolCall { observation: None, output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: "call-ssh-2".into(),
                 name: "run_command".into(),
@@ -57226,6 +57602,7 @@ tools = ["read_file", "search_files", "list_dir"]
         let workspace = workspace::WorkspaceContext::discover(temp.path()).unwrap();
         let calls = [
             ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: "call-question".into(),
@@ -57236,6 +57613,7 @@ tools = ["read_file", "search_files", "list_dir"]
                 started_at: None,
             },
             ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: "call-ssh".into(),
@@ -57323,6 +57701,7 @@ tools = ["read_file", "search_files", "list_dir"]
         let temp = tempfile::tempdir().unwrap();
         let workspace = workspace::WorkspaceContext::discover(temp.path()).unwrap();
         let call = ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call-privilege-negative-surface".into(),
@@ -57402,6 +57781,7 @@ tools = ["read_file", "search_files", "list_dir"]
         std::fs::write(&later_path, "later").unwrap();
         let workspace = workspace::WorkspaceContext::discover(temp.path()).unwrap();
         let privilege = ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call-privilege".into(),
@@ -57416,6 +57796,7 @@ tools = ["read_file", "search_files", "list_dir"]
             started_at: None,
         };
         let later = ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call-later".into(),
@@ -57528,6 +57909,7 @@ tools = ["read_file", "search_files", "list_dir"]
         let target = temp.path().join("blocked.txt");
         let workspace = workspace::WorkspaceContext::discover(temp.path()).unwrap();
         let write = ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call-ask".into(),
@@ -57570,6 +57952,7 @@ tools = ["read_file", "search_files", "list_dir"]
         assert!(!target.exists());
 
         let shell = ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call-unsafe".into(),
@@ -57618,6 +58001,7 @@ tools = ["read_file", "search_files", "list_dir"]
         symlink(&target, &link).unwrap();
         let workspace = workspace::WorkspaceContext::discover(temp.path()).unwrap();
         let call = ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call-canonical-deny".into(),
@@ -57781,6 +58165,7 @@ tools = ["read_file", "search_files", "list_dir"]
         .unwrap();
         let calls =
             [("call-missing", "missing"), ("call-deploy", "deploy")].map(|(id, skill)| ToolCall {
+                observation: None,
                 output_source: None,
                 id: id.into(),
                 name: "activate_skill".into(),
@@ -58010,6 +58395,7 @@ tools = ["read_file", "search_files", "list_dir"]
             &[],
         )));
         let call = ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call-skill".into(),
@@ -58046,6 +58432,7 @@ tools = ["read_file", "search_files", "list_dir"]
         assert!(skills.lock().unwrap().is_active("deploy"));
 
         let unknown = ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call-unknown-skill".into(),
@@ -58135,6 +58522,7 @@ tools = ["read_file", "search_files", "list_dir"]
         assert!(denied.results[0].output.contains("Denied"));
 
         let later_write = ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call-write".into(),
@@ -58176,6 +58564,7 @@ tools = ["read_file", "search_files", "list_dir"]
         let temp = tempfile::tempdir().unwrap();
         let command = "printf called";
         let calls = ["call_1", "call_2"].map(|id| ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: id.into(),
@@ -58226,6 +58615,7 @@ tools = ["read_file", "search_files", "list_dir"]
         std::fs::write(&readable, "content").unwrap();
         let calls = vec![
             ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: "call-1".into(),
@@ -58241,6 +58631,7 @@ tools = ["read_file", "search_files", "list_dir"]
                 started_at: None,
             },
             ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: "call-2".into(),
@@ -58251,6 +58642,7 @@ tools = ["read_file", "search_files", "list_dir"]
                 started_at: None,
             },
             ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: "call-3".into(),
@@ -58261,6 +58653,7 @@ tools = ["read_file", "search_files", "list_dir"]
                 started_at: None,
             },
             ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: "call-4".into(),
@@ -58466,6 +58859,7 @@ tools = ["read_file", "search_files", "list_dir"]
             role: Role::Assistant,
             content: String::new(),
             tool_calls: Some(vec![ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: "call-1".into(),
@@ -60201,6 +60595,7 @@ tools = ["read_file", "search_files", "list_dir"]
             response_items: Vec::new(),
             timestamp: chrono::Utc::now(),
             tool_calls: Some(vec![ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: "write-once".into(),
@@ -60311,6 +60706,7 @@ tools = ["read_file", "search_files", "list_dir"]
             response_items: Vec::new(),
             timestamp: chrono::Utc::now(),
             tool_calls: Some(vec![ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: "done".into(),
@@ -60402,6 +60798,7 @@ tools = ["read_file", "search_files", "list_dir"]
                 role: Role::Assistant,
                 content: "UNRESOLVED-TOOL-SUFFIX".into(),
                 tool_calls: Some(vec![ToolCall {
+                    observation: None,
                     output_source: None,
                     arguments_retrieved_spans: Vec::new(),
                     id: "pending".into(),
@@ -60872,6 +61269,7 @@ tools = ["read_file", "search_files", "list_dir"]
                 role: Role::Assistant,
                 content: String::new(),
                 tool_calls: Some(vec![ToolCall {
+                    observation: None,
                     output_source: None,
                     arguments_retrieved_spans: Vec::new(),
                     id: "read".into(),
@@ -60901,6 +61299,7 @@ tools = ["read_file", "search_files", "list_dir"]
         bind_interactive_child_lifecycle_hooks(&state).unwrap();
         let child = manager
             .spawn(agent::subagent::AgentSpawnRequest {
+                repair_contract: None,
                 task_retrieved_spans: Vec::new(),
                 parent: None,
                 parent_turn: owner,
@@ -62376,6 +62775,7 @@ tools = ["read_file", "search_files", "list_dir"]
             role: Role::Assistant,
             content: String::new(),
             tool_calls: Some(vec![ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: "read-call".into(),
@@ -62611,6 +63011,7 @@ tools = ["read_file", "search_files", "list_dir"]
             role: Role::Assistant,
             content: String::new(),
             tool_calls: Some(vec![ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: "call-1".into(),
@@ -62682,6 +63083,7 @@ tools = ["read_file", "search_files", "list_dir"]
             role: Role::Assistant,
             content: "I will inspect it.".into(),
             tool_calls: Some(vec![ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: "call-1".into(),

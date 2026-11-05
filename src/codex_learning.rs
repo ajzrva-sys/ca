@@ -11546,6 +11546,7 @@ mod tests {
                     role: crate::app::Role::Assistant,
                     content: "transfer is healthy".into(),
                     tool_calls: Some(vec![crate::app::ToolCall {
+                        observation: None,
                         output_source: None,
                         arguments_retrieved_spans: Vec::new(),
                         id: "safe-action".into(),
@@ -12037,6 +12038,7 @@ models = ["gpt-5.6-terra"]
                     role: crate::app::Role::Assistant,
                     content: "private email conclusion".into(),
                     tool_calls: Some(vec![crate::app::ToolCall {
+                        observation: None,
                         output_source: None,
                         arguments_retrieved_spans: Vec::new(),
                         id: "email".into(),
@@ -13840,6 +13842,7 @@ models = ["gpt-5.6-terra"]
                         role: crate::app::Role::Assistant,
                         content: "The transfer state was reported.".into(),
                         tool_calls: Some(vec![crate::app::ToolCall {
+                            observation: None,
                             output_source: None,
                             arguments_retrieved_spans: Vec::new(),
                             id: Uuid::new_v4().to_string(),

@@ -218,7 +218,10 @@ impl AliasRegistry {
         let kind = normalize_kind(kind)?;
         let identity = digest(value.as_bytes());
         let key = (kind.clone(), identity.clone());
-        if !matches!(kind.as_str(), "SOURCE_RECEIPT" | "FILENAME_REGISTRY") {
+        if !matches!(
+            kind.as_str(),
+            "SOURCE_RECEIPT" | "FILENAME_REGISTRY" | "NATIVE_DIGEST"
+        ) {
             if let Some(index) = self.by_identity.get(&identity) {
                 if self.entries[*index].value != value {
                     return Err("privacy original identity collision".into());
@@ -264,7 +267,7 @@ impl AliasRegistry {
         self.by_value.insert(key, index);
         if !matches!(
             self.entries[index].kind.as_str(),
-            "SOURCE_RECEIPT" | "FILENAME_REGISTRY"
+            "SOURCE_RECEIPT" | "FILENAME_REGISTRY" | "NATIVE_DIGEST"
         ) {
             self.by_identity.insert(identity, index);
         }
@@ -544,7 +547,10 @@ impl AliasRegistry {
                 {
                     return Err("privacy registry contains a duplicate alias".into());
                 }
-                if !matches!(entry.kind.as_str(), "SOURCE_RECEIPT" | "FILENAME_REGISTRY") {
+                if !matches!(
+                    entry.kind.as_str(),
+                    "SOURCE_RECEIPT" | "FILENAME_REGISTRY" | "NATIVE_DIGEST"
+                ) {
                     if let Some(first) = registry.by_identity.get(&identity) {
                         if registry.entries[*first].value != value {
                             return Err("privacy original identity collision".into());

@@ -2105,6 +2105,7 @@ mod tests {
         }]);
         let mut assistant = message(Role::Assistant, "acknowledged", 2);
         assistant.tool_calls = Some(vec![crate::app::ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call-1".into(),
@@ -2140,6 +2141,7 @@ mod tests {
         let start = arguments.find(encoded_evidence).unwrap();
         let mut assistant = message(Role::Assistant, "AUTHORED_PROSE", 1);
         assistant.tool_calls = Some(vec![ToolCall {
+            observation: None,
             output_source: None,
             id: "delegation".into(),
             name: "spawn_agent".into(),
@@ -2608,6 +2610,7 @@ mod tests {
         let sentinel = "checkpoint-private-email-sentinel";
         let mut assistant = message(Role::Assistant, "", 1);
         assistant.tool_calls = Some(vec![crate::app::ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "email-call".into(),
@@ -2626,6 +2629,7 @@ mod tests {
     fn consumed_mechanistic_capsule_projects_digest_without_mutating_canonical_output() {
         let mut assistant = message(Role::Assistant, "", 1);
         assistant.tool_calls = Some(vec![ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call_1".into(),
@@ -2734,6 +2738,7 @@ mod tests {
     fn retained_boundary_keeps_complete_latest_exchanges_without_splitting_tools() {
         let mut tool_message = message(Role::Assistant, "checking", 4);
         tool_message.tool_calls = Some(vec![ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call-1".into(),
@@ -2769,6 +2774,7 @@ mod tests {
         let mut legacy = unresolved;
         let mut legacy_result = message(Role::Tool, "", 4);
         legacy_result.tool_calls = Some(vec![ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call-1".into(),
@@ -3099,6 +3105,7 @@ mod tests {
                 role: Role::Assistant,
                 content: "Checking".into(),
                 tool_calls: Some(vec![ToolCall {
+                    observation: None,
                     output_source: None,
                     arguments_retrieved_spans: Vec::new(),
                     id: "call-1".into(),
@@ -3153,6 +3160,7 @@ mod tests {
             role: Role::Assistant,
             content: "checking".into(),
             tool_calls: Some(vec![ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: "resolved".into(),
@@ -3171,6 +3179,7 @@ mod tests {
             role: Role::Assistant,
             content: "live partial".into(),
             tool_calls: Some(vec![ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: "unresolved".into(),

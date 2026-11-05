@@ -1582,7 +1582,7 @@ fn response_output_item_bytes(item: &serde_json::Value) -> Result<usize, Provide
         .map_err(|error| ProviderError::MalformedData(error.to_string()))
 }
 
-fn response_output_items_for_replay<'a>(
+pub(crate) fn response_output_items_for_replay<'a>(
     message: &'a ChatMessage,
     source: &ProviderStateSourceV1,
 ) -> Result<Option<Vec<&'a serde_json::Value>>, ProviderError> {

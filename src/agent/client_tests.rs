@@ -2,6 +2,7 @@ use super::*;
 use crate::agent::stream::FinishReason;
 use crate::app::{Message, Role, ToolCall, ToolStatus};
 use crate::config::{ProviderTimeoutConfig, ReasoningEffort, ReasoningRequestFormat};
+use crate::request::RequestStore;
 use std::time::Duration;
 
 fn fixed_time() -> chrono::DateTime<chrono::Utc> {
@@ -36,6 +37,7 @@ fn system(content: &str) -> Message {
 
 fn call(id: &str, status: ToolStatus, output: Option<&str>) -> ToolCall {
     ToolCall {
+        observation: None,
         output_source: None,
         arguments_retrieved_spans: Vec::new(),
         id: id.to_string(),
@@ -152,6 +154,43 @@ fn segmented_prompt_serializes_checkpoint_before_the_dynamic_cache_barrier() {
             .count(),
         1,
         "the checkpoint must reach the provider wire exactly once"
+    );
+}
+
+#[test]
+fn logical_context_keeps_its_sent_position_during_a_tool_continuation() {
+    let original = user("read input.txt");
+    let store = RequestStore::default();
+    let scope = crate::request::PromptCacheScope::conversation(uuid::Uuid::new_v4());
+    let project = |history: &[Message]| {
+        let assembly = AgentClient::build_segmented_messages(
+            Some("stable"),
+            Some("frozen turn context"),
+            history,
+            None,
+            &[],
+        )
+        .unwrap();
+        let mut prepared = crate::request::PreparedModelRequest::new(
+            crate::request::RequestKind::MainTurn,
+            "fixture",
+            "model",
+            assembly.messages,
+            Vec::new(),
+            ChatRequestOptions::default(),
+        )
+        .with_prompt_cache(scope, assembly.stable_prefix_messages);
+        store.prepare_host_contexts(&mut prepared).unwrap();
+        prepared.messages
+    };
+    let first = project(std::slice::from_ref(&original));
+    let second = project(&[
+        original,
+        assistant_with_calls(vec![call("read", ToolStatus::Done, Some("evidence"))]),
+    ]);
+    assert_eq!(
+        serde_json::to_value(&second[..first.len()]).unwrap(),
+        serde_json::to_value(&first).unwrap()
     );
 }
 
@@ -1557,6 +1596,7 @@ async fn capture_reasoning_content_tool_loop(provider: &'static str) -> Vec<Vec<
             role: Role::Assistant,
             content: first_turn.content,
             tool_calls: Some(vec![ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: first_turn.tool_calls[0]
                     .arguments_retrieved_spans
@@ -1702,6 +1742,7 @@ async fn deepseek_replays_tool_and_final_reasoning_on_the_next_question() {
             .tool_calls
             .into_iter()
             .map(|call| ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: call.arguments_retrieved_spans.clone(),
                 id: call.id,
@@ -1894,6 +1935,7 @@ async fn chat_reasoning_continuation_is_bound_to_the_exact_runtime_endpoint() {
                 role: Role::Assistant,
                 content: first_turn.content,
                 tool_calls: Some(vec![ToolCall {
+                    observation: None,
                     output_source: None,
                     arguments_retrieved_spans: first_turn.tool_calls[0]
                         .arguments_retrieved_spans
@@ -2283,6 +2325,7 @@ async fn capture_openai_responses_reasoning_tool_loop() -> (Vec<Vec<u8>>, String
             role: Role::Assistant,
             content: first_turn.content,
             tool_calls: Some(vec![ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: first_turn.tool_calls[0]
                     .arguments_retrieved_spans
@@ -2498,6 +2541,7 @@ async fn capture_first_party_responses_tool_loop(provider: &str, model: &str) ->
             role: Role::Assistant,
             content: first_turn.content,
             tool_calls: Some(vec![ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: first_turn.tool_calls[0]
                     .arguments_retrieved_spans
@@ -5471,6 +5515,7 @@ async fn retrieved_content_crosses_all_four_actual_provider_transports() {
         .iter()
         .enumerate()
         .map(|(index, name)| ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: format!("retrieved-call-{index}"),
@@ -5689,6 +5734,7 @@ async fn restored_argument_sources_cross_all_four_actual_provider_transports() {
     .to_string();
     let argument_start = arguments.find(canary).unwrap();
     let mut assistant = assistant_with_calls(vec![ToolCall {
+        observation: None,
         output_source: None,
         id: "restored-source-call".into(),
         name: "spawn_agent".into(),

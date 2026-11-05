@@ -143,6 +143,122 @@ fn builtin_local_payloads_restore_paths_without_rewriting_schema_controls() {
 }
 
 #[test]
+fn builtin_repair_checks_restore_typed_argv_and_exact_command_grants() {
+    configured(|| {
+        let (temp, _workspace, context) = fixture();
+        let workspace = context.workspace().to_path_buf();
+        let external = temp.path().join("PrivateRuntime317");
+        std::fs::create_dir(&external).unwrap();
+        let executable = external.join("PrivatePython317");
+        std::fs::write(&executable, "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let executable = std::fs::canonicalize(executable).unwrap();
+        let checker = workspace.join("PrivateChecker317.py");
+        let target = workspace.join("PrivateTarget317.py");
+        std::fs::write(&checker, "raise SystemExit(0)\n").unwrap();
+        let source = "value = 0\n";
+        std::fs::write(&target, source).unwrap();
+        let mut authority = crate::workspace::WorkspaceContext::discover(&workspace).unwrap();
+        authority
+            .add_root(executable.parent().unwrap(), false)
+            .unwrap();
+        context.authorize_tool_roots(&authority).unwrap();
+
+        let executable_alias = context.project_filename_path(&executable).unwrap();
+        let checker_alias = context.project_filename_path(&checker).unwrap();
+        let target_alias = context.project_filename_path(&target).unwrap();
+        let cwd_alias = context.project_filename_path(&workspace).unwrap();
+        let argv = vec![executable_alias.clone(), checker_alias];
+        let native_argv = vec![
+            executable.to_str().unwrap().to_owned(),
+            checker.to_str().unwrap().to_owned(),
+        ];
+        let arguments = json!({
+            "task":"Repair the frozen target", "tools":["read_file","edit_file","run_command"],
+            "commands":[crate::narrow_worker::render_command(&argv)],
+            "repair_contract":{
+                "path":target_alias, "source_sha256":crate::narrow_worker::digest(source),
+                "start_line":1, "end_line":1, "context":"Keep the fixed check",
+                "checks":[{"argv":argv, "cwd":cwd_alias, "timeout_secs":1}],
+                "max_attempts":1
+            }
+        });
+        for name in ["spawn_agent", "spawn_agent_batch"] {
+            let wire = if name == "spawn_agent_batch" {
+                json!({"tasks":[arguments.clone()]})
+            } else {
+                arguments.clone()
+            };
+            let restored = context.prepare_edit_ticket(name, &wire).unwrap();
+            let restored = if name == "spawn_agent_batch" {
+                &restored["tasks"][0]
+            } else {
+                &restored
+            };
+            assert_eq!(
+                restored["repair_contract"]["path"],
+                target.to_str().unwrap()
+            );
+            assert_eq!(
+                restored["repair_contract"]["checks"][0]["argv"],
+                json!(native_argv)
+            );
+            assert_eq!(
+                restored["repair_contract"]["checks"][0]["cwd"],
+                workspace.to_str().unwrap()
+            );
+            assert_eq!(
+                restored["commands"],
+                json!([crate::narrow_worker::render_command(&native_argv)])
+            );
+        }
+
+        let mut mismatched = arguments.clone();
+        mismatched["commands"][0] = json!(format!(
+            "{} --different-grant",
+            crate::narrow_worker::render_command(&argv)
+        ));
+        assert!(context
+            .prepare_edit_ticket("spawn_agent", &mismatched)
+            .is_err());
+
+        let mut unknown = arguments.clone();
+        let unknown_argv = vec![
+            "__CA_PATH_00000000000000000000000000000000__/f999".to_owned(),
+            argv[1].clone(),
+        ];
+        unknown["repair_contract"]["checks"][0]["argv"] = json!(unknown_argv);
+        unknown["commands"][0] = json!(crate::narrow_worker::render_command(&unknown_argv));
+        assert!(context
+            .prepare_edit_ticket("spawn_agent", &unknown)
+            .is_err());
+
+        // Typed repair checks do not make arbitrary executable shell aliases safe.
+        assert!(context
+            .prepare_edit_ticket(
+                "run_command",
+                &json!({
+                    "command":crate::narrow_worker::render_command(&argv), "cwd":cwd_alias
+                })
+            )
+            .is_err());
+
+        context
+            .authorize_tool_roots(
+                &crate::workspace::WorkspaceContext::discover(&workspace).unwrap(),
+            )
+            .unwrap();
+        assert!(context
+            .prepare_edit_ticket("spawn_agent", &arguments)
+            .is_err());
+    });
+}
+
+#[test]
 fn builtin_nested_creation_and_external_grants_are_live_not_snapshot_authority() {
     configured(|| {
         let (temp, workspace, context) = fixture();
@@ -695,6 +811,7 @@ fn builtin_native_ids_and_public_controls_survive_filename_collisions() {
                     agents: vec![native_control::NativeAgentControl {
                         id,
                         status: native_control::NativeAgentStatus::Completed,
+                        narrow_repair: None,
                     }],
                     batch: None,
                 },

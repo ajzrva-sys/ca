@@ -25,7 +25,8 @@ impl ToolPrivacy {
             SelectFiles | MoveFiles => Self::PrivateBatch,
             GenerateImage => Self::ModelPayload,
             RunPrivileged => Self::PrivilegedArgv,
-            ReadFile
+            Infer
+            | ReadFile
             | ReadPdf
             | ViewImage
             | Browser
@@ -178,6 +179,31 @@ pub(super) fn restore_extra_paths(
             );
         }
     }
+    if name == "spawn_agent" {
+        if let Some(value) = args
+            .get_mut("repair_contract")
+            .and_then(|v| v.get_mut("path"))
+        {
+            path(context, value, false, false)?;
+        }
+        restore_repair_checks(context, args)?;
+    }
+    if name == "spawn_agent_batch" {
+        if let Some(tasks) = args
+            .get_mut("tasks")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            for task in tasks {
+                if let Some(value) = task
+                    .get_mut("repair_contract")
+                    .and_then(|v| v.get_mut("path"))
+                {
+                    path(context, value, false, false)?;
+                }
+                restore_repair_checks(context, task)?;
+            }
+        }
+    }
     let fields: &[(&str, bool, bool)] = match name {
         "install_binary" => &[("source", false, false), ("destination", true, false)],
         "request_write_access" => &[("path", false, false)],
@@ -257,6 +283,61 @@ pub(super) fn restore_extra_paths(
             }
         }
     }
+    Ok(())
+}
+
+/// A repair check already declares closed argv. Restore only the corresponding
+/// exact grant, then let normal child admission enforce its command authority.
+fn restore_repair_checks(
+    context: &super::Context,
+    args: &mut serde_json::Value,
+) -> Result<(), String> {
+    let Some(value) = args.get("repair_contract").filter(|value| !value.is_null()) else {
+        return Ok(());
+    };
+    let mut contract: crate::narrow_worker::RepairContract = serde_json::from_value(value.clone())
+        .map_err(|error| format!("invalid repair_contract: {error}"))?;
+    if contract.checks.len() > 8 {
+        return Err("invalid bounded repair checks".into());
+    }
+    let original_commands: Vec<String> = serde_json::from_value(args["commands"].clone())
+        .map_err(|_| "repair checks require exact command grants".to_string())?;
+    let mut commands = original_commands.clone();
+    let restore = |text: &str| -> Result<String, String> {
+        if text.contains("__CA_PATH_") || text.contains("__CA_NAME_") {
+            // A path reference must occupy the complete argv element. Joining
+            // aliases with shell syntax or unissued continuations grants nothing.
+            context
+                .resolve_filename_path(text, false)?
+                .to_str()
+                .map(str::to_owned)
+                .ok_or_else(|| "Unsupported native filename encoding".into())
+        } else {
+            context.restore_text(text)
+        }
+    };
+    for check in &mut contract.checks {
+        let original = crate::narrow_worker::render_command(&check.argv);
+        if !original_commands.contains(&original) {
+            return Err("pinned repair check is outside its exact command grant".into());
+        }
+        for argument in &mut check.argv {
+            *argument = restore(argument)?;
+        }
+        if let Some(cwd) = &mut check.cwd {
+            *cwd = restore(cwd)?;
+        }
+        let native = crate::narrow_worker::render_command(&check.argv);
+        for (command, original_command) in commands.iter_mut().zip(&original_commands) {
+            if original_command == &original {
+                *command = native.clone();
+            }
+        }
+    }
+    contract.validate()?;
+    args["repair_contract"]["checks"] =
+        serde_json::to_value(&contract.checks).map_err(|error| error.to_string())?;
+    args["commands"] = serde_json::Value::from(commands);
     Ok(())
 }
 
@@ -408,7 +489,7 @@ mod tests {
         let registry = crate::agent::registry::ToolRegistry::builtins();
         assert_eq!(
             registry.specs().len(),
-            104,
+            105,
             "update the reviewed tool coverage inventory"
         );
         for spec in registry.specs() {

@@ -1723,9 +1723,11 @@ async fn execute_inner(
         Err(error) => return crate::agent::registry::ToolExecutionResult::Failure(error),
     };
     let job = crate::jobs::JobInfo {
+        log_artifact: None,
         id: crate::jobs::JobId::new(),
         command: invocation.display_command(),
         cwd: invocation.cwd.to_string_lossy().into_owned(),
+        protected_sources: false,
         status: output.status,
         elapsed: output.elapsed,
         stdout: output.stdout.render("stdout"),
@@ -2178,6 +2180,7 @@ printf 'target-ok\n'
                 role: crate::app::Role::Assistant,
                 content: String::new(),
                 tool_calls: Some(vec![crate::app::ToolCall {
+                    observation: None,
                     output_source: None,
                     arguments_retrieved_spans: Vec::new(),
                     id: "call-privilege".into(),

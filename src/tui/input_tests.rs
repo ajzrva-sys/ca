@@ -2847,9 +2847,11 @@ fn busy_commit_review_accepts_only_emergency_cancellation() {
 
 fn running_job() -> crate::jobs::JobInfo {
     crate::jobs::JobInfo {
+        log_artifact: None,
         id: "00000000-0000-4000-8000-000000000001".parse().unwrap(),
         command: "read line; echo $line".into(),
         cwd: "/tmp/project".into(),
+        protected_sources: false,
         status: crate::jobs::JobStatus::Running,
         elapsed: std::time::Duration::from_millis(1250),
         stdout: "ready\n".into(),

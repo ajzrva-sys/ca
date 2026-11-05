@@ -5448,6 +5448,7 @@ finally:
                 role: crate::app::Role::Assistant,
                 content: String::new(),
                 tool_calls: Some(vec![crate::app::ToolCall {
+                    observation: None,
                     output_source: None,
                     arguments_retrieved_spans: Vec::new(),
                     id: "call-190".into(),

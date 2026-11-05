@@ -4285,6 +4285,7 @@ fn completed_tool_snapshots() {
         role: Role::Assistant,
         content: "Read the requested file.".to_string(),
         tool_calls: Some(vec![ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call-read".to_string(),
@@ -4324,6 +4325,7 @@ fn adaptive_tool_output_state(expanded: bool) -> AppState {
             role: Role::Assistant,
             content: "I calculated the ratio-sorted selection.".into(),
             tool_calls: Some(vec![ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: id.into(),
@@ -4441,6 +4443,7 @@ fn identical_spawn_failure_state() -> AppState {
             .into_iter()
             .enumerate()
             .map(|(index, task)| ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: format!("spawn-{index}"),
@@ -4521,6 +4524,7 @@ fn spawn_failure_grouping_preserves_calls_and_exact_contiguous_boundaries() {
     noncontiguous_calls.insert(
         1,
         ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "list-between".into(),
@@ -4558,7 +4562,7 @@ fn deferred_mcp_search_success_and_failure_snapshots() {
         retrieved_spans: Some(Vec::new()),
         role: Role::Assistant,
         content: "I found the relevant MCP tools. Their exact schemas will be available on the next turn.".into(),
-        tool_calls: Some(vec![ToolCall { output_source: None,
+        tool_calls: Some(vec![ToolCall { observation: None, output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call-mcp-search".into(),
             name: "search_mcp_tools".into(),
@@ -4588,6 +4592,7 @@ fn deferred_mcp_search_success_and_failure_snapshots() {
         role: Role::Assistant,
         content: "The server needs explicit network authority before discovery can run.".into(),
         tool_calls: Some(vec![ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call-mcp-search-failed".into(),
@@ -4621,6 +4626,7 @@ fn semantic_navigation_success_and_failure_snapshots() {
         role: Role::Assistant,
         content: "The definition is in the current workspace.".into(),
         tool_calls: Some(vec![ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call-lsp-definition".into(),
@@ -4648,6 +4654,7 @@ fn semantic_navigation_success_and_failure_snapshots() {
         role: Role::Assistant,
         content: "The configured language server returned an unsafe location.".into(),
         tool_calls: Some(vec![ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call-lsp-external".into(),
@@ -4677,7 +4684,7 @@ fn pdf_text_reading_success_and_failure_snapshots() {
         retrieved_spans: Some(Vec::new()),
         role: Role::Assistant,
         content: "I extracted only the requested PDF pages within the configured bounds.".into(),
-        tool_calls: Some(vec![ToolCall { output_source: None,
+        tool_calls: Some(vec![ToolCall { observation: None, output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call-read-pdf".into(),
             name: "read_pdf".into(),
@@ -4707,6 +4714,7 @@ fn pdf_text_reading_success_and_failure_snapshots() {
         role: Role::Assistant,
         content: "The PDF needs to be decrypted before its text can be read.".into(),
         tool_calls: Some(vec![ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call-read-pdf-encrypted".into(),
@@ -4748,6 +4756,7 @@ fn multimodal_attachment_and_image_tool_snapshots() {
         role: Role::Assistant,
         content: "I inspected the normalized image without exposing its bytes.".into(),
         tool_calls: Some(vec![ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call-view-image".into(),
@@ -4787,7 +4796,7 @@ fn bounded_tool_output_snapshots() {
         retrieved_spans: Some(Vec::new()),
         role: Role::Assistant,
         content: "Read a bounded section and report what remains.".into(),
-        tool_calls: Some(vec![ToolCall { output_source: None,
+        tool_calls: Some(vec![ToolCall { observation: None, output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call-bounded-read".into(),
             name: "read_file".into(),
@@ -8417,9 +8426,11 @@ fn jobs_state() -> AppState {
     state.jobs_view_open = true;
     state.job_list = vec![
         crate::jobs::JobInfo {
+            log_artifact: None,
             id: "00000000-0000-4000-8000-000000000001".parse().unwrap(),
             command: "cargo test --workspace".into(),
             cwd: "/tmp/project".into(),
+            protected_sources: false,
             status: crate::jobs::JobStatus::Running,
             elapsed: std::time::Duration::from_millis(1234),
             stdout: "test output began\n[… stdout: 2048 bytes omitted …]\nrunning 12 tests\n"
@@ -8430,9 +8441,11 @@ fn jobs_state() -> AppState {
             background: true,
         },
         crate::jobs::JobInfo {
+            log_artifact: None,
             id: "00000000-0000-4000-8000-000000000002".parse().unwrap(),
             command: "printf complete".into(),
             cwd: "/tmp/project".into(),
+            protected_sources: false,
             status: crate::jobs::JobStatus::Completed { exit_code: 0 },
             elapsed: std::time::Duration::from_millis(250),
             stdout: "complete\n".into(),
@@ -9491,6 +9504,7 @@ fn workflow_waiting_approval_snapshots() {
         role: Role::Assistant,
         content: "The verification needs a command.".into(),
         tool_calls: Some(vec![ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "workflow-call".into(),
@@ -10625,6 +10639,7 @@ fn semantic_command_collapsed_and_raw_expansion_snapshots() {
     let mut state = test_state();
     let id = "command-semantic";
     state.messages = vec![assistant_calls(vec![ToolCall {
+        observation: None,
         output_source: None,
         arguments_retrieved_spans: Vec::new(),
         id: id.into(),
@@ -10635,8 +10650,11 @@ fn semantic_command_collapsed_and_raw_expansion_snapshots() {
         started_at: None,
     }])];
     let observation = crate::command_output::CommandObservation {
+        log_artifact: None,
+        build_diagnosis: None,
         command: "git status --short".into(),
         cwd: "/workspace/demo".into(),
+        protected_sources: false,
         network_requested: false,
         status: crate::jobs::JobStatus::Completed { exit_code: 0 },
         stdout: " M src/main.rs\n?? notes.txt\n".into(),
@@ -10885,6 +10903,7 @@ fn terminal_math_prose_table_and_list_snapshots() {
 
 fn exploration_call(id: &str, name: &str, status: ToolStatus) -> ToolCall {
     ToolCall {
+        observation: None,
         output_source: None,
         arguments_retrieved_spans: Vec::new(),
         id: id.into(),
@@ -11094,6 +11113,7 @@ fn activity_call(
     output: &str,
 ) -> ToolCall {
     ToolCall {
+        observation: None,
         output_source: None,
         arguments_retrieved_spans: Vec::new(),
         id: id.into(),
@@ -12051,6 +12071,7 @@ fn agent_dashboard_snapshots() {
 
 fn bug292_await_call(job: &crate::jobs::JobInfo, id: &str) -> ToolCall {
     ToolCall {
+        observation: None,
         output_source: None,
         arguments_retrieved_spans: Vec::new(),
         id: id.into(),
@@ -12321,6 +12342,7 @@ fn long_diffs_hint_ctrl_o_expand() {
         role: Role::Assistant,
         content: String::new(),
         tool_calls: Some(vec![ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call-diff".into(),
@@ -12350,6 +12372,7 @@ fn running_tool_shows_elapsed_and_spinner() {
         role: Role::Assistant,
         content: "Read a bounded section and report what remains.".into(),
         tool_calls: Some(vec![ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call-elapsed".into(),
@@ -12397,6 +12420,7 @@ fn private_move_second_pending_progress_replaces_first_with_long_history() {
             role: Role::Assistant,
             content: String::new(),
             tool_calls: Some(vec![ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: "private-pending-move".into(),

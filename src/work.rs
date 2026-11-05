@@ -1306,6 +1306,14 @@ impl WorkState {
                         "denied"
                     }
                 ));
+                let explanation = crate::agent_graph::explain_task_verification(
+                    self.agent_graph.verification_binding(),
+                    task,
+                    None,
+                );
+                if let Ok(value) = serde_json::to_string(&explanation) {
+                    lines.push(format!("  Verification: {value}"));
+                }
                 if let Some(failure) = &task.agent_runtime.failure {
                     lines.push(format!("  Agent failure: {failure}"));
                 }

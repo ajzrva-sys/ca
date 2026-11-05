@@ -854,9 +854,11 @@ fields = ["generation_speed", "sitting_cost"]
             fake,
         );
         let runner = StatusCommandRunner::with_backend(backend, true);
+        let payload = [b"ready\n".as_slice(), &[b'x'; 5000]].concat();
+        std::fs::write(temp.path().join("output"), &payload).unwrap();
         let result = runner
             .run(
-                "printf 'ready\\n'; i=0; while [ $i -lt 5000 ]; do printf x; i=$((i+1)); done",
+                "cat \"$CA_PROJECT_DIR/output\"",
                 temp.path(),
                 &[temp.path().to_path_buf()],
             )
@@ -865,6 +867,10 @@ fields = ["generation_speed", "sitting_cost"]
         assert!(result.truncated);
         assert!(result.text.starts_with("ready "));
         assert!(result.text.contains("bytes omitted"));
+        assert!(result.text.contains(&format!(
+            "{} bytes omitted",
+            payload.len() - STATUS_COMMAND_CONTENT_BYTES
+        )));
         assert!(result.text.len() <= STATUS_COMMAND_OUTPUT_BYTES);
     }
 

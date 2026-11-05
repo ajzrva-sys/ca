@@ -442,6 +442,43 @@ pub async fn execute_tool_with_context(
     args: &Value,
     context: &ToolContext,
 ) -> ToolExecutionResult {
+    let result = Box::pin(execute_tool_with_context_inner(name, args, context)).await;
+    if let Ok(workspace) =
+        crate::workspace::WorkspaceContext::from_roots(&context.cwd, &context.workspace_roots)
+    {
+        let mut native_args = args.clone();
+        if let Some(privacy) = crate::privacy::for_owner(context.job_owner) {
+            if let Some(path) = native_args["path"]
+                .as_str()
+                .filter(|path| path.contains("__CA_PATH_") || path.contains("__CA_NAME_"))
+            {
+                if let Ok(path) = privacy.resolve_filename_path(path, false) {
+                    native_args["path"] = Value::String(path.to_string_lossy().into_owned());
+                }
+            }
+        }
+        let privacy = crate::privacy::for_owner(context.job_owner);
+        let _ = crate::context_observation::capture_native_execution_scoped(
+            name,
+            &native_args,
+            result.model_text(),
+            result.is_success(),
+            &workspace,
+            result
+                .command_observation()
+                .filter(|observation| observation.protected_sources)
+                .map(|observation| observation.cwd.as_str()),
+            privacy.as_deref(),
+        );
+    }
+    result
+}
+
+async fn execute_tool_with_context_inner(
+    name: &str,
+    args: &Value,
+    context: &ToolContext,
+) -> ToolExecutionResult {
     let mut private_context;
     let context = if let Some(privacy) =
         crate::privacy::for_owner(context.job_owner).filter(|privacy| privacy.filenames_enabled())
@@ -511,6 +548,13 @@ pub async fn execute_tool_with_context(
     }
     if let Err(error) = registry.validate(name, &crate::formatting::plain_arguments(args)) {
         return ToolExecutionResult::Failure(error.to_string());
+    }
+    if spec.handler == ToolHandler::Infer {
+        return Box::pin(crate::inference::execute_owned_tool(
+            context.job_owner,
+            args,
+        ))
+        .await;
     }
     if spec.handler == ToolHandler::ReadFile {
         if let Some(binding) = crate::privacy::tasks::remote_binding() {
@@ -1348,6 +1392,7 @@ async fn execute_builtin(
         return "Error: agent manager context is unavailable".into();
     }
     let result = match handler {
+        ToolHandler::Infer => "Error: infer requires typed execution".into(),
         ToolHandler::ReadFile => {
             let path = args["path"].as_str().unwrap_or("");
             let resolved = resolve_path(path, cwd);
@@ -2002,7 +2047,8 @@ async fn execute_job_tool_with_policy(
                     .await
                 {
                     Ok(crate::jobs::ForegroundJobOutcome::Finished(job)) => {
-                        classify_job_result(job, effective_network_allowed)
+                        classify_job_result_owned(job, effective_network_allowed, context.job_owner)
+                            .await
                     }
                     Ok(crate::jobs::ForegroundJobOutcome::Promoted(job)) => {
                         ToolExecutionResult::Success(format!("Started background job {}", job.id))
@@ -2087,7 +2133,7 @@ async fn execute_job_tool_with_policy(
                 }
             };
             match result {
-                Ok(job) => classify_job_result(job, false),
+                Ok(job) => classify_job_result_owned(job, false, context.job_owner).await,
                 Err(error) => ToolExecutionResult::Failure(error),
             }
         }
@@ -2095,8 +2141,36 @@ async fn execute_job_tool_with_policy(
     }
 }
 
+async fn classify_job_result_owned(
+    job: crate::jobs::JobInfo,
+    network_requested: bool,
+    owner: crate::jobs::JobOwner,
+) -> ToolExecutionResult {
+    let diagnosis = Box::pin(crate::inference::maybe_analyze_job(owner, &job)).await;
+    let mut result = classify_job_result(job, network_requested);
+    if let (
+        Some(diagnosis),
+        ToolExecutionResult::Command {
+            model_text,
+            observation,
+            ..
+        },
+    ) = (diagnosis, &mut result)
+    {
+        model_text.push_str(&format!("\nBuild-log diagnosis (inferred): {diagnosis}"));
+        observation.build_diagnosis = Some(Box::new(diagnosis));
+    }
+    result
+}
+
 fn classify_job_result(job: crate::jobs::JobInfo, network_requested: bool) -> ToolExecutionResult {
-    let output = job.formatted_output();
+    let mut output = job.formatted_output();
+    if let Some(artifact) = &job.log_artifact {
+        output.push_str(&format!(
+            "\nStored log: {}",
+            serde_json::to_string(artifact).unwrap_or_default()
+        ));
+    }
     let success = matches!(
         job.status,
         crate::jobs::JobStatus::Completed { exit_code: 0 }
@@ -2281,10 +2355,15 @@ pub(crate) fn read_private_file_range_blocking(
             max_bytes: READ_FILE_MAX_RESULT_BYTES,
         },
     )?;
+    crate::context_observation::remember_read_source(
+        resolved,
+        &output,
+        &format!("{:x}", Sha256::digest(source.as_bytes())),
+    );
     Ok((output, origin))
 }
 
-async fn read_file_range(
+pub(crate) async fn read_file_range(
     resolved: &str,
     requested_path: &str,
     start_line: Option<usize>,
@@ -2320,6 +2399,7 @@ async fn read_file_range(
     let mut file = tokio::fs::File::open(resolved)
         .await
         .map_err(|error| error.to_string())?;
+    let mut source_hasher = Sha256::new();
     let mut outbound = Vec::new();
     let mut buffer = [0_u8; 8192];
     let mut pending_utf8 = Vec::new();
@@ -2339,6 +2419,7 @@ async fn read_file_range(
             break;
         }
         let chunk = &buffer[..count];
+        source_hasher.update(chunk);
         if let Err(error) = crate::provider_filter::scan_outbound_chunk(&mut outbound, chunk) {
             return Err(crate::provider_filter::withheld_message(&error));
         }
@@ -2418,6 +2499,11 @@ async fn read_file_range(
     let body_budget = READ_FILE_MAX_RESULT_BYTES.saturating_sub(footer.len());
     let body = truncate_output(&selected, body_budget);
     let output = format!("{body}{footer}");
+    crate::context_observation::remember_read_source(
+        resolved,
+        &output,
+        &format!("{:x}", source_hasher.finalize()),
+    );
     Ok(output)
 }
 
@@ -5108,6 +5194,29 @@ mod job_tool_tests {
     }
 
     #[tokio::test]
+    async fn read_file_end_only_preserves_first_line_bytes_and_anchors() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("first-line.txt");
+        std::fs::write(&path, "αé\r\nSECOND_LINE_MUST_STAY_OUT\r\n").unwrap();
+        let resolved = path.to_str().unwrap();
+        for hashes in [false, true] {
+            let implicit = read_file_range(resolved, resolved, None, Some(1), hashes)
+                .await
+                .unwrap();
+            let explicit = read_file_range(resolved, resolved, Some(1), Some(1), hashes)
+                .await
+                .unwrap();
+            assert_eq!(implicit, explicit);
+            assert!(implicit.contains("αé"));
+            assert!(!implicit.contains("SECOND_LINE_MUST_STAY_OUT"));
+            assert!(implicit.contains("Showing lines 1-1 of 2"));
+            if hashes {
+                assert!(implicit.contains(&line_anchor("αé")));
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn read_file_ranges_unicode_crlf_and_reports_the_next_range() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("unicode.txt");
@@ -6081,9 +6190,11 @@ mod job_tool_tests {
     #[test]
     fn terminal_job_statuses_map_to_typed_tool_outcomes() {
         let job = |status| crate::jobs::JobInfo {
+            log_artifact: None,
             id: crate::jobs::JobId::new(),
             command: "command".into(),
             cwd: "/tmp".into(),
+            protected_sources: false,
             status,
             elapsed: Duration::ZERO,
             stdout: String::new(),

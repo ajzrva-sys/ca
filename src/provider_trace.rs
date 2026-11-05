@@ -1414,6 +1414,7 @@ impl RequestKind {
             Self::ProjectInit => "project_init",
             Self::Review => "review",
             Self::Subagent => "subagent",
+            Self::Inference => "inference",
             Self::Headless => "headless",
             Self::HeadlessCheck => "headless_check",
             Self::Scripted => "scripted",

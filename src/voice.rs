@@ -891,12 +891,14 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let script = root.path().join("cancel-transcriber");
         let started = root.path().join("started");
+        let release = root.path().join("release");
         let descendant = root.path().join("descendant-marker");
         std::fs::write(
             &script,
             format!(
-                "#!/bin/sh\nprintf started > '{}'\n(sleep 1; printf survived > '{}') &\nsleep 30\n",
+                "#!/bin/sh\n(printf started > '{}'; while [ ! -e '{}' ]; do sleep 0.01; done; printf survived > '{}') &\nsleep 30\n",
                 started.display(),
+                release.display(),
                 descendant.display()
             ),
         )
@@ -924,8 +926,10 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         assert!(started.exists());
+        assert!(!descendant.exists());
         task.abort();
-        let _ = task.await;
+        assert!(task.await.unwrap_err().is_cancelled());
+        std::fs::write(&release, b"release").unwrap();
         tokio::time::sleep(Duration::from_millis(1200)).await;
         assert!(!descendant.exists());
     }

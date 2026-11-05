@@ -303,6 +303,7 @@ async fn run_agent_turn<B: agent::client::ChatBackend + ?Sized>(
                 serde_json::from_str(&tc.3).unwrap_or(serde_json::json!({}));
             let execution = agent::tools::execute_tool(&tc.2, &args, cwd, 30).await;
             state_tcs.push(ToolCall {
+                observation: None,
                 output_source: None,
                 arguments_retrieved_spans: Vec::new(),
                 id: tc.1.clone(),

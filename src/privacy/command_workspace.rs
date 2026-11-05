@@ -30,6 +30,31 @@ impl Workspaces {
 }
 
 impl Context {
+    /// Only an in-process, host-created mapping establishes a command-copy role.
+    /// No command output or saved observation can create this authority.
+    pub(crate) fn command_copy_binding(&self, path: &Path) -> Option<(String, String, PathBuf)> {
+        if path
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+        {
+            return None;
+        }
+        let manager = self
+            .command_workspaces
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        manager.generations.values().find_map(|generation| {
+            generation.roots.iter().find_map(|(source, view)| {
+                let relative = path.strip_prefix(view).ok()?;
+                Some((
+                    generation.digest.clone(),
+                    super::digest(view.to_string_lossy().as_bytes()),
+                    source.join(relative),
+                ))
+            })
+        })
+    }
+
     pub(crate) fn command_artifact_roots(&self) -> Vec<PathBuf> {
         self.command_workspaces
             .lock()

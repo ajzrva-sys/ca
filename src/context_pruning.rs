@@ -7,6 +7,39 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::{OnceLock, RwLock};
 
+// The qualification control ablates this one semantic feature boundary.
+const SEMANTIC_EVIDENCE: bool = true;
+
+fn coding_request(kind: RequestKind) -> bool {
+    matches!(
+        kind,
+        RequestKind::MainTurn
+            | RequestKind::ToolContinuation
+            | RequestKind::Headless
+            | RequestKind::Service
+            | RequestKind::Subagent
+            | RequestKind::Scheduled
+            | RequestKind::WorkflowStep
+            | RequestKind::RoleRun
+            | RequestKind::MultiRunCandidate
+    )
+}
+
+/// Fixed first-party request instruction; privacy recognizes only this exact
+/// text in an actual system-instruction envelope, never in user/source data.
+pub(crate) const EVIDENCE_GUIDANCE: &str = "Reuse retained reads and citations unless the task requests a reread or the evidence is missing, stale, or uncertain. For new reads, use the smallest relevant range. Omit start_line when it is 1; use end_line=1 for first-line facts. Expand when needed and honor explicit whole-file requests. State requested facts, citations, and unresolved conditions directly. Effects of isolated commands stay in their copies. For tasks that only ask to run, inspect, and report, leave originals unchanged and describe copy effects separately. Do not mirror copy changes into originals, including with edit_file, unless applying them is part of the task. A preserve-other-bytes constraint does not itself request an edit. Use original evidence for original-state claims and inspect only relevant copy files for copy-state claims.";
+
+pub(crate) fn evidence_guidance(kind: RequestKind) -> Option<&'static str> {
+    (SEMANTIC_EVIDENCE
+        && coding_request(kind)
+        && !policy().read().unwrap_or_else(|p| p.into_inner()).disabled)
+        .then_some(EVIDENCE_GUIDANCE)
+}
+
+pub(crate) fn fixed_evidence_instruction(role: &str, text: Option<&str>) -> bool {
+    role == "system" && text == Some(EVIDENCE_GUIDANCE)
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct PruningConfig {
@@ -27,11 +60,18 @@ impl Default for PruningConfig {
 pub struct PruningStats {
     pub results: usize,
     pub saved_tokens: u64,
+    pub added_tokens: u64,
 }
 impl PruningStats {
     pub fn apply(self, breakdown: &mut crate::context::ContextBreakdown) {
-        breakdown.conversation = breakdown.conversation.saturating_sub(self.saved_tokens);
-        breakdown.total = breakdown.total.saturating_sub(self.saved_tokens);
+        breakdown.conversation = breakdown
+            .conversation
+            .saturating_add(self.added_tokens)
+            .saturating_sub(self.saved_tokens);
+        breakdown.total = breakdown
+            .total
+            .saturating_add(self.added_tokens)
+            .saturating_sub(self.saved_tokens);
     }
 }
 #[derive(Default)]
@@ -83,18 +123,7 @@ pub fn project_request(
     provider: &str,
     model: &str,
 ) -> PruningStats {
-    if !matches!(
-        kind,
-        RequestKind::MainTurn
-            | RequestKind::ToolContinuation
-            | RequestKind::Headless
-            | RequestKind::Service
-            | RequestKind::Subagent
-            | RequestKind::Scheduled
-            | RequestKind::WorkflowStep
-            | RequestKind::RoleRun
-            | RequestKind::MultiRunCandidate
-    ) {
+    if !coding_request(kind) {
         return PruningStats::default();
     }
     let settings = policy().read().unwrap_or_else(|p| p.into_inner());
@@ -162,6 +191,7 @@ pub fn project(messages: &mut [ChatMessage], enabled: bool, capacity: Option<u64
     if !enabled {
         return PruningStats::default();
     }
+    let mut evidence = crate::context_observation::project_deferred(messages, SEMANTIC_EVIDENCE);
     let keep_from = messages
         .iter()
         .enumerate()
@@ -198,7 +228,11 @@ pub fn project(messages: &mut [ChatMessage], enabled: bool, capacity: Option<u64
         let tokens = crate::context::estimate_text_tokens(text);
         let protected_by_budget = retained < protected;
         retained = retained.saturating_add(tokens);
-        if index >= keep_from || protected_by_budget || !message.content.is_prunable_tool_result() {
+        if index >= keep_from
+            || protected_by_budget
+            || evidence.frozen(index)
+            || !message.content.is_prunable_tool_result()
+        {
             continue;
         }
         let Some(id) = message.tool_call_id.as_deref() else {
@@ -226,15 +260,25 @@ pub fn project(messages: &mut [ChatMessage], enabled: bool, capacity: Option<u64
         }
     }
     if savings < minimum {
-        return PruningStats::default();
+        return evidence.finish(messages);
     }
-    let stats = PruningStats {
-        results: candidates.len(),
-        saved_tokens: savings,
-    };
+    let mut legacy = PruningStats::default();
     for (index, marker) in candidates {
-        messages[index].content = crate::image_content::ModelContent::text(marker);
+        if !evidence.age(index) {
+            legacy.results += 1;
+            let before = crate::context::estimate_text_tokens(
+                messages[index].content.as_str().unwrap_or_default(),
+            );
+            let after = crate::context::estimate_text_tokens(&marker);
+            legacy.saved_tokens += before.saturating_sub(after);
+            legacy.added_tokens += after.saturating_sub(before);
+        }
+        messages[index].content = crate::image_content::ModelContent::context_marker(marker);
     }
+    let mut stats = evidence.finish(messages);
+    stats.results += legacy.results;
+    stats.saved_tokens += legacy.saved_tokens;
+    stats.added_tokens += legacy.added_tokens;
     stats
 }
 
@@ -349,6 +393,7 @@ mod tests {
     #[test]
     fn orc290_qualification_requires_known_success_and_protects_skills() {
         let mut call = ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "c".into(),

@@ -196,6 +196,12 @@ pub type ChatStreamItem = Result<ProviderEvent, ProviderError>;
 
 #[async_trait::async_trait]
 pub trait ChatBackend: Send + Sync {
+    /// Only native clients expose a route for bounded host inference. Custom
+    /// budgeted backends keep their own authority unless they opt in explicitly.
+    fn inference_client(&self) -> Option<AgentClient> {
+        None
+    }
+
     async fn prepare_harness_request(
         &self,
         request: crate::request::PreparedModelRequest,
@@ -463,14 +469,23 @@ impl AgentClient {
                 let _ = auth.identity().await;
             }
         }
-        match self.route_identity() {
+        let mut prepared = match self.route_identity() {
             Ok(source) => {
                 let mut request = request;
                 request.runtime_source = Some(source.clone());
                 crate::harness_guidance::prepare(request, source).await
             }
             Err(_) => request,
+        };
+        prepared.prepare_evidence_guidance();
+        if self.protocol != crate::agent::provider::ProviderProtocol::ChatCompletions
+            && prepared.host_context_error.is_none()
+        {
+            if let Err(error) = self.request_store.prepare_host_contexts(&mut prepared) {
+                prepared.host_context_error = Some(error);
+            }
         }
+        prepared
     }
 
     fn cooldown_key(&self) -> Option<crate::provider_cooldown::RouteKey> {
@@ -623,6 +638,11 @@ impl AgentClient {
             auth.identity().await?;
         }
         let mut effective = self.prepare_harness_request(request.clone()).await;
+        if let Some(detail) = &effective.host_context_error {
+            return Err(ProviderError::PrivacyBlocked {
+                detail: detail.clone(),
+            });
+        }
         effective.tool_schema_policy = self.tool_schema_policy;
         let privacy = self.privacy_context();
         if self.active_filter().filenames()
@@ -807,7 +827,8 @@ impl AgentClient {
         }
         if prepared_http.replay.privacy_context.is_some() {
             prepared_http.replay.privacy_body = Some(
-                crate::provider_replay::PreparedBodyReceipt::new(&prepared_http.body),
+                crate::provider_replay::PreparedBodyReceipt::new(&prepared_http.body)
+                    .with_structured_output(request.structured_output()),
             );
         }
         let trace = self.trace_hub.as_ref().and_then(|hub| {
@@ -1669,7 +1690,8 @@ async fn execute_provider_request(
             }
             let private_revision = context.private_revision();
             context
-                .validate_wire(&body, revision, bindings.privacy_policy_digest.as_deref().unwrap_or_default())
+                .validate_wire_with_structured_output(&body, revision, bindings.privacy_policy_digest.as_deref().unwrap_or_default(),
+                    bindings.privacy_body.as_ref().and_then(|receipt| receipt.structured_output()))
                 .map_err(|detail| ProviderError::PrivacyBlocked { detail })?;
             context
                 .publish_wire(original.as_deref().unwrap_or(&raw), &body)
@@ -2519,6 +2541,14 @@ pub(crate) fn append_provider_messages(
                             role: "tool".into(),
                             content: crate::image_content::ModelContent::text(output.clone())
                                 .with_source_receipt(call.output_source.clone())
+                                .with_context_observation(
+                                    call.observation
+                                        .as_ref()
+                                        .filter(|observation| {
+                                            observation.matches(&call.name, &call.arguments, output)
+                                        })
+                                        .cloned(),
+                                )
                                 .with_prunable_tool_result(crate::context_pruning::qualified(call))
                                 .with_tool_result_status(
                                     call.status == crate::app::ToolStatus::Done,
@@ -2540,6 +2570,14 @@ pub(crate) fn append_provider_messages(
                         role: "tool".into(),
                         content: crate::image_content::ModelContent::text(output.clone())
                             .with_source_receipt(call.output_source.clone())
+                            .with_context_observation(
+                                call.observation
+                                    .as_ref()
+                                    .filter(|observation| {
+                                        observation.matches(&call.name, &call.arguments, output)
+                                    })
+                                    .cloned(),
+                            )
                             .with_prunable_tool_result(crate::context_pruning::qualified(call))
                             .with_tool_result_status(call.status == crate::app::ToolStatus::Done),
                         tool_calls: None,
@@ -2622,6 +2660,10 @@ fn retry_delay(response: &reqwest::Response, policy: &ProviderCallPolicy) -> std
 
 #[async_trait::async_trait]
 impl ChatBackend for AgentClient {
+    fn inference_client(&self) -> Option<AgentClient> {
+        Some(self.clone())
+    }
+
     async fn prepare_harness_request(
         &self,
         request: crate::request::PreparedModelRequest,

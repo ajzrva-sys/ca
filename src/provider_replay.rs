@@ -262,17 +262,35 @@ fn tool_input_matches(arguments: &str, input: &Value) -> bool {
 /// Host-only immutable bytes prove the exact prepared body at the send boundary.
 /// Protocol-prefix and durable registry digests keep their SHA-256 contracts.
 #[derive(Clone)]
-pub(crate) struct PreparedBodyReceipt(std::sync::Arc<[u8]>);
+pub(crate) struct PreparedBodyReceipt {
+    body: std::sync::Arc<[u8]>,
+    structured_output: Option<crate::headless_contract::StructuredOutputContract>,
+}
 
 impl PreparedBodyReceipt {
     pub(crate) fn new(body: &[u8]) -> Self {
-        Self(std::sync::Arc::from(body))
+        Self {
+            body: std::sync::Arc::from(body),
+            structured_output: None,
+        }
     }
     pub(crate) fn matches(&self, body: &[u8]) -> bool {
-        self.0.as_ref() == body
+        self.body.as_ref() == body
     }
     pub(crate) fn bytes(&self) -> std::sync::Arc<[u8]> {
-        self.0.clone()
+        self.body.clone()
+    }
+    pub(crate) fn with_structured_output(
+        mut self,
+        contract: Option<&crate::headless_contract::StructuredOutputContract>,
+    ) -> Self {
+        self.structured_output = contract.cloned();
+        self
+    }
+    pub(crate) fn structured_output(
+        &self,
+    ) -> Option<&crate::headless_contract::StructuredOutputContract> {
+        self.structured_output.as_ref()
     }
 }
 
@@ -280,7 +298,7 @@ impl std::fmt::Debug for PreparedBodyReceipt {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("PreparedBodyReceipt")
-            .field("bytes", &self.0.len())
+            .field("bytes", &self.body.len())
             .finish_non_exhaustive()
     }
 }

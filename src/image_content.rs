@@ -124,6 +124,10 @@ pub struct ModelContent {
     tool_success: Option<bool>,
     retrieved_spans: Vec<Option<Vec<crate::retrieved_content::RetrievedSpan>>>,
     authored_id: Option<String>,
+    context_observation: Option<crate::context_observation::ObservationV1>,
+    context_marker: bool,
+    // Runtime-only boundary established by append_authored, never imported data.
+    authored_suffix_start: Option<usize>,
 }
 
 impl ModelContent {
@@ -134,6 +138,9 @@ impl ModelContent {
             prunable_tool_result: false,
             tool_success: None,
             authored_id: None,
+            context_observation: None,
+            context_marker: false,
+            authored_suffix_start: None,
         }
     }
 
@@ -146,6 +153,9 @@ impl ModelContent {
             prunable_tool_result: false,
             tool_success: None,
             authored_id: None,
+            context_observation: None,
+            context_marker: false,
+            authored_suffix_start: None,
         }
     }
 
@@ -155,6 +165,9 @@ impl ModelContent {
             prunable_tool_result: false,
             tool_success: Some(true),
             authored_id: None,
+            context_observation: None,
+            context_marker: false,
+            authored_suffix_start: None,
             blocks: vec![
                 ModelContentBlock::Text(format!("Image returned by view_image call {call_id}.")),
                 ModelContentBlock::Image(image),
@@ -203,6 +216,7 @@ impl ModelContent {
         project: impl Fn(&str) -> String,
     ) -> Result<Self, String> {
         let mut next = self.clone();
+        next.authored_suffix_start = None;
         next.blocks.clear();
         next.retrieved_spans.clear();
         for (index, block) in self.blocks.iter().enumerate() {
@@ -276,6 +290,28 @@ impl ModelContent {
         self
     }
 
+    pub(crate) fn with_context_observation(
+        mut self,
+        observation: Option<crate::context_observation::ObservationV1>,
+    ) -> Self {
+        self.context_observation = observation;
+        self
+    }
+
+    pub(crate) fn context_observation(&self) -> Option<&crate::context_observation::ObservationV1> {
+        self.context_observation.as_ref()
+    }
+
+    pub(crate) fn context_marker(text: impl Into<String>) -> Self {
+        let mut content = Self::text(text);
+        content.context_marker = true;
+        content
+    }
+
+    pub(crate) fn is_context_marker(&self) -> bool {
+        self.context_marker
+    }
+
     pub(crate) fn text_retrieved_spans(
         &self,
     ) -> Option<Vec<crate::retrieved_content::RetrievedSpan>> {
@@ -298,10 +334,17 @@ impl ModelContent {
     /// Existing spans remain subject to validation during request projection.
     pub(crate) fn append_authored(&self, suffix: &str) -> Self {
         let mut content = self.clone();
-        if let Some(text) = content.as_text_mut() {
+        if let [ModelContentBlock::Text(text)] = content.blocks.as_mut_slice() {
+            content.authored_suffix_start.get_or_insert(text.len());
             text.push_str(suffix);
         }
         content
+    }
+
+    pub(crate) fn split_authored_suffix(&self) -> Option<(&str, &str)> {
+        let text = self.as_str()?;
+        let end = self.authored_suffix_start.unwrap_or(text.len());
+        Some((text.get(..end)?, text.get(end..)?))
     }
 
     pub fn with_legacy_provenance(mut self) -> Self {
@@ -351,6 +394,30 @@ impl ModelContent {
         context: &crate::privacy::Context,
         tool_result: bool,
     ) -> Result<Self, String> {
+        fn append_tool_segment(
+            context: &crate::privacy::Context,
+            text: &str,
+            source: Option<&str>,
+            output: &mut String,
+            read_generation: &mut Option<String>,
+        ) -> Result<(), String> {
+            let projected = context.project_retrieved(text, source)?;
+            if let Some(generation) = context.exact_read_projection(&projected)? {
+                if read_generation
+                    .as_ref()
+                    .is_some_and(|prior| prior != &generation)
+                {
+                    return Err(
+                        "Private values changed between native read segments; prepare again".into(),
+                    );
+                }
+                *read_generation = Some(generation);
+                output.push_str(&projected);
+            } else {
+                output.push_str(&context.mask_known(&projected)?);
+            }
+            Ok(())
+        }
         let mut projected = self.clone();
         for (index, block) in projected.blocks.iter_mut().enumerate() {
             match block {
@@ -366,26 +433,62 @@ impl ModelContent {
                         let spans =
                             crate::retrieved_content::checked_spans(text, metadata, true)
                                 .map_err(|_| "Privacy source ranges are unavailable or invalid")?;
+                        if spans.iter().any(|span| span.source.is_some()) {
+                            // Discover every segment before retaining a read's
+                            // public controls. A later annotation may introduce
+                            // private values that invalidate an earlier proof.
+                            let mut offset = 0;
+                            for span in &spans {
+                                if offset < span.start {
+                                    context.project_retrieved(&text[offset..span.start], None)?;
+                                }
+                                context.project_retrieved(
+                                    &text[span.start..span.end],
+                                    span.source.as_deref(),
+                                )?;
+                                offset = span.end;
+                            }
+                            if offset < text.len() {
+                                context.project_retrieved(&text[offset..], None)?;
+                            }
+                        }
                         let mut result = String::new();
                         let mut offset = 0;
+                        let mut read_generation = None;
                         for span in spans {
                             if offset < span.start {
-                                result.push_str(
-                                    &context.project_retrieved(&text[offset..span.start], None)?,
-                                );
+                                append_tool_segment(
+                                    context,
+                                    &text[offset..span.start],
+                                    None,
+                                    &mut result,
+                                    &mut read_generation,
+                                )?;
                             }
-                            result.push_str(&context.project_retrieved(
+                            append_tool_segment(
+                                context,
                                 &text[span.start..span.end],
                                 span.source.as_deref(),
-                            )?);
+                                &mut result,
+                                &mut read_generation,
+                            )?;
                             offset = span.end;
                         }
                         if offset < text.len() {
-                            result.push_str(&context.project_retrieved(&text[offset..], None)?);
+                            append_tool_segment(
+                                context,
+                                &text[offset..],
+                                None,
+                                &mut result,
+                                &mut read_generation,
+                            )?;
                         }
                         *text = result;
                         if self.tool_success == Some(false) {
                             text.insert_str(0, "[tool failed]\n");
+                        }
+                        if let Some(generation) = read_generation {
+                            context.retain_read_projection(text, &generation)?;
                         }
                     } else {
                         let metadata = self.retrieved_spans.get(index).and_then(Option::as_deref);
@@ -445,6 +548,7 @@ impl ModelContent {
     }
 
     pub fn as_text_mut(&mut self) -> Option<&mut String> {
+        self.authored_suffix_start = None;
         match self.blocks.as_mut_slice() {
             [ModelContentBlock::Text(text)] => Some(text),
             _ => None,

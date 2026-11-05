@@ -218,6 +218,15 @@ pub struct AutomationReservation {
     started_at: chrono::DateTime<chrono::Utc>,
 }
 impl AutomationDispatch {
+    pub fn output_token_cap(&self) -> u32 {
+        self.policy.output_token_cap()
+    }
+    pub fn input_byte_cap(&self) -> usize {
+        self.policy.input_byte_cap()
+    }
+    pub fn request_options(&self) -> crate::agent::client::ChatRequestOptions {
+        self.policy.frozen.options.clone()
+    }
     pub fn remaining(&self) -> Duration {
         Duration::from_secs(self.policy.budget.runtime_secs).saturating_sub(self.started.elapsed())
     }

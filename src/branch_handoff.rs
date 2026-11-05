@@ -393,6 +393,7 @@ mod tests {
             end: assistant.content.len(),
         }]);
         assistant.tool_calls = Some(vec![crate::app::ToolCall {
+            observation: None,
             output_source: None,
             arguments_retrieved_spans: Vec::new(),
             id: "call-1".into(),

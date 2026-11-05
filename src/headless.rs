@@ -1,6 +1,4 @@
-#[cfg(test)]
-use crate::agent::client::ToolDef;
-use crate::agent::client::{ChatBackend, ChatMessage};
+use crate::agent::client::{ChatBackend, ChatMessage, ToolDef};
 use crate::agent::registry::{ToolCapability, ToolExecutionResult, ToolRegistry};
 use crate::agent::stream::{
     AssembledToolCall, AssistantTurnAssembler, AssistantTurnLimits, ProviderError, ProviderEvent,
@@ -1845,6 +1843,20 @@ pub async fn run_with_backend<B: ChatBackend + ?Sized>(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> HeadlessExit {
+    if let Some(client) = backend.inference_client() {
+        let ledger =
+            std::sync::Arc::new(std::sync::Mutex::new(crate::usage::UsageLedger::default()));
+        crate::inference::bind_coordinator(
+            config.job_owner,
+            client,
+            crate::usage::UsageRecorder::new(
+                ledger,
+                crate::usage::UsageKind::Inference,
+                &config.provider,
+                &config.model,
+            ),
+        );
+    }
     let sink = config.outcome_sink.clone();
     // Keep the large request state machine off each caller's stack, including
     // callers that perform several verification or repair runs in one future.
@@ -1890,6 +1902,7 @@ async fn run_with_backend_inner<B: ChatBackend + ?Sized>(
         .as_ref()
         .map(|policy| std::sync::Arc::new(std::sync::Mutex::new(policy.start())));
     emitter.automation_dispatch = automation_dispatch.clone();
+    crate::inference::bind_automation_budget(config.job_owner, automation_dispatch.clone());
     if let Some(sink) = config.outcome_sink.clone() {
         let mut tracker = crate::session_outcome::OutcomeTracker::for_run(
             config.run_id.to_string(),
@@ -2097,18 +2110,12 @@ async fn run_with_backend_inner<B: ChatBackend + ?Sized>(
     let mut verification_failed = false;
     let mut repair_passes = 0_u8;
     let discovery = crate::tool_discovery::ToolDiscoverySession::default();
+    let mut native_guidance_added = false;
+    let mut report_retry_tools: Option<Vec<ToolDef>> = None;
 
     for turn_number in 1..=config.max_turns {
         exit_if_role_run_interrupted!();
         emit_or_pipe!(HeadlessEventV1::TurnStart { turn: turn_number });
-        let catalog_registry = if let Some(manager) = &config.mcp {
-            manager.active_catalog().await.registry
-        } else {
-            None
-        };
-        let registry = catalog_registry
-            .as_ref()
-            .unwrap_or_else(|| ToolRegistry::builtins());
         let mut tool_constraints = config.tool_constraints.clone();
         tool_constraints.native_mechanistic_enabled = config.native_mechanistic
             && !external_mechanistic
@@ -2117,45 +2124,59 @@ async fn run_with_backend_inner<B: ChatBackend + ?Sized>(
         if config.automation_policy.is_some() {
             tool_constraints.images_supported = false;
         }
-        let mut turn_tools = match crate::tool_selection::resolve_tools(
-            registry,
-            config.tool_profile,
-            &config.tool_policy,
-            &tool_constraints,
-        ) {
-            Ok(tools) => tools.into_definitions(),
-            Err(error) => {
+        let report_only = report_retry_tools.is_some();
+        let turn_tools = if let Some(tools) = &report_retry_tools {
+            tools.clone()
+        } else {
+            let catalog_registry = if let Some(manager) = &config.mcp {
+                manager.active_catalog().await.registry
+            } else {
+                None
+            };
+            let registry = catalog_registry
+                .as_ref()
+                .unwrap_or_else(|| ToolRegistry::builtins());
+            let mut turn_tools = match crate::tool_selection::resolve_tools(
+                registry,
+                config.tool_profile,
+                &config.tool_policy,
+                &tool_constraints,
+            ) {
+                Ok(tools) => tools.into_definitions(),
+                Err(error) => {
+                    emit_or_pipe!(HeadlessEventV1::Failure {
+                        kind: HeadlessFailureKind::Input,
+                        message: format!("tool selection failed: {error}"),
+                        exit_code: 2,
+                    });
+                    return finish_with_code(emitter, 2);
+                }
+            };
+            turn_tools.retain(|tool| {
+                headless_surface_tool_allowed(&tool.function.name)
+                    && (!matches!(tool.function.name.as_str(), "task" | "spawn_agent")
+                        || !subagent_tool_hard_denied(&config, &tool.function.name))
+            });
+            turn_tools = discovery.advertise(turn_tools, &config.tool_policy);
+            if turn_tools.iter().any(|tool| {
+                matches!(
+                    tool.function.name.as_str(),
+                    crate::headless_contract::STRUCTURED_OUTPUT_TOOL
+                        | crate::headless_contract::VERIFICATION_TOOL
+                )
+            }) {
                 emit_or_pipe!(HeadlessEventV1::Failure {
                     kind: HeadlessFailureKind::Input,
-                    message: format!("tool selection failed: {error}"),
+                    message: "selected tools collide with a reserved headless contract tool".into(),
                     exit_code: 2,
                 });
                 return finish_with_code(emitter, 2);
             }
+            if let Some(contract) = &config.structured_output {
+                turn_tools.push(contract.tool_definition());
+            }
+            turn_tools
         };
-        turn_tools.retain(|tool| {
-            headless_surface_tool_allowed(&tool.function.name)
-                && (!matches!(tool.function.name.as_str(), "task" | "spawn_agent")
-                    || !subagent_tool_hard_denied(&config, &tool.function.name))
-        });
-        turn_tools = discovery.advertise(turn_tools, &config.tool_policy);
-        if turn_tools.iter().any(|tool| {
-            matches!(
-                tool.function.name.as_str(),
-                crate::headless_contract::STRUCTURED_OUTPUT_TOOL
-                    | crate::headless_contract::VERIFICATION_TOOL
-            )
-        }) {
-            emit_or_pipe!(HeadlessEventV1::Failure {
-                kind: HeadlessFailureKind::Input,
-                message: "selected tools collide with a reserved headless contract tool".into(),
-                exit_code: 2,
-            });
-            return finish_with_code(emitter, 2);
-        }
-        if let Some(contract) = &config.structured_output {
-            turn_tools.push(contract.tool_definition());
-        }
         let advertised_tool_names = turn_tools
             .iter()
             .map(|tool| tool.function.name.clone())
@@ -2163,7 +2184,8 @@ async fn run_with_backend_inner<B: ChatBackend + ?Sized>(
         let proactive = crate::proactive_delegation::ProactiveContext {
             tracker: proactive_tracker.clone(),
             turn: review_turn,
-            enabled: config.proactive_delegation
+            enabled: !report_only
+                && config.proactive_delegation
                 && !is_role_run(&config)
                 && config.automation_policy.is_none()
                 && config.tool_profile == crate::agent::registry::ToolProfile::Main,
@@ -2172,7 +2194,7 @@ async fn run_with_backend_inner<B: ChatBackend + ?Sized>(
             authority: automatic_review_authority(&config, false, false),
             original_request: config.original_request.clone(),
         };
-        if let Some(manager) = config.agents.as_ref() {
+        if let Some(manager) = config.agents.as_ref().filter(|_| !report_only) {
             let ready = proactive_tracker.ready(&manager.subscribe_activity().borrow());
             if let Some(result) = ready {
                 messages.push(ChatMessage {
@@ -2198,9 +2220,10 @@ async fn run_with_backend_inner<B: ChatBackend + ?Sized>(
             .iter()
             .take_while(|message| matches!(message.role.as_str(), "system" | "developer"))
             .count();
-        let mut request_messages = messages.clone();
-        if tool_constraints.native_mechanistic_enabled {
-            request_messages.push(ChatMessage {
+        if tool_constraints.native_mechanistic_enabled && !native_guidance_added {
+            // Opaque provider reasoning binds this message's sent position.
+            // Retain it before appending subsequent assistant/tool exchanges.
+            messages.push(ChatMessage {
                 role: "system".into(),
                 content: crate::image_content::ModelContent::text(include_str!(
                     "../prompts/native_mechanistic_tools.md"
@@ -2209,9 +2232,12 @@ async fn run_with_backend_inner<B: ChatBackend + ?Sized>(
                 tool_call_id: None,
                 response_items: Vec::new(),
             });
+            native_guidance_added = true;
         }
+        let mut request_messages = messages.clone();
         let delegation = crate::agent::subagent::proactive_delegation_guidance(
-            config.proactive_delegation
+            !report_only
+                && config.proactive_delegation
                 && !is_role_run(&config)
                 && config.automation_policy.is_none(),
             config
@@ -2266,6 +2292,7 @@ async fn run_with_backend_inner<B: ChatBackend + ?Sized>(
             turn_tools,
             config.chat_options.clone(),
         )
+        .with_structured_output(config.structured_output.as_ref())
         .with_prompt_cache(
             crate::request::PromptCacheScope::conversation(config.run_id),
             stable_prefix_messages,
@@ -2444,6 +2471,21 @@ async fn run_with_backend_inner<B: ChatBackend + ?Sized>(
                 return finish_with_code(emitter, 7);
             }
         }
+        // Keep the full signed tool prefix for replay, but permit no execution
+        // while repairing only the final response format.
+        if report_only
+            && !(turn.tool_calls.len() == 1
+                && turn.tool_calls[0].name == crate::headless_contract::STRUCTURED_OUTPUT_TOOL)
+        {
+            emit_or_pipe!(HeadlessEventV1::Failure {
+                kind: HeadlessFailureKind::ProviderProtocol,
+                message:
+                    "structured output format retry requires the sole report_structured_output call"
+                        .into(),
+                exit_code: 6,
+            });
+            return finish_with_code(emitter, 6);
+        }
         automation_limit!(reserve_tools, turn.tool_calls.len());
         let automation_tool_output_cap = automation_dispatch.as_ref().map(|dispatch| {
             dispatch
@@ -2453,9 +2495,11 @@ async fn run_with_backend_inner<B: ChatBackend + ?Sized>(
         });
         exit_if_role_run_interrupted!();
 
-        let terminal_candidate = turn.tool_calls.is_empty()
-            || (turn.tool_calls.len() == 1
-                && turn.tool_calls[0].name == crate::headless_contract::STRUCTURED_OUTPUT_TOOL);
+        let terminal_candidate = !report_only
+            && (turn.tool_calls.is_empty()
+                || (turn.tool_calls.len() == 1
+                    && turn.tool_calls[0].name
+                        == crate::headless_contract::STRUCTURED_OUTPUT_TOOL));
         if terminal_candidate && proactive_tracker.pending(review_turn) {
             if let Some(manager) = config.agents.as_ref() {
                 let result = tokio::select! {
@@ -2471,6 +2515,7 @@ async fn run_with_backend_inner<B: ChatBackend + ?Sized>(
                             turn.tool_calls
                                 .iter()
                                 .map(|call| ToolCall {
+                                    observation: None,
                                     output_source: None,
                                     arguments_retrieved_spans: call
                                         .arguments_retrieved_spans
@@ -2610,6 +2655,23 @@ async fn run_with_backend_inner<B: ChatBackend + ?Sized>(
                         .await;
                 }
                 if !completed_jobs.is_empty() {
+                    let mut diagnoses = std::collections::HashMap::new();
+                    for completion in &completed_jobs {
+                        let diagnosis = tokio::select! {
+                            result = crate::inference::maybe_analyze_job(job_owner, completion) => result,
+                            _ = wait_for_interruption(role_run_cancellation) => {
+                                emit_or_pipe!(HeadlessEventV1::Failure {
+                                    kind: HeadlessFailureKind::Interrupted,
+                                    message: "interrupted".into(),
+                                    exit_code: 130
+                                });
+                                return finish_with_code(emitter, 130);
+                            }
+                        };
+                        if let Some(diagnosis) = diagnosis {
+                            diagnoses.insert(completion.id, diagnosis);
+                        }
+                    }
                     let assistant = Message {
                         retrieved_spans: Some(turn.retrieved_spans.clone()),
                         role: Role::Assistant,
@@ -2618,6 +2680,7 @@ async fn run_with_backend_inner<B: ChatBackend + ?Sized>(
                             turn.tool_calls
                                 .iter()
                                 .map(|call| ToolCall {
+                                    observation: None,
                                     output_source: None,
                                     arguments_retrieved_spans: call
                                         .arguments_retrieved_spans
@@ -2652,6 +2715,7 @@ async fn run_with_backend_inner<B: ChatBackend + ?Sized>(
                         role: "system".into(),
                         content: host_evidence_content(&model_job_completion_message(
                             &completed_jobs,
+                            &diagnoses,
                         )),
                         tool_calls: None,
                         tool_call_id: None,
@@ -2760,6 +2824,7 @@ async fn run_with_backend_inner<B: ChatBackend + ?Sized>(
                         turn.tool_calls
                             .iter()
                             .map(|call| ToolCall {
+                                observation: None,
                                 output_source: None,
                                 arguments_retrieved_spans: call.arguments_retrieved_spans.clone(),
                                 id: call.id.clone(),
@@ -2940,6 +3005,38 @@ async fn run_with_backend_inner<B: ChatBackend + ?Sized>(
                 return finish_with_code(emitter, 10);
             }
             if config.structured_output.is_some() {
+                if !report_only && turn_number < config.max_turns && !config.check_mode.enabled() {
+                    let assistant = Message {
+                        retrieved_spans: Some(turn.retrieved_spans.clone()),
+                        role: Role::Assistant,
+                        content: turn.content.clone(),
+                        tool_calls: None,
+                        thinking: turn.reasoning.clone(),
+                        response_items: turn.response_items.clone(),
+                        timestamp: chrono::Utc::now(),
+                    };
+                    if let Err(error) =
+                        crate::agent::client::append_provider_messages(&mut messages, &assistant)
+                    {
+                        emit_or_pipe!(HeadlessEventV1::Failure {
+                            kind: HeadlessFailureKind::Internal,
+                            message: error.to_string(),
+                            exit_code: 8,
+                        });
+                        return finish_with_code(emitter, 8);
+                    }
+                    messages.push(ChatMessage {
+                        role: "system".into(),
+                        content: crate::image_content::ModelContent::text(
+                            "Format the existing evidence as the required structured output. Call only report_structured_output, exactly once. Do not run commands, edit files, request inference, or start workers. Report unresolved or incomplete conditions truthfully within the schema; do not invent success or evidence.",
+                        ),
+                        tool_calls: None,
+                        tool_call_id: None,
+                        response_items: Vec::new(),
+                    });
+                    report_retry_tools = Some(prepared.tools.clone());
+                    continue;
+                }
                 emit_or_pipe!(HeadlessEventV1::Failure {
                     kind: HeadlessFailureKind::ProviderProtocol,
                     message: "structured output response did not call report_structured_output"
@@ -3339,6 +3436,7 @@ async fn run_with_backend_inner<B: ChatBackend + ?Sized>(
             }
             let output_source = execution.source_for(&retained_model_text);
             completed_calls.push(ToolCall {
+                observation: None,
                 output_source,
                 arguments_retrieved_spans: call.arguments_retrieved_spans.clone(),
                 id: call.id.clone(),
@@ -3361,7 +3459,7 @@ async fn run_with_backend_inner<B: ChatBackend + ?Sized>(
             });
             return finish_with_code(emitter, 9);
         }
-        let message = Message {
+        let mut message = Message {
             retrieved_spans: Some(turn.retrieved_spans),
             role: Role::Assistant,
             content: turn.content,
@@ -3370,6 +3468,9 @@ async fn run_with_backend_inner<B: ChatBackend + ?Sized>(
             response_items: turn.response_items,
             timestamp: chrono::Utc::now(),
         };
+        for call in message.tool_calls.as_mut().into_iter().flatten() {
+            call.bind_native_observation();
+        }
         if let Err(error) = crate::agent::client::append_provider_messages(&mut messages, &message)
         {
             emit_or_pipe!(HeadlessEventV1::Failure {
@@ -3507,7 +3608,10 @@ async fn run_with_backend_inner<B: ChatBackend + ?Sized>(
     finish_with_code(emitter, 7)
 }
 
-fn model_job_completion_message(completions: &[crate::jobs::JobInfo]) -> String {
+fn model_job_completion_message(
+    completions: &[crate::jobs::JobInfo],
+    diagnoses: &std::collections::HashMap<crate::jobs::JobId, serde_json::Value>,
+) -> String {
     let mut content = String::from(
         "Background model-tool completion event. Incorporate these results into the conversation. This is host-owned lifecycle data, not user input.",
     );
@@ -3522,6 +3626,15 @@ fn model_job_completion_message(completions: &[crate::jobs::JobInfo]) -> String 
             }
             output.truncate(end);
             output.push_str("\n[… background job output truncated …]");
+        }
+        if let Some(artifact) = &completion.log_artifact {
+            output.push_str(&format!(
+                "\nStored log: {}",
+                serde_json::to_string(artifact).unwrap_or_default()
+            ));
+        }
+        if let Some(diagnosis) = diagnoses.get(&completion.id) {
+            output.push_str(&format!("\nBuild-log diagnosis (inferred): {diagnosis}"));
         }
         let item = format!(
             "\n\njob={} status={} command={}\n{}",
@@ -4485,6 +4598,7 @@ async fn run_verification<B: ChatBackend + ?Sized>(
                     )]);
             }
             completed_calls.push(ToolCall {
+                observation: None,
                 output_source: execution.source_for(execution.model_text()),
                 arguments_retrieved_spans: call.arguments_retrieved_spans.clone(),
                 id: call.id,
@@ -4796,6 +4910,7 @@ mod tests {
         requests: Mutex<Vec<Vec<ChatMessage>>>,
         prepared: Mutex<Vec<(crate::request::RequestKind, String, String)>>,
         tool_sets: Mutex<Vec<Vec<String>>>,
+        tool_definitions: Mutex<Vec<serde_json::Value>>,
     }
 
     impl FakeBackend {
@@ -4805,6 +4920,7 @@ mod tests {
                 requests: Mutex::new(Vec::new()),
                 prepared: Mutex::new(Vec::new()),
                 tool_sets: Mutex::new(Vec::new()),
+                tool_definitions: Mutex::new(Vec::new()),
             }
         }
 
@@ -4848,6 +4964,10 @@ mod tests {
             tokio::sync::mpsc::UnboundedReceiver<crate::agent::client::ChatStreamItem>,
             ProviderError,
         > {
+            self.tool_definitions
+                .lock()
+                .unwrap()
+                .push(serde_json::to_value(&request.tools).unwrap());
             self.prepared.lock().unwrap().push((
                 request.kind,
                 request.provider.clone(),
@@ -4939,6 +5059,56 @@ mod tests {
             tool_call_id: None,
             response_items: Vec::new(),
         }]
+    }
+
+    #[tokio::test]
+    async fn headless_native_guidance_preserves_sent_prefix_across_tool_continuations() {
+        for native in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::write(root.path().join("input.txt"), "current evidence\n").unwrap();
+            std::fs::write(root.path().join("other.txt"), "distinct evidence\n").unwrap();
+            let backend = FakeBackend::new(vec![
+                tool_turn(
+                    "read-1",
+                    "read_file",
+                    serde_json::json!({"path":"input.txt"}),
+                ),
+                tool_turn(
+                    "read-2",
+                    "read_file",
+                    serde_json::json!({"path":"other.txt"}),
+                ),
+                text_turn("read complete"),
+            ]);
+            let mut run = config(root.path(), OutputFormat::Json);
+            run.approval_mode = HeadlessApprovalMode::Yolo;
+            run.native_mechanistic = native;
+            run.mechanistic.automatic_preflight = false;
+            run.proactive_delegation = false;
+            run.tool_policy = crate::tool_selection::ToolSelectionPolicy::replacing(&["read_file"]);
+            let exit =
+                run_with_backend(&backend, messages(), run, &mut Vec::new(), &mut Vec::new()).await;
+            assert_eq!(exit.code, 0);
+            let requests = backend.requests();
+            assert_eq!(requests.len(), 3);
+            for pair in requests.windows(2) {
+                assert_eq!(
+                    serde_json::to_value(&pair[1][..pair[0].len()]).unwrap(),
+                    serde_json::to_value(&pair[0]).unwrap(),
+                    "tool continuation changed an already sent input prefix (native={native})"
+                );
+            }
+            for request in requests {
+                assert_eq!(
+                    request
+                        .iter()
+                        .filter(|message| message.content.as_str()
+                            == Some(include_str!("../prompts/native_mechanistic_tools.md")))
+                        .count(),
+                    usize::from(native)
+                );
+            }
+        }
     }
 
     #[tokio::test]
@@ -6514,6 +6684,116 @@ mod tests {
         assert!(output.contains("image/png 2×1"));
         assert!(!output.contains("data:image"));
         assert!(stderr.is_empty());
+    }
+
+    #[tokio::test]
+    async fn structured_missing_report_retries_format_once_without_changing_tools() {
+        let temp = tempfile::tempdir().unwrap();
+        let opaque = crate::agent::stream::ProviderResponseItem::ResponsesOutput {
+            source: crate::agent::stream::ProviderStateSourceV1::for_test(
+                "openai",
+                crate::agent::provider::ProviderProtocol::OpenAiResponses,
+            ),
+            output_index: 0,
+            privacy_prefix_sha256: Some("bound-prefix".into()),
+            item: serde_json::json!({"type":"reasoning","encrypted_content":"opaque-test-state"}),
+        };
+        let mut initial = text_turn("Done.").unwrap();
+        initial.insert(0, Ok(ProviderEvent::ResponseItem(opaque.clone())));
+        let backend = FakeBackend::new(vec![
+            Ok(initial),
+            tool_turn(
+                "format-report",
+                crate::headless_contract::STRUCTURED_OUTPUT_TOOL,
+                serde_json::json!({"value":{"answer":7}}),
+            ),
+        ]);
+        let mut run = config(temp.path(), OutputFormat::Json);
+        run.structured_output = Some(structured_contract(temp.path()));
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let exit = run_with_backend(&backend, messages(), run, &mut stdout, &mut stderr).await;
+        assert_eq!(exit.code, 0, "{}", String::from_utf8_lossy(&stdout));
+        assert_eq!(backend.requests().len(), 2);
+        assert_eq!(backend.tool_sets()[0], backend.tool_sets()[1]);
+        let definitions = backend.tool_definitions.lock().unwrap();
+        assert_eq!(definitions[0], definitions[1]);
+        let requests = backend.requests();
+        assert!(requests[1]
+            .iter()
+            .any(|m| m.response_items.contains(&opaque)));
+        assert!(requests[1]
+            .iter()
+            .any(|m| m.role == "assistant" && m.content.as_str() == Some("Done.")));
+        assert!(requests[1]
+            .last()
+            .unwrap()
+            .content
+            .as_str()
+            .unwrap()
+            .contains("existing evidence"));
+    }
+
+    #[tokio::test]
+    async fn structured_missing_report_retry_is_bounded_and_never_executes_other_tools() {
+        let temp = tempfile::tempdir().unwrap();
+        let forbidden = temp.path().join("forbidden.txt");
+        for second in [
+            text_turn("Still done."),
+            tool_turn(
+                "forbidden-write",
+                "write_file",
+                serde_json::json!({"path":forbidden,"content":"must never write"}),
+            ),
+            two_tool_turn(
+                (
+                    "mixed-report",
+                    crate::headless_contract::STRUCTURED_OUTPUT_TOOL,
+                    serde_json::json!({"value":{"answer":7}}),
+                ),
+                (
+                    "mixed-write",
+                    "write_file",
+                    serde_json::json!({"path":forbidden,"content":"must never write"}),
+                ),
+            ),
+            tool_turn(
+                "bad-report",
+                crate::headless_contract::STRUCTURED_OUTPUT_TOOL,
+                serde_json::json!({"value":{"answer":"invalid"}}),
+            ),
+        ] {
+            let backend = FakeBackend::new(vec![
+                text_turn("Done."),
+                second,
+                text_turn("must not request"),
+            ]);
+            let mut run = config(temp.path(), OutputFormat::Json);
+            run.structured_output = Some(structured_contract(temp.path()));
+            run.approval_mode = HeadlessApprovalMode::Yolo;
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let exit = run_with_backend(&backend, messages(), run, &mut stdout, &mut stderr).await;
+            assert_eq!(exit.code, 6);
+            assert_eq!(backend.requests().len(), 2);
+            assert!(!forbidden.exists());
+            let output: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+            assert_eq!(output["success"], false);
+            assert!(!output["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|e| e["type"] == "tool_start"));
+        }
+        let backend = FakeBackend::new(vec![text_turn("Done."), text_turn("must not request")]);
+        let mut run = config(temp.path(), OutputFormat::Json);
+        run.structured_output = Some(structured_contract(temp.path()));
+        run.max_turns = 1;
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let exit = run_with_backend(&backend, messages(), run, &mut stdout, &mut stderr).await;
+        assert_eq!(exit.code, 6);
+        assert_eq!(backend.requests().len(), 1);
     }
 
     #[tokio::test]

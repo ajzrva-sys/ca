@@ -1,5 +1,6 @@
 use crate::agent::client::{ChatMessage, ChatRequestOptions, ToolDef};
 use crate::context::ContextBreakdown;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
@@ -13,6 +14,144 @@ const SNAPSHOT_ID_LIMIT: usize = 256;
 const SNAPSHOT_JSON_DEPTH_LIMIT: usize = 32;
 const SNAPSHOT_JSON_NODE_LIMIT: usize = 2_048;
 
+const HOST_CONTEXT_SCOPE_BYTES: usize = 4 * 1024 * 1024;
+const HOST_CONTEXT_TOTAL_BYTES: usize = 16 * 1024 * 1024;
+
+/// Optional local replay data, never a freshness or execution-authority receipt.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostContextFrame {
+    anchor: String,
+    group: String,
+    key: String,
+    role: String,
+    text: String,
+    spans: Option<Vec<crate::retrieved_content::RetrievedSpan>>,
+    sha256: String,
+}
+impl std::fmt::Debug for HostContextFrame {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HostContextFrame")
+            .field("role", &self.role)
+            .field("bytes", &self.text.len())
+            .finish()
+    }
+}
+fn context_hash(value: &impl Serialize) -> String {
+    use sha2::{Digest, Sha256};
+    format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(value).expect("context serializes"))
+    )
+}
+impl HostContextFrame {
+    fn capture(anchor: String, group: String, message: &ChatMessage) -> Self {
+        let role = message.role.clone();
+        let text = message.content.as_str().unwrap_or_default().to_string();
+        let spans = message.content.text_retrieved_spans();
+        let key = context_hash(&(&group, &role, &text, &spans));
+        let sha256 = context_hash(&(&anchor, &group, &key, &role, &text, &spans));
+        Self {
+            anchor,
+            group,
+            key,
+            role,
+            text,
+            spans,
+            sha256,
+        }
+    }
+    fn valid(&self) -> bool {
+        !self.anchor.is_empty()
+            && self.anchor.len() <= 1024
+            && !self.group.is_empty()
+            && self.group.len() <= 1024
+            && matches!(self.role.as_str(), "system" | "developer" | "user")
+            && self.text.len() <= 1024 * 1024
+            && self.spans.as_ref().is_none_or(|spans| spans.len() <= 512)
+            && self.spans.iter().flatten().all(|span| {
+                span.source
+                    .as_ref()
+                    .is_none_or(|source| source.len() <= 256)
+            })
+            && crate::retrieved_content::checked_spans(&self.text, self.spans.as_deref(), true)
+                .is_ok()
+            && self.key == context_hash(&(&self.group, &self.role, &self.text, &self.spans))
+            && self.sha256
+                == context_hash(&(
+                    &self.anchor,
+                    &self.group,
+                    &self.key,
+                    &self.role,
+                    &self.text,
+                    &self.spans,
+                ))
+    }
+    fn bytes(&self) -> usize {
+        self.text
+            .len()
+            .saturating_add(self.spans.as_ref().map_or(0, Vec::len).saturating_mul(320))
+            .saturating_add(2304)
+    }
+    fn message(&self) -> ChatMessage {
+        let content = crate::image_content::ModelContent::text(self.text.clone());
+        let content = match &self.spans {
+            Some(spans) => content.with_retrieved_spans(spans.clone()),
+            None => content.with_legacy_provenance(),
+        };
+        ChatMessage {
+            role: self.role.clone(),
+            content,
+            tool_calls: None,
+            tool_call_id: None,
+            response_items: Vec::new(),
+        }
+    }
+}
+
+pub(crate) fn deserialize_host_contexts<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<HostContextFrame>, D::Error> {
+    let value = Value::deserialize(deserializer)?;
+    let Some(values) = value.as_array() else {
+        return Ok(Vec::new());
+    };
+    let mut bytes = 0_usize;
+    Ok(values
+        .iter()
+        .take(4096)
+        .filter_map(|value| serde_json::from_value::<HostContextFrame>(value.clone()).ok())
+        .filter(|frame| {
+            if !frame.valid() || bytes.saturating_add(frame.bytes()) > HOST_CONTEXT_SCOPE_BYTES {
+                return false;
+            }
+            bytes += frame.bytes();
+            true
+        })
+        .collect())
+}
+
+fn context_message_key(message: &ChatMessage) -> String {
+    if let Some(id) = &message.tool_call_id {
+        return format!("tool:{id}");
+    }
+    if let Some(id) = message.content.authored_id() {
+        return format!("message:{id}");
+    }
+    if let Some(id) = message
+        .tool_calls
+        .as_ref()
+        .and_then(|calls| calls.first())
+        .map(|call| &call.id)
+    {
+        return format!("assistant:{id}");
+    }
+    context_hash(&(message.role.as_str(), &message.content, &message.tool_calls))
+}
+fn context_scope(scope: PromptCacheScope) -> String {
+    format!("{}:{}", scope.domain.label(), scope.scope_id)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RequestKind {
     MainTurn,
@@ -24,6 +163,7 @@ pub enum RequestKind {
     ProjectInit,
     Review,
     Subagent,
+    Inference,
     RoleRun,
     #[default]
     Headless,
@@ -57,6 +197,7 @@ impl RequestKind {
             Self::ProjectInit => "project initialization",
             Self::Review => "review",
             Self::Subagent => "subagent",
+            Self::Inference => "inference",
             Self::RoleRun => "role run",
             Self::Headless => "headless",
             Self::HeadlessCheck => "headless check",
@@ -311,7 +452,12 @@ impl std::fmt::Debug for EffectivePromptCachePlan {
 
 #[derive(Clone)]
 pub struct PreparedModelRequest {
+    evidence_guidance_prepared: bool,
+    /// Process-owned contract identity; never serialized into a provider body.
+    structured_output: Option<crate::headless_contract::StructuredOutputContract>,
     pub(crate) privacy_revision: Option<u64>,
+    pub(crate) host_context_error: Option<String>,
+    host_context_prepared: bool,
     pub(crate) privacy_policy_digest: Option<String>,
     pub(crate) tool_schema_policy: crate::tool_schema::Policy,
     pub pruning: crate::context_pruning::PruningStats,
@@ -358,7 +504,11 @@ impl PreparedModelRequest {
         let pruning =
             crate::context_pruning::project_request(&mut messages, kind, &provider, &model);
         Self {
+            evidence_guidance_prepared: false,
+            structured_output: None,
             privacy_revision: None,
+            host_context_error: None,
+            host_context_prepared: false,
             privacy_policy_digest: None,
             tool_schema_policy: Default::default(),
             pruning,
@@ -374,6 +524,56 @@ impl PreparedModelRequest {
             context_breakdown: None,
             prompt_cache: None,
         }
+    }
+
+    pub(crate) fn prepare_evidence_guidance(&mut self) {
+        if self.evidence_guidance_prepared {
+            return;
+        }
+        self.evidence_guidance_prepared = true;
+        if let Some(guidance) = crate::context_pruning::evidence_guidance(self.kind) {
+            let leading = self
+                .messages
+                .iter()
+                .take_while(|message| matches!(message.role.as_str(), "system" | "developer"))
+                .count();
+            if leading == 0 {
+                return; // Bare backend callers own their instruction/message shape.
+            }
+            if !self.messages[..leading].iter().any(|message| {
+                crate::context_pruning::fixed_evidence_instruction(
+                    &message.role,
+                    message.content.as_str(),
+                )
+            }) {
+                self.messages.insert(
+                    leading,
+                    ChatMessage {
+                        role: "system".into(),
+                        content: crate::image_content::ModelContent::text(guidance),
+                        tool_calls: None,
+                        tool_call_id: None,
+                        response_items: Vec::new(),
+                    },
+                );
+            }
+        }
+    }
+
+    pub(crate) fn with_structured_output(
+        mut self,
+        contract: Option<&crate::headless_contract::StructuredOutputContract>,
+    ) -> Self {
+        self.structured_output = contract
+            .filter(|contract| self.tools.iter().any(|tool| contract.matches_tool(tool)))
+            .cloned();
+        self
+    }
+
+    pub(crate) fn structured_output(
+        &self,
+    ) -> Option<&crate::headless_contract::StructuredOutputContract> {
+        self.structured_output.as_ref()
     }
 
     pub fn with_harness_component(
@@ -805,6 +1005,7 @@ struct RequestStoreInner {
     sequence: u64,
     latest: Option<RequestSnapshot>,
     harness: Option<crate::harness_registry::ComponentSnapshot>,
+    host_contexts: std::collections::HashMap<String, Vec<HostContextFrame>>,
 }
 
 impl std::fmt::Debug for RequestStore {
@@ -822,6 +1023,159 @@ impl std::fmt::Debug for RequestStore {
 }
 
 impl RequestStore {
+    pub(crate) fn host_contexts(&self, session: Uuid) -> Vec<HostContextFrame> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .host_contexts
+            .get(&context_scope(PromptCacheScope::conversation(session)))
+            .cloned()
+            .unwrap_or_default()
+    }
+    pub(crate) fn restore_host_contexts(
+        &self,
+        session: Uuid,
+        frames: Vec<HostContextFrame>,
+    ) -> Result<(), String> {
+        let scope = context_scope(PromptCacheScope::conversation(session));
+        let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        let mut merged = inner.host_contexts.get(&scope).cloned().unwrap_or_default();
+        for frame in frames.into_iter().filter(HostContextFrame::valid) {
+            if !merged.iter().any(|known| known.key == frame.key) {
+                merged.push(frame);
+            }
+        }
+        let bytes = merged.iter().map(HostContextFrame::bytes).sum::<usize>();
+        let other = inner
+            .host_contexts
+            .iter()
+            .filter(|(key, _)| **key != scope)
+            .flat_map(|(_, frames)| frames)
+            .map(HostContextFrame::bytes)
+            .sum::<usize>();
+        if merged.len() > 4096
+            || bytes > HOST_CONTEXT_SCOPE_BYTES
+            || bytes.saturating_add(other) > HOST_CONTEXT_TOTAL_BYTES
+        {
+            return Err("Saved host context history exceeds its storage bound".into());
+        }
+        if !merged.is_empty() {
+            inner.host_contexts.insert(scope, merged);
+        }
+        Ok(())
+    }
+    /// Preserve host-only context at its first-sent canonical boundary. All
+    /// text still passes through the ordinary privacy and signed replay checks.
+    pub(crate) fn prepare_host_contexts(
+        &self,
+        request: &mut PreparedModelRequest,
+    ) -> Result<(), String> {
+        if request.host_context_prepared {
+            return Ok(());
+        }
+        let Some(cache) = request.prompt_cache else {
+            request.host_context_prepared = true;
+            return Ok(());
+        };
+        if matches!(cache.scope.domain, PromptCacheDomain::Isolated(_)) {
+            request.host_context_prepared = true;
+            return Ok(());
+        }
+        let scope = context_scope(cache.scope);
+        let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        let mut frames = inner.host_contexts.get(&scope).cloned().unwrap_or_default();
+        let leading = request
+            .messages
+            .iter()
+            .take_while(|message| matches!(message.role.as_str(), "system" | "developer"))
+            .count()
+            .max(cache.stable_prefix_messages);
+        let mut canonical = Vec::new();
+        let mut group = String::new();
+        let mut anchor = String::new();
+        let mut seen_user = false;
+        for (index, message) in request.messages.iter().enumerate() {
+            let host = index >= leading
+                && message.content.authored_id().is_none()
+                && message.content.as_str().is_some()
+                && (matches!(message.role.as_str(), "system" | "developer")
+                    || (message.role == "user" && seen_user));
+            if host && !anchor.is_empty() {
+                let frame = HostContextFrame::capture(anchor.clone(), group.clone(), message);
+                if !frame.valid() {
+                    return Err(
+                        "Host request context cannot be retained within its storage bound".into(),
+                    );
+                }
+                if !frames.iter().any(|old| old.key == frame.key) {
+                    frames.push(frame);
+                }
+            } else {
+                anchor = context_message_key(message);
+                if message.role == "user" {
+                    group = anchor.clone();
+                    seen_user = true;
+                }
+                canonical.push((anchor.clone(), group.clone(), message.clone()));
+            }
+        }
+        let bytes = frames.iter().map(HostContextFrame::bytes).sum::<usize>();
+        let other = inner
+            .host_contexts
+            .iter()
+            .filter(|(key, _)| **key != scope)
+            .flat_map(|(_, frames)| frames)
+            .map(HostContextFrame::bytes)
+            .sum::<usize>();
+        if frames.len() > 4096
+            || bytes > HOST_CONTEXT_SCOPE_BYTES
+            || bytes.saturating_add(other) > HOST_CONTEXT_TOTAL_BYTES
+        {
+            return Err("Host request context history reached its bound; create a fresh context before continuing".into());
+        }
+        let mut counts = std::collections::HashMap::<String, usize>::new();
+        for (key, _, _) in &canonical {
+            *counts.entry(key.clone()).or_default() += 1;
+        }
+        let mut projected = Vec::new();
+        for (key, group, message) in canonical {
+            projected.push(message);
+            if counts.get(&key) == Some(&1) {
+                projected.extend(
+                    frames
+                        .iter()
+                        .filter(|frame| {
+                            frame.anchor == key
+                                && frame.group == group
+                                && counts.get(&frame.group) == Some(&1)
+                        })
+                        .map(HostContextFrame::message),
+                );
+            }
+        }
+        // Only an exact unique boundary can reattach saved context. Missing or
+        // ambiguous history is never guessed; the downstream replay guard stays authoritative.
+        if let Some(breakdown) = &mut request.context_breakdown {
+            let before = crate::context::estimate_serialized_tokens(&request.messages);
+            let after = crate::context::estimate_serialized_tokens(&projected);
+            if after >= before {
+                let added = after - before;
+                breakdown.instructions = breakdown.instructions.saturating_add(added);
+                breakdown.total = breakdown.total.saturating_add(added);
+            } else {
+                let removed = (before - after).min(breakdown.instructions);
+                breakdown.instructions -= removed;
+                breakdown.total = breakdown.total.saturating_sub(removed);
+            }
+        }
+        request.messages = projected;
+        if !frames.is_empty() {
+            inner.host_contexts.insert(scope, frames);
+        }
+        request.host_context_prepared = true;
+        Ok(())
+    }
+
     pub(crate) fn set_privacy_pending(&self, pending: bool) {
         self.inner
             .lock()
@@ -1201,6 +1555,70 @@ fn truncate_utf8(text: &str, limit: usize) -> (String, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hrs317_evidence_guidance_freezes_enabled_and_disabled_retry_decisions() {
+        struct Restore;
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                crate::context_pruning::install(&Default::default());
+            }
+        }
+        let _restore = Restore;
+        let definition = crate::agent::registry::ToolRegistry::builtins()
+            .get("read_file")
+            .unwrap()
+            .definition();
+        for enabled in [false, true] {
+            let mut config = crate::config::CaConfig::default();
+            config.context_pruning.enabled = enabled;
+            crate::context_pruning::install(&config);
+            let mut request = PreparedModelRequest::new(
+                RequestKind::Headless,
+                "fixture",
+                "fixture",
+                vec![host_message("system", "Host coding instructions", None)],
+                vec![definition.clone()],
+                Default::default(),
+            );
+            request.prepare_evidence_guidance();
+            assert_eq!(request.messages.len(), 1 + usize::from(enabled));
+            let mut narrowed = PreparedModelRequest::new(
+                RequestKind::ToolContinuation,
+                "fixture",
+                "fixture",
+                vec![host_message("system", "Host coding instructions", None)],
+                vec![],
+                Default::default(),
+            );
+            narrowed.prepare_evidence_guidance();
+            assert_eq!(
+                serde_json::to_value(&narrowed.messages).unwrap(),
+                serde_json::to_value(&request.messages).unwrap()
+            );
+            let before = serde_json::to_value(&request.messages).unwrap();
+            config.context_pruning.enabled = !enabled;
+            crate::context_pruning::install(&config);
+            let mut retry = request.clone();
+            retry.prepare_evidence_guidance();
+            assert_eq!(serde_json::to_value(&retry.messages).unwrap(), before);
+        }
+    }
+    #[test]
+    fn hrs317_bare_backend_requests_keep_their_original_message_shape() {
+        let mut request = PreparedModelRequest::new(
+            RequestKind::MainTurn,
+            "fixture",
+            "fixture",
+            vec![host_message("user", "Read the source", None)],
+            vec![],
+            Default::default(),
+        );
+        let before = serde_json::to_value(&request.messages).unwrap();
+        request.prepare_evidence_guidance();
+        assert_eq!(serde_json::to_value(&request.messages).unwrap(), before);
+    }
+
     use crate::agent::client::{FunctionCall, ToolCallMsg, ToolFunction};
     use crate::agent::provider::ProviderProtocol;
     use crate::agent::stream::{ProviderResponseItem, ProviderStateSourceV1};
@@ -1214,6 +1632,228 @@ mod tests {
             tools,
             ChatRequestOptions::default(),
         )
+    }
+
+    fn host_message(role: &str, text: &str, authored: Option<&str>) -> ChatMessage {
+        let mut content = crate::image_content::ModelContent::text(text);
+        if let Some(id) = authored {
+            content = content.with_authored_id(id.into());
+        }
+        ChatMessage {
+            role: role.into(),
+            content,
+            tool_calls: None,
+            tool_call_id: None,
+            response_items: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn host_context_retains_one_shot_and_changed_context_at_first_sent_boundary() {
+        let store = RequestStore::default();
+        let scope = PromptCacheScope::conversation(Uuid::new_v4());
+        let base = vec![
+            host_message("system", "stable", None),
+            host_message("user", "task", Some("u1")),
+        ];
+        let project = |messages| {
+            let mut request = prepared(messages, Vec::new()).with_prompt_cache(scope, 1);
+            store.prepare_host_contexts(&mut request).unwrap();
+            request.messages
+        };
+        let mut first = base.clone();
+        first.push(host_message("system", "one-shot preflight", None));
+        first.push(host_message("user", "pending verification", None));
+        let first = project(first);
+        let mut second = base.clone();
+        second.push(host_message(
+            "assistant",
+            "tool result boundary",
+            Some("a1"),
+        ));
+        second.push(host_message("system", "fresh evidence", None));
+        let second = project(second);
+        assert_eq!(
+            serde_json::to_value(&second[..first.len()]).unwrap(),
+            serde_json::to_value(&first).unwrap()
+        );
+        let repeated = project(second.clone());
+        assert_eq!(
+            serde_json::to_value(repeated).unwrap(),
+            serde_json::to_value(second).unwrap()
+        );
+    }
+
+    #[test]
+    fn host_context_save_resume_preserves_provenance_and_new_user_boundaries() {
+        let session = Uuid::new_v4();
+        let scope = PromptCacheScope::conversation(session);
+        let store = RequestStore::default();
+        let user = host_message("user", "task", Some("u1"));
+        let legacy = host_message("system", "legacy private text", None);
+        let legacy = ChatMessage {
+            content: legacy.content.with_legacy_provenance(),
+            ..legacy
+        };
+        let authored = host_message("system", "host authored", None);
+        let authored = ChatMessage {
+            content: authored.content.with_retrieved_spans(Vec::new()),
+            ..authored
+        };
+        let mut first =
+            prepared(vec![user.clone(), legacy, authored], Vec::new()).with_prompt_cache(scope, 0);
+        store.prepare_host_contexts(&mut first).unwrap();
+        let json = serde_json::to_string(&store.host_contexts(session)).unwrap();
+        let frames: Vec<HostContextFrame> = serde_json::from_str(&json).unwrap();
+        assert_eq!(frames[0].spans, None);
+        assert_eq!(frames[1].spans, Some(Vec::new()));
+        let resumed = RequestStore::default();
+        resumed.restore_host_contexts(session, frames).unwrap();
+        let mut next = prepared(
+            vec![
+                user,
+                host_message("user", "next task", Some("u2")),
+                host_message("system", "new turn context", None),
+            ],
+            Vec::new(),
+        )
+        .with_prompt_cache(scope, 0);
+        resumed.prepare_host_contexts(&mut next).unwrap();
+        assert_eq!(
+            serde_json::to_value(&next.messages[..first.messages.len()]).unwrap(),
+            serde_json::to_value(&first.messages).unwrap()
+        );
+        assert_eq!(next.messages.len(), 5);
+        assert_eq!(next.messages[1].content.text_retrieved_spans(), None);
+        assert_eq!(
+            next.messages[2].content.text_retrieved_spans(),
+            Some(Vec::new())
+        );
+    }
+
+    #[test]
+    fn host_context_invalid_optional_metadata_is_ignored() {
+        #[derive(Deserialize)]
+        struct Saved {
+            #[serde(default, deserialize_with = "deserialize_host_contexts")]
+            frames: Vec<HostContextFrame>,
+        }
+        for value in [
+            serde_json::json!({}),
+            serde_json::json!({"frames":42}),
+            serde_json::json!({"frames":[{"text":"untrusted"}]}),
+        ] {
+            assert!(serde_json::from_value::<Saved>(value)
+                .unwrap()
+                .frames
+                .is_empty());
+        }
+        let mut frame = HostContextFrame::capture(
+            "message:u1".into(),
+            "message:u1".into(),
+            &host_message("system", "known", None),
+        );
+        frame.text = "changed without binding".into();
+        let saved: Saved = serde_json::from_value(serde_json::json!({"frames":[frame]})).unwrap();
+        assert!(saved.frames.is_empty());
+    }
+
+    #[test]
+    fn host_context_never_guesses_missing_or_ambiguous_anchors() {
+        let session = Uuid::new_v4();
+        let scope = PromptCacheScope::conversation(session);
+        let store = RequestStore::default();
+        let user = host_message("user", "task", Some("u1"));
+        let mut first = prepared(
+            vec![user.clone(), host_message("system", "old context", None)],
+            Vec::new(),
+        )
+        .with_prompt_cache(scope, 0);
+        store.prepare_host_contexts(&mut first).unwrap();
+        for history in [
+            vec![host_message("user", "checkpoint", Some("u2"))],
+            vec![user.clone(), user.clone()],
+        ] {
+            let len = history.len();
+            let mut next = prepared(history, Vec::new()).with_prompt_cache(scope, 0);
+            store.prepare_host_contexts(&mut next).unwrap();
+            assert_eq!(next.messages.len(), len);
+        }
+    }
+
+    #[test]
+    fn host_context_branch_cannot_reattach_future_context_through_reused_tool_id() {
+        let source = Uuid::new_v4();
+        let store = RequestStore::default();
+        let mut tool = host_message("tool", "result", None);
+        tool.tool_call_id = Some("reused-call".into());
+        let mut original = prepared(
+            vec![
+                host_message("user", "future task", Some("future-user")),
+                tool.clone(),
+                host_message("system", "future private context", None),
+            ],
+            Vec::new(),
+        )
+        .with_prompt_cache(PromptCacheScope::conversation(source), 0);
+        store.prepare_host_contexts(&mut original).unwrap();
+        let branch = Uuid::new_v4();
+        let resumed = RequestStore::default();
+        resumed
+            .restore_host_contexts(branch, store.host_contexts(source))
+            .unwrap();
+        let mut request = prepared(
+            vec![
+                host_message("user", "branch task", Some("branch-user")),
+                tool,
+            ],
+            Vec::new(),
+        )
+        .with_prompt_cache(PromptCacheScope::conversation(branch), 0);
+        resumed.prepare_host_contexts(&mut request).unwrap();
+        assert_eq!(request.messages.len(), 2);
+        assert!(!serde_json::to_string(&request.messages)
+            .unwrap()
+            .contains("future private context"));
+    }
+
+    #[test]
+    fn host_context_frozen_retry_cannot_pick_up_later_request_context() {
+        let store = RequestStore::default();
+        let scope = PromptCacheScope::conversation(Uuid::new_v4());
+        let user = host_message("user", "task", Some("u1"));
+        let mut first = prepared(
+            vec![user.clone(), host_message("system", "first context", None)],
+            Vec::new(),
+        )
+        .with_prompt_cache(scope, 0);
+        store.prepare_host_contexts(&mut first).unwrap();
+        let frozen = serde_json::to_value(&first.messages).unwrap();
+        let mut second = prepared(
+            vec![user, host_message("system", "later context", None)],
+            Vec::new(),
+        )
+        .with_prompt_cache(scope, 0);
+        store.prepare_host_contexts(&mut second).unwrap();
+        let mut retry = first.clone();
+        store.prepare_host_contexts(&mut retry).unwrap();
+        assert_eq!(serde_json::to_value(&retry.messages).unwrap(), frozen);
+    }
+
+    #[test]
+    fn host_context_scope_limits_reject_without_changing_request() {
+        let store = RequestStore::default();
+        let mut request = prepared(
+            vec![
+                host_message("user", "task", Some("u1")),
+                host_message("system", &"x".repeat(1024 * 1024 + 1), None),
+            ],
+            Vec::new(),
+        )
+        .with_prompt_cache(PromptCacheScope::conversation(Uuid::new_v4()), 0);
+        let before = serde_json::to_value(&request.messages).unwrap();
+        assert!(store.prepare_host_contexts(&mut request).is_err());
+        assert_eq!(serde_json::to_value(&request.messages).unwrap(), before);
     }
 
     #[test]

@@ -2403,6 +2403,7 @@ async fn run_turn(
                 completed_images.insert(call.id.clone(), image.clone());
             }
             completed_calls.push(ToolCall {
+                observation: None,
                 output_source: execution.source_for(execution.model_text()),
                 arguments_retrieved_spans: call.arguments_retrieved_spans.clone(),
                 id: call.id.clone(),

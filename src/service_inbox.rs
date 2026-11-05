@@ -343,6 +343,7 @@ fn canonical(messages: &[ChatMessage]) -> Result<Vec<Message>, String> {
                 calls
                     .iter()
                     .map(|c| ToolCall {
+                        observation: None,
                         output_source: None,
                         arguments_retrieved_spans: c.function.arguments_retrieved_spans.clone(),
                         id: c.id.clone(),

@@ -30,6 +30,19 @@ fn runtime() -> &'static RwLock<Runtime> {
     static R: OnceLock<RwLock<Runtime>> = OnceLock::new();
     R.get_or_init(|| RwLock::new(Runtime::default()))
 }
+
+#[cfg(test)]
+tokio::task_local! {
+    static TEST_CONFIG: FormatterConfig;
+}
+
+#[cfg(test)]
+pub(crate) async fn with_test_config<T>(
+    config: FormatterConfig,
+    work: impl std::future::Future<Output = T>,
+) -> T {
+    TEST_CONFIG.scope(config, work).await
+}
 impl FormatterConfig {
     pub fn is_default(&self) -> bool {
         !self.enabled && self.presets.is_empty() && self.custom.is_empty()
@@ -233,6 +246,12 @@ pub async fn prepare_with_authority(
         return Ok(());
     }
     let settings = runtime().read().unwrap_or_else(|p| p.into_inner()).clone();
+    #[cfg(test)]
+    let settings = TEST_CONFIG
+        .try_with(|config| Runtime {
+            config: config.clone(),
+        })
+        .unwrap_or(settings);
     if !settings.config.enabled {
         return Ok(());
     }

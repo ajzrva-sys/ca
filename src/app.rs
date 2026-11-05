@@ -171,6 +171,13 @@ pub struct AgentActivityFocusState {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolCall {
+    /// Descriptive, byte-bound native evidence. Restored metadata is not authority.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::context_observation::deserialize_optional"
+    )]
+    pub observation: Option<crate::context_observation::ObservationV1>,
     /// Host-issued receipt for this exact completed source read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_source: Option<String>,
@@ -184,6 +191,33 @@ pub struct ToolCall {
     /// Set when the tool enters Running; used for live elapsed display.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl ToolCall {
+    /// Called only after a native result has been published to this call.
+    pub(crate) fn bind_native_observation(&mut self) {
+        if self.observation.as_ref().is_some_and(|observation| {
+            (self.status == ToolStatus::Done
+                || observation.kind == crate::context_observation::ObservationKind::Execution)
+                && observation.matches(
+                    &self.name,
+                    &self.arguments,
+                    self.output.as_deref().unwrap_or_default(),
+                )
+        }) {
+            return;
+        }
+        self.observation = self
+            .output
+            .as_deref()
+            .and_then(|output| {
+                crate::context_observation::bind_native_result(&self.name, &self.arguments, output)
+            })
+            .filter(|observation| {
+                self.status == ToolStatus::Done
+                    || observation.kind == crate::context_observation::ObservationKind::Execution
+            });
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1925,6 +1959,7 @@ pub struct AppState {
     pub(crate) host_evidence: crate::host_evidence::HostEvidence,
     pub pending_agent_completions: VecDeque<TranscriptAgentSummary>,
     pub pending_job_completions: VecDeque<crate::jobs::JobInfo>,
+    pub pending_log_analyses: Vec<crate::jobs::JobInfo>,
     pub agent_activity_focus: Option<AgentActivityFocusState>,
     pub streaming: Option<StreamingState>,
     pub active_turn_prompt: Option<ActiveTurnPromptState>,
@@ -2083,6 +2118,7 @@ pub struct AppState {
     pub acceptance_request: Option<AcceptanceUiRequest>,
     pub acceptance_running: bool,
     pub job_owner: crate::jobs::JobOwner,
+    pub observations_pending_validation: bool,
     pub pending_workspace_root: Option<std::path::PathBuf>,
     pub vim_mode: bool,
     pub vim_state: VimMode,
@@ -2649,6 +2685,7 @@ impl AppState {
             host_evidence: crate::host_evidence::HostEvidence::default(),
             pending_agent_completions: VecDeque::new(),
             pending_job_completions: VecDeque::new(),
+            pending_log_analyses: Vec::new(),
             agent_activity_focus: None,
             streaming: None,
             active_turn_prompt: None,
@@ -2775,6 +2812,7 @@ impl AppState {
             acceptance_request: None,
             acceptance_running: false,
             job_owner: crate::jobs::JobOwner::new(None),
+            observations_pending_validation: false,
             pending_workspace_root: None,
             vim_mode: false,
             vim_state: VimMode::Normal,

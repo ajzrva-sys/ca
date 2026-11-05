@@ -51,6 +51,9 @@ use uuid::Uuid;
 const MAX_SOURCE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_WIRE_BYTES: usize = 128 * 1024 * 1024;
 
+// Fixed host protocol guidance; dynamic description text remains private data.
+const FILENAME_TOOL_GUIDANCE: &str = " Use complete discovered filename references for path arguments; '.' lists the workspace. Source link references can be opened directly. To create a file or directory, append one new plain leaf beneath a discovered directory reference and re-list after creation. For select_files folder/destination and move_files destination, use canonical directory references or host-issued batch folder references; select by public extensions to preserve hidden filenames. For HTML/CSS/JS links, insert a complete source-link or canonical file reference directly; never strip its components or prepend ../ or ./ to it. Ca restores the appropriate relative URL. Retain source references in edits. Registered built-ins use local privacy contracts. Commands run in a disposable writable project copy; original sources remain unchanged. Command artifacts have private references. Unknown or evaluated filename expressions and custom tools are unavailable.";
+
 pub(crate) fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
@@ -393,7 +396,9 @@ impl Context {
                     .clone()
                     .unwrap_or_else(|| format!("legacy:{}", digest(receipt.original.as_bytes())));
                 reads.insert(key, receipt);
-            } else if entry.kind.eq_ignore_ascii_case("filename_registry") {
+            } else if entry.kind.eq_ignore_ascii_case("filename_registry")
+                || entry.kind.eq_ignore_ascii_case("native_digest")
+            {
                 // Local-only metadata, never an active content substitution.
             } else if entry.kind == "task_path" {
                 task_names.insert(entry.value.clone(), entry.token.clone());
@@ -484,12 +489,19 @@ impl Context {
         if for_session(new_session_id).is_some() {
             return Err("Privacy branch identity is already active".into());
         }
-        let registry = self
-            .state
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .registry
-            .fork_in_memory(new_session_id)?;
+        let registry = {
+            let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            let mut registry = state.registry.fork_in_memory(new_session_id)?;
+            // Lazy path/name references may have been issued since the last
+            // request commit. Fork the current vocabulary, not an older ledger
+            // snapshot, while leaving the parent's registry untouched.
+            if let Some(names) = &state.filenames {
+                let snapshot = serde_json::to_string(&names.snapshot())
+                    .map_err(|_| "Filename mappings cannot be encoded")?;
+                registry.alias("filename_registry", &snapshot)?;
+            }
+            registry
+        };
         let fork = Self::from_registry(
             self.scope.clone(),
             self.workspace.clone(),
@@ -573,7 +585,7 @@ impl Context {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .filenames
-            .as_ref()
+            .as_mut()
             .ok_or("Filename mappings are unavailable")?
             .path_alias(path)
     }
@@ -620,14 +632,39 @@ impl Context {
             return Ok(());
         }
         self.refresh_authorized_roots()?;
+        let roots = self
+            .state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .filenames
+            .as_ref()
+            .ok_or("Filename mappings are unavailable")?
+            .census_roots();
+        // The complete metadata walk may visit millions of entries. Do not hold
+        // the UI-facing privacy state lock while collecting its unique names.
+        let census = filenames::collect_census(&roots)?;
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         let names = state
             .filenames
             .as_mut()
             .ok_or("Filename mappings are unavailable")?;
-        let changed = names.discover()?;
-        let snapshot = serde_json::to_string(&names.snapshot())
-            .map_err(|_| "Filename mappings cannot be encoded")?;
+        let changed = names.apply_census(census)?;
+        let snapshot = names.snapshot();
+        // A newly created target can make an unchanged source link executable
+        // even when its basename already existed elsewhere in the census.
+        state.cache.clear();
+        // Invalidate old prepared/cache proofs before any fallible persistence
+        // work: even a failed save must not authorize the earlier raw spelling.
+        if changed {
+            self.private_revision
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            state.cache.clear();
+            state.exact_masks.clear();
+            state.mask_cache.clear();
+            state.safe_template_hashes.clear();
+        }
+        let snapshot =
+            serde_json::to_string(&snapshot).map_err(|_| "Filename mappings cannot be encoded")?;
         let previous = state
             .registry
             .entries()
@@ -636,12 +673,11 @@ impl Context {
             .find(|entry| entry.kind.eq_ignore_ascii_case("filename_registry"))
             .map(|entry| entry.value.as_str());
         if previous != Some(snapshot.as_str()) {
+            if !changed {
+                self.private_revision
+                    .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            }
             state.registry.alias("filename_registry", &snapshot)?;
-            self.private_revision
-                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-        }
-        if changed {
-            state.cache.clear();
         }
         Ok(())
     }
@@ -826,6 +862,7 @@ impl Context {
                 .filter(|entry| {
                     !entry.kind.eq_ignore_ascii_case("source_receipt")
                         && !entry.kind.eq_ignore_ascii_case("filename_registry")
+                        && !entry.kind.eq_ignore_ascii_case("native_digest")
                 })
                 .map(|entry| (entry.value.clone(), entry.token.clone()))
                 .collect()
@@ -1262,9 +1299,12 @@ impl Context {
                 let suffix = self.mask_known(&attachment.suffix)?;
                 return Ok(format!("{prefix}{selected}{suffix}"));
             }
-            let selected =
-                render_read(&projection.text, receipt.start, receipt.end, receipt.hashes);
-            return read_projection::project(self, &selected, receipt.read_footer.as_ref());
+            let generation = self.read_projection_generation();
+            let body = self.mask_known(&projection.text)?;
+            let selected = render_read(&body, receipt.start, receipt.end, receipt.hashes);
+            let output = read_projection::project(self, &selected, receipt.read_footer.as_ref())?;
+            self.retain_read_projection(&output, &generation)?;
+            return Ok(output);
         }
         if self.policy().default_action == Action::Allow {
             self.discover_selected_sources()?;
@@ -1353,9 +1393,12 @@ impl Context {
     /// let validation inspect an existing proof without allocating another full
     /// history string merely to compare it with its input.
     fn mask_known_shared(&self, text: &str) -> Result<Option<Arc<str>>, String> {
+        if self.exact_read_projection(text)?.is_some() {
+            return Ok(None);
+        }
         let content = self.mask_content_known_shared(text)?;
         let input = content.as_deref().unwrap_or(text);
-        let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(ticket) = state
             .safe_template_hashes
             .get(&(self.policy_fingerprint(), digest(input.as_bytes())))
@@ -1365,8 +1408,8 @@ impl Context {
             ticket.touch();
             return Ok(content);
         }
-        if let Some(names) = &state.filenames {
-            let protected = state.registry.tokens_in(input)?;
+        let protected = state.registry.tokens_in(input)?;
+        if let Some(names) = &mut state.filenames {
             let projected = names.project_text_with_protected(input, &protected)?;
             return Ok((projected != text).then(|| Arc::from(projected)));
         }
@@ -1655,18 +1698,44 @@ impl Context {
                 return Err("Opaque provider history has no matching project privacy receipt; use /filter continue for a fresh privacy-safe continuation".into());
             }
         }
+        // Authenticate provider-issued plaintext against canonical history before
+        // projecting either copy. Opaque state and previously sent prefixes keep
+        // their existing immutable replay checks at the transport boundary.
+        let replay_source = request.runtime_source.clone();
+        if let Some(source) = &replay_source {
+            for message in &request.messages {
+                crate::agent::provider::response_output_items_for_replay(message, source)
+                    .map_err(|error| error.to_string())?;
+            }
+        }
         self.discover_filename_grant_requests(request)?;
         self.refresh_filenames()?;
-        request
-            .tools
-            .retain(|tool| self.check_filename_tool(&tool.function.name).is_ok());
+        let structured_output = request.structured_output().cloned();
+        if let Some(contract) = &structured_output {
+            let reports = request
+                .tools
+                .iter()
+                .filter(|tool| {
+                    tool.function.name == crate::headless_contract::STRUCTURED_OUTPUT_TOOL
+                })
+                .collect::<Vec<_>>();
+            if reports.len() != 1 || !contract.matches_tool(reports[0]) {
+                return Err("Host structured-output definition changed after admission".into());
+            }
+        }
+        request.tools.retain(|tool| {
+            self.check_filename_tool(&tool.function.name).is_ok()
+                || structured_output
+                    .as_ref()
+                    .is_some_and(|contract| contract.matches_tool(tool))
+        });
         if self.filename_mode {
             // Only the provider copy receives contextual paths. Local listings
             // retain their ordinary basename presentation.
-            let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
             let names = state
                 .filenames
-                .as_ref()
+                .as_mut()
                 .ok_or("Filename mappings are unavailable")?;
             let mut listing_roots = HashMap::new();
             for call in request
@@ -1693,6 +1762,9 @@ impl Context {
                 listing_roots.insert(call.id.clone(), root);
             }
             for message in &mut request.messages {
+                if message.content.is_context_marker() {
+                    continue;
+                }
                 let Some(root) = message
                     .tool_call_id
                     .as_ref()
@@ -1700,7 +1772,7 @@ impl Context {
                 else {
                     continue;
                 };
-                let Some(text) = message.content.as_str() else {
+                let Some((text, authored_suffix)) = message.content.split_authored_suffix() else {
                     return Err("Unsupported directory result encoding".into());
                 };
                 if text.starts_with("Error") || text.starts_with("[tool failed]\n") {
@@ -1722,7 +1794,10 @@ impl Context {
                             .project_path(child.to_str().ok_or("Unsupported listing filename")?)?,
                     );
                 }
-                message.content = crate::image_content::ModelContent::text(rows.join("\n"));
+                message.content = crate::image_content::ModelContent::text(format!(
+                    "{}{authored_suffix}",
+                    rows.join("\n")
+                ));
             }
         }
 
@@ -1736,7 +1811,10 @@ impl Context {
         // First discover all retrieved values; only then mask authored text so a
         // newly read identity is also hidden in earlier messages in this request.
         for message in &mut request.messages {
-            let authored_text = message.role != "tool"
+            let authored_text = crate::context_pruning::fixed_evidence_instruction(
+                &message.role,
+                message.content.as_str(),
+            ) || message.role != "tool"
                 && message.content.as_str().is_some()
                 && message
                     .content
@@ -1749,30 +1827,92 @@ impl Context {
             }
         }
         for message in &mut request.messages {
-            if let Some(text) = message.content.as_text_mut() {
-                if let Some(replacement) = self.mask_known_shared(text)? {
-                    *text = replacement.as_ref().to_owned();
+            if !crate::context_pruning::fixed_evidence_instruction(
+                &message.role,
+                message.content.as_str(),
+            ) {
+                if let Some(text) = message.content.as_text_mut() {
+                    if let Some(replacement) = self.mask_known_shared(text)? {
+                        *text = replacement.as_ref().to_owned();
+                    }
+                } else {
+                    message.content = message.content.mask_privacy(self)?;
                 }
-            } else {
-                message.content = message.content.mask_privacy(self)?;
             }
             for call in message.tool_calls.as_mut().into_iter().flatten() {
-                check_tool_name(self, &call.function.name)?;
+                check_tool_name_with_structured_output(
+                    self,
+                    &call.function.name,
+                    structured_output.as_ref(),
+                )?;
                 let mut value: serde_json::Value =
                     serde_json::from_str(&call.function.arguments)
                         .map_err(|_| "Privacy tool arguments are not valid JSON")?;
-                arguments::project(self, &call.function.name, &mut value)?;
+                if host_report_name(structured_output.as_ref(), &call.function.name) {
+                    arguments::project_contract_report(
+                        self,
+                        structured_output.as_ref().unwrap(),
+                        &mut value,
+                    )?;
+                } else {
+                    arguments::project(self, &call.function.name, &mut value)?;
+                }
                 call.function.arguments = value.to_string();
+            }
+            // A newly discovered filename can change plain argument data in
+            // this outgoing copy. Keep its authenticated Responses call in the
+            // same projection; never change call identity or opaque payloads.
+            // Canonical session history is outside this request-only copy.
+            for response in &mut message.response_items {
+                let crate::agent::stream::ProviderResponseItem::ResponsesOutput {
+                    source,
+                    item,
+                    ..
+                } = response
+                else {
+                    continue;
+                };
+                if replay_source.as_ref() != Some(source) || item["type"] != "function_call" {
+                    continue;
+                }
+                let call = message
+                    .tool_calls
+                    .as_ref()
+                    .and_then(|calls| {
+                        calls
+                            .iter()
+                            .find(|call| Some(call.id.as_str()) == item["call_id"].as_str())
+                    })
+                    .ok_or("Authenticated response call is unavailable")?;
+                item["arguments"] = call.function.arguments.clone().into();
             }
         }
         for tool in &mut request.tools {
-            check_tool_name(self, &tool.function.name)?;
-            tool.function.description = self.mask_known(&tool.function.description)?;
-            if self.filename_mode {
-                tool.function.description.push_str(" Use complete discovered filename references for path arguments; '.' lists the workspace. Source link references can be opened directly. To create a file or directory, append one new plain leaf beneath a discovered directory reference and re-list after creation. For select_files folder/destination and move_files destination, use canonical directory references or host-issued batch folder references; select by public extensions to preserve hidden filenames. For HTML/CSS/JS links, insert a complete source-link or canonical file reference directly; never strip its components or prepend ../ or ./ to it. Ca restores the appropriate relative URL. Retain source references in edits. Registered built-ins use local privacy contracts. Commands run in a disposable writable project copy; original sources remain unchanged. Command artifacts have private references. Unknown or evaluated filename expressions and custom tools are unavailable.");
+            let host_report = host_report_name(structured_output.as_ref(), &tool.function.name);
+            check_tool_name_with_structured_output(
+                self,
+                &tool.function.name,
+                structured_output.as_ref(),
+            )?;
+            if !host_report
+                && !host_builtin_description(self, &tool.function.name, &tool.function.description)
+            {
+                tool.function.description = self.mask_known(&tool.function.description)?;
+            }
+            if self.filename_mode && !host_report {
+                tool.function.description.push_str(FILENAME_TOOL_GUIDANCE);
             }
 
             project_schema_text(self, &mut tool.function.parameters)?;
+            if host_report {
+                check_bound_structured_output_schema(
+                    self,
+                    structured_output.as_ref().unwrap(),
+                    &tool.function.parameters,
+                    false,
+                )?;
+                continue;
+            }
             let custom = crate::agent::registry::ToolRegistry::builtins()
                 .get(&tool.function.name)
                 .is_none();
@@ -2110,6 +2250,16 @@ impl Context {
         revision: u64,
         fingerprint: &str,
     ) -> Result<(), String> {
+        self.validate_wire_with_structured_output(body, revision, fingerprint, None)
+    }
+
+    pub(crate) fn validate_wire_with_structured_output(
+        &self,
+        body: &[u8],
+        revision: u64,
+        fingerprint: &str,
+        structured_output: Option<&crate::headless_contract::StructuredOutputContract>,
+    ) -> Result<(), String> {
         self.check_policy(revision)?;
         if self.policy_fingerprint() != fingerprint {
             return Err("Privacy rules changed after request preparation; prepare it again".into());
@@ -2132,6 +2282,7 @@ impl Context {
             context: &Context,
             value: &'a serde_json::Value,
             path: &mut Vec<&'a str>,
+            structured_output: Option<&crate::headless_contract::StructuredOutputContract>,
         ) -> Result<(), String> {
             match value {
                 serde_json::Value::String(text) => {
@@ -2143,7 +2294,11 @@ impl Context {
                             "*",
                         ]
                     {
-                        return check_tool_name(context, text);
+                        return check_tool_name_with_structured_output(
+                            context,
+                            text,
+                            structured_output,
+                        );
                     }
                     if context.mask_known_shared(text)?.is_some() {
                         return Err("Private content remained in an immutable protocol field; use /filter continue for a fresh privacy-safe continuation".into());
@@ -2152,42 +2307,92 @@ impl Context {
                 serde_json::Value::Array(items) => {
                     for item in items {
                         path.push("*");
-                        check(context, item, path)?;
+                        check(context, item, path, structured_output)?;
                         path.pop();
                     }
                 }
                 serde_json::Value::Object(items) => {
                     let tool = wire_tool_location(path, items);
                     for (key, item) in items {
-                        if tool && key == "name" {
-                            check_tool_name(
+                        if fixed_evidence_wire(path, key, item, items) {
+                            // Exact static first-party system instruction only.
+                        } else if tool && key == "name" {
+                            check_tool_name_with_structured_output(
                                 context,
                                 item.as_str().ok_or("Final tool name is not text")?,
+                                structured_output,
                             )?;
                         } else if tool && key == "arguments" && item.is_string() {
                             let value: serde_json::Value =
                                 serde_json::from_str(item.as_str().unwrap_or_default())
                                     .map_err(|_| "Final tool arguments are not valid JSON")?;
-                            arguments::validate(
-                                context,
-                                items.get("name").and_then(serde_json::Value::as_str),
-                                &value,
-                            )?;
+                            if host_report_name(
+                                structured_output,
+                                items
+                                    .get("name")
+                                    .and_then(serde_json::Value::as_str)
+                                    .unwrap_or_default(),
+                            ) {
+                                arguments::validate_contract_report(
+                                    context,
+                                    structured_output.unwrap(),
+                                    &value,
+                                )?;
+                            } else {
+                                arguments::validate(
+                                    context,
+                                    items.get("name").and_then(serde_json::Value::as_str),
+                                    &value,
+                                )?;
+                            }
                         } else if tool
                             && matches!(key.as_str(), "input" | "args")
                             && item.is_object()
                         {
-                            arguments::validate(
-                                context,
-                                items.get("name").and_then(serde_json::Value::as_str),
-                                item,
-                            )?;
+                            if host_report_name(
+                                structured_output,
+                                items
+                                    .get("name")
+                                    .and_then(serde_json::Value::as_str)
+                                    .unwrap_or_default(),
+                            ) {
+                                arguments::validate_contract_report(
+                                    context,
+                                    structured_output.unwrap(),
+                                    item,
+                                )?;
+                            } else {
+                                arguments::validate(
+                                    context,
+                                    items.get("name").and_then(serde_json::Value::as_str),
+                                    item,
+                                )?;
+                            }
                         } else if (tool && matches!(key.as_str(), "parameters" | "input_schema"))
                             || (matches!(
                                 path.as_slice(),
                                 ["generationConfig"] | ["generation_config"]
                             ) && matches!(key.as_str(), "responseSchema" | "response_schema"))
                         {
+                            if host_report_name(
+                                structured_output,
+                                items
+                                    .get("name")
+                                    .and_then(serde_json::Value::as_str)
+                                    .unwrap_or_default(),
+                            ) && wire_tool_definition_location(path)
+                            {
+                                check_bound_structured_output_schema(
+                                    context,
+                                    structured_output.unwrap(),
+                                    item,
+                                    matches!(
+                                        path.as_slice(),
+                                        ["tools", "*", "functionDeclarations", "*"]
+                                    ),
+                                )?;
+                                continue;
+                            }
                             let custom = items
                                 .get("name")
                                 .and_then(serde_json::Value::as_str)
@@ -2201,9 +2406,51 @@ impl Context {
                                 item,
                                 (!custom).then(|| items["name"].as_str()).flatten(),
                             )?;
+                        } else if tool
+                            && key == "description"
+                            && wire_tool_definition_location(path)
+                            && host_report_name(
+                                structured_output,
+                                items
+                                    .get("name")
+                                    .and_then(serde_json::Value::as_str)
+                                    .unwrap_or_default(),
+                            )
+                            && item.as_str()
+                                == Some(
+                                    structured_output
+                                        .unwrap()
+                                        .tool_definition()
+                                        .function
+                                        .description
+                                        .as_str(),
+                                )
+                        {
+                            // This exact description is published by the process-owned contract.
+                        } else if tool
+                            && key == "description"
+                            && wire_tool_definition_location(path)
+                            && items
+                                .get("name")
+                                .and_then(serde_json::Value::as_str)
+                                .zip(item.as_str())
+                                .is_some_and(|(name, text)| {
+                                    host_builtin_description(context, name, text)
+                                })
+                        {
+                            // Exact registry prose (and the fixed filename suffix)
+                            // is host instruction, never source-discovered data.
+                        } else if let Some(prefix) =
+                            filename_guidance_prefix(context, path, key, items, item)
+                        {
+                            // Only this exact host suffix has protocol meaning.
+                            // Caller-supplied prefix text retains the normal check.
+                            if context.mask_known_shared(prefix)?.is_some() {
+                                return Err("Private content remained in an immutable protocol field; use /filter continue for a fresh privacy-safe continuation".into());
+                            }
                         } else if !wire_control_field(path, key, item, items) {
                             path.push(key);
-                            check(context, item, path)?;
+                            check(context, item, path, structured_output)?;
                             path.pop();
                         }
                     }
@@ -2212,7 +2459,7 @@ impl Context {
             }
             Ok(())
         }
-        check(self, &value, &mut Vec::new())?;
+        check(self, &value, &mut Vec::new(), structured_output)?;
         // The provenance-aware traversal above inspects data through the same
         // filename/content projection as preparation. Protocol identifiers,
         // builtin schema controls and provider-encrypted reasoning stay exact.
@@ -2656,6 +2903,176 @@ impl Context {
     }
 }
 
+fn host_report_name(
+    contract: Option<&crate::headless_contract::StructuredOutputContract>,
+    name: &str,
+) -> bool {
+    contract.is_some() && name == crate::headless_contract::STRUCTURED_OUTPUT_TOOL
+}
+
+fn check_tool_name_with_structured_output(
+    context: &Context,
+    name: &str,
+    contract: Option<&crate::headless_contract::StructuredOutputContract>,
+) -> Result<(), String> {
+    if host_report_name(contract, name) {
+        Ok(())
+    } else {
+        check_tool_name(context, name)
+    }
+}
+
+fn check_bound_structured_output_schema(
+    context: &Context,
+    contract: &crate::headless_contract::StructuredOutputContract,
+    value: &serde_json::Value,
+    google: bool,
+) -> Result<(), String> {
+    if contract.matches_native_schema(value, google)? {
+        return Ok(());
+    }
+    check_structured_output_schema(context, value)
+}
+
+fn check_structured_output_schema(
+    context: &Context,
+    value: &serde_json::Value,
+) -> Result<(), String> {
+    use serde_json::Value;
+    fn private_text(context: &Context, text: &str) -> Result<(), String> {
+        if context.mask_known(text)? == text {
+            Ok(())
+        } else {
+            Err("A private value is required by the structured-output schema".into())
+        }
+    }
+    fn schema(context: &Context, value: &Value, depth: usize) -> Result<(), String> {
+        if depth > 64 {
+            return Err("Structured-output schema exceeds the privacy nesting bound".into());
+        }
+        let Some(items) = value.as_object() else {
+            return Ok(());
+        };
+        for (key, value) in items {
+            match key.as_str() {
+                "properties" | "patternProperties" | "$defs" | "definitions"
+                | "dependentSchemas" => {
+                    if let Some(fields) = value.as_object() {
+                        for (name, child) in fields {
+                            private_text(context, name)?;
+                            schema(context, child, depth + 1)?;
+                        }
+                    }
+                }
+                "dependentRequired" | "dependencies" => {
+                    if let Some(fields) = value.as_object() {
+                        for (name, child) in fields {
+                            private_text(context, name)?;
+                            if child.is_object() {
+                                schema(context, child, depth + 1)?;
+                            } else {
+                                check_schema_for_tool(context, child, None)?;
+                            }
+                        }
+                    }
+                }
+                "type" => {
+                    let public_type = |value: &Value| {
+                        value.as_str().is_some_and(|value| {
+                            matches!(
+                                value,
+                                "null"
+                                    | "boolean"
+                                    | "object"
+                                    | "array"
+                                    | "number"
+                                    | "string"
+                                    | "integer"
+                            )
+                        })
+                    };
+                    if !public_type(value)
+                        && !value
+                            .as_array()
+                            .is_some_and(|items| items.iter().all(public_type))
+                    {
+                        check_schema_for_tool(context, value, None)?;
+                    }
+                }
+                "items"
+                | "additionalItems"
+                | "additionalProperties"
+                | "unevaluatedItems"
+                | "unevaluatedProperties"
+                | "propertyNames"
+                | "contains"
+                | "if"
+                | "then"
+                | "else"
+                | "not"
+                | "contentSchema" => {
+                    if let Some(items) = value.as_array() {
+                        for child in items {
+                            schema(context, child, depth + 1)?;
+                        }
+                    } else {
+                        schema(context, value, depth + 1)?;
+                    }
+                }
+                "allOf" | "anyOf" | "oneOf" | "prefixItems" => {
+                    if let Some(items) = value.as_array() {
+                        for child in items {
+                            schema(context, child, depth + 1)?;
+                        }
+                    }
+                }
+                "minLength" | "maxLength" | "minimum" | "maximum" | "exclusiveMinimum"
+                | "exclusiveMaximum" | "multipleOf" | "minItems" | "maxItems" | "uniqueItems"
+                | "minContains" | "maxContains" | "minProperties" | "maxProperties"
+                | "readOnly" | "writeOnly" | "deprecated" => {}
+                "$ref" | "$dynamicRef" => {
+                    if let Some(reference) = value.as_str() {
+                        // This prefix was introduced by the host's value wrapper.
+                        private_text(
+                            context,
+                            reference
+                                .strip_prefix("#/properties/value")
+                                .unwrap_or(reference),
+                        )?;
+                    }
+                }
+                "enum" | "const" | "default" | "examples" => {
+                    arguments::validate(context, None, value)?;
+                }
+                "required" | "description" | "title" | "$comment" | "$id" | "$schema"
+                | "$anchor" | "$dynamicAnchor" | "format" | "pattern" | "contentEncoding"
+                | "contentMediaType" => {
+                    check_schema_for_tool(context, value, None)?;
+                }
+                _ => {
+                    private_text(context, key)?;
+                    check_schema_for_tool(context, value, None)?;
+                }
+            }
+        }
+        Ok(())
+    }
+    let properties = value
+        .get("properties")
+        .and_then(Value::as_object)
+        .ok_or("Host structured-output wrapper changed")?;
+    if value.as_object().is_none_or(|items| items.len() != 4)
+        || value.get("type").and_then(Value::as_str) != Some("object")
+        || value.get("additionalProperties") != Some(&Value::Bool(false))
+        || value.get("required") != Some(&serde_json::json!(["value"]))
+        || properties.len() != 1
+        || !properties.contains_key("value")
+    {
+        return Err("Host structured-output wrapper changed".into());
+    }
+    schema(context, &properties["value"], 0)
+}
+
 fn check_tool_name(context: &Context, name: &str) -> Result<(), String> {
     if crate::agent::registry::ToolRegistry::builtins()
         .get(name)
@@ -2667,8 +3084,440 @@ fn check_tool_name(context: &Context, name: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(test)]
+mod structured_output_tests {
+    use super::*;
+    use crate::headless_contract::{StructuredOutputContract, STRUCTURED_OUTPUT_TOOL};
+    use crate::request::{PreparedModelRequest, RequestKind};
+    use serde_json::{json, Value};
+
+    fn request(schema: Value) -> (StructuredOutputContract, PreparedModelRequest) {
+        let contract = StructuredOutputContract::from_value(schema).unwrap();
+        let request = PreparedModelRequest::new(
+            RequestKind::Inference,
+            "fixture",
+            "model",
+            Vec::new(),
+            vec![contract.tool_definition()],
+            Default::default(),
+        )
+        .with_structured_output(Some(&contract));
+        (contract, request)
+    }
+
+    #[test]
+    fn native_repair_schema_keeps_exact_host_controls_and_private_payload_boundaries() {
+        let filter = crate::provider_filter::ProviderFilterConfig {
+            enabled: true,
+            hide: crate::provider_filter::FilterHide {
+                filenames: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        crate::provider_filter::with_test_filter(&filter, || {
+            let temporary = tempfile::tempdir().unwrap();
+            let workspace = temporary.path().join("workspace");
+            std::fs::create_dir(&workspace).unwrap();
+            for name in ["status", "replacement", "incomplete", "diagnosis"] {
+                std::fs::write(workspace.join(name), "private filename collision").unwrap();
+            }
+            let context = Context::open(
+                temporary.path().join("profile"),
+                workspace,
+                uuid::Uuid::new_v4(),
+                None,
+            )
+            .unwrap();
+            context.allow_ephemeral();
+            context.refresh_filenames().unwrap();
+            let contract = crate::narrow_worker::RepairContract::output_contract().unwrap();
+            let definition = contract.tool_definition();
+            let caller_schema = definition.function.parameters["properties"]["value"].clone();
+            let (_, mut caller_request) = request(caller_schema);
+            assert!(
+                context.prepare_request(&mut caller_request).is_err(),
+                "the same caller-defined schema cannot claim native control provenance"
+            );
+
+            let mut prepared = PreparedModelRequest::new(
+                RequestKind::Subagent,
+                "fixture",
+                "model",
+                Vec::new(),
+                vec![definition.clone()],
+                Default::default(),
+            )
+            .with_structured_output(Some(&contract));
+            let revision = context.prepare_request(&mut prepared).unwrap();
+            let fingerprint = context.policy_fingerprint();
+            let parameters = definition.function.parameters.clone();
+            let google_parameters = crate::tool_schema::translate(
+                STRUCTURED_OUTPUT_TOOL,
+                &parameters,
+                crate::tool_schema::Profile::Google,
+                crate::tool_schema::Policy::Compatible,
+            )
+            .unwrap()
+            .schema
+            .into_owned();
+            let bodies = [
+                json!({"tools":[definition]}),
+                json!({"tools":[{"type":"function","name":STRUCTURED_OUTPUT_TOOL,"description":definition.function.description,"parameters":parameters}]}),
+                json!({"tools":[{"name":STRUCTURED_OUTPUT_TOOL,"description":definition.function.description,"input_schema":parameters}]}),
+                json!({"tools":[{"functionDeclarations":[{"name":STRUCTURED_OUTPUT_TOOL,"description":definition.function.description,"parameters":google_parameters}]}]}),
+            ];
+            for body in &bodies {
+                context
+                    .validate_wire_with_structured_output(
+                        &serde_json::to_vec(body).unwrap(),
+                        revision,
+                        &fingerprint,
+                        Some(&contract),
+                    )
+                    .unwrap();
+            }
+
+            let mut changed = bodies[0].clone();
+            changed["tools"][0]["function"]["parameters"]["properties"]["value"]["properties"]
+                ["replacement"]["description"] = json!("replacement");
+            assert!(
+                context
+                    .validate_wire_with_structured_output(
+                        &serde_json::to_vec(&changed).unwrap(),
+                        revision,
+                        &fingerprint,
+                        Some(&contract),
+                    )
+                    .is_err(),
+                "injected schema text cannot borrow a native field's spelling"
+            );
+            let mut changed = bodies[0].clone();
+            changed["tools"][0]["function"]["parameters"]["properties"]["value"]["properties"]
+                ["status"]["enum"] = json!(["replacement", "incomplete", "diagnosis"]);
+            assert!(
+                context
+                    .validate_wire_with_structured_output(
+                        &serde_json::to_vec(&changed).unwrap(),
+                        revision,
+                        &fingerprint,
+                        Some(&contract),
+                    )
+                    .is_err(),
+                "native controls remain bound to their exact schema positions"
+            );
+            let mut changed = bodies[0].clone();
+            changed["messages"] = json!([{"role":"user","content":"replacement"}]);
+            assert!(
+                context
+                    .validate_wire_with_structured_output(
+                        &serde_json::to_vec(&changed).unwrap(),
+                        revision,
+                        &fingerprint,
+                        Some(&contract),
+                    )
+                    .is_err(),
+                "ordinary data does not inherit native schema authority"
+            );
+            assert!(arguments::validate_report(
+                &context,
+                &parameters,
+                &json!({"value":{"status":"replacement","replacement":"replacement","diagnosis":""}}),
+            )
+            .is_err(), "replacement source text remains private data");
+        });
+    }
+
+    #[test]
+    fn native_cargo_schema_and_infer_offsets_keep_exact_control_positions() {
+        let filter = crate::provider_filter::ProviderFilterConfig {
+            enabled: true,
+            hide: crate::provider_filter::FilterHide {
+                filenames: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        crate::provider_filter::with_test_filter(&filter, || {
+            let temporary = tempfile::tempdir().unwrap();
+            let workspace = temporary.path().join("workspace");
+            std::fs::create_dir(&workspace).unwrap();
+            for name in [
+                "findings",
+                "group_id",
+                "cause",
+                "evidence_index",
+                "group-1",
+                "0",
+                "2",
+                "90",
+                "123",
+            ] {
+                std::fs::write(workspace.join(name), "private filename collision").unwrap();
+            }
+            let context = Context::open(
+                temporary.path().join("profile"),
+                workspace,
+                uuid::Uuid::new_v4(),
+                None,
+            )
+            .unwrap();
+            context.allow_ephemeral();
+            context.refresh_filenames().unwrap();
+            let contract =
+                StructuredOutputContract::native_cargo_diagnostics(&["group-1".into()]).unwrap();
+            let definition = contract.tool_definition();
+            let (_, mut caller_request) = request(contract.schema().clone());
+            assert!(context.prepare_request(&mut caller_request).is_err());
+            let mut prepared = PreparedModelRequest::new(
+                RequestKind::Inference,
+                "fixture",
+                "model",
+                Vec::new(),
+                vec![definition.clone()],
+                Default::default(),
+            )
+            .with_structured_output(Some(&contract));
+            let revision = context.prepare_request(&mut prepared).unwrap();
+            let fingerprint = context.policy_fingerprint();
+            let report = json!({"value":{"findings":[{"group_id":"group-1","cause":"observed failure","evidence_index":0}]}});
+            let mut projected = report.clone();
+            arguments::project_contract_report(&context, &contract, &mut projected).unwrap();
+            assert_eq!(projected, report);
+            arguments::validate_contract_report(&context, &contract, &report).unwrap();
+            assert!(
+                arguments::validate_report(&context, &definition.function.parameters, &report)
+                    .is_err(),
+                "generic numeric report data stays private"
+            );
+            let body = json!({"tools":[definition],"messages":[{"role":"assistant","tool_calls":[{"id":"native-report","type":"function","function":{"name":STRUCTURED_OUTPUT_TOOL,"arguments":report.to_string()}}]}]});
+            context
+                .validate_wire_with_structured_output(
+                    &serde_json::to_vec(&body).unwrap(),
+                    revision,
+                    &fingerprint,
+                    Some(&contract),
+                )
+                .unwrap();
+            for changed in [
+                json!({"value":{"findings":[{"group_id":"group-1","cause":0,"evidence_index":0}]}}),
+                json!({"value":{"findings":[{"group_id":"group-1","cause":"observed failure","evidence_index":2}]}}),
+                json!({"value":{"evidence_index":0,"findings":[]}}),
+            ] {
+                assert!(
+                    arguments::validate_contract_report(&context, &contract, &changed).is_err()
+                );
+            }
+
+            let infer = json!({"task":"Inspect immutable evidence", "context_refs":[{"artifact_id":"artifact317","stream":"stderr","start":0,"end":2}], "output_schema":{"type":"object","properties":{"answer":{"type":"string"}}}, "budget":{"max_requests":2,"timeout_secs":90}});
+            crate::agent::registry::ToolRegistry::builtins()
+                .validate("infer", &infer)
+                .unwrap();
+            let mut projected = infer.clone();
+            arguments::project(&context, "infer", &mut projected).unwrap();
+            assert_eq!(projected, infer);
+            arguments::validate(&context, Some("infer"), &infer).unwrap();
+            for number in [0, 2, 90, 123] {
+                let mut schema_data = infer.clone();
+                schema_data["output_schema"]["properties"]["answer"] =
+                    json!({"type":"integer","enum":[number]});
+                assert!(
+                    arguments::project(&context, "infer", &mut schema_data).is_err(),
+                    "caller output_schema numbers remain data: {number}"
+                );
+                let data =
+                    json!({"context_refs":{"start":number},"budget":{"max_requests":number}});
+                assert!(
+                    arguments::validate(&context, None, &data).is_err(),
+                    "the same names under unregistered data grant no controls: {number}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn host_report_contract_preserves_only_bound_protocol_and_checks_dynamic_schema() {
+        let filter = crate::provider_filter::ProviderFilterConfig {
+            enabled: true,
+            hide: crate::provider_filter::FilterHide {
+                filenames: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        crate::provider_filter::with_test_filter(&filter, || {
+            let temporary = tempfile::tempdir().unwrap();
+            let workspace = temporary.path().join("workspace");
+            std::fs::create_dir(&workspace).unwrap();
+            for name in [
+                STRUCTURED_OUTPUT_TOOL,
+                "value",
+                "object",
+                "string",
+                "PrivateSchemaKey317",
+                "PrivateSchemaEnum317",
+                "PrivateSchemaDescription317",
+                "structured",
+                "123",
+            ] {
+                std::fs::write(workspace.join(name), "private filename collision").unwrap();
+            }
+            let context = Context::open(
+                temporary.path().join("profile"),
+                workspace,
+                uuid::Uuid::new_v4(),
+                None,
+            )
+            .unwrap();
+            context.allow_ephemeral();
+            context.refresh_filenames().unwrap();
+            let good = json!({"type":"object","additionalProperties":false,"required":["answer"],"properties":{"answer":{"type":"string"}}});
+            let (contract, mut prepared) = request(good.clone());
+            let revision = context.prepare_request(&mut prepared).unwrap();
+            assert_eq!(prepared.tools.len(), 1);
+            assert_eq!(prepared.tools[0].function.name, STRUCTURED_OUTPUT_TOOL);
+            let body = serde_json::to_vec(&json!({"tools":prepared.tools,"messages":[{
+                "role":"assistant","tool_calls":[{"id":"report","type":"function","function":{
+                    "name":STRUCTURED_OUTPUT_TOOL,"arguments":json!({"value":{"answer":"public answer"}}).to_string()
+                }}]
+            }]})).unwrap();
+            let fingerprint = context.policy_fingerprint();
+            assert!(
+                context
+                    .validate_wire(&body, revision, &fingerprint)
+                    .is_err(),
+                "unmarked report name must retain custom-tool privacy checks"
+            );
+            context
+                .validate_wire_with_structured_output(
+                    &body,
+                    revision,
+                    &fingerprint,
+                    Some(&contract),
+                )
+                .unwrap();
+            let (_, mut unmarked) = request(good.clone());
+            unmarked = unmarked.with_structured_output(None);
+            context.prepare_request(&mut unmarked).unwrap();
+            assert!(unmarked.tools.is_empty());
+
+            for schema in [
+                json!({"type":"object","properties":{"PrivateSchemaKey317":{"type":"string"}}}),
+                json!({"type":"object","properties":{"object":{"type":"string"}}}),
+                json!({"type":"object","properties":{"answer":{"type":"string","enum":["PrivateSchemaEnum317"]}}}),
+                json!({"type":"object","properties":{"answer":{"type":"integer","enum":[123]}}}),
+            ] {
+                let (_, mut prepared) = request(schema);
+                assert!(
+                    context.prepare_request(&mut prepared).is_err(),
+                    "caller schema data cannot borrow protocol vocabulary"
+                );
+            }
+            let (numeric_contract, mut numeric_prepared) =
+                request(json!({"type":"object","properties":{"limit":{"type":"integer"}}}));
+            let numeric_revision = context.prepare_request(&mut numeric_prepared).unwrap();
+            let original_arguments = json!({"value":{"limit":123}});
+            let mut projected_arguments = original_arguments.clone();
+            assert!(
+                arguments::project_report(
+                    &context,
+                    &numeric_contract.tool_definition().function.parameters,
+                    &mut projected_arguments
+                )
+                .is_err(),
+                "report data cannot borrow builtin numeric controls"
+            );
+            assert_eq!(
+                projected_arguments, original_arguments,
+                "typed private data must not be coerced"
+            );
+            let numeric_body =
+                serde_json::to_vec(&json!({"tools":numeric_prepared.tools,"messages":[{
+                    "role":"assistant","tool_calls":[{"id":"report","type":"function","function":{
+                        "name":STRUCTURED_OUTPUT_TOOL,"arguments":original_arguments.to_string()
+                    }}]
+                }]}))
+                .unwrap();
+            assert!(
+                context
+                    .validate_wire_with_structured_output(
+                        &numeric_body,
+                        numeric_revision,
+                        &fingerprint,
+                        Some(&numeric_contract)
+                    )
+                    .is_err(),
+                "numeric report data remains private at the final wire boundary"
+            );
+            let (_, mut changed) = request(good);
+            changed.tools[0].function.parameters["properties"]["value"]["properties"]["injected"] =
+                json!({"type":"string"});
+            assert!(
+                context.prepare_request(&mut changed).is_err(),
+                "definition drift cannot retain the host marker"
+            );
+            let mut changed: Value = serde_json::from_slice(&body).unwrap();
+            changed["tools"][0]["function"]["parameters"]["unexpected"] =
+                json!("PrivateSchemaDescription317");
+            assert!(context
+                .validate_wire_with_structured_output(
+                    &serde_json::to_vec(&changed).unwrap(),
+                    revision,
+                    &fingerprint,
+                    Some(&contract)
+                )
+                .is_err());
+            let mut changed: Value = serde_json::from_slice(&body).unwrap();
+            changed["messages"][0]["tool_calls"][0]["function"]["description"] =
+                json!(contract.tool_definition().function.description);
+            assert!(
+                context
+                    .validate_wire_with_structured_output(
+                        &serde_json::to_vec(&changed).unwrap(),
+                        revision,
+                        &fingerprint,
+                        Some(&contract)
+                    )
+                    .is_err(),
+                "call-record data cannot borrow a tool definition's public description"
+            );
+            let mut changed: Value = serde_json::from_slice(&body).unwrap();
+            changed["messages"][0]["tool_calls"][0]["function"]["parameters"] =
+                contract.tool_definition().function.parameters;
+            assert!(
+                context
+                    .validate_wire_with_structured_output(
+                        &serde_json::to_vec(&changed).unwrap(),
+                        revision,
+                        &fingerprint,
+                        Some(&contract)
+                    )
+                    .is_err(),
+                "call-record data cannot borrow a tool definition's public schema vocabulary"
+            );
+            let mut changed: Value = serde_json::from_slice(&body).unwrap();
+            changed["tools"][0]["function"]["description"] = json!("PrivateSchemaDescription317");
+            assert!(context
+                .validate_wire_with_structured_output(
+                    &serde_json::to_vec(&changed).unwrap(),
+                    revision,
+                    &fingerprint,
+                    Some(&contract)
+                )
+                .is_err());
+        });
+    }
+}
+
 // Only real protocol envelopes grant control-field exemptions. Data nested in
 // tool arguments/results cannot turn a property called `name` into authority.
+fn wire_tool_definition_location(path: &[&str]) -> bool {
+    matches!(
+        path,
+        ["tools", "*"] | ["tools", "*", "function"] | ["tools", "*", "functionDeclarations", "*"]
+    )
+}
+
 fn wire_tool_location(path: &[&str], items: &serde_json::Map<String, serde_json::Value>) -> bool {
     match path {
         ["tools", "*"]
@@ -2689,6 +3538,93 @@ fn wire_tool_location(path: &[&str], items: &serde_json::Map<String, serde_json:
     }
 }
 
+fn fixed_evidence_wire(
+    path: &[&str],
+    key: &str,
+    value: &serde_json::Value,
+    items: &serde_json::Map<String, serde_json::Value>,
+) -> bool {
+    let exact = |value: &serde_json::Value| {
+        value.as_str() == Some(crate::context_pruning::EVIDENCE_GUIDANCE)
+    };
+    match path {
+        ["messages", "*"] | ["input", "*"]
+            if key == "content"
+                && items.get("role").and_then(serde_json::Value::as_str) == Some("system") =>
+        {
+            exact(value)
+                || value.as_array().is_some_and(|blocks| {
+                    blocks.len() == 1
+                        && blocks[0].as_object().is_some_and(|block| {
+                            block.len() == 2
+                                && block
+                                    .get("type")
+                                    .and_then(serde_json::Value::as_str)
+                                    .is_some_and(|kind| matches!(kind, "text" | "input_text"))
+                                && block.get("text").is_some_and(exact)
+                        })
+                })
+        }
+        ["system", "*"]
+            if key == "text"
+                && items.get("type").and_then(serde_json::Value::as_str) == Some("text") =>
+        {
+            exact(value)
+        }
+        ["systemInstruction", "parts", "*"] | ["system_instruction", "parts", "*"]
+            if key == "text" =>
+        {
+            exact(value)
+        }
+        _ => false,
+    }
+}
+
+fn host_builtin_description(context: &Context, name: &str, text: &str) -> bool {
+    let text = if context.filename_mode {
+        text.strip_suffix(FILENAME_TOOL_GUIDANCE).unwrap_or(text)
+    } else {
+        text
+    };
+    crate::agent::registry::ToolRegistry::builtins()
+        .get(name)
+        .is_some_and(|spec| text == spec.description)
+}
+
+fn filename_guidance_prefix<'a>(
+    context: &Context,
+    path: &[&str],
+    key: &str,
+    items: &serde_json::Map<String, serde_json::Value>,
+    value: &'a serde_json::Value,
+) -> Option<&'a str> {
+    if key != "description"
+        || !context.filename_mode
+        || !matches!(
+            path,
+            ["tools", "*"]
+                | ["tools", "*", "function"]
+                | ["tools", "*", "functionDeclarations", "*"]
+        )
+        || !wire_tool_location(path, items)
+        || items
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|name| crate::agent::registry::ToolRegistry::builtins().get(name))
+            .is_none()
+    {
+        return None;
+    }
+    value.as_str()?.strip_suffix(FILENAME_TOOL_GUIDANCE)
+}
+
+fn public_reasoning_effort(value: &serde_json::Value) -> bool {
+    value.as_str().is_some_and(|text| {
+        text.parse::<crate::config::ReasoningEffort>()
+            .is_ok_and(|effort| effort.to_string() == text)
+    })
+}
+
 fn wire_control_field(
     path: &[&str],
     key: &str,
@@ -2704,7 +3640,9 @@ fn wire_control_field(
                 && value
                     .as_str()
                     .is_some_and(|s| matches!(s, "auto" | "none" | "required" | "any")))
+                || (key == "reasoning_effort" && public_reasoning_effort(value))
         }
+        ["reasoning"] => key == "effort" && public_reasoning_effort(value),
         ["messages", "*"] => matches!(key, "role" | "tool_call_id"),
         ["messages", "*", "tool_calls", "*"] => matches!(key, "id" | "type"),
         ["input", "*"] => {

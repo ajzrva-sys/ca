@@ -2,12 +2,14 @@
 //! not a source-content anonymizer. All filesystem work belongs on a worker.
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder, MatchKind};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Component, Path, PathBuf};
 
 const VERSION: u32 = 2;
 const MAX_ENTRIES: usize = 262_144;
 const MAX_BYTES: usize = 256 * 1024 * 1024;
+// Match the native directory result's existing 5,000-row browsing bound.
+const MAX_INITIAL_PATHS: usize = 5_000;
 const ERROR: &str = "Filename aliases could not be validated; local action was blocked";
 const LIMIT: &str = "Filename discovery exceeded its bound; no private filenames were sent";
 
@@ -68,6 +70,10 @@ pub(crate) struct FilenameAliases {
     replacements: Vec<String>,
     scopes: BTreeMap<PathBuf, FilenameAliases>,
     authorized_scopes: BTreeSet<PathBuf>,
+    /// Complete process-only basename census; bool records ambiguity.
+    census: BTreeMap<String, bool>,
+    /// Matcher patterns parallel replacements; empty replacements are allocated only when emitted.
+    patterns: Vec<String>,
 }
 
 impl FilenameAliases {
@@ -217,6 +223,8 @@ impl FilenameAliases {
             replacements: Vec::new(),
             scopes,
             authorized_scopes: BTreeSet::new(),
+            census: BTreeMap::new(),
+            patterns: Vec::new(),
         };
         this.rebuild()?;
         Ok(this)
@@ -256,10 +264,10 @@ impl FilenameAliases {
             }
             active.insert(root);
         }
-        self.authorized_scopes = active;
-        for root in &self.authorized_scopes {
-            self.scopes.get_mut(root).ok_or(ERROR)?.discover()?;
+        if self.authorized_scopes == active {
+            return Ok(());
         }
+        self.authorized_scopes = active;
         self.rebuild()
     }
 
@@ -271,8 +279,7 @@ impl FilenameAliases {
             return Ok(());
         }
         let namespace = format!("{}{:x}", self.snapshot.namespace, scope_tag(&root));
-        let mut scope = Self::new(root.clone(), &namespace)?;
-        scope.discover()?;
+        let scope = Self::new(root.clone(), &namespace)?;
         self.scopes.insert(root, scope);
         self.rebuild()
     }
@@ -315,45 +322,70 @@ impl FilenameAliases {
                 .any(|root| path.starts_with(root))
     }
 
-    pub(crate) fn path_alias(&self, path: &Path) -> Result<String, String> {
+    pub(crate) fn path_alias(&mut self, path: &Path) -> Result<String, String> {
         self.project_path(path.to_str().ok_or(ERROR)?)
     }
 
     pub(crate) fn matching_files(
-        &self,
+        &mut self,
         root: &Path,
         pattern: &str,
     ) -> Result<BTreeSet<PathBuf>, String> {
         let pattern = glob::Pattern::new(pattern).map_err(|_| "Invalid projected filename glob")?;
+        if !self.authorized_path(root) {
+            return Err("Filename selection needs a current folder grant".into());
+        }
+        let selected_scope = self
+            .authorized_scopes
+            .iter()
+            .filter(|scope| root.starts_with(scope))
+            .max_by_key(|scope| scope.components().count())
+            .cloned();
+        let scope = if let Some(scope) = &selected_scope {
+            self.scopes.get_mut(scope).ok_or(ERROR)?
+        } else {
+            &mut *self
+        };
+        let mut stack = vec![root.to_path_buf()];
+        let mut visited = 0_usize;
         let mut matches = BTreeSet::new();
-        for scope in std::iter::once(self).chain(
-            self.scopes
-                .iter()
-                .filter(|(root, _)| self.authorized_scopes.contains(*root))
-                .map(|(_, scope)| scope),
-        ) {
-            for entry in scope
-                .snapshot
-                .entries
-                .iter()
-                .filter(|entry| !entry.directory && scope.live.contains(&entry.relative))
-            {
-                let native = scope.workspace.join(&entry.relative);
-                if !native.starts_with(root) {
-                    continue;
-                }
-                let name = native
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .ok_or(ERROR)?;
-                let descriptive = self.project_text(name)?;
-                if pattern.matches(&entry.alias)
-                    || pattern.matches(entry.alias.rsplit('/').next().unwrap_or(&entry.alias))
-                    || pattern.matches(&descriptive)
-                {
-                    matches.insert(native);
-                }
+        while let Some(path) = stack.pop() {
+            visited += 1;
+            if visited > MAX_ENTRIES {
+                return Err("Filename selection exceeded its entry bound".into());
             }
+            let metadata = std::fs::symlink_metadata(&path).map_err(|_| ERROR)?;
+            if metadata.is_dir() {
+                for entry in std::fs::read_dir(&path).map_err(|_| ERROR)? {
+                    stack.push(entry.map_err(|_| ERROR)?.path());
+                    if stack.len().saturating_add(visited) > MAX_ENTRIES {
+                        return Err("Filename selection exceeded its entry bound".into());
+                    }
+                }
+                continue;
+            }
+            let native = path.to_str().ok_or(ERROR)?;
+            let alias = scope.project_path(native)?;
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or(ERROR)?;
+            let descriptive = if scope.disclosed_creation_leaf(name) {
+                name.into()
+            } else if let Some(alias) = scope.forward.get(name).filter(|alias| !alias.is_empty()) {
+                alias.clone()
+            } else {
+                scope.issue_name(name)?
+            };
+            if pattern.matches(&alias)
+                || pattern.matches(alias.rsplit('/').next().unwrap_or(&alias))
+                || pattern.matches(&descriptive)
+            {
+                matches.insert(path);
+            }
+        }
+        if selected_scope.is_some() {
+            self.rebuild()?;
         }
         Ok(matches)
     }
@@ -374,131 +406,367 @@ impl FilenameAliases {
         Ok(())
     }
 
-    /// Enumerate every name, including hidden entries, without reading contents
-    /// or descending through symlinks. Commit the new snapshot only on success.
+    /// Enumerate every basename, but allocate path references only for shallow
+    /// browsing and paths actually projected. Census data never enters a snapshot.
     pub(crate) fn discover(&mut self) -> Result<bool, String> {
-        let found = inventory(&self.workspace)?;
-        let mut next = self.clone();
-        next.live = found.keys().cloned().collect();
-        let existing: BTreeMap<_, _> = next
-            .snapshot
-            .entries
-            .iter()
-            .map(|entry| (entry.relative.clone(), entry.clone()))
-            .collect();
-        // A literal filename that resembles our root must not be mistaken for
-        // an already projected token. Reserve a different root before issuing
-        // the first reference; once issued, a conflict withholds transmission.
-        let raw_names: BTreeSet<_> = found
-            .keys()
-            .flat_map(|name| name.split('/').map(str::to_owned))
-            .collect();
-        if raw_names
-            .iter()
-            .any(|name| name.contains(&next.snapshot.root_alias))
+        let census = collect_census(&self.census_roots())?;
+        self.apply_census(census)
+    }
+
+    pub(crate) fn census_roots(&self) -> Vec<PathBuf> {
+        std::iter::once(self.workspace.clone())
+            .chain(self.authorized_scopes.iter().cloned())
+            .collect()
+    }
+
+    pub(crate) fn apply_census(&mut self, census: Vec<FilenameCensus>) -> Result<bool, String> {
+        if self.census_roots()
+            != census
+                .iter()
+                .map(|entry| entry.root.clone())
+                .collect::<Vec<_>>()
         {
-            if !next.snapshot.entries.is_empty() {
+            return Err(
+                "Filename grants changed during discovery; prepare the request again".into(),
+            );
+        }
+        let issued_names = std::iter::once(&*self)
+            .chain(self.scopes.values())
+            .flat_map(|scope| {
+                scope
+                    .snapshot
+                    .names
+                    .values()
+                    .chain(scope.snapshot.source_spellings.keys())
+            })
+            .collect::<Vec<_>>();
+        if census.iter().any(|found| {
+            found
+                .names
+                .keys()
+                .filter(|name| name.contains("__CA_"))
+                .any(|name| {
+                    issued_names
+                        .iter()
+                        .any(|alias| name.contains(alias.as_str()))
+                })
+        }) {
+            return Err(
+                "Filename reference conflicts with a newly discovered name; request was withheld"
+                    .into(),
+            );
+        }
+        let mut next = self.clone();
+        let before = self.snapshot();
+        let census_changed = census.iter().any(|found| {
+            let previous = if found.root == self.workspace {
+                Some(&*self)
+            } else {
+                self.scopes.get(&found.root)
+            };
+            previous.is_none_or(|previous| previous.census != found.names)
+        });
+        let before_live = self.live.clone();
+        for found in census {
+            if found.root == next.workspace {
+                next.apply_local_census(found)?;
+            } else {
+                next.scopes
+                    .get_mut(&found.root)
+                    .ok_or(ERROR)?
+                    .apply_local_census(found)?;
+            }
+        }
+        next.rebuild()?;
+        let changed = census_changed || next.live != before_live || next.snapshot() != before;
+        *self = next;
+        Ok(changed)
+    }
+
+    fn apply_local_census(&mut self, found: FilenameCensus) -> Result<(), String> {
+        self.census = found.names;
+        if self
+            .census
+            .keys()
+            .any(|name| name.contains(&self.snapshot.root_alias))
+        {
+            if !self.snapshot.entries.is_empty() {
                 return Err("Filename alias namespace conflicts with a newly discovered name; no private filenames were sent".into());
             }
-            let base = format!("__CA_PATH_{}", next.snapshot.namespace);
+            let base = format!("__CA_PATH_{}", self.snapshot.namespace);
             let mut counter = 1_u64;
             loop {
                 let candidate = format!("{base}_{counter}__");
-                if !raw_names.iter().any(|name| name.contains(&candidate)) {
-                    next.snapshot.root_alias = candidate;
+                if !self.census.keys().any(|name| name.contains(&candidate)) {
+                    self.snapshot.root_alias = candidate;
                     break;
                 }
                 counter = counter.checked_add(1).ok_or(LIMIT)?;
             }
         }
-        if next
+        if self
             .snapshot
             .source_spellings
             .keys()
-            .any(|alias| raw_names.iter().any(|name| name.contains(alias)))
+            .any(|alias| self.census.keys().any(|name| name.contains(alias)))
         {
             return Err("Source filename reference conflicts with a newly discovered name; request was withheld".into());
         }
-        let mut directories = BTreeMap::new();
-        directories.insert(String::new(), next.snapshot.root_alias.clone());
-        for (relative, directory) in &found {
-            let parent = relative.rsplit_once('/').map_or("", |(parent, _)| parent);
-            let parent_alias = directories.get(parent).ok_or(ERROR)?;
-            let alias = if let Some(entry) = existing.get(relative) {
-                if entry.directory != *directory {
-                    return Err(
-                        "A registered filename changed kind; local action was blocked".into(),
-                    );
+        self.live.clear();
+        for entry in &self.snapshot.entries {
+            match std::fs::symlink_metadata(self.workspace.join(&entry.relative)) {
+                Ok(metadata) => {
+                    if metadata.is_dir() != entry.directory {
+                        return Err(
+                            "A registered filename changed kind; local action was blocked".into(),
+                        );
+                    }
+                    self.live.insert(entry.relative.clone());
                 }
-                entry.alias.clone()
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return Err(ERROR.into()),
+            }
+        }
+        // Public creation references are issued before their files exist. Once
+        // publication has happened, register those exact targets on demand so
+        // their original spelling becomes a live read reference as before.
+        let created_targets = self
+            .snapshot
+            .source_spellings
+            .values()
+            .filter(|spelling| spelling.source.is_none())
+            .filter_map(|spelling| spelling.target.clone())
+            .filter(|target| std::fs::symlink_metadata(self.workspace.join(target)).is_ok())
+            .collect::<BTreeSet<_>>();
+        for target in created_targets {
+            self.register_relative(&target)?;
+        }
+        // First-level directory references support normal browsing without
+        // allocating references for millions of descendants.
+        for (relative, _) in found.shallow.into_iter().take(MAX_INITIAL_PATHS) {
+            self.register_relative(&relative)?;
+        }
+        self.rebuild()
+    }
+
+    fn register_relative(&mut self, relative: &str) -> Result<(), String> {
+        valid_relative(relative)?;
+        let components = Path::new(relative).components().count();
+        let mut parent_alias = self.snapshot.root_alias.clone();
+        let mut current = PathBuf::new();
+        for (index, component) in Path::new(relative).components().enumerate() {
+            current.push(component.as_os_str());
+            let relative = current.to_str().ok_or(ERROR)?.to_owned();
+            if let Some(entry) = self
+                .snapshot
+                .entries
+                .iter()
+                .find(|entry| entry.relative == relative)
+            {
+                if index + 1 < components && !entry.directory {
+                    return Err(ERROR.into());
+                }
+                parent_alias = entry.alias.clone();
+                continue;
+            }
+            if self.snapshot.entries.len() >= MAX_ENTRIES {
+                return Err(LIMIT.into());
+            }
+            let metadata =
+                std::fs::symlink_metadata(self.workspace.join(&relative)).map_err(|_| ERROR)?;
+            let directory = metadata.is_dir();
+            if index + 1 < components && !directory {
+                return Err(ERROR.into());
+            }
+            let counter = if directory {
+                &mut self.snapshot.next_directory
             } else {
-                let counter = if *directory {
-                    &mut next.snapshot.next_directory
-                } else {
-                    &mut next.snapshot.next_file
-                };
-                let kind = if *directory { 'd' } else { 'f' };
-                let suffix = if *directory { "" } else { extension(relative) };
-                let tag = &next.snapshot.allocation_tag;
-                let alias = loop {
-                    let number = *counter;
-                    *counter = counter.checked_add(1).ok_or(LIMIT)?;
-                    let component = if tag.is_empty() {
-                        format!("{kind}{number:03}{suffix}")
-                    } else {
-                        format!("{kind}{tag}_{number:03}{suffix}")
-                    };
-                    let alias = format!("{parent_alias}/{component}");
-                    if !raw_names.contains(&component)
-                        && !next
-                            .snapshot
-                            .entries
-                            .iter()
-                            .any(|entry| entry.alias == alias)
-                    {
-                        break alias;
-                    }
-                };
-                next.snapshot.entries.push(Entry {
-                    relative: relative.clone(),
-                    alias: alias.clone(),
-                    directory: *directory,
-                });
-                alias
+                &mut self.snapshot.next_file
             };
-            if *directory {
-                directories.insert(relative.clone(), alias);
-            }
-        }
-        for name in &raw_names {
-            if !next.snapshot.names.contains_key(name) && !next.disclosed_creation_leaf(name) {
-                let alias = loop {
-                    let number = next.snapshot.next_name;
-                    next.snapshot.next_name = number.checked_add(1).ok_or(LIMIT)?;
-                    let alias = format!("__CA_NAME_{}_{number}__", next.snapshot.namespace);
-                    if !raw_names.iter().any(|original| original.contains(&alias))
-                        && !next
-                            .snapshot
-                            .names
-                            .values()
-                            .any(|existing| existing == &alias)
-                    {
-                        break alias;
-                    }
+            let kind = if directory { 'd' } else { 'f' };
+            let suffix = if directory { "" } else { extension(&relative) };
+            let alias = loop {
+                let number = *counter;
+                *counter = counter.checked_add(1).ok_or(LIMIT)?;
+                let tag = &self.snapshot.allocation_tag;
+                let component = if tag.is_empty() {
+                    format!("{kind}{number:03}{suffix}")
+                } else {
+                    format!("{kind}{tag}_{number:03}{suffix}")
                 };
-                next.snapshot.names.insert(name.clone(), alias);
+                let alias = format!("{parent_alias}/{component}");
+                if !self.census.contains_key(&component) && !self.backward.contains_key(&alias) {
+                    break alias;
+                }
+            };
+            self.snapshot.entries.push(Entry {
+                relative: relative.clone(),
+                alias: alias.clone(),
+                directory,
+            });
+            self.live.insert(relative.clone());
+            if !self.disclosed_creation_leaf(&relative) {
+                self.forward.insert(relative.clone(), alias.clone());
+            }
+            if !directory || !self.disclosed_creation_leaf(&relative) {
+                self.forward.insert(format!("./{relative}"), alias.clone());
+            }
+            self.forward.insert(
+                format!("{}/{relative}", self.workspace.to_str().ok_or(ERROR)?),
+                alias.clone(),
+            );
+            self.backward.insert(alias.clone(), relative.clone());
+            let leaf = current
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or(ERROR)?;
+            if !self.disclosed_creation_leaf(leaf)
+                && !self.census.get(leaf).copied().unwrap_or(false)
+            {
+                self.forward.insert(leaf.into(), alias.clone());
+            }
+            self.matcher = None;
+            parent_alias = alias;
+        }
+        Ok(())
+    }
+
+    fn register_text_paths(&mut self, text: &str) -> Result<(), String> {
+        let candidates = text
+            .split(|ch: char| {
+                ch.is_whitespace()
+                    || matches!(
+                        ch,
+                        '\'' | '"'
+                            | '`'
+                            | '('
+                            | ')'
+                            | '['
+                            | ']'
+                            | '{'
+                            | '}'
+                            | '='
+                            | '<'
+                            | '>'
+                            | ','
+                            | ';'
+                    )
+            })
+            .map(|token| token.strip_prefix('@').unwrap_or(token))
+            .filter(|token| {
+                !token.is_empty()
+                    && (!token.contains("__CA_")
+                        || token.split('/').any(|part| self.census.contains_key(part)))
+            })
+            .filter(|token| {
+                token.contains('/') || token.contains('.') || self.census.contains_key(*token)
+            })
+            .collect::<BTreeSet<_>>();
+        for candidate in candidates {
+            let path = Path::new(candidate);
+            let relative = if path.is_absolute() {
+                let Some(relative) = path
+                    .strip_prefix(&self.workspace)
+                    .ok()
+                    .and_then(Path::to_str)
+                else {
+                    continue;
+                };
+                relative
+            } else {
+                candidate.strip_prefix("./").unwrap_or(candidate)
+            };
+            if valid_relative(relative).is_err() {
+                continue;
+            }
+            if self
+                .snapshot
+                .entries
+                .iter()
+                .any(|entry| entry.relative == relative)
+            {
+                continue;
+            }
+            if std::fs::symlink_metadata(self.workspace.join(relative)).is_ok() {
+                self.register_relative(relative)?;
             }
         }
-        if next.snapshot.entries.len() > MAX_ENTRIES || next.snapshot.names.len() > MAX_ENTRIES {
-            return Err(LIMIT.into());
+        let mut scoped_paths_changed = false;
+        for scope in self.scopes.values_mut() {
+            let before = scope.snapshot.entries.len();
+            scope.register_text_paths(text)?;
+            scoped_paths_changed |= scope.snapshot.entries.len() != before;
         }
-        for root in next.authorized_scopes.clone() {
-            next.scopes.get_mut(&root).ok_or(ERROR)?.discover()?;
+        if scoped_paths_changed {
+            self.rebuild()?;
         }
-        next.rebuild()?;
-        let changed = next.snapshot != self.snapshot;
-        *self = next;
-        Ok(changed)
+        Ok(())
+    }
+
+    fn is_registered_path(&self, spelling: &str) -> bool {
+        let path = Path::new(spelling);
+        let relative = if path.is_absolute() {
+            let Ok(relative) = path.strip_prefix(&self.workspace) else {
+                return self
+                    .scopes
+                    .values()
+                    .any(|scope| scope.is_registered_path(spelling));
+            };
+            relative
+        } else {
+            path
+        };
+        let mut normalized = PathBuf::new();
+        for component in relative.components() {
+            match component {
+                Component::Normal(value) => normalized.push(value),
+                Component::CurDir => {}
+                _ => return false,
+            }
+        }
+        normalized.to_str().is_some_and(|relative| {
+            self.snapshot
+                .entries
+                .iter()
+                .any(|entry| entry.relative == relative)
+        })
+    }
+
+    /// Qualified source expressions may be descriptive without naming a live
+    /// target. Never manufacture an executable directory-prefix continuation.
+    fn register_descriptive_paths(&mut self, text: &str) -> Result<(), String> {
+        self.ensure_matcher()?;
+        let expressions = text
+            .split(|ch: char| ch.is_whitespace() || matches!(ch, '\'' | '"' | '`' | '<' | '>'))
+            .map(|word| {
+                word.trim_start_matches(['@', '(', '['])
+                    .trim_end_matches(['.', ',', ';', ':', ')', ']'])
+            })
+            .filter(|word| word.len() <= 4096 && word.contains('/') && !word.contains("__CA_"))
+            .filter(|word| !self.forward.contains_key(*word))
+            // Public creation leaves deliberately lack a raw relative forward
+            // key. Their exact registered target still owns its issued form.
+            .filter(|word| !self.is_registered_path(word))
+            .filter(|word| {
+                self.matcher.as_ref().is_some_and(|matcher| {
+                    matcher.find_iter(word).any(|found| {
+                        filename_match(
+                            &self.patterns[found.pattern().as_usize()],
+                            word,
+                            found.start(),
+                            found.end(),
+                        )
+                    })
+                })
+            })
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+        for expression in expressions {
+            let alias = self.source_spelling(&expression, None, None)?;
+            self.forward.insert(expression, alias);
+            self.matcher = None;
+        }
+        Ok(())
     }
 
     /// A new plain leaf was already sent by the model before its file existed.
@@ -564,17 +832,44 @@ impl FilenameAliases {
             let name = entry.relative.rsplit('/').next().ok_or(ERROR)?;
             basenames.entry(name).or_default().push(entry);
         }
-        for (name, name_alias) in &self.snapshot.names {
-            if let Some(entries) = basenames.get(name.as_str()) {
-                if entries.len() == 1 {
+        let descriptive_names = self
+            .census
+            .keys()
+            .chain(self.snapshot.names.keys())
+            .cloned()
+            .chain(basenames.keys().map(|name| (*name).to_owned()))
+            .collect::<BTreeSet<_>>();
+        for name in &descriptive_names {
+            if self.disclosed_creation_leaf(name) {
+                continue;
+            }
+            let issued = self.snapshot.names.get(name);
+            if let Some(alias) = issued {
+                self.backward.insert(alias.clone(), name.clone());
+            }
+            if !self.census.get(name).copied().unwrap_or(false) {
+                if let Some(entries) = basenames
+                    .get(name.as_str())
+                    .filter(|entries| entries.len() == 1)
+                {
                     self.forward.insert(name.clone(), entries[0].alias.clone());
                     continue;
                 }
             }
-            self.forward.insert(name.clone(), name_alias.clone());
-            self.backward.insert(name_alias.clone(), name.clone());
+            self.forward
+                .insert(name.clone(), issued.cloned().unwrap_or_default());
         }
         for (alias, spelling) in &self.snapshot.source_spellings {
+            if spelling.target.is_none()
+                && spelling.source.is_none()
+                && spelling.original.contains('/')
+            {
+                // A descriptive source expression remains private after its
+                // components disappear. An actual path mapping keeps priority.
+                self.forward
+                    .entry(spelling.original.clone())
+                    .or_insert_with(|| alias.clone());
+            }
             if self
                 .backward
                 .insert(alias.clone(), spelling.original.clone())
@@ -594,6 +889,15 @@ impl FilenameAliases {
                 }
             }
             for (alias, relative) in &names.backward {
+                if names
+                    .snapshot
+                    .names
+                    .values()
+                    .any(|name_alias| name_alias == alias)
+                {
+                    self.backward.insert(alias.clone(), relative.clone());
+                    continue;
+                }
                 let native = if Path::new(relative).is_absolute() {
                     PathBuf::from(relative)
                 } else {
@@ -611,46 +915,133 @@ impl FilenameAliases {
         if bytes > MAX_BYTES {
             return Err(LIMIT.into());
         }
-        self.replacements = self.forward.values().cloned().collect();
-        self.matcher = Some(
-            AhoCorasickBuilder::new()
-                .match_kind(MatchKind::LeftmostLongest)
-                .build(self.forward.keys())
-                .map_err(|_| ERROR)?,
-        );
+        self.matcher = None;
         Ok(())
+    }
+
+    fn ensure_matcher(&mut self) -> Result<(), String> {
+        if self.matcher.is_none() {
+            self.patterns = self.forward.keys().cloned().collect();
+            self.replacements = self.forward.values().cloned().collect();
+            self.matcher = Some(
+                AhoCorasickBuilder::new()
+                    .match_kind(MatchKind::LeftmostLongest)
+                    .build(&self.patterns)
+                    .map_err(|_| ERROR)?,
+            );
+        }
+        Ok(())
+    }
+
+    fn contains_private_spelling(&mut self, text: &str) -> Result<bool, String> {
+        self.ensure_matcher()?;
+        Ok(self
+            .matcher
+            .as_ref()
+            .ok_or(ERROR)?
+            .find_iter(text)
+            .any(|found| {
+                filename_match(
+                    &self.patterns[found.pattern().as_usize()],
+                    text,
+                    found.start(),
+                    found.end(),
+                )
+            }))
+    }
+
+    fn issue_name(&mut self, name: &str) -> Result<String, String> {
+        if !self.census.contains_key(name) {
+            if let Some(root) = self
+                .scopes
+                .iter()
+                .find(|(_, scope)| scope.census.contains_key(name))
+                .map(|(root, _)| root.clone())
+            {
+                let alias = self.scopes.get_mut(&root).ok_or(ERROR)?.issue_name(name)?;
+                self.forward.insert(name.into(), alias.clone());
+                self.backward.insert(alias.clone(), name.into());
+                return Ok(alias);
+            }
+        }
+        if let Some(alias) = self.snapshot.names.get(name) {
+            return Ok(alias.clone());
+        }
+        if self.snapshot.names.len() >= MAX_ENTRIES {
+            return Err(LIMIT.into());
+        }
+        let alias = loop {
+            let number = self.snapshot.next_name;
+            self.snapshot.next_name = number.checked_add(1).ok_or(LIMIT)?;
+            let alias = format!("__CA_NAME_{}_{number}__", self.snapshot.namespace);
+            if !self.backward.contains_key(&alias)
+                && !self
+                    .census
+                    .keys()
+                    .chain(self.scopes.values().flat_map(|scope| scope.census.keys()))
+                    .filter(|name| name.contains("__CA_"))
+                    .any(|name| name.contains(&alias))
+            {
+                break alias;
+            }
+        };
+        self.snapshot.names.insert(name.into(), alias.clone());
+        self.forward.insert(name.into(), alias.clone());
+        self.backward.insert(alias.clone(), name.into());
+        Ok(alias)
     }
 
     /// Longest-match, non-recursive projection. Already issued references are
     /// protected, while literal alias-shaped filenames use their own mapping.
-    pub(crate) fn project_text(&self, text: &str) -> Result<String, String> {
+    pub(crate) fn project_text(&mut self, text: &str) -> Result<String, String> {
         self.project_text_with_protected(text, &[])
     }
 
     pub(crate) fn project_text_with_protected(
-        &self,
+        &mut self,
         text: &str,
         opaque: &[std::ops::Range<usize>],
     ) -> Result<String, String> {
-        let Some(matcher) = &self.matcher else {
-            return Err(ERROR.into());
-        };
+        self.register_text_paths(text)?;
+        // Inputs containing reserved model references are excluded by this
+        // registration step and remain subject to reference_ranges below.
+        self.register_descriptive_paths(text)?;
+        self.ensure_matcher()?;
         let protected = self.reference_ranges(text)?;
+        let matches = self
+            .matcher
+            .as_ref()
+            .ok_or(ERROR)?
+            .find_iter(text)
+            .filter(|found| {
+                filename_match(
+                    &self.patterns[found.pattern().as_usize()],
+                    text,
+                    found.start(),
+                    found.end(),
+                )
+            })
+            .map(|found| (found.start(), found.end(), found.pattern().as_usize()))
+            .collect::<Vec<_>>();
         let mut out = String::with_capacity(text.len());
         let mut copied = 0;
-        for found in matcher.find_iter(text) {
+        for (start, end, pattern) in matches {
             if protected
                 .iter()
-                .any(|(start, end)| found.start() < *end && found.end() > *start)
+                .any(|(left, right)| start < *right && end > *left)
                 || opaque
                     .iter()
-                    .any(|range| found.start() < range.end && found.end() > range.start)
+                    .any(|range| start < range.end && end > range.start)
             {
                 continue;
             }
-            out.push_str(&text[copied..found.start()]);
-            out.push_str(&self.replacements[found.pattern().as_usize()]);
-            copied = found.end();
+            if self.replacements[pattern].is_empty() {
+                let name = self.patterns[pattern].clone();
+                self.replacements[pattern] = self.issue_name(&name)?;
+            }
+            out.push_str(&text[copied..start]);
+            out.push_str(&self.replacements[pattern]);
+            copied = end;
         }
         out.push_str(&text[copied..]);
         Ok(out)
@@ -740,6 +1131,9 @@ impl FilenameAliases {
         else {
             return Ok(None);
         };
+        if std::fs::symlink_metadata(&normalized).is_ok() {
+            self.register_relative(relative)?;
+        }
         if !self.live.contains(relative) {
             // Historical reads retain their issued spelling after a rename or
             // move removes the old target. Execution still requires liveness.
@@ -800,12 +1194,23 @@ impl FilenameAliases {
     /// Remaining filename occurrences in code get exact-spelling references,
     /// rather than losing relative/bare/absolute spelling to canonical paths.
     pub(crate) fn project_source_text(&mut self, text: &str) -> Result<String, String> {
+        self.register_text_paths(text)?;
+        self.register_descriptive_paths(text)?;
+        self.ensure_matcher()?;
         let protected = self.reference_ranges(text)?;
         let matches = self
             .matcher
             .as_ref()
             .ok_or(ERROR)?
             .find_iter(text)
+            .filter(|found| {
+                filename_match(
+                    &self.patterns[found.pattern().as_usize()],
+                    text,
+                    found.start(),
+                    found.end(),
+                )
+            })
             .filter(|found| {
                 !protected
                     .iter()
@@ -926,7 +1331,7 @@ impl FilenameAliases {
     /// Validate outbound content without changing it. A raw registered name
     /// outside an issued reference means a transformation was bypassed.
     #[cfg(test)]
-    pub(crate) fn validate_wire_text(&self, text: &str) -> Result<(), String> {
+    pub(crate) fn validate_wire_text(&mut self, text: &str) -> Result<(), String> {
         if self.project_text(text)? != text {
             return Err("A filename remains in the provider copy; request was withheld".into());
         }
@@ -935,14 +1340,21 @@ impl FilenameAliases {
 
     /// Project a typed local path without guessing from a bare basename in
     /// prose. Useful for file listings whose root entries otherwise lack './'.
-    pub(crate) fn project_path(&self, path: &str) -> Result<String, String> {
-        if let Some((_, scope)) = self
+    pub(crate) fn project_path(&mut self, path: &str) -> Result<String, String> {
+        if let Some(root) = self
             .scopes
-            .iter()
-            .filter(|(root, _)| Path::new(path).starts_with(root))
-            .max_by_key(|(root, _)| root.components().count())
+            .keys()
+            .filter(|root| Path::new(path).starts_with(root))
+            .max_by_key(|root| root.components().count())
+            .cloned()
         {
-            return scope.project_path(path);
+            let projected = self
+                .scopes
+                .get_mut(&root)
+                .ok_or(ERROR)?
+                .project_path(path)?;
+            self.rebuild()?;
+            return Ok(projected);
         }
         if path == "." || Path::new(path) == self.workspace {
             return Ok(self.snapshot.root_alias.clone());
@@ -958,6 +1370,7 @@ impl FilenameAliases {
             path.strip_prefix("./").unwrap_or(path)
         };
         valid_relative(relative)?;
+        self.register_relative(relative)?;
         // Historical listing rows still need projection after a supported
         // deletion. Only execution, through resolve_path, requires liveness.
         self.snapshot
@@ -1074,7 +1487,10 @@ impl FilenameAliases {
                 .rsplit_once('/')
                 .ok_or("Create beneath a discovered directory reference")?;
             valid_relative(leaf)?;
-            if leaf.contains('/') || leaf.contains("__CA_") || self.project_text(leaf)? != leaf {
+            if leaf.contains('/')
+                || leaf.contains("__CA_")
+                || self.contains_private_spelling(leaf)?
+            {
                 return Err(
                     "A new path requires public leaves without protected existing names".into(),
                 );
@@ -1327,36 +1743,66 @@ fn valid_alias_path(root: &str, alias: &str) -> bool {
         })
 }
 
-fn inventory(root: &Path) -> Result<BTreeMap<String, bool>, String> {
-    let mut found = BTreeMap::new();
+/// Entire-tree privacy coverage without retaining a path for every descendant.
+/// Raw names are ephemeral. Only references actually issued enter Snapshot.
+pub(crate) struct FilenameCensus {
+    root: PathBuf,
+    names: BTreeMap<String, bool>,
+    shallow: BTreeMap<String, bool>,
+}
+
+pub(crate) fn collect_census(roots: &[PathBuf]) -> Result<Vec<FilenameCensus>, String> {
+    roots.iter().map(|root| inventory_names(root)).collect()
+}
+
+fn remember_name(
+    names: &mut HashMap<String, bool>,
+    bytes: &mut usize,
+    name: &str,
+) -> Result<(), String> {
+    valid_relative(name)?;
+    if let Some(ambiguous) = names.get_mut(name) {
+        *ambiguous = true;
+    } else {
+        *bytes = bytes.saturating_add(name.len());
+        if names.len() >= MAX_ENTRIES || *bytes > MAX_BYTES {
+            return Err(LIMIT.into());
+        }
+        names.insert(name.into(), false);
+    }
+    Ok(())
+}
+
+fn inventory_names(root: &Path) -> Result<FilenameCensus, String> {
+    let mut names = HashMap::new();
+    let mut shallow = BTreeMap::new();
     let mut stack = vec![root.to_path_buf()];
     let mut bytes = 0_usize;
     while let Some(directory) = stack.pop() {
-        let entries = std::fs::read_dir(directory)
+        let entries = std::fs::read_dir(&directory)
             .map_err(|_| "Workspace filename discovery failed; request was withheld")?;
         for entry in entries {
             let entry = entry.map_err(|_| ERROR)?;
-            let path = entry.path();
-            let relative = path
-                .strip_prefix(root)
-                .map_err(|_| ERROR)?
+            let name = entry.file_name();
+            let name = name
                 .to_str()
-                .ok_or("Non-UTF-8 filename is unsupported; request was withheld")?
-                .to_owned();
-            valid_relative(&relative)?;
+                .ok_or("Non-UTF-8 filename is unsupported; request was withheld")?;
+            remember_name(&mut names, &mut bytes, name)?;
             let kind = entry.file_type().map_err(|_| ERROR)?;
-            let directory = kind.is_dir();
-            bytes = bytes.saturating_add(relative.len());
-            found.insert(relative, directory);
-            if found.len() > MAX_ENTRIES || bytes > MAX_BYTES {
-                return Err(LIMIT.into());
+            if directory == root {
+                shallow.insert(name.into(), kind.is_dir());
             }
-            if directory {
-                stack.push(path);
+            // d_type is metadata only; symlink leaves are indexed but never followed.
+            if kind.is_dir() {
+                stack.push(entry.path());
             }
         }
     }
-    Ok(found)
+    Ok(FilenameCensus {
+        root: root.into(),
+        names: names.into_iter().collect(),
+        shallow,
+    })
 }
 
 fn extension(path: &str) -> &str {
@@ -1419,6 +1865,12 @@ fn extension(path: &str) -> &str {
     }
 }
 
+// A bare filename is a word or path component, not a substring of another
+// word. Full paths, dotted names and encoded spellings retain literal matching.
+fn filename_match(pattern: &str, text: &str, start: usize, end: usize) -> bool {
+    !super::is_word(pattern) || (super::boundary(text, start) && super::boundary(text, end))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1427,6 +1879,217 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let aliases = FilenameAliases::new(temp.path().into(), "test").unwrap();
         (temp, aliases)
+    }
+
+    #[test]
+    fn filename_words_do_not_reclassify_other_words_or_published_copy_leaves() {
+        let (root, mut names) = fixture();
+        let prose = "stdout outer output without about timeout_secs build target";
+        names.declare_public_names(prose).unwrap();
+        let copy = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(copy.path().join("target/debug/build/out")).unwrap();
+        names.authorize_roots(&[copy.path().into()]).unwrap();
+        names.discover().unwrap();
+        assert_eq!(names.project_text(prose).unwrap(), prose);
+        let code = "function output() { return stdout + outer + timeout_secs; }";
+        assert_eq!(names.project_source_text(code).unwrap(), code);
+        let ordinary_path = "folder/stdout/notes";
+        assert_eq!(names.project_text(ordinary_path).unwrap(), ordinary_path);
+        assert_eq!(
+            names.project_source_text(ordinary_path).unwrap(),
+            ordinary_path
+        );
+        let private_path = names.project_text("folder/out/notes").unwrap();
+        assert_ne!(private_path, "folder/out/notes");
+        assert!(
+            names.resolve_path(&private_path).is_err(),
+            "descriptive paths grant no executable target"
+        );
+        for relative in ["target", "target/debug/build", "target/debug/build/out"] {
+            let native = copy.path().join(relative);
+            let alias = names.project_path(native.to_str().unwrap()).unwrap();
+            assert!(alias.starts_with("__CA_PATH_"));
+            assert_eq!(names.resolve_path(&alias).unwrap(), native);
+        }
+        assert_ne!(names.project_text("out").unwrap(), "out");
+        assert!(!names.project_text("/out/").unwrap().contains("/out/"));
+        std::fs::write(root.path().join("PrivateLeaf317.rs"), "private").unwrap();
+        names.discover().unwrap();
+        assert!(!names
+            .project_text("prefixPrivateLeaf317.rsSuffix")
+            .unwrap()
+            .contains("PrivateLeaf317.rs"));
+    }
+
+    #[test]
+    fn filename_census_repeated_metadata_exceeds_old_entry_count_without_snapshot_growth() {
+        let mut names = HashMap::new();
+        let mut bytes = 0;
+        for _ in 0..MAX_ENTRIES + 1 {
+            remember_name(&mut names, &mut bytes, "reused-private.rs").unwrap();
+        }
+        assert_eq!(names.len(), 1);
+        assert_eq!(bytes, "reused-private.rs".len());
+        assert!(names["reused-private.rs"]);
+        assert!(remember_name(&mut names, &mut bytes, "unsupported\\name").is_err());
+    }
+
+    #[test]
+    fn filename_aliases_symbolic_authored_paths_are_descriptive_and_never_executable() {
+        let (root, mut names) = fixture();
+        std::fs::create_dir(root.path().join("src")).unwrap();
+        std::fs::create_dir(root.path().join("tests")).unwrap();
+        std::fs::write(root.path().join("src/config.rs"), "source").unwrap();
+        std::fs::create_dir_all(root.path().join("templates/.agent")).unwrap();
+        std::fs::write(
+            root.path().join("templates/.agent/PLANS.md"),
+            "unrelated plan",
+        )
+        .unwrap();
+        names.discover().unwrap();
+        let original =
+            "See `tests/*.ca`, `src/{config,session,context,approval,undo,markdown,test}.rs` and `.agent/PLANS.md`.";
+        let projected = names.project_text(original).unwrap();
+        names.validate_wire_text(&projected).unwrap();
+        assert_eq!(names.restore_text(&projected).unwrap(), original);
+        assert!(
+            !projected.contains("tests/")
+                && !projected.contains("src/")
+                && !projected.contains(".agent/")
+        );
+        let references = names.reference_ranges(&projected).unwrap();
+        assert_eq!(references.len(), 3);
+        for (start, end) in references {
+            let reference = &projected[start..end];
+            assert!(reference.starts_with("__CA_NAME_"));
+            assert!(names.resolve_path(reference).is_err());
+            assert!(names.resolve_write_path(reference).is_err());
+        }
+        let directory = names.project_path("tests").unwrap();
+        assert!(names.project_text(&format!("{directory}/*.ca")).is_err());
+        assert!(names
+            .project_text(&format!("{directory}/../outside.rs"))
+            .is_err());
+        std::fs::remove_dir_all(root.path().join("templates/.agent")).unwrap();
+        names.discover().unwrap();
+        assert_eq!(names.project_text(original).unwrap(), projected);
+        assert_eq!(names.restore_text(&projected).unwrap(), original);
+        let mut loaded =
+            FilenameAliases::from_snapshot(root.path().into(), names.snapshot()).unwrap();
+        loaded.discover().unwrap();
+        assert_eq!(loaded.project_text(original).unwrap(), projected);
+        assert_eq!(loaded.restore_text(&projected).unwrap(), original);
+        for (start, end) in loaded.reference_ranges(&projected).unwrap() {
+            assert!(loaded.resolve_path(&projected[start..end]).is_err());
+            assert!(loaded.resolve_write_path(&projected[start..end]).is_err());
+        }
+    }
+
+    #[test]
+    fn filename_census_masks_unvisited_names_and_preserves_deferred_links_globs_resume_deletion() {
+        let (root, mut names) = fixture();
+        std::fs::create_dir_all(root.path().join("target/.hidden/deep")).unwrap();
+        let file = root
+            .path()
+            .join("target/.hidden/deep/PrivateDeferred317.rs");
+        std::fs::write(&file, "original source").unwrap();
+        names.discover().unwrap();
+        assert_eq!(
+            names.snapshot.entries.len(),
+            1,
+            "only shallow browsing is allocated"
+        );
+        assert!(
+            names.snapshot.names.is_empty(),
+            "the global census is not persisted"
+        );
+        let prose = names
+            .project_text("Discuss PrivateDeferred317.rs before visiting it")
+            .unwrap();
+        assert!(!prose.contains("PrivateDeferred317.rs"));
+        assert_eq!(names.snapshot.names.len(), 1);
+        let descriptive = names.snapshot.names["PrivateDeferred317.rs"].clone();
+        let alias = names
+            .project_path("target/.hidden/deep/PrivateDeferred317.rs")
+            .unwrap();
+        assert_eq!(names.resolve_path(&alias).unwrap(), file);
+        assert_eq!(names.resolve_write_path(&alias).unwrap(), file);
+        let link = names
+            .source_link("index.html", "target/.hidden/deep/PrivateDeferred317.rs")
+            .unwrap()
+            .unwrap();
+        assert_eq!(names.resolve_path(&link).unwrap(), file);
+        assert!(names
+            .matching_files(&root.path().join("target"), "*.rs")
+            .unwrap()
+            .contains(&file));
+        let snapshot = names.snapshot();
+        assert!(serde_json::to_vec(&snapshot).unwrap().len() < 8 * 1024 * 1024);
+        let mut loaded = FilenameAliases::from_snapshot(root.path().into(), snapshot).unwrap();
+        loaded.discover().unwrap();
+        assert_eq!(loaded.resolve_path(&alias).unwrap(), file);
+        assert_eq!(
+            loaded.restore_text(&descriptive).unwrap(),
+            "PrivateDeferred317.rs"
+        );
+        std::fs::remove_file(&file).unwrap();
+        loaded.discover().unwrap();
+        assert!(loaded.resolve_path(&alias).is_err());
+        assert!(loaded.resolve_path(&link).is_err());
+        assert_eq!(
+            loaded
+                .project_path("target/.hidden/deep/PrivateDeferred317.rs")
+                .unwrap(),
+            alias
+        );
+    }
+
+    #[test]
+    fn filename_census_scoped_lazy_names_do_not_collide_with_literal_foreign_aliases() {
+        let (root, mut names) = fixture();
+        std::fs::create_dir(root.path().join("deep")).unwrap();
+        std::fs::write(root.path().join("deep/RootPrivate317.rs"), "x").unwrap();
+        let other = tempfile::tempdir().unwrap();
+        std::fs::create_dir(other.path().join("deep")).unwrap();
+        std::fs::write(other.path().join("__CA_NAME_test_1__"), "literal").unwrap();
+        std::fs::write(other.path().join("deep/ForeignPrivate317.rs"), "x").unwrap();
+        names
+            .authorize_roots(&[other.path().to_path_buf()])
+            .unwrap();
+        names.discover().unwrap();
+        let root_alias = names.project_text("RootPrivate317.rs").unwrap();
+        assert_ne!(root_alias, "__CA_NAME_test_1__");
+        let foreign = names.project_text("ForeignPrivate317.rs").unwrap();
+        assert!(!foreign.contains("ForeignPrivate317.rs"));
+        assert_ne!(foreign, root_alias);
+        assert_eq!(
+            names.restore_text(&foreign).unwrap(),
+            "ForeignPrivate317.rs"
+        );
+        let mut loaded =
+            FilenameAliases::from_snapshot(root.path().into(), names.snapshot()).unwrap();
+        loaded
+            .authorize_roots(&[other.path().to_path_buf()])
+            .unwrap();
+        loaded.discover().unwrap();
+        assert_eq!(
+            loaded.restore_text(&foreign).unwrap(),
+            "ForeignPrivate317.rs"
+        );
+    }
+
+    #[test]
+    fn filename_census_new_literal_issued_name_collision_is_transactionally_withheld() {
+        let (root, mut names) = fixture();
+        std::fs::create_dir_all(root.path().join("deep")).unwrap();
+        std::fs::write(root.path().join("deep/PrivateBasename317.rs"), "x").unwrap();
+        names.discover().unwrap();
+        let issued = names.project_text("PrivateBasename317.rs").unwrap();
+        assert!(issued.starts_with("__CA_NAME_"));
+        let before = names.snapshot();
+        std::fs::write(root.path().join(&issued), "literal conflicting name").unwrap();
+        assert!(names.discover().is_err());
+        assert_eq!(names.snapshot(), before);
     }
 
     #[test]
@@ -1558,15 +2221,9 @@ mod tests {
             aliases.project_text(&format!("{left} {right}")).unwrap(),
             format!("{left} {right}")
         );
-        assert!(aliases
-            .resolve_path(&aliases.project_text("customer.rs").unwrap())
-            .is_err());
-        assert_eq!(
-            aliases
-                .restore_text(&aliases.project_text("customer.rs").unwrap())
-                .unwrap(),
-            "customer.rs"
-        );
+        let basename = aliases.project_text("customer.rs").unwrap();
+        assert!(aliases.resolve_path(&basename).is_err());
+        assert_eq!(aliases.restore_text(&basename).unwrap(), "customer.rs");
     }
 
     #[test]
@@ -1667,9 +2324,8 @@ mod tests {
         aliases.discover().unwrap();
         let before = aliases.snapshot();
         assert!(aliases.validate_wire_text("open sensitive.rs").is_err());
-        aliases
-            .validate_wire_text(&aliases.project_text("open sensitive.rs").unwrap())
-            .unwrap();
+        let projected = aliases.project_text("open sensitive.rs").unwrap();
+        aliases.validate_wire_text(&projected).unwrap();
         let mut corrupt = aliases.snapshot();
         corrupt.entries[0].relative = "../outside".into();
         assert!(FilenameAliases::from_snapshot(temp.path().into(), corrupt).is_err());
@@ -1700,7 +2356,7 @@ mod tests {
                 directory: false,
             });
         }
-        let aliases = FilenameAliases::from_snapshot(temp.path().into(), snapshot).unwrap();
+        let mut aliases = FilenameAliases::from_snapshot(temp.path().into(), snapshot).unwrap();
         let mut identities = BTreeSet::new();
         for spelling in ["Case.rs", "case.rs", "é.rs", "e\u{301}.rs"] {
             let alias = aliases.project_text(spelling).unwrap();
