@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "scope": "Conservative complete Cargo.lock registry inventory; includes target-specific, build, dev and optional resolution. Not a release binary bill of materials.",
-  "cargo_lock_sha256": "1a385c75a55e94b3140c21883744852917095ad6446cbbaa54af1a714db6ab04",
-  "registry_package_count": 666,
+  "cargo_lock_sha256": "dd0284dc5a682aac14324ea9b8705c1b2f10d90c9d89bf80c469b72b1c3f4850",
+  "registry_package_count": 682,
   "legal_text_gaps": [
     "adobe-cmap-parser@0.4.1",
     "cesu8@1.1.0",
@@ -29,6 +29,11 @@
     "siphasher@1.0.3",
     "stop-token@0.7.0",
     "system-configuration-sys@0.5.0",
+    "tree-sitter-cpp@0.23.4",
+    "tree-sitter-html@0.23.2",
+    "tree-sitter-json@0.24.8",
+    "tree-sitter-toml-ng@0.7.0",
+    "tree-sitter-typescript@0.23.2",
     "type1-encoding-parser@0.1.1",
     "winapi-i686-pc-windows-gnu@0.4.0",
     "winapi-x86_64-pc-windows-gnu@0.4.0",
@@ -12730,6 +12735,30 @@
       "attribution_text_count": 3
     },
     {
+      "name": "sha2-asm",
+      "version": "0.6.4",
+      "license_expression": "MIT",
+      "repository": "https://github.com/RustCrypto/asm-hashes",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "crate_sha256": "b845214d6175804686b2bd482bcffe96651bb2d1200742b712003504a2dac1ab",
+      "source_url": "https://static.crates.io/crates/sha2-asm/sha2-asm-0.6.4.crate",
+      "texts": [
+        {
+          "path": "licenses/third-party/crates/sha2-asm-0.6.4/LICENSE",
+          "sha256": "85010e75aef5bdcd10b9ce39e8865dfab508f620f9ddb6ca6e54833fe97f36fa",
+          "origin": "crate"
+        },
+        {
+          "path": "licenses/third-party/crates/sha2-asm-0.6.4/EMBEDDED_NOTICES.txt",
+          "sha256": "17a4b2ea856a2436b45959ae912f1b6e4535f63888b0813676532dd6b9e52c4d",
+          "origin": "embedded-comments"
+        }
+      ],
+      "primary_original_license_text_found": true,
+      "primary_text_review_exclusions": {},
+      "attribution_text_count": 2
+    },
+    {
       "name": "sharded-slab",
       "version": "0.1.7",
       "license_expression": "MIT",
@@ -13297,6 +13326,35 @@
       "primary_original_license_text_found": false,
       "primary_text_review_exclusions": {},
       "attribution_text_count": 0
+    },
+    {
+      "name": "streaming-iterator",
+      "version": "0.1.9",
+      "license_expression": "MIT OR Apache-2.0",
+      "repository": "https://github.com/sfackler/streaming-iterator",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "crate_sha256": "2b2231b7c3057d5e4ad0156fb3dc807d900806020c5ffa3ee6ff2c8c76fb8520",
+      "source_url": "https://static.crates.io/crates/streaming-iterator/streaming-iterator-0.1.9.crate",
+      "texts": [
+        {
+          "path": "licenses/third-party/crates/streaming-iterator-0.1.9/LICENSE-APACHE",
+          "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08",
+          "origin": "crate"
+        },
+        {
+          "path": "licenses/third-party/crates/streaming-iterator-0.1.9/LICENSE-MIT",
+          "sha256": "34cb64162194d52a8412e96d8693ebf43a67d019c6b5bd76da3bb377ba7507aa",
+          "origin": "crate"
+        },
+        {
+          "path": "licenses/third-party/crates/streaming-iterator-0.1.9/EMBEDDED_NOTICES.txt",
+          "sha256": "25f0bfb93aa5a70ff7880468bbd3f1395a3c7d2d74fa362fef6ab55131dd0939",
+          "origin": "embedded-comments"
+        }
+      ],
+      "primary_original_license_text_found": true,
+      "primary_text_review_exclusions": {},
+      "attribution_text_count": 3
     },
     {
       "name": "stringprep",
@@ -14692,6 +14750,282 @@
           "sha256": "79ce389f0ef96cdefb37753b5643487fa75d93bd27617868d6d7886027ef52ad",
           "origin": "upstream",
           "url": "https://raw.githubusercontent.com/j0rsa/transmission-rpc/85f66770aca0bd73993044b95e9f482d40ea7aee/LICENSE"
+        }
+      ],
+      "primary_original_license_text_found": true,
+      "primary_text_review_exclusions": {},
+      "attribution_text_count": 1
+    },
+    {
+      "name": "tree-sitter",
+      "version": "0.25.10",
+      "license_expression": "MIT",
+      "repository": "https://github.com/tree-sitter/tree-sitter",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "crate_sha256": "78f873475d258561b06f1c595d93308a7ed124d9977cb26b148c2084a4a3cc87",
+      "source_url": "https://static.crates.io/crates/tree-sitter/tree-sitter-0.25.10.crate",
+      "texts": [
+        {
+          "path": "licenses/third-party/crates/tree-sitter-0.25.10/src/unicode/LICENSE",
+          "sha256": "6a18c5fac70d7860b57f5b72b4e2c9a1ba6b3d2741eef7ff9767c5379364f10d",
+          "origin": "crate"
+        },
+        {
+          "path": "licenses/third-party/crates/tree-sitter-0.25.10/EMBEDDED_NOTICES.txt",
+          "sha256": "9a2eeb04460bf2e07773c2ccad86012f40d0c0b4b8d88edacbeb9a0cdc78cd1f",
+          "origin": "embedded-comments"
+        }
+      ],
+      "primary_original_license_text_found": true,
+      "primary_text_review_exclusions": {},
+      "attribution_text_count": 2
+    },
+    {
+      "name": "tree-sitter-bash",
+      "version": "0.25.1",
+      "license_expression": "MIT",
+      "repository": "https://github.com/tree-sitter/tree-sitter-bash",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "crate_sha256": "9e5ec769279cc91b561d3df0d8a5deb26b0ad40d183127f409494d6d8fc53062",
+      "source_url": "https://static.crates.io/crates/tree-sitter-bash/tree-sitter-bash-0.25.1.crate",
+      "texts": [
+        {
+          "path": "licenses/third-party/crates/tree-sitter-bash-0.25.1/LICENSE",
+          "sha256": "49bf33cf78ef5897e4e161ce1517df7de1ae5042a65b6bcfd44401e0fc606559",
+          "origin": "crate"
+        }
+      ],
+      "primary_original_license_text_found": true,
+      "primary_text_review_exclusions": {},
+      "attribution_text_count": 1
+    },
+    {
+      "name": "tree-sitter-c",
+      "version": "0.24.2",
+      "license_expression": "MIT",
+      "repository": "https://github.com/tree-sitter/tree-sitter-c",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "crate_sha256": "a9b2eb57a55fed6b00812912e730b7a275cf4fe98bfd6a5d76263d4438371728",
+      "source_url": "https://static.crates.io/crates/tree-sitter-c/tree-sitter-c-0.24.2.crate",
+      "texts": [
+        {
+          "path": "licenses/third-party/crates/tree-sitter-c-0.24.2/LICENSE",
+          "sha256": "2e0110e07abef7c2548b26ec9d6969775617ca539a0dc8dbeeb14d6452c711d1",
+          "origin": "crate"
+        }
+      ],
+      "primary_original_license_text_found": true,
+      "primary_text_review_exclusions": {},
+      "attribution_text_count": 1
+    },
+    {
+      "name": "tree-sitter-cpp",
+      "version": "0.23.4",
+      "license_expression": "MIT",
+      "repository": "https://github.com/tree-sitter/tree-sitter-cpp",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "crate_sha256": "df2196ea9d47b4ab4a31b9297eaa5a5d19a0b121dceb9f118f6790ad0ab94743",
+      "source_url": "https://static.crates.io/crates/tree-sitter-cpp/tree-sitter-cpp-0.23.4.crate",
+      "texts": [
+        {
+          "path": "licenses/third-party/upstream/license-templates/MIT.txt",
+          "sha256": "6d7c9e9d7d12c8d3753bdb24417b84819ba4d6c2f025c37948113d86dc81eef9",
+          "origin": "canonical-template",
+          "url": "https://raw.githubusercontent.com/spdx/license-list-data/v3.26.0/text/MIT.txt"
+        }
+      ],
+      "primary_original_license_text_found": false,
+      "primary_text_review_exclusions": {},
+      "attribution_text_count": 0
+    },
+    {
+      "name": "tree-sitter-css",
+      "version": "0.25.0",
+      "license_expression": "MIT",
+      "repository": "https://github.com/tree-sitter/tree-sitter-css",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "crate_sha256": "a5cbc5e18f29a2c6d6435891f42569525cf95435a3e01c2f1947abcde178686f",
+      "source_url": "https://static.crates.io/crates/tree-sitter-css/tree-sitter-css-0.25.0.crate",
+      "texts": [
+        {
+          "path": "licenses/third-party/crates/tree-sitter-css-0.25.0/LICENSE",
+          "sha256": "c5cfb43042b6b72045f4ba997834d0a7786d2793d91680868b5815b39f14fc78",
+          "origin": "crate"
+        }
+      ],
+      "primary_original_license_text_found": true,
+      "primary_text_review_exclusions": {},
+      "attribution_text_count": 1
+    },
+    {
+      "name": "tree-sitter-html",
+      "version": "0.23.2",
+      "license_expression": "MIT",
+      "repository": "https://github.com/tree-sitter/tree-sitter-html",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "crate_sha256": "261b708e5d92061ede329babaaa427b819329a9d427a1d710abb0f67bbef63ee",
+      "source_url": "https://static.crates.io/crates/tree-sitter-html/tree-sitter-html-0.23.2.crate",
+      "texts": [
+        {
+          "path": "licenses/third-party/upstream/license-templates/MIT.txt",
+          "sha256": "6d7c9e9d7d12c8d3753bdb24417b84819ba4d6c2f025c37948113d86dc81eef9",
+          "origin": "canonical-template",
+          "url": "https://raw.githubusercontent.com/spdx/license-list-data/v3.26.0/text/MIT.txt"
+        }
+      ],
+      "primary_original_license_text_found": false,
+      "primary_text_review_exclusions": {},
+      "attribution_text_count": 0
+    },
+    {
+      "name": "tree-sitter-javascript",
+      "version": "0.25.0",
+      "license_expression": "MIT",
+      "repository": "https://github.com/tree-sitter/tree-sitter-javascript",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "crate_sha256": "68204f2abc0627a90bdf06e605f5c470aa26fdcb2081ea553a04bdad756693f5",
+      "source_url": "https://static.crates.io/crates/tree-sitter-javascript/tree-sitter-javascript-0.25.0.crate",
+      "texts": [
+        {
+          "path": "licenses/third-party/crates/tree-sitter-javascript-0.25.0/LICENSE",
+          "sha256": "2e0110e07abef7c2548b26ec9d6969775617ca539a0dc8dbeeb14d6452c711d1",
+          "origin": "crate"
+        }
+      ],
+      "primary_original_license_text_found": true,
+      "primary_text_review_exclusions": {},
+      "attribution_text_count": 1
+    },
+    {
+      "name": "tree-sitter-json",
+      "version": "0.24.8",
+      "license_expression": "MIT",
+      "repository": "https://github.com/tree-sitter/tree-sitter-json",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "crate_sha256": "4d727acca406c0020cffc6cf35516764f36c8e3dc4408e5ebe2cb35a947ec471",
+      "source_url": "https://static.crates.io/crates/tree-sitter-json/tree-sitter-json-0.24.8.crate",
+      "texts": [
+        {
+          "path": "licenses/third-party/upstream/license-templates/MIT.txt",
+          "sha256": "6d7c9e9d7d12c8d3753bdb24417b84819ba4d6c2f025c37948113d86dc81eef9",
+          "origin": "canonical-template",
+          "url": "https://raw.githubusercontent.com/spdx/license-list-data/v3.26.0/text/MIT.txt"
+        }
+      ],
+      "primary_original_license_text_found": false,
+      "primary_text_review_exclusions": {},
+      "attribution_text_count": 0
+    },
+    {
+      "name": "tree-sitter-language",
+      "version": "0.1.9",
+      "license_expression": "MIT",
+      "repository": "https://github.com/tree-sitter/tree-sitter",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "crate_sha256": "d0af592be68c579aa78a16846bd19422978c3c52e438523d45ff5d1bff1f9d4a",
+      "source_url": "https://static.crates.io/crates/tree-sitter-language/tree-sitter-language-0.1.9.crate",
+      "texts": [
+        {
+          "path": "licenses/third-party/crates/tree-sitter-language-0.1.9/LICENSE",
+          "sha256": "c5cfb43042b6b72045f4ba997834d0a7786d2793d91680868b5815b39f14fc78",
+          "origin": "crate"
+        }
+      ],
+      "primary_original_license_text_found": true,
+      "primary_text_review_exclusions": {},
+      "attribution_text_count": 1
+    },
+    {
+      "name": "tree-sitter-python",
+      "version": "0.25.0",
+      "license_expression": "MIT",
+      "repository": "https://github.com/tree-sitter/tree-sitter-python",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "crate_sha256": "6bf85fd39652e740bf60f46f4cda9492c3a9ad75880575bf14960f775cb74a1c",
+      "source_url": "https://static.crates.io/crates/tree-sitter-python/tree-sitter-python-0.25.0.crate",
+      "texts": [
+        {
+          "path": "licenses/third-party/crates/tree-sitter-python-0.25.0/LICENSE",
+          "sha256": "d724405ce238a22c0d35769c5a36b386ad5958192efe8bbb304fb2896254575f",
+          "origin": "crate"
+        }
+      ],
+      "primary_original_license_text_found": true,
+      "primary_text_review_exclusions": {},
+      "attribution_text_count": 1
+    },
+    {
+      "name": "tree-sitter-rust",
+      "version": "0.24.2",
+      "license_expression": "MIT",
+      "repository": "https://github.com/tree-sitter/tree-sitter-rust",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "crate_sha256": "439e577dbe07423ec2582ac62c7531120dbfccfa6e5f92406f93dd271a120e45",
+      "source_url": "https://static.crates.io/crates/tree-sitter-rust/tree-sitter-rust-0.24.2.crate",
+      "texts": [
+        {
+          "path": "licenses/third-party/crates/tree-sitter-rust-0.24.2/LICENSE",
+          "sha256": "31d5b6f4243d5c7c6e1c4ebbbb9f6407bd1457a08bcc4f706521710341acba36",
+          "origin": "crate"
+        }
+      ],
+      "primary_original_license_text_found": true,
+      "primary_text_review_exclusions": {},
+      "attribution_text_count": 1
+    },
+    {
+      "name": "tree-sitter-toml-ng",
+      "version": "0.7.0",
+      "license_expression": "MIT",
+      "repository": "https://github.com/tree-sitter-grammars/tree-sitter-toml",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "crate_sha256": "e9adc2c898ae49730e857d75be403da3f92bb81d8e37a2f918a08dd10de5ebb1",
+      "source_url": "https://static.crates.io/crates/tree-sitter-toml-ng/tree-sitter-toml-ng-0.7.0.crate",
+      "texts": [
+        {
+          "path": "licenses/third-party/upstream/license-templates/MIT.txt",
+          "sha256": "6d7c9e9d7d12c8d3753bdb24417b84819ba4d6c2f025c37948113d86dc81eef9",
+          "origin": "canonical-template",
+          "url": "https://raw.githubusercontent.com/spdx/license-list-data/v3.26.0/text/MIT.txt"
+        }
+      ],
+      "primary_original_license_text_found": false,
+      "primary_text_review_exclusions": {},
+      "attribution_text_count": 0
+    },
+    {
+      "name": "tree-sitter-typescript",
+      "version": "0.23.2",
+      "license_expression": "MIT",
+      "repository": "https://github.com/tree-sitter/tree-sitter-typescript",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "crate_sha256": "6c5f76ed8d947a75cc446d5fccd8b602ebf0cde64ccf2ffa434d873d7a575eff",
+      "source_url": "https://static.crates.io/crates/tree-sitter-typescript/tree-sitter-typescript-0.23.2.crate",
+      "texts": [
+        {
+          "path": "licenses/third-party/upstream/license-templates/MIT.txt",
+          "sha256": "6d7c9e9d7d12c8d3753bdb24417b84819ba4d6c2f025c37948113d86dc81eef9",
+          "origin": "canonical-template",
+          "url": "https://raw.githubusercontent.com/spdx/license-list-data/v3.26.0/text/MIT.txt"
+        }
+      ],
+      "primary_original_license_text_found": false,
+      "primary_text_review_exclusions": {},
+      "attribution_text_count": 0
+    },
+    {
+      "name": "tree-sitter-yaml",
+      "version": "0.7.2",
+      "license_expression": "MIT",
+      "repository": "https://github.com/tree-sitter-grammars/tree-sitter-yaml",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "crate_sha256": "53c223db85f05e34794f065454843b0668ebc15d240ada63e2b5939f43ce7c97",
+      "source_url": "https://static.crates.io/crates/tree-sitter-yaml/tree-sitter-yaml-0.7.2.crate",
+      "texts": [
+        {
+          "path": "licenses/third-party/crates/tree-sitter-yaml-0.7.2/LICENSE",
+          "sha256": "2d181298822a124f6d106118dcc69c8d4d26ac668559be29682c452e712b0947",
+          "origin": "crate"
         }
       ],
       "primary_original_license_text_found": true,
