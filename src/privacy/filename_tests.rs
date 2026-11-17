@@ -2842,6 +2842,102 @@ fn responses_replay_accepts_stale_filename_alias_after_tools() {
     });
 }
 
+#[test]
+fn selected_values_plain_turn_sends_the_builtin_catalog() {
+    crate::provider_filter::with_test_filter(&selected_values_config(), || {
+        let root = tempfile::tempdir().unwrap();
+        let scope = root.path().join("profile");
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir_all(workspace.join(".ca/memory/topics")).unwrap();
+        std::fs::create_dir_all(workspace.join("src")).unwrap();
+        std::fs::write(workspace.join("src/main.rs"), "fn main() {}\n").unwrap();
+        // These basenames exist in a real project and are also subagent tool
+        // grants. The host puts those names in spawn_agent's enum.
+        for name in ["glob", "monitor"] {
+            std::fs::write(workspace.join(name), "x").unwrap();
+        }
+        std::fs::create_dir(&scope).unwrap();
+        let context = Context::open(scope, workspace.clone(), Uuid::new_v4(), None).unwrap();
+        context.allow_ephemeral();
+        assert_eq!(
+            context.summary(),
+            "Project privacy · Selected values only · filenames on · 0 selected values"
+        );
+        let registry = crate::agent::registry::ToolRegistry::builtins();
+        let tools = crate::tool_selection::resolve_tools(
+            registry,
+            crate::agent::registry::ToolProfile::Main,
+            &crate::tool_selection::ToolSelectionPolicy::default(),
+            &crate::tool_selection::ToolSelectionConstraints::default(),
+        )
+        .unwrap()
+        .into_definitions();
+        let mut request = PreparedModelRequest::new(
+            RequestKind::MainTurn,
+            "plain",
+            "grok-4.6",
+            vec![message("user", "testing")],
+            tools.clone(),
+            Default::default(),
+        );
+        let result = context.prepare_request(&mut request);
+        if let Err(error) = &result {
+            let mut blocked = Vec::new();
+            for tool in &tools {
+                let mut one = PreparedModelRequest::new(
+                    RequestKind::MainTurn,
+                    "plain",
+                    "grok-4.6",
+                    vec![message("user", "testing")],
+                    vec![tool.clone()],
+                    Default::default(),
+                );
+                if let Err(tool_error) = context.prepare_request(&mut one) {
+                    blocked.push(format!("{} ({tool_error})", tool.function.name));
+                }
+            }
+            panic!("plain turn blocked: {error}; tools: {}", blocked.join(", "));
+        }
+        let spawn = request
+            .tools
+            .iter()
+            .find(|tool| tool.function.name == "spawn_agent")
+            .expect("spawn_agent");
+        let grants = spawn
+            .function
+            .parameters
+            .pointer("/properties/tools/items/enum")
+            .and_then(|value| value.as_array())
+            .expect("host grant enum");
+        assert!(grants.iter().any(|name| name == "glob"));
+        assert!(grants.iter().any(|name| name == "monitor"));
+
+        let mut smuggled = tools
+            .into_iter()
+            .find(|tool| tool.function.name == "read_file")
+            .expect("read_file");
+        smuggled.function.parameters["properties"]["path"]["enum"] =
+            json!(["secret-topic.md", "glob"]);
+        std::fs::write(workspace.join("secret-topic.md"), "private").unwrap();
+        context.refresh_filenames().unwrap();
+        let mut smuggled_request = PreparedModelRequest::new(
+            RequestKind::MainTurn,
+            "plain",
+            "grok-4.6",
+            vec![message("user", "testing")],
+            vec![smuggled],
+            Default::default(),
+        );
+        let smuggled_result = context.prepare_request(&mut smuggled_request);
+        assert!(
+            smuggled_result
+                .unwrap_err()
+                .contains("immutable tool schema"),
+            "a private filename added to a builtin enum must stay blocked"
+        );
+    });
+}
+
 fn outgoing_text(request: &PreparedModelRequest) -> String {
     let mut text = String::new();
     for message in &request.messages {

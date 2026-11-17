@@ -5219,10 +5219,20 @@ fn check_schema_for_tool(
         context: &Context,
         value: &serde_json::Value,
         public: &std::collections::BTreeSet<String>,
+        builtin_owner: bool,
+        host_grant: bool,
     ) -> Result<(), String> {
         match value {
             serde_json::Value::String(text) => {
-                if !public.contains(text) && context.mask_known(text)? != *text {
+                // spawn_agent names its grants in an enum. Those names are host
+                // protocol, even when a workspace file uses the same spelling.
+                // A caller-added enum value, and any custom tool schema, is not.
+                let host_tool_name = builtin_owner
+                    && host_grant
+                    && crate::agent::registry::ToolRegistry::builtins()
+                        .get(text.as_str())
+                        .is_some();
+                if !host_tool_name && !public.contains(text) && context.mask_known(text)? != *text {
                     return Err("A private value is required by an immutable tool schema; adjust its local policy before sending".into());
                 }
             }
@@ -5231,12 +5241,18 @@ fn check_schema_for_tool(
                     if !public.contains(key) && context.mask_known(key)? != *key {
                         return Err("A private field name is required by an immutable tool schema; adjust its local policy before sending".into());
                     }
-                    inspect(context, value, public)?;
+                    inspect(
+                        context,
+                        value,
+                        public,
+                        builtin_owner,
+                        builtin_owner && key == "enum",
+                    )?;
                 }
             }
             serde_json::Value::Array(items) => {
                 for item in items {
-                    inspect(context, item, public)?;
+                    inspect(context, item, public, builtin_owner, host_grant)?;
                 }
             }
             _ => {}
@@ -5244,14 +5260,17 @@ fn check_schema_for_tool(
         Ok(())
     }
     let mut public = std::collections::BTreeSet::new();
-    if let Some(spec) =
+    let builtin_owner = if let Some(spec) =
         name.and_then(|name| crate::agent::registry::ToolRegistry::builtins().get(name))
     {
         // Only text already published by the registered native schema is public.
         // A caller cannot add private keys by borrowing a builtin tool's name.
         collect(&spec.schema, &mut public);
-    }
-    inspect(context, value, &public)
+        true
+    } else {
+        false
+    };
+    inspect(context, value, &public, builtin_owner, false)
 }
 
 fn project_responses_reasoning_plaintext(
