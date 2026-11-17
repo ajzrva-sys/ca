@@ -42,6 +42,9 @@ const CORE: &[&str] = &[
     "find_relevant_tests",
     "verify_changes",
     "verify_recipe",
+    "browser",
+    "browser_exec",
+    "browser_vault",
     SEARCH_TOOLS_NAME,
 ];
 
@@ -414,25 +417,29 @@ mod tests {
     #[test]
     fn search_only_activates_after_complete_batch_and_current_snapshot_is_frozen() {
         let session = ToolDiscoverySession::default();
-        let full = vec![tool("read_file"), tool(SEARCH_TOOLS_NAME), tool("browser")];
+        let full = vec![
+            tool("read_file"),
+            tool(SEARCH_TOOLS_NAME),
+            tool("web_fetch"),
+        ];
         let initial = session.advertise(full.clone(), &policy());
         let batch = session.begin_batch();
         assert!(session
-            .search(&serde_json::json!({"query":"browser"}))
+            .search(&serde_json::json!({"query":"web_fetch"}))
             .is_success());
         assert_eq!(names(&initial), ["read_file", SEARCH_TOOLS_NAME]);
-        assert!(!names(&session.advertise(full.clone(), &policy())).contains(&"browser"));
+        assert!(!names(&session.advertise(full.clone(), &policy())).contains(&"web_fetch"));
         batch.commit();
-        assert!(names(&session.advertise(full, &policy())).contains(&"browser"));
+        assert!(names(&session.advertise(full, &policy())).contains(&"web_fetch"));
     }
     #[test]
     fn cancelled_search_does_not_leak_to_next_turn_or_other_session() {
         let session = ToolDiscoverySession::default();
-        let full = vec![tool(SEARCH_TOOLS_NAME), tool("browser")];
+        let full = vec![tool(SEARCH_TOOLS_NAME), tool("web_fetch")];
         session.advertise(full.clone(), &policy());
         {
             let _batch = session.begin_batch();
-            session.search(&serde_json::json!({"query":"browser"}));
+            session.search(&serde_json::json!({"query":"web_fetch"}));
         }
         assert_eq!(
             names(&session.advertise(full.clone(), &policy())),
@@ -446,62 +453,66 @@ mod tests {
     #[test]
     fn reset_invalidates_old_guards_without_discarding_new_owned_batch() {
         let session = ToolDiscoverySession::default();
-        let full = vec![tool(SEARCH_TOOLS_NAME), tool("browser")];
+        let full = vec![tool(SEARCH_TOOLS_NAME), tool("web_fetch")];
         session.advertise(full.clone(), &policy());
         let stale = session.begin_batch();
-        session.search(&serde_json::json!({"query":"browser"}));
+        session.search(&serde_json::json!({"query":"web_fetch"}));
         session.reset();
         session.advertise(full.clone(), &policy());
         let live = session.begin_batch();
-        session.search(&serde_json::json!({"query":"browser"}));
+        session.search(&serde_json::json!({"query":"web_fetch"}));
         drop(stale);
         live.commit();
-        assert!(names(&session.advertise(full, &policy())).contains(&"browser"));
+        assert!(names(&session.advertise(full, &policy())).contains(&"web_fetch"));
     }
     #[test]
     fn authorization_changes_remove_activation_and_search_results_are_schema_bounded() {
         let session = ToolDiscoverySession::default();
         let mut huge = tool("huge");
         huge.function.description = "huge".repeat(12_000);
-        let full = vec![tool(SEARCH_TOOLS_NAME), tool("browser"), huge];
+        let full = vec![tool(SEARCH_TOOLS_NAME), tool("web_fetch"), huge];
         session.advertise(full.clone(), &policy());
         let batch = session.begin_batch();
         assert!(session
             .search(&serde_json::json!({"query":"huge"}))
             .model_text()
             .contains("\"tools\":[]"));
-        session.search(&serde_json::json!({"query":"browser"}));
+        session.search(&serde_json::json!({"query":"web_fetch"}));
         batch.commit();
         let narrowed = session.advertise(vec![tool(SEARCH_TOOLS_NAME)], &policy());
         assert_eq!(names(&narrowed), [SEARCH_TOOLS_NAME]);
         let batch = session.begin_batch();
         assert!(session
-            .search(&serde_json::json!({"query":"browser"}))
+            .search(&serde_json::json!({"query":"web_fetch"}))
             .model_text()
             .contains("\"tools\":[]"));
         batch.commit();
-        assert!(!names(&session.advertise(full, &policy())).contains(&"browser"));
+        assert!(!names(&session.advertise(full, &policy())).contains(&"web_fetch"));
     }
     #[test]
     fn eager_exact_lists_missing_discovery_and_explicit_includes_preserve_authority() {
         let session = ToolDiscoverySession::default();
-        let full = vec![tool(SEARCH_TOOLS_NAME), tool("browser"), tool("email_read")];
+        let full = vec![
+            tool(SEARCH_TOOLS_NAME),
+            tool("web_fetch"),
+            tool("email_read"),
+        ];
         assert_eq!(
             names(&session.advertise(full.clone(), &ToolSelectionPolicy::default())),
             names(&full)
         );
-        let exact = ToolSelectionPolicy::replacing(&["browser"])
+        let exact = ToolSelectionPolicy::replacing(&["web_fetch"])
             .with_discovery_mode(ToolDiscoveryMode::Lazy);
         assert_eq!(
-            names(&session.advertise(vec![tool("browser")], &exact)),
-            ["browser"]
+            names(&session.advertise(vec![tool("web_fetch")], &exact)),
+            ["web_fetch"]
         );
-        let include = ToolSelectionPolicy::from_cli(None, vec!["browser".into()], vec![])
+        let include = ToolSelectionPolicy::from_cli(None, vec!["web_fetch".into()], vec![])
             .unwrap()
             .with_discovery_mode(ToolDiscoveryMode::Lazy);
         assert_eq!(
             names(&session.advertise(full, &include)),
-            [SEARCH_TOOLS_NAME, "browser"]
+            [SEARCH_TOOLS_NAME, "web_fetch"]
         );
         let _batch = session.begin_batch();
         let result = session.search(&serde_json::json!({"query":"run_privileged"}));

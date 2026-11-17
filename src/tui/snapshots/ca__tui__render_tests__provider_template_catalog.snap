@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
 
 
 
@@ -10,10 +10,11 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
          │ Provider templates                                                             │
          │ Select a compatible template to review before saving.                          │
          │> type to filter names, aliases, or key env…                                    │
-         │  17 ready · 23 need integration                                                │
+         │  18 ready · 23 need integration                                                │
          │                                                                                │
          │▸ Nous Portal · needs OAuth                                                     │
          │  OpenAI Codex · ready · responses                                              │
+         │  ChatGPT plan · ready · responses                                              │
          │  GitHub Copilot · needs adapter                                                │
          │  GitHub Copilot ACP · needs subprocess                                         │
          │  Anthropic · ready · messages                                                  │
@@ -22,26 +23,26 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
          │  NovitaAI · needs adapter                                                      │
          │  AI Gateway (Vercel) · needs adapter                                           │
          │  z.ai / GLM · needs adapter                                                    │
-         │  Kimi / Moonshot · needs adapter                                               │
          │                                                                                │
          │Enter review · ↑↓ move · PgUp/PgDn · Home/End                                   │
          │Esc providers · unavailable rows show requirements                              │
          │                                                                                │
-         └────────────────────────────────────────────────────────────────────────────────┘
-╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                                                                   │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
-/ commands
+╭────────└────────────────────────────────────────────────────────────────────────────────┘────────╮
+│› Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto
+/ commands · Ctrl+\ dashboard · ↑ history
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
   ┌──────────────────────────────────────────────────────┐
   │ Provider templates                                   │
   │ Select a compatible template to review before saving.│
   │> type to filter names, aliases, or key env…          │
-  │  17 ready · 23 need integration                      │
+  │  18 ready · 23 need integration                      │
   │                                                      │
   │▸ Nous Portal · needs OAuth                           │
   │  OpenAI Codex · ready · responses                    │
+  │  ChatGPT plan · ready · responses                    │
   │  GitHub Copilot · needs adapter                      │
   │  GitHub Copilot ACP · needs subprocess               │
   │  Anthropic · ready · messages                        │
@@ -50,10 +51,9 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
   │  NovitaAI · needs adapter                            │
   │  AI Gateway (Vercel) · needs adapter                 │
   │  z.ai / GLM · needs adapter                          │
-  │  Kimi / Moonshot · needs adapter                     │
   │                                                      │
-  │Enter review · ↑↓ move · PgUp/PgDn · Home/End         │
-╭─│Esc providers · unavailable rows show requirements    │─╮
-│›│                                                      │ │
-╰─└──────────────────────────────────────────────────────┘ ╯
-/ commands
+╭─│Enter review · ↑↓ move · PgUp/PgDn · Home/End         │─╮
+│›│Esc providers · unavailable rows show requirements    │ │
+╰─│                                                      │─╯
+ca└──────────────────────────────────────────────────────┘
+/ commands · Ctrl+\ dashboard · ↑ history

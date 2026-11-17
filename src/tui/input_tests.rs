@@ -217,18 +217,22 @@ fn new_session_command_executes_exactly_and_closes_the_palette() {
 
 fn config_hub_items() -> Vec<crate::app::ConfigHubItem> {
     vec![
-        crate::app::ConfigHubItem {
-            label: "Current model".into(),
-            value: "mimo/mimo-v2.5-pro".into(),
-            keywords: "provider switch".into(),
-            action: crate::app::ConfigHubAction::CurrentModel,
-        },
-        crate::app::ConfigHubItem {
-            label: "Review model".into(),
-            value: "use current default".into(),
-            keywords: "reviewer".into(),
-            action: crate::app::ConfigHubAction::ReviewModel,
-        },
+        crate::app::ConfigHubItem::row(
+            crate::app::ConfigHubSection::Models,
+            "Current model",
+            "mimo/mimo-v2.5-pro",
+            "provider switch",
+            "Model used for this session",
+            crate::app::ConfigHubAction::CurrentModel,
+        ),
+        crate::app::ConfigHubItem::row(
+            crate::app::ConfigHubSection::Models,
+            "Review model",
+            "use current default",
+            "reviewer",
+            "Model used for a fresh-context review",
+            crate::app::ConfigHubAction::ReviewModel,
+        ),
     ]
 }
 
@@ -401,11 +405,7 @@ fn sandbox_required_saves_directly_and_bare_is_view_only() {
 #[test]
 fn config_hub_filters_pastes_navigates_and_routes_without_touching_composer() {
     let mut state = state_with_input("draft", 5);
-    state.config_hub = Some(crate::app::ConfigHubState {
-        filter: String::new(),
-        selected_idx: 0,
-        items: config_hub_items(),
-    });
+    state.config_hub = Some(crate::app::ConfigHubState::list(config_hub_items()));
 
     assert!(handle_event(
         &mut state,
@@ -440,16 +440,16 @@ fn config_hub_filters_pastes_navigates_and_routes_without_touching_composer() {
 #[test]
 fn config_hub_routes_sandbox_to_the_shared_manager_command() {
     let mut state = state_with_input("preserved", 9);
-    state.config_hub = Some(crate::app::ConfigHubState {
-        filter: String::new(),
-        selected_idx: 0,
-        items: vec![crate::app::ConfigHubItem {
-            label: "Sandbox".into(),
-            value: "required saved · required active".into(),
-            keywords: "process isolation".into(),
-            action: crate::app::ConfigHubAction::Sandbox,
-        }],
-    });
+    state.config_hub = Some(crate::app::ConfigHubState::list(vec![
+        crate::app::ConfigHubItem::row(
+            crate::app::ConfigHubSection::AgentApproval,
+            "Sandbox",
+            "required saved · required active",
+            "process isolation",
+            "Saved sandbox mode",
+            crate::app::ConfigHubAction::Sandbox,
+        ),
+    ]));
 
     press(&mut state, KeyCode::Enter);
 
@@ -463,6 +463,389 @@ fn config_hub_routes_sandbox_to_the_shared_manager_command() {
         ))
     );
     assert_eq!(state.input, "preserved");
+}
+
+#[test]
+fn settings_search_clears_before_close_and_jumps_to_the_ends() {
+    let mut state = state_with_input("draft", 5);
+    state.config_hub = Some(crate::app::ConfigHubState::list(config_hub_items()));
+    press(&mut state, KeyCode::Char('/'));
+    assert!(state.config_hub.as_ref().unwrap().search_focused);
+    press(&mut state, KeyCode::Char('r'));
+    press(&mut state, KeyCode::Char('e'));
+    assert_eq!(state.config_hub.as_ref().unwrap().filter, "re");
+    press(&mut state, KeyCode::Esc);
+    assert!(state.config_hub.as_ref().unwrap().filter.is_empty());
+    assert!(state.config_hub.is_some());
+    press(&mut state, KeyCode::Char('G'));
+    assert_eq!(state.config_hub.as_ref().unwrap().selected_idx, 1);
+    press(&mut state, KeyCode::Char('g'));
+    assert_eq!(state.config_hub.as_ref().unwrap().selected_idx, 0);
+    press(&mut state, KeyCode::Esc);
+    assert!(state.config_hub.is_none());
+    assert_eq!(state.input, "draft");
+}
+
+#[test]
+fn settings_choice_page_selects_without_leaving_the_sheet_until_enter() {
+    let mut state = state_with_input("draft", 5);
+    state.config_hub = Some(crate::app::ConfigHubState::list(vec![
+        crate::app::ConfigHubItem::row(
+            crate::app::ConfigHubSection::Appearance,
+            "Completion notification",
+            "Off",
+            "bell",
+            "Alert when a turn finishes",
+            crate::app::ConfigHubAction::Notification,
+        )
+        .with_choices(
+            vec![
+                crate::app::ConfigHubChoice {
+                    label: "Off".into(),
+                    description: "No completion alert".into(),
+                    action: crate::app::ConfigHubAction::NotificationSave(
+                        crate::ui_settings::NotificationStyle::Off,
+                    ),
+                    preview: None,
+                },
+                crate::app::ConfigHubChoice {
+                    label: "BEL".into(),
+                    description: "Terminal bell".into(),
+                    action: crate::app::ConfigHubAction::NotificationSave(
+                        crate::ui_settings::NotificationStyle::Bel,
+                    ),
+                    preview: None,
+                },
+            ],
+            Some(crate::app::ConfigHubAction::NotificationSave(
+                crate::ui_settings::NotificationStyle::Off,
+            )),
+        ),
+    ]));
+    press(&mut state, KeyCode::Enter);
+    assert!(matches!(
+        state.config_hub.as_ref().unwrap().page,
+        crate::app::ConfigHubPage::Choices(_)
+    ));
+    press(&mut state, KeyCode::Char('j'));
+    press(&mut state, KeyCode::Esc);
+    assert!(matches!(
+        state.config_hub.as_ref().unwrap().page,
+        crate::app::ConfigHubPage::List
+    ));
+    assert!(state.pending_input_action.is_none());
+    press(&mut state, KeyCode::Enter);
+    press(&mut state, KeyCode::Char('j'));
+    press(&mut state, KeyCode::Enter);
+    assert_eq!(
+        state.pending_input_action,
+        Some(crate::tui::commands::InputAction::SaveNotification(
+            crate::ui_settings::NotificationStyle::Bel
+        ))
+    );
+    assert!(state.config_hub.is_none());
+}
+
+fn settings_scroll_rows(count: usize) -> Vec<crate::app::ConfigHubItem> {
+    (0..count)
+        .map(|index| {
+            crate::app::ConfigHubItem::row(
+                crate::app::ConfigHubSection::Appearance,
+                format!("Row {index}"),
+                "on",
+                "row",
+                "How this row behaves",
+                crate::app::ConfigHubAction::CurrentModel,
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn settings_sheet_scroll_wheel_moves_the_row_not_the_transcript() {
+    let mut state = state_with_input("draft", 5);
+    state.config_hub = Some(crate::app::ConfigHubState::list(settings_scroll_rows(24)));
+    state.transcript_scroll.observe_rendered_maximum(20);
+    state.transcript_scroll.request_offset(4);
+    let before = state.transcript_scroll.bottom_offset();
+    assert_eq!(before, 4);
+    assert!(handle_event(
+        &mut state,
+        &Event::MouseScroll(crate::tui::event::MouseScrollEvent {
+            direction: crate::tui::event::ScrollDirection::Down,
+            column: 4,
+            row: 4,
+        }),
+        "/tmp/ca-settings-scroll",
+    ));
+    assert_eq!(state.config_hub.as_ref().unwrap().selected_idx, 3);
+    assert_eq!(state.transcript_scroll.bottom_offset(), before);
+    assert_eq!(state.input, "draft");
+    assert!(handle_event(
+        &mut state,
+        &Event::MouseScroll(crate::tui::event::MouseScrollEvent {
+            direction: crate::tui::event::ScrollDirection::Up,
+            column: 4,
+            row: 4,
+        }),
+        "/tmp/ca-settings-scroll",
+    ));
+    assert_eq!(state.config_hub.as_ref().unwrap().selected_idx, 0);
+
+    state.config_hub.as_mut().unwrap().page =
+        crate::app::ConfigHubPage::Choices(crate::app::ConfigHubChoicePage {
+            title: "Theme".into(),
+            detail: "Color theme".into(),
+            selected_idx: 0,
+            choices: (0..8)
+                .map(|index| crate::app::ConfigHubChoice {
+                    label: format!("Choice {index}"),
+                    description: "option".into(),
+                    action: crate::app::ConfigHubAction::CurrentModel,
+                    preview: None,
+                })
+                .collect(),
+            sandbox_saved: None,
+        });
+    assert!(handle_event(
+        &mut state,
+        &Event::MouseScroll(crate::tui::event::MouseScrollEvent {
+            direction: crate::tui::event::ScrollDirection::Down,
+            column: 4,
+            row: 4,
+        }),
+        "/tmp/ca-settings-scroll",
+    ));
+    match &state.config_hub.as_ref().unwrap().page {
+        crate::app::ConfigHubPage::Choices(page) => assert_eq!(page.selected_idx, 3),
+        other => panic!("expected choices, got {other:?}"),
+    }
+}
+
+#[test]
+fn settings_sheet_scroll_page_uses_rendered_lines() {
+    let mut state = state_with_input("draft", 5);
+    state.config_hub = Some(crate::app::ConfigHubState::list(settings_scroll_rows(24)));
+    crate::tui::test_support::render_to_text(&state, 80, 16);
+    press(&mut state, KeyCode::PageDown);
+    assert_eq!(state.config_hub.as_ref().unwrap().selected_idx, 6);
+    assert_eq!(state.input, "draft");
+    crate::tui::test_support::render_to_text(&state, 80, 16);
+    press(&mut state, KeyCode::PageUp);
+    assert_eq!(state.config_hub.as_ref().unwrap().selected_idx, 0);
+}
+
+#[test]
+fn personality_submenu_saves_an_edit_and_bare_mode_refuses() {
+    let temp = tempfile::tempdir().unwrap();
+    let config_path = temp.path().join("config.toml");
+    std::fs::write(&config_path, "[ui]\ntheme = \"default\"\n").unwrap();
+    let personality_path = temp.path().join("personality.md");
+    std::fs::write(&personality_path, "# Voice\nKeep updates brief.\n").unwrap();
+
+    let mut state = state_with_input("", 0);
+    state.config_path = Some(config_path.display().to_string());
+    state.config_hub = Some(personality_hub());
+    press(&mut state, KeyCode::Enter);
+    let page = personality_page(&state);
+    assert!(page.personality.contains("one-line question"));
+    assert!(page.pre_prompt.contains("technical expert"));
+    assert!(!page.personality.contains("Hermes"));
+    let rendered = crate::tui::test_support::render_to_text(&state, 100, 30);
+    assert!(rendered.contains("Pre-prompt"));
+    assert!(rendered.contains("Guided questions"));
+    let stored = std::fs::read_to_string(&personality_path).unwrap();
+    assert!(stored.contains("Keep updates brief."));
+    assert!(stored.contains("one-line question"));
+    assert!(stored.contains("technical expert"));
+    assert!(!stored.contains("Hermes"));
+    assert!(!stored.contains("Nous"));
+
+    press(&mut state, KeyCode::Char('j'));
+    press(&mut state, KeyCode::Char('j'));
+    press(&mut state, KeyCode::Enter);
+    match state.pending_input_action.take() {
+        Some(crate::tui::commands::InputAction::Command(action)) => {
+            assert_eq!(action.id, crate::tui::commands::CommandId::Personality);
+        }
+        other => panic!("guided questions should open the questionnaire, got {other:?}"),
+    }
+    assert!(state.config_hub.is_none());
+
+    state.config_hub = Some(personality_hub());
+    press(&mut state, KeyCode::Enter);
+    press(&mut state, KeyCode::Enter);
+    press(&mut state, KeyCode::Char('!'));
+    press(&mut state, KeyCode::Esc);
+    press(&mut state, KeyCode::Char('j'));
+    press(&mut state, KeyCode::Char('j'));
+    press(&mut state, KeyCode::Char('j'));
+    press(&mut state, KeyCode::Enter);
+    let stored = std::fs::read_to_string(&personality_path).unwrap();
+    assert!(stored.contains("Keep updates brief."));
+    assert!(stored.contains('!'));
+    assert_eq!(
+        personality_page(&state).notice.as_deref(),
+        Some("Personality saved")
+    );
+
+    let cleared = "# Voice\nKeep updates brief.\n\n## Personality\n\n## Pre-prompt\n\n";
+    std::fs::write(&personality_path, cleared).unwrap();
+    state.config_hub = Some(personality_hub());
+    press(&mut state, KeyCode::Enter);
+    let page = personality_page(&state);
+    assert!(page.personality.is_empty());
+    assert!(page.pre_prompt.is_empty());
+    assert!(!std::fs::read_to_string(&personality_path)
+        .unwrap()
+        .contains("one-line question"));
+
+    state.run_capabilities.config_writes = false;
+    press(&mut state, KeyCode::Enter);
+    press(&mut state, KeyCode::Char('N'));
+    press(&mut state, KeyCode::Esc);
+    press(&mut state, KeyCode::Char('j'));
+    press(&mut state, KeyCode::Char('j'));
+    press(&mut state, KeyCode::Char('j'));
+    press(&mut state, KeyCode::Enter);
+    assert_eq!(
+        personality_page(&state).error.as_deref(),
+        Some("Bare mode cannot save personality")
+    );
+    assert_eq!(std::fs::read_to_string(&personality_path).unwrap(), cleared);
+}
+
+fn personality_hub() -> crate::app::ConfigHubState {
+    crate::app::ConfigHubState::list(vec![crate::app::ConfigHubItem::row(
+        crate::app::ConfigHubSection::Advanced,
+        "Personality",
+        "voice and pre-prompt",
+        "personality",
+        "Edit the personality and pre-prompt",
+        crate::app::ConfigHubAction::PersonalityMenu,
+    )
+    .screen()])
+}
+
+fn personality_page(state: &AppState) -> crate::app::PersonalitySettingsPage {
+    match &state.config_hub.as_ref().unwrap().page {
+        crate::app::ConfigHubPage::Personality(page) => page.clone(),
+        other => panic!("personality submenu should be open, got {other:?}"),
+    }
+}
+
+#[test]
+fn image_chip_backspace_removes_that_image_and_renumbers() {
+    let mut state = state_with_input("", 0);
+    let first = crate::image_content::normalize_rgba(2, 2, [1, 2, 3, 255].repeat(4)).unwrap();
+    let second = crate::image_content::normalize_rgba(3, 1, [4, 5, 6, 255].repeat(3)).unwrap();
+    crate::tui::input::insert_image_chip(
+        &mut state,
+        first,
+        crate::tui::composer::ImageChipSource::Clipboard,
+    );
+    crate::tui::input::insert_image_chip(
+        &mut state,
+        second,
+        crate::tui::composer::ImageChipSource::File {
+            name: "shot.png".into(),
+        },
+    );
+    assert_eq!(state.input, "[Image #1][Image #2]");
+    state.input_cursor = "[Image #1]".len();
+    press(&mut state, KeyCode::Backspace);
+    assert_eq!(state.input, "[Image #1]");
+    assert_eq!(state.pasted_images.len(), 1);
+    assert_eq!(state.pasted_images[0].width(), 3);
+    assert!(state.input_cursor <= state.input.len());
+}
+
+#[test]
+fn pasted_image_path_attaches_and_other_paths_stay_text() {
+    let root = tempfile::tempdir().unwrap();
+    let image = root.path().join("shot.png");
+    let notes = root.path().join("notes.txt");
+    std::fs::write(&image, b"png").unwrap();
+    std::fs::write(&notes, b"text").unwrap();
+    let cwd = root.path().to_str().unwrap();
+
+    let mut state = state_with_input("", 0);
+    assert!(handle_event(
+        &mut state,
+        &Event::Paste(image.display().to_string()),
+        cwd
+    ));
+    assert!(state.input.is_empty());
+    assert!(matches!(
+        state.pending_input_action,
+        Some(crate::tui::commands::InputAction::AttachImageFile { .. })
+    ));
+
+    let mut text = state_with_input("", 0);
+    assert!(handle_event(
+        &mut text,
+        &Event::Paste(notes.display().to_string()),
+        cwd
+    ));
+    assert!(text.input.contains("notes.txt"));
+    assert!(text.pending_input_action.is_none());
+}
+
+#[test]
+fn super_v_uses_the_clipboard_paste_path() {
+    let mut state = state_with_input("", 0);
+    state.image_attachment_busy = true;
+    press_with_modifiers(&mut state, KeyCode::Char('v'), KeyModifiers::SUPER);
+    assert!(state.input.is_empty());
+    assert_eq!(
+        state.status_message.as_deref(),
+        Some("Clipboard image is still processing")
+    );
+    assert!(crate::tui::input::is_clipboard_paste(KeyModifiers::META));
+    assert!(crate::tui::input::is_clipboard_paste(KeyModifiers::CONTROL));
+}
+
+#[test]
+fn shift_tab_cycles_normal_plan_auto_review_and_always_approve() {
+    let mut state = state_with_input("keep", 4);
+    let cycle = [
+        (
+            crate::app::AgentMode::Plan,
+            crate::app::ApprovalMode::Allowlist,
+            "Plan mode",
+            "plan",
+        ),
+        (
+            crate::app::AgentMode::Agent,
+            crate::app::ApprovalMode::AutoReview,
+            "Auto-review",
+            "auto-review",
+        ),
+        (
+            crate::app::AgentMode::Agent,
+            crate::app::ApprovalMode::RunEverything,
+            "Always-approve",
+            "always-approve",
+        ),
+        (
+            crate::app::AgentMode::Agent,
+            crate::app::ApprovalMode::Allowlist,
+            "Normal",
+            "agent",
+        ),
+    ];
+    for (mode, approval, message, label) in cycle {
+        assert!(handle_event(
+            &mut state,
+            &Event::Key(KeyCode::BackTab, KeyModifiers::SHIFT),
+            "/tmp/ca-uni004-test",
+        ));
+        assert_eq!(state.mode, mode);
+        assert_eq!(state.approval, approval);
+        assert_eq!(state.status_message.as_deref(), Some(message));
+        assert_eq!(state.mode.status_label(&state.approval), label);
+        assert_eq!(state.input, "keep");
+    }
 }
 
 fn press(state: &mut AppState, code: KeyCode) {
@@ -950,6 +1333,72 @@ fn live_catalog_merges_with_configured_models_and_sorts_current_provider_first()
     assert_eq!(models[1].display_name, "mimo-v2.5-pro");
 }
 
+#[test]
+fn first_party_picker_hides_models_without_a_contract() {
+    let xai = crate::config::ProviderConfig {
+        google: None,
+        tool_schema_policy: Default::default(),
+        base_url: "https://api.x.ai/v1".into(),
+        api_key: String::new(),
+        protocol: crate::agent::ProviderProtocol::OpenAiResponses,
+        prompt_cache_mode: crate::config::PromptCacheMode::Implicit,
+        models: vec!["grok-4.7".into(), "grok-4.3".into()],
+        timeout: crate::config::ProviderTimeoutConfig::default(),
+    };
+    let custom = crate::config::ProviderConfig {
+        google: None,
+        tool_schema_policy: Default::default(),
+        base_url: "https://other.invalid/v1".into(),
+        api_key: String::new(),
+        protocol: crate::agent::ProviderProtocol::default(),
+        prompt_cache_mode: crate::config::PromptCacheMode::Implicit,
+        models: vec!["configured-other".into()],
+        timeout: crate::config::ProviderTimeoutConfig::default(),
+    };
+    let providers = std::collections::HashMap::from([
+        ("xai-oauth".to_string(), xai),
+        ("other".to_string(), custom),
+    ]);
+    let discovered = std::collections::HashMap::from([(
+        "xai-oauth".to_string(),
+        vec!["grok-4.3".into(), "grok-4.5".into(), "grok-2".into()],
+    )]);
+
+    let models = crate::tui::input::build_model_list_with_catalog(
+        &providers,
+        &discovered,
+        Some("xai-oauth"),
+    );
+    let shown = models
+        .iter()
+        .map(|model| (model.provider.as_str(), model.id.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        shown,
+        [
+            ("xai-oauth", "grok-4.5"),
+            ("xai-oauth", "grok-4.7"),
+            ("other", "configured-other"),
+        ]
+    );
+
+    let only_unsupported = std::collections::HashMap::from([(
+        "xai-oauth".to_string(),
+        crate::config::ProviderConfig {
+            models: vec!["grok-4.3".into()],
+            ..providers["xai-oauth"].clone()
+        },
+    )]);
+    let fallback = crate::tui::input::build_model_list(&only_unsupported);
+    assert_eq!(
+        fallback
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<Vec<_>>(),
+        ["grok-4.5", "grok-4.6", "grok-4.7"]
+    );
+}
+
 fn provider_entry(id: &str, configured_models: &[&str]) -> crate::config::ProviderManagementEntry {
     crate::config::ProviderManagementEntry {
         id: id.into(),
@@ -1041,6 +1490,33 @@ fn bare_profile_requires_confirmation_before_starting_oauth() {
             crate::provider_connect::FirstClassProvider::OpenAiCodex
         ))
     );
+}
+
+#[test]
+fn provider_picker_starts_chatgpt_plan_oauth_not_codex() {
+    let mut state = state_with_input("composer stays", "composer stays".len());
+    crate::tui::input::open_provider_manager(
+        &mut state,
+        vec![disconnected_provider_entry("openai-chatgpt")],
+        String::new(),
+    );
+
+    press(&mut state, KeyCode::Enter);
+    let auth = state.provider_auth.as_ref().unwrap();
+    assert_eq!(
+        auth.provider,
+        crate::provider_connect::FirstClassProvider::OpenAiChatGpt
+    );
+    assert_eq!(auth.stage, crate::app::ProviderAuthStage::Starting);
+    assert!(auth.prompt.contains("ChatGPT plan"));
+    assert!(!auth.prompt.to_ascii_lowercase().contains("codex"));
+    assert_eq!(
+        state.pending_input_action.take(),
+        Some(crate::tui::commands::InputAction::StartProviderAuth(
+            crate::provider_connect::FirstClassProvider::OpenAiChatGpt
+        ))
+    );
+    assert_eq!(state.input, "composer stays");
 }
 
 #[test]
@@ -1836,6 +2312,23 @@ fn provider_template_catalog_keeps_integration_rows_inert_and_refuses_duplicates
         .error
         .as_deref()
         .is_some_and(|error| error.contains("mimo exists")));
+
+    let manager = state.provider_manager.as_mut().unwrap();
+    manager.template_filter = "premium+".into();
+    manager.selected_template_idx = 0;
+    manager.error = None;
+    press(&mut state, KeyCode::Enter);
+    assert_eq!(
+        state.pending_input_action.take(),
+        Some(crate::tui::commands::InputAction::StartProviderAuth(
+            crate::provider_connect::FirstClassProvider::XaiOAuth
+        ))
+    );
+    assert!(state
+        .provider_auth
+        .as_ref()
+        .is_some_and(|auth| auth.prompt.contains("xAI")));
+    assert!(state.provider_manager.as_ref().unwrap().error.is_none());
 }
 
 #[test]
@@ -2296,6 +2789,106 @@ fn alt_enter_explicitly_queues_the_current_draft() {
 }
 
 #[test]
+fn empty_enter_sends_the_oldest_queued_follow_up_now() {
+    let mut state = state_with_input("", 0);
+    state.turn_lifecycle.begin();
+    let first = state.input_queue.enqueue("first follow-up").unwrap();
+    let second = state.input_queue.enqueue("second follow-up").unwrap();
+    state.input_queue.selected_index = 1;
+    press(&mut state, KeyCode::Enter);
+    assert_eq!(
+        state.pending_input_action,
+        Some(crate::tui::commands::InputAction::Steer {
+            text: "first follow-up".into(),
+            queued_id: Some(first),
+        })
+    );
+    assert_eq!(state.input_queue.selected().unwrap().id, second);
+}
+
+#[test]
+fn ctrl_s_sends_the_selected_queued_row_when_the_composer_is_empty() {
+    let mut state = state_with_input("", 0);
+    state.turn_lifecycle.begin();
+    state.input_queue.enqueue("first follow-up");
+    let second = state.input_queue.enqueue("second follow-up").unwrap();
+    state.input_queue.selected_index = 1;
+    press_ctrl(&mut state, 's');
+    assert_eq!(
+        state.pending_input_action,
+        Some(crate::tui::commands::InputAction::Steer {
+            text: "second follow-up".into(),
+            queued_id: Some(second),
+        })
+    );
+}
+
+#[test]
+fn queue_view_send_now_edit_and_cancel() {
+    let mut state = state_with_input("keep", 4);
+    state.turn_lifecycle.begin();
+    let first = state.input_queue.enqueue("send this").unwrap();
+    state.input_queue.enqueue("drop this");
+    state.input_queue.selected_index = 1;
+    state.queue_view_open = true;
+    press(&mut state, KeyCode::Char('d'));
+    assert_eq!(state.input_queue.len(), 1);
+    assert_eq!(
+        state.pending_input_action,
+        Some(crate::tui::commands::InputAction::PersistSessionQueue)
+    );
+    assert!(state.turn_lifecycle.is_active());
+    assert_ne!(
+        state.pending_input_action,
+        Some(crate::tui::commands::InputAction::StopTurn)
+    );
+
+    state.pending_input_action = None;
+    state.queue_view_open = true;
+    press(&mut state, KeyCode::Char('s'));
+    assert!(!state.queue_view_open);
+    assert_eq!(
+        state.pending_input_action,
+        Some(crate::tui::commands::InputAction::Steer {
+            text: "send this".into(),
+            queued_id: Some(first),
+        })
+    );
+
+    state.pending_input_action = None;
+    state.input_queue.enqueue("edit this");
+    state.queue_view_open = true;
+    state.input_queue.selected_index = state.input_queue.len() - 1;
+    press(&mut state, KeyCode::Char('e'));
+    assert!(!state.queue_view_open);
+    assert_eq!(state.input, "edit this");
+    assert!(state.input_queue.editing_id.is_some());
+}
+
+#[test]
+fn pasted_images_stay_in_the_composer_when_enter_would_queue() {
+    let mut state = state_with_input("with image", 10);
+    state.turn_lifecycle.begin();
+    state
+        .pasted_images
+        .push(crate::image_content::normalize_rgba(1, 1, vec![1, 2, 3, 255]).unwrap());
+    press(&mut state, KeyCode::Enter);
+    assert!(state.pending_input_action.is_none());
+    assert_eq!(state.input, "with image");
+    assert!(state.input_queue.is_empty());
+    assert!(state
+        .status_message
+        .as_deref()
+        .unwrap()
+        .contains("Remove pasted images"));
+    press_ctrl(&mut state, 's');
+    assert!(matches!(
+        state.pending_input_action,
+        Some(crate::tui::commands::InputAction::Steer { .. })
+    ));
+}
+
+#[test]
 fn ctrl_s_emits_steering_action_while_turn_is_active() {
     let mut state = state_with_input("change direction", "change direction".len());
     state.turn_lifecycle.begin();
@@ -2311,24 +2904,28 @@ fn ctrl_s_emits_steering_action_while_turn_is_active() {
 }
 
 #[test]
-fn busy_enter_interrupts_instead_of_silently_queueing() {
+fn busy_enter_queues_a_follow_up_instead_of_interrupting() {
     let mut state = state_with_input("", 0);
     state.turn_lifecycle.begin();
+    state.input_queue.enqueue("already waiting");
     state.input = "Stop that and inspect the diff".into();
     state.input_cursor = state.input.len();
     press(&mut state, KeyCode::Enter);
     assert_eq!(
         state.pending_input_action,
-        Some(crate::tui::commands::InputAction::Steer {
-            text: "Stop that and inspect the diff".into(),
-            queued_id: None,
-        })
+        Some(crate::tui::commands::InputAction::PersistSessionQueue)
     );
-    assert!(state.input_queue.is_empty());
+    assert!(state.input.is_empty());
+    assert_eq!(state.input_queue.len(), 2);
+    assert_eq!(
+        state.input_queue.selected().unwrap().text,
+        "Stop that and inspect the diff"
+    );
+    assert!(state.turn_lifecycle.is_active());
 }
 
 #[test]
-fn busy_enter_interrupts_leading_path_prose() {
+fn busy_enter_queues_leading_path_prose() {
     for input in [
         "/Volumes/projects/qui you can use this source",
         "/tmp/project inspect this directory",
@@ -2341,18 +2938,15 @@ fn busy_enter_interrupts_leading_path_prose() {
         press(&mut state, KeyCode::Enter);
         assert_eq!(
             state.pending_input_action,
-            Some(crate::tui::commands::InputAction::Steer {
-                text: input.into(),
-                queued_id: None,
-            })
+            Some(crate::tui::commands::InputAction::PersistSessionQueue)
         );
         assert!(state.input.is_empty());
-        assert!(state.input_queue.is_empty());
+        assert_eq!(state.input_queue.selected().unwrap().text, input);
     }
 }
 
 #[test]
-fn busy_enter_interrupts_an_unmatched_path_completion() {
+fn busy_enter_queues_an_unmatched_path_completion() {
     let input = "/missing/project";
     let mut state = state_with_input(input, input.len());
     state.turn_lifecycle.begin();
@@ -2363,11 +2957,9 @@ fn busy_enter_interrupts_an_unmatched_path_completion() {
     assert!(!state.composer_ui.path_completion.open);
     assert_eq!(
         state.pending_input_action,
-        Some(crate::tui::commands::InputAction::Steer {
-            text: input.into(),
-            queued_id: None,
-        })
+        Some(crate::tui::commands::InputAction::PersistSessionQueue)
     );
+    assert_eq!(state.input_queue.selected().unwrap().text, input);
 }
 
 #[test]
@@ -2535,10 +3127,54 @@ fn interrupt_controls_work_in_vim_normal_mode() {
     assert_eq!(state.input, "correction");
     state.pending_input_action = None;
     press(&mut state, KeyCode::Enter);
-    assert!(matches!(
+    assert_eq!(
         state.pending_input_action,
-        Some(crate::tui::commands::InputAction::Steer { .. })
-    ));
+        Some(crate::tui::commands::InputAction::PersistSessionQueue)
+    );
+    assert_eq!(state.input_queue.selected().unwrap().text, "correction");
+    assert!(state.turn_lifecycle.is_active());
+}
+
+#[test]
+fn plain_enter_newlines_while_shift_is_held() {
+    let _guard = PhysicalShiftGuard::held();
+    let mut state = state_with_input("hello", 5);
+    state.turn_lifecycle.begin();
+    press(&mut state, KeyCode::Enter);
+    assert_eq!(state.input, "hello\n");
+    assert!(state.pending_input_action.is_none());
+    assert!(state.turn_lifecycle.is_active());
+
+    state.turn_lifecycle.cancel();
+    state.pending_input_action = None;
+    press(&mut state, KeyCode::Enter);
+    assert_eq!(state.input, "hello\n\n");
+    assert!(state.pending_input_action.is_none());
+}
+
+#[test]
+fn ctrl_j_inserts_a_newline_instead_of_sending() {
+    let mut state = state_with_input("hello", 5);
+    state.turn_lifecycle.begin();
+    press_ctrl(&mut state, 'j');
+    assert_eq!(state.input, "hello\n");
+    assert!(state.pending_input_action.is_none());
+    assert!(state.input_queue.is_empty());
+}
+
+struct PhysicalShiftGuard;
+
+impl PhysicalShiftGuard {
+    fn held() -> Self {
+        crate::tui::modifiers::force_physical_shift(Some(true));
+        Self
+    }
+}
+
+impl Drop for PhysicalShiftGuard {
+    fn drop(&mut self) {
+        crate::tui::modifiers::force_physical_shift(None);
+    }
 }
 
 #[test]
@@ -2578,19 +3214,39 @@ fn queue_view_edit_retains_item_identity_for_steering() {
 }
 
 #[test]
-fn ctrl_r_emits_the_shared_change_review_command() {
-    let mut state = state_with_input("", 0);
+fn ctrl_r_opens_previous_sessions() {
+    let mut state = state_with_input("draft", 5);
     press_ctrl(&mut state, 'r');
 
     assert_eq!(
         state.pending_input_action,
         Some(crate::tui::commands::InputAction::Command(
             crate::tui::commands::CommandAction {
-                id: crate::tui::commands::CommandId::Diff,
+                id: crate::tui::commands::CommandId::Resume,
                 args: String::new(),
             }
         ))
     );
+    assert_eq!(state.input, "draft");
+}
+
+#[test]
+fn ctrl_r_opens_previous_sessions_while_a_turn_is_running() {
+    let mut state = state_with_input("draft", 5);
+    state.turn_lifecycle.begin();
+    press_ctrl(&mut state, 'r');
+
+    assert_eq!(
+        state.pending_input_action,
+        Some(crate::tui::commands::InputAction::Command(
+            crate::tui::commands::CommandAction {
+                id: crate::tui::commands::CommandId::Resume,
+                args: String::new(),
+            }
+        ))
+    );
+    assert!(state.turn_lifecycle.is_active());
+    assert_eq!(state.input, "draft");
 }
 
 #[test]
@@ -2847,9 +3503,11 @@ fn busy_commit_review_accepts_only_emergency_cancellation() {
 
 fn running_job() -> crate::jobs::JobInfo {
     crate::jobs::JobInfo {
+        log_artifact: None,
         id: "00000000-0000-4000-8000-000000000001".parse().unwrap(),
         command: "read line; echo $line".into(),
         cwd: "/tmp/project".into(),
+        protected_sources: false,
         status: crate::jobs::JobStatus::Running,
         elapsed: std::time::Duration::from_millis(1250),
         stdout: "ready\n".into(),
@@ -3683,7 +4341,7 @@ fn ctrl_w_with_interior_emoji_byte_cursor_normalizes_and_does_not_panic() {
 }
 
 #[test]
-fn typed_keymap_dispatches_custom_one_and_default_two_stroke_without_shadowing_diff() {
+fn typed_keymap_dispatches_custom_one_and_default_two_stroke_without_shadowing_sessions() {
     let mut state = state_with_input("draft", 5);
     let mut configured = crate::keymap::KeymapConfig::new();
     configured.insert(
@@ -3715,7 +4373,7 @@ fn typed_keymap_dispatches_custom_one_and_default_two_stroke_without_shadowing_d
         state.pending_input_action.take(),
         Some(crate::tui::commands::InputAction::Command(
             crate::tui::commands::CommandAction {
-                id: crate::tui::commands::CommandId::Diff,
+                id: crate::tui::commands::CommandId::Resume,
                 args: String::new(),
             }
         ))
@@ -3860,7 +4518,7 @@ fn modifier_key_events_do_not_consume_a_pending_chord() {
 }
 
 #[test]
-fn two_stroke_prefix_times_out_and_unmatched_ctrl_r_still_opens_diff() {
+fn two_stroke_prefix_times_out_and_unmatched_ctrl_r_still_opens_sessions() {
     let mut state = state_with_input("draft", 5);
     let mut configured = crate::keymap::KeymapConfig::new();
     configured.insert(
@@ -3881,7 +4539,7 @@ fn two_stroke_prefix_times_out_and_unmatched_ctrl_r_still_opens_diff() {
         state.pending_input_action.take(),
         Some(crate::tui::commands::InputAction::Command(
             crate::tui::commands::CommandAction {
-                id: crate::tui::commands::CommandId::Diff,
+                id: crate::tui::commands::CommandId::Resume,
                 args: String::new(),
             }
         ))
@@ -4000,6 +4658,42 @@ fn agent_activity_chord_focuses_and_controls_are_cancel_first() {
     press(&mut state, KeyCode::Enter);
     assert_eq!(state.agents_request, Some(format!("cancel {id}")));
     assert!(state.agent_activity_action_pending);
+}
+
+#[test]
+fn subtree_stop_includes_descendants_and_skips_an_unrelated_child() {
+    let mut state = state_with_input("keep draft", 10);
+    let turn = uuid::Uuid::new_v4();
+    let root = crate::agent::subagent::AgentId::new();
+    let child = crate::agent::subagent::AgentId::new();
+    let grandchild = crate::agent::subagent::AgentId::new();
+    let other = crate::agent::subagent::AgentId::new();
+    let mut agents = [root, child, grandchild, other]
+        .into_iter()
+        .map(|id| live_agent(id, turn, crate::agent::subagent::AgentStatus::Running))
+        .collect::<Vec<_>>();
+    agents[1].parent = Some(root);
+    agents[2].parent = Some(child);
+    agents[3].parent = Some(crate::agent::subagent::AgentId::new());
+    state.live_agent_activity = agents;
+    state.agent_activity_focus = Some(crate::app::AgentActivityFocusState {
+        turn_id: turn,
+        selected_agent: Some(root),
+        ..crate::app::AgentActivityFocusState::default()
+    });
+    press(&mut state, KeyCode::Char('X'));
+    assert!(state.agent_activity_focus.as_ref().unwrap().cancel_subtree);
+    press(&mut state, KeyCode::Right);
+    press(&mut state, KeyCode::Enter);
+    let request = state.agents_request.expect("subtree cancels");
+    assert!(request.contains(&format!("cancel {root}")), "{request}");
+    assert!(request.contains(&format!("cancel {child}")), "{request}");
+    assert!(
+        request.contains(&format!("cancel {grandchild}")),
+        "{request}"
+    );
+    assert!(!request.contains(&format!("cancel {other}")), "{request}");
+    assert_eq!(state.input, "keep draft");
 }
 
 #[test]
@@ -4447,4 +5141,159 @@ fn dashboard_typed_prompt_stays_on_an_empty_session_for_submit() {
     assert!(!state.dashboard.open);
     assert_eq!(state.input, "fix");
     assert!(state.pending_composer_submit);
+}
+
+fn transcript_tool_call(id: &str, path: &str) -> crate::app::ToolCall {
+    crate::app::ToolCall {
+        observation: None,
+        output_source: None,
+        arguments_retrieved_spans: Vec::new(),
+        id: id.to_string(),
+        name: "read_file".to_string(),
+        arguments: format!(r#"{{"path":"{path}"}}"#),
+        status: crate::app::ToolStatus::Done,
+        output: Some("fn main() {}".into()),
+        started_at: None,
+    }
+}
+
+fn message(
+    role: crate::app::Role,
+    content: &str,
+    tools: Option<Vec<crate::app::ToolCall>>,
+) -> crate::app::Message {
+    crate::app::Message {
+        retrieved_spans: Some(Vec::new()),
+        role,
+        content: content.to_string(),
+        tool_calls: tools,
+        thinking: None,
+        timestamp: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+        response_items: Vec::new(),
+    }
+}
+
+#[test]
+fn tab_selects_scrollback_and_alt_q_quotes_the_block() {
+    let mut state = state_with_input("", 0);
+    state.cwd = "/workspace/ca".into();
+    state.messages.push(message(
+        crate::app::Role::User,
+        "Please inspect the sources",
+        None,
+    ));
+    state.messages.push(message(
+        crate::app::Role::Assistant,
+        "Done reading.",
+        Some(vec![
+            transcript_tool_call("call-a", "src/main.rs"),
+            transcript_tool_call("call-b", "src/app.rs"),
+        ]),
+    ));
+    let _ = crate::tui::test_support::render_to_text(&state, 100, 30);
+    assert!(
+        state
+            .transcript_scroll
+            .blocks()
+            .iter()
+            .any(|block| matches!(
+                block.kind,
+                crate::tui::transcript::SelectableKind::ToolRun(_)
+            )),
+        "render should publish a tool-run block"
+    );
+
+    press(&mut state, KeyCode::Tab);
+    assert_eq!(state.composer_focus, crate::app::ComposerFocus::Scrollback);
+    assert_eq!(state.transcript_selection, 0);
+    let keys = crate::tui::test_support::render_to_text(&state, 100, 30);
+    assert!(keys.contains("Alt+Q"), "{keys}");
+
+    press_with_modifiers(&mut state, KeyCode::Char('q'), KeyModifiers::ALT);
+    assert_eq!(state.composer_focus, crate::app::ComposerFocus::Composer);
+    assert!(
+        state.input.starts_with("> Please inspect the sources"),
+        "{}",
+        state.input
+    );
+
+    press(&mut state, KeyCode::Tab);
+    assert_eq!(state.composer_focus, crate::app::ComposerFocus::Scrollback);
+    let tool = state
+        .transcript_scroll
+        .blocks()
+        .iter()
+        .position(|block| {
+            matches!(
+                block.kind,
+                crate::tui::transcript::SelectableKind::ToolRun(_)
+            )
+        })
+        .expect("tool run");
+    while state.transcript_selection < tool {
+        press(&mut state, KeyCode::Down);
+    }
+    let collapsed = crate::tui::test_support::render_to_text(&state, 100, 30);
+    assert!(collapsed.contains("Explored"), "{collapsed}");
+    assert!(collapsed.contains("src/main.rs"), "{collapsed}");
+    assert!(!collapsed.contains("fn main"), "{collapsed}");
+    press(&mut state, KeyCode::Right);
+    assert!(!state.expanded_blocks.is_empty());
+    let expanded = crate::tui::test_support::render_to_text(&state, 100, 30);
+    assert!(expanded.contains("fn main"), "{expanded}");
+    press(&mut state, KeyCode::Enter);
+    assert!(state.pager_open);
+    assert!(!state.pager_content.is_empty());
+}
+
+#[test]
+fn slash_palette_tab_still_completes() {
+    let mut state = state_with_input("/help", 5);
+    state.slash_palette_open = true;
+    state.slash_filter = "help".into();
+    press(&mut state, KeyCode::Tab);
+    assert!(!state.slash_palette_open);
+    assert_eq!(state.composer_focus, crate::app::ComposerFocus::Composer);
+    assert!(state.input.starts_with("/help"), "{}", state.input);
+    assert!(
+        state
+            .status_message
+            .as_deref()
+            .is_some_and(|message| message.contains("Completed")),
+        "{:?}",
+        state.status_message
+    );
+}
+
+#[test]
+fn first_escape_parks_a_choice_question() {
+    let mut state = state_with_input("", 0);
+    state.interaction = Some(crate::interaction::InteractionState::host(
+        crate::interaction::InteractionRequest {
+            question: "Which validation?".into(),
+            description: None,
+            mode: crate::interaction::InteractionMode::SingleChoice,
+            choices: vec![
+                crate::interaction::InteractionChoice {
+                    label: "Focused".into(),
+                    value: Some("focused".into()),
+                    description: None,
+                },
+                crate::interaction::InteractionChoice {
+                    label: "Full".into(),
+                    value: Some("full".into()),
+                    description: None,
+                },
+            ],
+            allow_other: false,
+        },
+    ));
+    assert!(crate::tui::input::steer_focused_interaction(
+        &mut state,
+        KeyCode::Esc,
+        KeyModifiers::NONE,
+    ));
+    assert!(state.interaction.is_some());
+    assert!(state.interaction_parked);
+    assert_eq!(state.composer_focus, crate::app::ComposerFocus::Scrollback);
 }

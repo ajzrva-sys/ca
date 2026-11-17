@@ -22,6 +22,8 @@ async fn identity(path: &Path, temporary: &Path) -> Result<String> {
         read_only_roots: vec![path.into()],
         temporary_directory: temporary.into(),
         network_allowed: false,
+        host_credentials: true,
+        proxy_port: None,
         hide_other_processes: true,
     };
     let prepared = crate::sandbox::SandboxBackend::new(crate::sandbox::SandboxMode::Required)
@@ -182,6 +184,8 @@ pub(crate) async fn smoke(path: &Path, temporary: &Path) -> Result<Vec<String>> 
         read_only_roots: vec![path.into()],
         temporary_directory: temporary.into(),
         network_allowed: false,
+        host_credentials: true,
+        proxy_port: None,
         hide_other_processes: true,
     };
     let mut digests = Vec::new();
@@ -264,6 +268,7 @@ pub async fn prepare(vault: LearningVault, id: &str) -> Result<PreparedArtifacts
 async fn prepare_inner(vault: LearningVault, id: &str) -> Result<PreparedArtifacts> {
     let _worker = vault.acquire_worker_lock()?;
     let (plan, cycle) = load_harness_cycle(&vault, id)?;
+    cycle.require_confirmation()?;
     if cycle.stage != HarnessStage::ReadyToPromote
         || !cycle.reservations.is_empty()
         || !cycle.active_reservations.is_empty()

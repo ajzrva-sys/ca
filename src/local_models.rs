@@ -1049,6 +1049,8 @@ async fn start_server_with_resolved_mode(
                 read_only_roots: Vec::new(),
                 temporary_directory: temporary.path().to_path_buf(),
                 network_allowed: true,
+                host_credentials: true,
+                proxy_port: None,
                 hide_other_processes: false,
             },
         )

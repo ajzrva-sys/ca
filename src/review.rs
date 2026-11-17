@@ -58,7 +58,9 @@ pub struct ReviewResult {
 }
 
 pub struct ReviewRunConfig<'a> {
+    pub job_owner: crate::jobs::JobOwner,
     pub project_instructions: &'a str,
+    pub project_retrieved_spans: &'a [crate::retrieved_content::RetrievedSpan],
     pub workspace: &'a WorkspaceContext,
     pub timeout_secs: u64,
     pub usage_recorder: crate::usage::UsageRecorder,
@@ -280,6 +282,19 @@ pub async fn run_review<B: ChatBackend + ?Sized>(
     input: &ReviewInput,
     run: ReviewRunConfig<'_>,
 ) -> Result<ReviewResult, String> {
+    crate::privacy::scope(
+        crate::privacy::for_owner(run.job_owner),
+        run_review_in_context(backend, request_target, input, run),
+    )
+    .await
+}
+
+async fn run_review_in_context<B: ChatBackend + ?Sized>(
+    backend: &B,
+    request_target: (&str, &str),
+    input: &ReviewInput,
+    run: ReviewRunConfig<'_>,
+) -> Result<ReviewResult, String> {
     let (provider, model) = request_target;
     let registry = ToolRegistry::builtins();
     let allowed = REVIEW_READ_TOOLS
@@ -314,10 +329,7 @@ pub async fn run_review<B: ChatBackend + ?Sized>(
         },
         ChatMessage {
             role: "user".into(),
-            content: crate::image_content::ModelContent::text(review_prompt(
-                input,
-                run.project_instructions,
-            )),
+            content: review_prompt(input, run.project_instructions, run.project_retrieved_spans).map_err(|error| error.to_string())?,
             tool_calls: None,
             tool_call_id: None,
             response_items: Vec::new(),
@@ -388,6 +400,7 @@ pub async fn run_review<B: ChatBackend + ?Sized>(
                 id: call.id.clone(),
                 call_type: "function".into(),
                 function: FunctionCall {
+                    arguments_retrieved_spans: call.arguments_retrieved_spans.clone(),
                     name: call.name.clone(),
                     arguments: call.arguments.clone(),
                 },
@@ -395,7 +408,8 @@ pub async fn run_review<B: ChatBackend + ?Sized>(
             .collect::<Vec<_>>();
         messages.push(ChatMessage {
             role: "assistant".into(),
-            content: crate::image_content::ModelContent::text(turn.content),
+            content: crate::image_content::ModelContent::text(turn.content)
+                .with_retrieved_spans(turn.retrieved_spans),
             tool_calls: Some(assistant_calls),
             tool_call_id: None,
             response_items: turn.response_items,
@@ -411,6 +425,14 @@ pub async fn run_review<B: ChatBackend + ?Sized>(
             }
             let arguments: Value = serde_json::from_str(&call.arguments)
                 .map_err(|error| format!("invalid review tool arguments: {error}"))?;
+            let arguments = if let Some(privacy) = crate::privacy::for_owner(run.job_owner) {
+                let name = call.name.clone();
+                tokio::task::spawn_blocking(move || privacy.prepare_edit_ticket(&name, &arguments))
+                    .await
+                    .map_err(|_| "Private review tool preparation worker stopped".to_string())??
+            } else {
+                arguments
+            };
             registry
                 .validate(&call.name, &arguments)
                 .map_err(|error| error.to_string())?;
@@ -442,7 +464,7 @@ pub async fn run_review<B: ChatBackend + ?Sized>(
                 run.timeout_secs,
                 crate::sandbox::SandboxMode::PolicyOnly,
                 false,
-                crate::jobs::JobOwner::process(),
+                run.job_owner,
             )
             .await;
             messages.push(tool_result_message(&call.id, &outcome));
@@ -494,17 +516,39 @@ fn tool_result_message(id: &str, outcome: &ToolExecutionResult) -> ChatMessage {
     }
 }
 
-fn review_prompt(input: &ReviewInput, project_instructions: &str) -> String {
-    format!(
-        "<project_instructions>\n{}\n</project_instructions>\n<review_scope>{}</review_scope>\n<custom_instructions>{}</custom_instructions>\n<included_files>\n{}\n</included_files>\n<omitted_files>\n{}\n</omitted_files>\n<untracked_names_only>\n{}\n</untracked_names_only>\n<diff>\n{}\n</diff>",
+fn review_prompt(
+    input: &ReviewInput,
+    project_instructions: &str,
+    project_spans: &[crate::retrieved_content::RetrievedSpan],
+) -> Result<crate::image_content::ModelContent, crate::agent::stream::ProviderError> {
+    let mut text = format!(
+        "<project_instructions>\n{}\n</project_instructions>\n<review_scope>{}</review_scope>\n<custom_instructions>{}</custom_instructions>\n",
         project_instructions,
         input.scope,
         input.custom_instructions.as_deref().unwrap_or(""),
-        input.included_files.join("\n"),
-        input.omitted_files.join("\n"),
-        input.untracked_files.join("\n"),
-        input.diff
-    )
+    );
+    crate::retrieved_content::validate_spans(project_instructions, project_spans)?;
+    let offset = "<project_instructions>\n".len();
+    let mut spans = project_spans
+        .iter()
+        .map(|span| crate::retrieved_content::RetrievedSpan {
+            source: None,
+            start: offset + span.start,
+            end: offset + span.end,
+        })
+        .collect::<Vec<_>>();
+    for (tag, body) in [
+        ("included_files", input.included_files.join("\n")),
+        ("omitted_files", input.omitted_files.join("\n")),
+        ("untracked_names_only", input.untracked_files.join("\n")),
+        ("diff", input.diff.clone()),
+    ] {
+        text.push_str(&format!("<{tag}>\n"));
+        crate::retrieved_content::append(&mut text, &mut spans, &body);
+        text.push_str(&format!("\n</{tag}>\n"));
+    }
+    text.pop();
+    Ok(crate::image_content::ModelContent::text(text).with_retrieved_spans(spans))
 }
 
 #[cfg(test)]
@@ -605,6 +649,29 @@ mod tests {
         }
     }
 
+    #[test]
+    fn review_prompt_substitutes_diff_and_preserves_review_instructions() {
+        let filter = crate::provider_filter::ProviderFilter::compile(
+            &crate::provider_filter::ProviderFilterConfig {
+                enabled: true,
+                page_stand_in: crate::provider_filter::PageStandIn::Latin,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut input = input();
+        input.custom_instructions = Some("CUSTOM_KEEP".into());
+        let content = review_prompt(&input, "PROJECT_KEEP", &[]).unwrap();
+        let projected = content.project_retrieved(&filter).unwrap();
+        let text = projected.as_str().unwrap();
+        assert!(text.contains("PROJECT_KEEP"));
+        assert!(text.contains("CUSTOM_KEEP"));
+        assert!(text.contains("<diff>"));
+        assert!(!text.contains("src/lib.rs"));
+        assert!(!text.contains("secret.txt"));
+        assert!(content.as_str().unwrap().contains("src/lib.rs"));
+    }
+
     #[tokio::test]
     async fn review_uses_fresh_context_and_structured_report_tool() {
         let root = TempDir::new().unwrap();
@@ -638,7 +705,9 @@ mod tests {
             ("fake", "model"),
             &input(),
             ReviewRunConfig {
+                job_owner: crate::jobs::JobOwner::process(),
                 project_instructions: "PROJECT-ONLY",
+                project_retrieved_spans: &[],
                 workspace: &workspace,
                 timeout_secs: 5,
                 usage_recorder: recorder,
@@ -709,7 +778,9 @@ mod tests {
             ("fake", "model"),
             &input(),
             ReviewRunConfig {
+                job_owner: crate::jobs::JobOwner::process(),
                 project_instructions: "",
+                project_retrieved_spans: &[],
                 workspace: &workspace,
                 timeout_secs: 5,
                 usage_recorder: usage_recorder(),
@@ -750,7 +821,9 @@ mod tests {
             ("fake", "model"),
             &input(),
             ReviewRunConfig {
+                job_owner: crate::jobs::JobOwner::process(),
                 project_instructions: "",
+                project_retrieved_spans: &[],
                 workspace: &workspace,
                 timeout_secs: 5,
                 usage_recorder: usage_recorder(),
@@ -775,7 +848,9 @@ mod tests {
             ("fake", "model"),
             &input(),
             ReviewRunConfig {
+                job_owner: crate::jobs::JobOwner::process(),
                 project_instructions: "",
+                project_retrieved_spans: &[],
                 workspace: &workspace,
                 timeout_secs: 5,
                 usage_recorder: usage_recorder(),
@@ -809,7 +884,9 @@ mod tests {
             ("fake", "model"),
             &input(),
             ReviewRunConfig {
+                job_owner: crate::jobs::JobOwner::process(),
                 project_instructions: "",
+                project_retrieved_spans: &[],
                 workspace: &workspace,
                 timeout_secs: 5,
                 usage_recorder: usage_recorder(),

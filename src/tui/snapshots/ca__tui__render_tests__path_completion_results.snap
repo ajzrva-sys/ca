@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&results, 100, 30),\nrender_to_text(&results, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
 
 
 
@@ -27,13 +27,13 @@ expression: "wide_narrow(render_to_text(&results, 100, 30),\nrender_to_text(&res
   ┌ Paths 2/2 ───────────────────────────────────────────────────────────┐
   │  src/                              folder                            │
   │▸ specification-with-a-long-unicod… file                              │
-  └ ↑↓ select · Enter/Tab complete · Esc dismiss ────────────────────────┘
-╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› Open ./s▌                                                                                       │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
+╭─└ ↑↓ select · Enter/Tab complete · Esc dismiss ────────────────────────┘─────────────────────────╮
+│› Open ./s                                                                                        │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto
 ↑↓ select · Tab complete · Enter choose · Esc dismiss
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
 
 
 
@@ -52,8 +52,8 @@ expression: "wide_narrow(render_to_text(&results, 100, 30),\nrender_to_text(&res
   │    folder                                            │
   │▸ specification-with-a-long-unicode-name-你 .md        │
   │    file                                              │
-  └ ↑↓ select · Enter/Tab complete · Esc dismiss ────────┘
-╭──────────────────────────────────────────────────────────╮
-│› Open ./s▌                                               │
-╰──────────────────────────────────────────── agent · auto ╯
+╭─└ ↑↓ select · Enter/Tab complete · Esc dismiss ────────┘─╮
+│› Open ./s                                                │
+╰──────────────────────────────────────────────────────────╯
+ca · model auto
 ↑↓ select · Tab complete · Enter choose · Esc dismiss

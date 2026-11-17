@@ -2,7 +2,14 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
+  Try one of these, or ask anything:
+
+    · Fix the failing tests in this repo
+    · Explain how the approval flow works
+    · Summarize what changed in this workspace
+
+  / shows commands · /help for help · /keymap for keys
 
 
 
@@ -18,22 +25,22 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
 
 
 
-
-
-
-
-
-
-
-
-
+│ Stopped · queued messages on hold
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│On hold · stop                                                                                    │
-│› ▌Ask anything…                                                                                   │
-╰ Alt+Up edit latest · /queue view all ────────────────────────────────────────────── agent · auto ╯
-Stopped · queued messages on hold
+│On hold · stop                                                          [Send now] [edit] [cancel]│
+│› Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto
+Alt+Up edit latest · /queue view all
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
+  Try one of these, or ask anything:
+
+    · Fix the failing tests in this repo
+    · Explain how the approval flow works
+    · Summarize what changed in this workspace
+
+  / shows commands · /help for help · /keymap for keys
 
 
 
@@ -43,17 +50,10 @@ Stopped · queued messages on hold
 
 
 
-
-
-
-
-
-
-
-
-
+│ Stopped · queued messages on hold
 ╭──────────────────────────────────────────────────────────╮
-│On hold · stop                                            │
-│› ▌Ask anything…                                           │
-╰ Alt+Up edit latest · /queue view all ────── agent · auto ╯
-Stopped · queued messages on hold
+│On hold · stop                  [Send now] [edit] [cancel]│
+│› Ask anything…                                           │
+╰──────────────────────────────────────────────────────────╯
+ca · model auto
+Alt+Up edit latest · /queue view all

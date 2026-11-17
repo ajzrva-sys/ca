@@ -317,6 +317,7 @@ fn canonical(messages: &[ChatMessage]) -> Result<Vec<Message>, String> {
                     .unwrap_or("[Media unavailable after restart]")
                     .into(),
             );
+            call.output_source = message.content.source_receipt();
             // Unknown restored outcomes remain protected from selective pruning.
             call.status = if message.content.tool_result_success() == Some(true) {
                 ToolStatus::Done
@@ -331,6 +332,7 @@ fn canonical(messages: &[ChatMessage]) -> Result<Vec<Message>, String> {
             _ => return Err("unsupported service message role".into()),
         };
         result.push(Message {
+            retrieved_spans: message.content.text_retrieved_spans(),
             role,
             content: message
                 .content
@@ -341,11 +343,15 @@ fn canonical(messages: &[ChatMessage]) -> Result<Vec<Message>, String> {
                 calls
                     .iter()
                     .map(|c| ToolCall {
+                        observation: None,
+                        output_source: None,
+                        arguments_retrieved_spans: c.function.arguments_retrieved_spans.clone(),
                         id: c.id.clone(),
                         name: c.function.name.clone(),
                         arguments: c.function.arguments.clone(),
                         status: ToolStatus::Running,
                         output: None,
+                        started_at: None,
                     })
                     .collect()
             }),

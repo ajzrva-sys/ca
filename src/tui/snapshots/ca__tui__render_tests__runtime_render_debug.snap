@@ -3,13 +3,13 @@ source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                                              ┌ Render diagnostics ──────────────┐│
+│ Try one of these, or ask anything:                           ┌ Render diagnostics ──────────────┐│
 │                                                              │Redraws          2                ││
-│                                                              │Dirty regions    5                ││
-│                                                              │Last / max frame 140 / 140 ms     ││
-│                                                              │Render failures  1                ││
+│   · Fix the failing tests in this repo                       │Dirty regions    5                ││
+│   · Explain how the approval flow works                      │Last / max frame 140 / 140 ms     ││
+│   · Summarize what changed in this workspace                 │Render failures  1                ││
 │                                                              │Repaint rate     2/s              ││
-│                                                              │Highlight        on               ││
+│ / shows commands · /help for help · /keymap for keys         │Highlight        on               ││
 │                                                              │Cache layouts    1 · 0 blocks     ││
 │                                                              │Cached payload   0 KiB · ready    ││
 │                                                              │                                  ││
@@ -27,20 +27,20 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
 │                                                                                                  │
 │                                                                                                  │
 │                                                                                                  │
-│                                                                                                  │
 │──────────────────────────────────────────────────────────────────────────────────────────────────│
-│› ▌Ask anything…                                                                                   │
-│──────────────────────────────────────────────────────────────────────────────────── agent · auto │
+│› Ask anything…                                                                                   │
+│──────────────────────────────────────────────────────────────────────────────────────────────────│
+│a · model auto                                                                                    │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 -- narrow --
 ┌──────────────────────────────────────────────────────────┐
-│                      ┌ Render diagnostics ──────────────┐│
+│ Try one of these, or ┌ Render diagnostics ──────────────┐│
 │                      │Redraws          2                ││
-│                      │Dirty regions    5                ││
-│                      │Last / max frame 140 / 140 ms     ││
-│                      │Render failures  1                ││
+│   · Fix the failing t│Dirty regions    5                ││
+│   · Explain how the a│Last / max frame 140 / 140 ms     ││
+│   · Summarize what ch│Render failures  1                ││
 │                      │Repaint rate     2/s              ││
-│                      │Highlight        on               ││
+│ / shows commands · /h│Highlight        on               ││
 │                      │Cache layouts    2 · 0 blocks     ││
 │                      │Cached payload   0 KiB · ready    ││
 │                      │                                  ││
@@ -52,8 +52,8 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
 │                                                          │
 │                                                          │
 │                                                          │
-│                                                          │
 │──────────────────────────────────────────────────────────│
-│› ▌Ask anything…                                           │
-│──────────────────────────────────────────── agent · auto │
+│› Ask anything…                                           │
+│──────────────────────────────────────────────────────────│
+│a · model auto                                            │
 └──────────────────────────────────────────────────────────┘

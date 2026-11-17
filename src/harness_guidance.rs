@@ -501,6 +501,7 @@ async fn transition(
 ) -> Result<Activation> {
     let _worker = vault.acquire_worker_lock()?;
     let (plan, mut cycle) = load_harness_cycle(&vault, id)?;
+    cycle.require_confirmation()?;
     if !plan.source_files.is_empty() {
         bail!("source experiments use source rollback");
     }
@@ -906,6 +907,7 @@ mod tests {
                     elapsed_millis: 1,
                 })
                 .collect();
+            cycle.confirmation_accepted = true;
             cycle.decide(plan)
         })
         .unwrap();

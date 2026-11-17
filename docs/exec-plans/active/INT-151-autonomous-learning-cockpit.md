@@ -1,6 +1,8 @@
+Do not start this plan unless the task names it. The continuation is [AGT-271](AGT-271-task-first-economic-delegation.md).
+
 # INT-151 — Autonomous Learning and Delegation Cockpit
 
-Status: ACTIVE
+Status: HELD
 Created: 2026-08-21
 Last updated: 2026-08-23
 

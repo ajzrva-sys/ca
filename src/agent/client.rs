@@ -101,6 +101,33 @@ impl OpenAiResponsesRequestOptions {
     }
 }
 
+fn compressed_request_body(base_url: &str, body: &[u8]) -> (Vec<u8>, bool) {
+    if !base_url.contains("api.x.ai") || body.len() < 64 * 1024 {
+        return (body.to_vec(), false);
+    }
+    match zstd::encode_all(std::io::Cursor::new(body), 3) {
+        Ok(compressed) if compressed.len() < body.len() => (compressed, true),
+        _ => (body.to_vec(), false),
+    }
+}
+
+/// Dial the provider origin once so the first sampling request is not also the handshake.
+pub fn prewarm_origin(base_url: &str) {
+    static STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    if !base_url.contains("api.x.ai") || STARTED.set(()).is_err() {
+        return;
+    }
+    let url = base_url.trim_end_matches('/').to_string();
+    tokio::spawn(async move {
+        if let Ok(client) = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(2))
+            .build()
+        {
+            let _ = client.get(url).send().await;
+        }
+    });
+}
+
 #[derive(Clone)]
 pub struct AgentClient {
     google: Option<crate::google_auth::Config>,
@@ -123,6 +150,7 @@ pub struct AgentClient {
     request_store: crate::request::RequestStore,
     trace_hub: Option<crate::provider_trace::ProviderTraceHub>,
     trace_session_id: Option<uuid::Uuid>,
+    privacy_override: Option<std::sync::Arc<crate::privacy::Context>>,
     filter_override: Option<
         std::sync::Arc<std::sync::RwLock<std::sync::Arc<crate::provider_filter::ProviderFilter>>>,
     >,
@@ -164,6 +192,8 @@ pub struct ToolCallMsg {
 pub struct FunctionCall {
     pub name: String,
     pub arguments: String,
+    #[serde(skip)]
+    pub arguments_retrieved_spans: Vec<crate::retrieved_content::RetrievedSpan>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -193,6 +223,12 @@ pub type ChatStreamItem = Result<ProviderEvent, ProviderError>;
 
 #[async_trait::async_trait]
 pub trait ChatBackend: Send + Sync {
+    /// Only native clients expose a route for bounded host inference. Custom
+    /// budgeted backends keep their own authority unless they opt in explicitly.
+    fn inference_client(&self) -> Option<AgentClient> {
+        None
+    }
+
     async fn prepare_harness_request(
         &self,
         request: crate::request::PreparedModelRequest,
@@ -266,6 +302,13 @@ impl AgentClient {
         request_store: crate::request::RequestStore,
     ) -> Self {
         let provider_id = provider_id.into();
+        let mut policy = policy;
+        if matches!(provider_id.as_str(), "xai" | "xai-oauth") && policy.max_attempts == 2 {
+            policy.max_attempts = 15;
+            if policy.max_retry_after <= std::time::Duration::from_secs(5) {
+                policy.max_retry_after = std::time::Duration::from_secs(30);
+            }
+        }
         let google = (provider.protocol == crate::agent::ProviderProtocol::GoogleGenerateContent)
             .then(|| provider.google.clone().unwrap_or_default());
         let base_url = google
@@ -310,6 +353,7 @@ impl AgentClient {
             request_store,
             trace_hub: crate::provider_trace::process_hub(),
             trace_session_id: None,
+            privacy_override: None,
             filter_override: None,
         }
     }
@@ -351,13 +395,48 @@ impl AgentClient {
         self
     }
 
+    pub(crate) fn privacy_context(&self) -> Option<std::sync::Arc<crate::privacy::Context>> {
+        if crate::privacy::tasks::remote_binding().is_some() {
+            return None;
+        }
+        self.privacy_override
+            .clone()
+            .or_else(|| self.request_store.privacy_context())
+    }
+
+    pub(crate) fn with_privacy_context(
+        mut self,
+        context: Option<std::sync::Arc<crate::privacy::Context>>,
+    ) -> Self {
+        self.privacy_override = context;
+        self
+    }
+
+    fn consumer_chat_shim(&self) -> bool {
+        crate::chatgpt_plan_auth::consumer_chat_shim(&self.provider_id)
+    }
+
     fn active_filter(&self) -> std::sync::Arc<crate::provider_filter::ProviderFilter> {
+        if crate::chatgpt_plan_auth::skips_provider_filter(&self.provider_id) {
+            // ChatGPT chat is a conversation. It does not use the provider
+            // filter, including a filter armed only for this test.
+            return std::sync::Arc::new(
+                crate::provider_filter::ProviderFilter::compile(
+                    &crate::provider_filter::ProviderFilterConfig::default(),
+                )
+                .expect("disabled provider filter compiles"),
+            );
+        }
         self.filter_override
             .as_ref()
             .map(|slot| {
                 slot.read()
                     .unwrap_or_else(|poison| poison.into_inner())
                     .clone()
+            })
+            .or_else(|| {
+                self.privacy_context()
+                    .and_then(|context| context.task_filter())
             })
             .unwrap_or_else(crate::provider_filter::current)
     }
@@ -373,6 +452,19 @@ impl AgentClient {
                 _ = tokio::time::sleep(std::time::Duration::from_millis(200)) => {}
             }
         }
+    }
+
+    /// A connectivity probe uses a fixed local prompt. It must not trip or
+    /// observe the process provider filter.
+    pub(crate) fn without_provider_filter(mut self) -> Self {
+        let disabled = crate::provider_filter::ProviderFilter::compile(
+            &crate::provider_filter::ProviderFilterConfig::default(),
+        )
+        .expect("disabled provider filter compiles");
+        self.filter_override = Some(std::sync::Arc::new(std::sync::RwLock::new(
+            std::sync::Arc::new(disabled),
+        )));
+        self
     }
 
     #[cfg(test)]
@@ -442,14 +534,26 @@ impl AgentClient {
                 let _ = auth.identity().await;
             }
         }
-        match self.route_identity() {
+        let mut prepared = match self.route_identity() {
             Ok(source) => {
                 let mut request = request;
                 request.runtime_source = Some(source.clone());
                 crate::harness_guidance::prepare(request, source).await
             }
             Err(_) => request,
+        };
+        prepared.prepare_evidence_guidance();
+        if let Err(error) = self.request_store.prepare_imported_history(&mut prepared) {
+            prepared.host_context_error = Some(error);
         }
+        if self.protocol != crate::agent::provider::ProviderProtocol::ChatCompletions
+            && prepared.host_context_error.is_none()
+        {
+            if let Err(error) = self.request_store.prepare_host_contexts(&mut prepared) {
+                prepared.host_context_error = Some(error);
+            }
+        }
+        prepared
     }
 
     fn cooldown_key(&self) -> Option<crate::provider_cooldown::RouteKey> {
@@ -496,6 +600,12 @@ impl AgentClient {
                 "{:x}",
                 Sha256::digest(format!("ca-native-credential-v1\0{credential}").as_bytes())
             ));
+        }
+        if let Some(context) = self.privacy_context().filter(|context| context.enabled()) {
+            source.privacy_policy_digest = Some(context.replay_policy_digest());
+        }
+        if let Some(binding) = crate::privacy::tasks::remote_binding() {
+            source.privacy_policy_digest = Some(binding.replay_policy_digest);
         }
         Ok(source)
     }
@@ -577,6 +687,22 @@ impl AgentClient {
         &self,
         request: &crate::request::PreparedModelRequest,
     ) -> Result<mpsc::UnboundedReceiver<ChatStreamItem>, ProviderError> {
+        // The plan author is already inside the session scope. That scope has
+        // the task filter, URL map, and filename aliases updated by list_dir.
+        // The route client's handle can be the parent context, which does not.
+        let context = crate::privacy::current().or_else(|| self.privacy_context());
+        crate::privacy::scope(context, self.stream_prepared_inner(request)).await
+    }
+
+    async fn stream_prepared_inner(
+        &self,
+        request: &crate::request::PreparedModelRequest,
+    ) -> Result<mpsc::UnboundedReceiver<ChatStreamItem>, ProviderError> {
+        if self.request_store.privacy_pending() {
+            return Err(ProviderError::PrivacyBlocked {
+                detail: "Project privacy is loading; retry when the local rules are ready".into(),
+            });
+        }
         if let Some(settings) = &self.google {
             settings.endpoint(&self.base_url)?;
         }
@@ -584,7 +710,101 @@ impl AgentClient {
             auth.identity().await?;
         }
         let mut effective = self.prepare_harness_request(request.clone()).await;
+        if let Some(detail) = &effective.host_context_error {
+            return Err(ProviderError::PrivacyBlocked {
+                detail: detail.clone(),
+            });
+        }
         effective.tool_schema_policy = self.tool_schema_policy;
+        let privacy = crate::privacy::current().or_else(|| self.privacy_context());
+        if self.active_filter().filenames()
+            && privacy
+                .as_ref()
+                .is_none_or(|context| !context.filenames_enabled())
+        {
+            return Err(ProviderError::PrivacyBlocked { detail: "Filename aliases require a session-owned workspace mapping before any provider request".into() });
+        }
+        if let Some(context) = privacy.clone() {
+            tokio::task::spawn_blocking(move || context.refresh_policy())
+                .await
+                .map_err(|_| ProviderError::PrivacyBlocked {
+                    detail: "Project privacy rules could not be refreshed; retry this request"
+                        .into(),
+                })?
+                .map_err(|detail| ProviderError::PrivacyBlocked { detail })?;
+        }
+        // The consumer chat bridge keeps the authored text. Project privacy
+        // stays in force for every other provider.
+        let privacy = if self.consumer_chat_shim() {
+            None
+        } else {
+            privacy.filter(|context| context.enabled())
+        };
+        let original_request = privacy.as_ref().map(|_| effective.clone());
+        if let Some(context) = privacy.clone() {
+            effective =
+                tokio::task::spawn_blocking(move || project_private_request(context, effective))
+                    .await
+                    .map_err(|_| ProviderError::PrivacyBlocked {
+                        detail: "Project privacy worker stopped; retry this request".into(),
+                    })??;
+        }
+        if let Some(binding) = crate::privacy::tasks::remote_binding() {
+            effective.privacy_policy_digest = Some(binding.policy_fingerprint);
+            effective.privacy_revision = Some(binding.policy_revision);
+        }
+        let filter = self.active_filter();
+        let projection_source = self.route_identity()?;
+        for message in &mut effective.messages {
+            // Pruning may replace a whole tool result. Its role remains the
+            // authoritative source identity, independent of old text lengths.
+            if message.role == "tool" {
+                if let Some(text) = message.content.as_str() {
+                    message.content = message
+                        .content
+                        .clone()
+                        .with_retrieved_spans(crate::retrieved_content::full_span(text));
+                }
+            }
+            let projected = if privacy.is_some() {
+                None
+            } else {
+                Some(message.content.project_retrieved(&filter)?)
+            };
+            // Validate canonical content before native adapters compare it to
+            // immutable issued output. Same-route replay already retains the
+            // original provider spelling, including its stand-ins.
+            let native_replay = message.role == "assistant"
+                && message.response_items.iter().any(|item| match item {
+                    ProviderResponseItem::ResponsesOutput { source, .. } => {
+                        source == &projection_source
+                    }
+                    ProviderResponseItem::NativeContent { source, model, .. } => {
+                        source == &projection_source && model == &self.model
+                    }
+                    ProviderResponseItem::ChatReasoning { .. } => false,
+                });
+            if !native_replay {
+                if let Some(projected) = projected {
+                    message.content = projected;
+                }
+            }
+            for call in message.tool_calls.as_mut().into_iter().flatten() {
+                let projected = if privacy.is_some() {
+                    call.function.arguments.clone()
+                } else {
+                    crate::retrieved_content::project_argument_string(
+                        &call.function.arguments,
+                        &call.function.arguments_retrieved_spans,
+                        &filter,
+                    )?
+                };
+                if !native_replay {
+                    call.function.arguments = projected;
+                    call.function.arguments_retrieved_spans.clear();
+                }
+            }
+        }
         let request = &effective;
         if request.model != self.model {
             return Err(ProviderError::Protocol(
@@ -639,9 +859,70 @@ impl AgentClient {
                 return Err(error);
             }
         };
+        let host_instructions = if privacy.is_some() {
+            let mut shadow = request.clone();
+            let mut replacements = Vec::new();
+            for message in &mut shadow.messages {
+                message.content = message
+                    .content
+                    .host_shadow(&mut replacements)
+                    .map_err(|detail| ProviderError::PrivacyBlocked { detail })?;
+                // Native continuation state is returned byte-for-byte to its
+                // exact issuing route and policy. It is not executable text.
+                // The adapter decides whether this typed state is replayed;
+                // only fields it actually emits acquire a concrete receipt.
+                for item in &mut message.response_items {
+                    if let ProviderResponseItem::ChatReasoning { source, content } = item {
+                        if *source == state_source {
+                            let marker =
+                                format!("__ca_continuation_{}__", uuid::Uuid::new_v4().simple());
+                            replacements.push((marker.clone(), std::mem::replace(content, marker)));
+                        }
+                    }
+                }
+            }
+            if replacements.is_empty() {
+                None
+            } else {
+                let shadow = adapter.prepare(
+                    &shadow,
+                    &state_source,
+                    self.contract,
+                    self.responses_options.as_ref(),
+                    prompt_cache.as_ref(),
+                )?;
+                Some(
+                    crate::host_instructions::WireReceipt::bind(
+                        &prepared_http.body,
+                        &shadow.body,
+                        replacements,
+                    )
+                    .map_err(|detail| ProviderError::PrivacyBlocked { detail })?,
+                )
+            }
+        } else {
+            None
+        };
         self.request_store
             .adapter_diagnostics(snapshot_sequence, &prepared_http.diagnostics);
         prepared_http.replay.request_sequence = snapshot_sequence;
+        prepared_http.replay.privacy_context = privacy;
+        prepared_http.replay.privacy_revision = request.privacy_revision;
+        prepared_http.replay.privacy_policy_digest = request.privacy_policy_digest.clone();
+        if let Some(original) = original_request {
+            prepared_http.replay.privacy_original = Some(std::sync::Arc::from(match adapter.prepare(
+                &original,
+                &state_source,
+                self.contract,
+                self.responses_options.as_ref(),
+                prompt_cache.as_ref(),
+            ) {
+                Ok(prepared) => prepared.body,
+                Err(_) => serde_json::to_vec(&serde_json::json!({
+                    "preview_omission": "Original request is unavailable because its native protocol state cannot be lowered independently. Sent displays the final prepared request."
+                })).expect("preview omission is serializable"),
+            }));
+        }
         if let Some(maximum) = self.output_token_cap {
             apply_output_token_cap(
                 &mut prepared_http.body,
@@ -658,6 +939,13 @@ impl AgentClient {
             return Err(ProviderError::Protocol(
                 "prepared request exceeds input byte cap".into(),
             ));
+        }
+        if prepared_http.replay.privacy_context.is_some() {
+            prepared_http.replay.privacy_body = Some(
+                crate::provider_replay::PreparedBodyReceipt::new(&prepared_http.body)
+                    .with_structured_output(request.structured_output())
+                    .with_host_instructions(host_instructions),
+            );
         }
         let trace = self.trace_hub.as_ref().and_then(|hub| {
             hub.begin_request_with_session(
@@ -828,7 +1116,12 @@ impl AgentClient {
         )?;
 
         let replay = std::sync::Arc::new(prepared_http.replay);
-        let max_attempts = self.policy.max_attempts.clamp(1, 2);
+        let attempt_cap = if matches!(self.provider_id.as_str(), "xai" | "xai-oauth") {
+            15
+        } else {
+            2
+        };
+        let max_attempts = self.policy.max_attempts.clamp(1, attempt_cap);
         let mut attempt = 0usize;
         let opened = open_provider_response(
             self,
@@ -850,7 +1143,8 @@ impl AgentClient {
         let frozen_body = prepared_http.body;
         let stream_trace = trace.clone();
 
-        tokio::spawn(async move {
+        let privacy_scope = replay.privacy_context.clone();
+        tokio::spawn(crate::privacy::scope(privacy_scope, async move {
             let mut opened = opened;
             loop {
                 let attempt_started = std::time::Instant::now();
@@ -955,7 +1249,7 @@ impl AgentClient {
                     }
                 }
             }
-        });
+        }));
         Ok(rx)
     }
 
@@ -987,6 +1281,30 @@ impl AgentClient {
         _streaming: Option<&StreamingState>,
         pasted_images: &[crate::image_content::ModelImage],
     ) -> anyhow::Result<crate::request::PromptAssembly> {
+        // An explicit fresh attachment supersedes only the same legacy
+        // attachment section in the outgoing projection. Keep canonical history.
+        let mut projected_messages = messages.to_vec();
+        let mut refreshed = Vec::new();
+        for message in projected_messages.iter_mut().rev() {
+            if message.retrieved_spans.is_none() && !refreshed.is_empty() {
+                message.content = crate::attachments::remove_legacy_attachment_sections(
+                    &message.content,
+                    &refreshed,
+                );
+            }
+            if message.role == Role::User {
+                if let Some(spans) = message.retrieved_spans.as_ref() {
+                    for reference in
+                        crate::attachments::refreshed_attachment_references(&message.content, spans)
+                    {
+                        if !refreshed.contains(&reference) {
+                            refreshed.push(reference);
+                        }
+                    }
+                }
+            }
+        }
+        let messages = projected_messages.as_slice();
         let mut result = Vec::new();
 
         if let Some(sys) = stable_system_prompt {
@@ -1006,7 +1324,7 @@ impl AgentClient {
         for message in messages.iter().take(leading_system_messages) {
             result.push(ChatMessage {
                 role: "system".into(),
-                content: crate::image_content::ModelContent::text(message.content.clone()),
+                content: canonical_content(message),
                 tool_calls: None,
                 tool_call_id: None,
                 response_items: Vec::new(),
@@ -1025,19 +1343,24 @@ impl AgentClient {
 
         for (i, msg) in messages.iter().enumerate().skip(leading_system_messages) {
             if msg.role == Role::User && Some(i) == last_user_idx && !pasted_images.is_empty() {
+                let (text, spans) = crate::image_content::strip_persistence_markers_with_spans(
+                    msg.content.clone(),
+                    pasted_images,
+                    msg.retrieved_spans.as_deref().unwrap_or_default(),
+                )?;
                 result.push(ChatMessage {
                     role: "user".into(),
-                    content: crate::image_content::ModelContent::multimodal(
-                        crate::image_content::strip_persistence_markers(
-                            msg.content.clone(),
-                            pasted_images,
-                        ),
-                        pasted_images,
-                    ),
+                    content: crate::image_content::ModelContent::multimodal(text, pasted_images)
+                        .with_retrieved_spans(spans)
+                        .with_authored_id(authored_message_key(msg)),
                     tool_calls: None,
                     tool_call_id: None,
                     response_items: Vec::new(),
                 });
+                if msg.retrieved_spans.is_none() {
+                    let content = &mut result.last_mut().expect("image message appended").content;
+                    *content = content.clone().with_legacy_provenance();
+                }
             } else {
                 append_provider_messages(&mut result, msg)?;
             }
@@ -1348,6 +1671,22 @@ async fn open_provider_response(
                     }
                     ErrorBodyRead::Excerpt(excerpt) => excerpt,
                 };
+                if client.consumer_chat_shim()
+                    && status == 401
+                    && *attempt == 1
+                    && refresh_consumer_shim_auth().await
+                {
+                    continue;
+                }
+                if let Some(message) =
+                    chatgpt_plan_usage_message(&client.provider_id, status, body_excerpt.as_deref())
+                {
+                    let error = ProviderError::http_with_excerpt(status, message);
+                    if let Some(trace) = trace {
+                        trace.outcome(*attempt, "failed", Some(&error.to_string()));
+                    }
+                    return Err(error);
+                }
                 let error = match body_excerpt {
                     Some(excerpt) => ProviderError::http_with_excerpt(status, excerpt),
                     None => ProviderError::http(status),
@@ -1428,8 +1767,134 @@ async fn execute_provider_request(
     } else {
         request
     };
+    let request = if crate::prose_recovery::xai_requests_doom_loop_check(&client.provider_id, url) {
+        request
+            .header(
+                crate::prose_recovery::DOOM_LOOP_CHECK_HEADER,
+                crate::prose_recovery::DOOM_LOOP_WINDOW_TOKENS,
+            )
+            .header(
+                crate::prose_recovery::EXACT_REPETITION_CHECK_HEADER,
+                crate::prose_recovery::EXACT_REPETITION_MIN_TOKENS,
+            )
+    } else {
+        request
+    };
     let filter = client.active_filter();
-    let (body, diagnostics) = crate::provider_replay::prepare_outbound(body, replay, &filter)?;
+    if client.request_store.privacy_pending() {
+        return Err(ProviderError::PrivacyBlocked {
+            detail: "Project privacy changed while this request was prepared; retry after loading"
+                .into(),
+        });
+    }
+    if let Some(context) = client.privacy_context() {
+        tokio::task::spawn_blocking(move || context.refresh_policy())
+            .await
+            .map_err(|_| ProviderError::PrivacyBlocked {
+                detail: "Project privacy rules could not be refreshed before transmission".into(),
+            })?
+            .map_err(|detail| ProviderError::PrivacyBlocked { detail })?;
+    }
+    if !client.consumer_chat_shim()
+        && client
+            .privacy_context()
+            .is_some_and(|context| context.enabled())
+        && replay.privacy_context.is_none()
+    {
+        return Err(ProviderError::PrivacyBlocked {
+            detail: "This provider path lacks a project privacy projection receipt".into(),
+        });
+    }
+    if replay.privacy_context.is_some()
+        && replay
+            .privacy_body
+            .as_ref()
+            .is_none_or(|receipt| !receipt.matches(body))
+    {
+        return Err(ProviderError::PrivacyBlocked {
+            detail: "Prepared request changed after privacy projection; prepare it again".into(),
+        });
+    }
+    let mut inspected_private_revision = None;
+    let (body, diagnostics) = if let Some(context) = replay.privacy_context.clone() {
+        let original = replay.privacy_original.clone();
+        let revision = replay
+            .privacy_revision
+            .ok_or_else(|| ProviderError::PrivacyBlocked {
+                detail: "Request lacks its privacy projection receipt".into(),
+            })?;
+        let raw = replay
+            .privacy_body
+            .as_ref()
+            .expect("privacy prepared body receipt was checked above")
+            .bytes();
+        let bindings = replay.clone();
+        let filter = filter.clone();
+        let (body, diagnostics, private_revision) = tokio::task::spawn_blocking(move || {
+            let projection = |bytes: &[u8]| context.project_task_wire(bytes).map_err(|detail|ProviderError::PrivacyBlocked{detail});
+            let (body, diagnostics, host) = if let Some(host) = bindings.privacy_body.as_ref().and_then(|receipt| receipt.host_instructions()) {
+                let (body, diagnostics, host) = crate::provider_replay::prepare_outbound_with_host(&raw, &bindings, &filter, context.has_task_names().then_some(&projection as &crate::provider_replay::OutboundProjection<'_>), host.clone())?;
+                (body, diagnostics, Some(host))
+            } else {
+            let (body, diagnostics) = if context.has_task_names() {
+                crate::provider_replay::prepare_outbound_with_projection(&raw, &bindings, &filter,&|bytes|context.project_task_wire(bytes).map_err(|detail|ProviderError::PrivacyBlocked{detail}))?
+            } else {crate::provider_replay::prepare_outbound(&raw,&bindings,&filter)?};
+                (body, diagnostics, None)
+            };
+            if bindings.privacy_policy_digest.as_deref() != Some(context.policy_fingerprint().as_str()) {
+                return Err(ProviderError::PrivacyBlocked {
+                    detail: "Prepared request belongs to different privacy rules; prepare it again".into(),
+                });
+            }
+            let private_revision = context.private_revision();
+            context
+                .validate_wire_with_receipts(&body, revision, bindings.privacy_policy_digest.as_deref().unwrap_or_default(),
+                    bindings.privacy_body.as_ref().and_then(|receipt| receipt.structured_output()), host.as_ref())
+                .map_err(|detail| ProviderError::PrivacyBlocked { detail })?;
+            context
+                .publish_wire(original.as_deref().unwrap_or(&raw), &body)
+                .map_err(|detail| ProviderError::PrivacyBlocked { detail })?;
+            if context.task_filter().is_some() {
+                // URL aliases can be allocated during final wire rewriting.
+                // Their receipt must be durable before bytes leave this process.
+                context.commit_registry().map_err(|detail| ProviderError::PrivacyBlocked { detail })?;
+            }
+            if context.private_revision() != private_revision {
+                return Err(ProviderError::PrivacyBlocked { detail: "New private values were discovered during inspection; prepare this request again".into() });
+            }
+            Ok::<_, ProviderError>((body, diagnostics, private_revision))
+        })
+        .await
+        .map_err(|_| ProviderError::PrivacyBlocked {
+            detail: "Final privacy inspection worker stopped".into(),
+        })??;
+        inspected_private_revision = Some(private_revision);
+        (body, diagnostics)
+    } else if crate::privacy::tasks::remote_binding().is_some() {
+        let body = body.to_vec();
+        let replay = replay.clone();
+        let filter = filter.clone();
+        tokio::task::spawn_blocking(move || {
+            crate::provider_replay::prepare_outbound_with_projection(
+                &body,
+                &replay,
+                &filter,
+                &|bytes| {
+                    crate::privacy::tasks::project_remote_wire_blocking(bytes)
+                        .map_err(|detail| ProviderError::PrivacyBlocked { detail })
+                },
+            )
+        })
+        .await
+        .map_err(|_| ProviderError::PrivacyBlocked {
+            detail: "Private replay projection worker stopped".into(),
+        })??
+    } else {
+        crate::provider_replay::prepare_outbound(body, replay, &filter)?
+    };
+    crate::privacy::tasks::validate_remote_wire(&body)
+        .await
+        .map_err(|detail| ProviderError::PrivacyBlocked { detail })?;
     client
         .request_store
         .adapter_diagnostics(replay.request_sequence, &diagnostics);
@@ -1445,15 +1910,23 @@ async fn execute_provider_request(
         Some(crate::provider_replay::SentPrefix(
             crate::provider_replay::prefix_digest(&crate::provider_replay::prefix_from_body(&body)),
         ))
+    } else if adapter.protocol() == crate::agent::ProviderProtocol::OpenAiResponses
+        && (replay.privacy_context.is_some() || crate::privacy::tasks::remote_binding().is_some())
+    {
+        Some(crate::provider_replay::SentPrefix(
+            crate::provider_replay::responses_prefix(&body, None)?,
+        ))
     } else {
         None
     };
-    if filter.shows_banner() {
+    if filter.shows_banner() || replay.privacy_context.is_some() {
         if matches!(
             adapter.protocol(),
             crate::agent::ProviderProtocol::AnthropicMessages
                 | crate::agent::ProviderProtocol::GoogleGenerateContent
-        ) {
+        ) || (adapter.protocol() == crate::agent::ProviderProtocol::OpenAiResponses
+            && replay.privacy_context.is_some())
+        {
             crate::provider_filter::publish_outbound_body(
                 &crate::provider_trace::native_diagnostic_body(&body, &[client.api_key.as_str()]),
             );
@@ -1475,10 +1948,58 @@ async fn execute_provider_request(
     } else {
         request
     };
+    let (wire, compressed) = compressed_request_body(&client.base_url, &body);
+    let request = if compressed {
+        request.header("content-encoding", "zstd")
+    } else {
+        request
+    };
     let request = request
-        .body(body.clone())
+        .body(wire)
         .build()
         .map_err(|error| ProviderError::Transport(classify_transport_error(&error)))?;
+    if let Some(context) = replay
+        .privacy_context
+        .clone()
+        .or_else(|| client.privacy_context())
+    {
+        let revision = replay.privacy_revision;
+        let fingerprint = replay.privacy_policy_digest.clone();
+        let projected = replay.privacy_context.is_some();
+        let plain_chat = client.consumer_chat_shim();
+        tokio::task::spawn_blocking(move || {
+            context.refresh_policy()?;
+            if context.enabled() && !projected && !plain_chat {
+                return Err(
+                    "Project privacy was enabled after preparation; retry this request".into(),
+                );
+            }
+            if let Some(revision) = revision {
+                context.check_policy(revision)?;
+                if fingerprint.as_deref() != Some(context.policy_fingerprint().as_str()) {
+                    return Err(
+                        "Privacy rules changed after request preparation; prepare it again".into(),
+                    );
+                }
+                if inspected_private_revision != Some(context.private_revision()) {
+                    return Err(
+                        "Private values changed before transmission; retry this request".into(),
+                    );
+                }
+            }
+            Ok::<_, String>(())
+        })
+        .await
+        .map_err(|_| ProviderError::PrivacyBlocked {
+            detail: "Project privacy worker stopped before transmission".into(),
+        })?
+        .map_err(|detail| ProviderError::PrivacyBlocked { detail })?;
+    }
+    if client.request_store.privacy_pending() {
+        return Err(ProviderError::PrivacyBlocked {
+            detail: "Project privacy changed before transmission; retry this request".into(),
+        });
+    }
     if let Some(trace) = trace {
         trace.attempt_started(
             attempt,
@@ -1513,6 +2034,19 @@ async fn execute_provider_request(
             Ok(Some(response))
         }
     }
+}
+
+fn chatgpt_plan_usage_message(
+    provider_id: &str,
+    status: u16,
+    excerpt: Option<&str>,
+) -> Option<String> {
+    if provider_id != "openai-chatgpt" {
+        return None;
+    }
+    let verdict =
+        crate::chatgpt_plan_auth::classify_chatgpt_plan_error(status, excerpt.unwrap_or(""));
+    verdict.is_usage_limit.then_some(verdict.user_message)
 }
 
 /// Semantic content needs its own carry: SSE framing separates two deltas of
@@ -2077,6 +2611,11 @@ async fn read_error_body(
     if let Some(key) = client.cooldown_key() {
         crate::provider_cooldown::record_structured(key, status, &headers, &collected, recorded);
     }
+    let raw = String::from_utf8_lossy(&collected);
+    if let Some(message) = chatgpt_plan_usage_message(&client.provider_id, status, Some(raw.trim()))
+    {
+        return ErrorBodyRead::Excerpt(Some(message));
+    }
     ErrorBodyRead::Excerpt(excerpt_from_error_bytes(
         &collected,
         &[client.api_key.as_str()],
@@ -2127,6 +2666,44 @@ fn extract_json_error_message(raw: &str) -> Option<String> {
 /// For `Role::User`, emits a plain user message.
 /// For `Role::Tool` (legacy), emits tool messages for each completed call.
 /// For `Role::System`, emits nothing.
+pub(crate) fn project_private_request(
+    context: std::sync::Arc<crate::privacy::Context>,
+    mut request: crate::request::PreparedModelRequest,
+) -> Result<crate::request::PreparedModelRequest, ProviderError> {
+    crate::privacy::scope_sync(Some(context.clone()), || {
+        request.privacy_policy_digest = Some(context.policy_fingerprint());
+        request.privacy_revision = Some(
+            context
+                .prepare_request(&mut request)
+                .map_err(|detail| ProviderError::PrivacyBlocked { detail })?,
+        );
+        Ok(request)
+    })
+}
+
+fn canonical_content(message: &Message) -> crate::image_content::ModelContent {
+    let content = crate::image_content::ModelContent::text(message.content.clone())
+        .with_authored_id(authored_message_key(message));
+    match &message.retrieved_spans {
+        Some(spans) => content.with_retrieved_spans(spans.clone()),
+        None => content.with_legacy_provenance(),
+    }
+}
+fn authored_message_key(message: &Message) -> String {
+    let content = crate::image_content::ModelContent::text(message.content.clone())
+        .with_retrieved_spans(message.retrieved_spans.clone().unwrap_or_default());
+    format!(
+        "{:x}",
+        Sha256::digest(format!(
+            "{}\0{}",
+            message.timestamp,
+            content
+                .authored_text()
+                .unwrap_or_else(|_| message.content.clone())
+        ))
+    )
+}
+
 pub(crate) fn append_provider_messages(
     result: &mut Vec<ChatMessage>,
     message: &Message,
@@ -2134,7 +2711,7 @@ pub(crate) fn append_provider_messages(
     match message.role {
         Role::User => result.push(ChatMessage {
             role: "user".into(),
-            content: crate::image_content::ModelContent::text(message.content.clone()),
+            content: canonical_content(message),
             tool_calls: None,
             tool_call_id: None,
             response_items: Vec::new(),
@@ -2152,13 +2729,14 @@ pub(crate) fn append_provider_messages(
                         function: FunctionCall {
                             name: call.name.clone(),
                             arguments: call.arguments.clone(),
+                            arguments_retrieved_spans: call.arguments_retrieved_spans.clone(),
                         },
                     })
                     .collect()
             });
             result.push(ChatMessage {
                 role: "assistant".into(),
-                content: crate::image_content::ModelContent::text(message.content.clone()),
+                content: canonical_content(message),
                 tool_calls,
                 tool_call_id: None,
                 response_items: message.response_items.clone(),
@@ -2169,6 +2747,15 @@ pub(crate) fn append_provider_messages(
                         result.push(ChatMessage {
                             role: "tool".into(),
                             content: crate::image_content::ModelContent::text(output.clone())
+                                .with_source_receipt(call.output_source.clone())
+                                .with_context_observation(
+                                    call.observation
+                                        .as_ref()
+                                        .filter(|observation| {
+                                            observation.matches(&call.name, &call.arguments, output)
+                                        })
+                                        .cloned(),
+                                )
                                 .with_prunable_tool_result(crate::context_pruning::qualified(call))
                                 .with_tool_result_status(
                                     call.status == crate::app::ToolStatus::Done,
@@ -2189,6 +2776,15 @@ pub(crate) fn append_provider_messages(
                     result.push(ChatMessage {
                         role: "tool".into(),
                         content: crate::image_content::ModelContent::text(output.clone())
+                            .with_source_receipt(call.output_source.clone())
+                            .with_context_observation(
+                                call.observation
+                                    .as_ref()
+                                    .filter(|observation| {
+                                        observation.matches(&call.name, &call.arguments, output)
+                                    })
+                                    .cloned(),
+                            )
                             .with_prunable_tool_result(crate::context_pruning::qualified(call))
                             .with_tool_result_status(call.status == crate::app::ToolStatus::Done),
                         tool_calls: None,
@@ -2234,6 +2830,45 @@ pub(crate) fn append_transient_tool_images(
     inserted
 }
 
+/// Replace older tool-result images on this request copy when the next send
+/// would cross the provider image ceiling. Returns the latched id set.
+pub fn retire_outbound_tool_images(
+    messages: &mut [ChatMessage],
+    latched: &std::collections::HashSet<String>,
+) -> std::collections::HashSet<String> {
+    let mut carriers = Vec::new();
+    let mut reserved_blocks: usize = 0;
+    let mut reserved_bytes: usize = 0;
+    for message in messages.iter() {
+        if let Some(carrier) = message.content.tool_image_carrier() {
+            carriers.push(carrier);
+        } else {
+            let (blocks, bytes) = message.content.image_accounting();
+            reserved_blocks = reserved_blocks.saturating_add(blocks);
+            reserved_bytes = reserved_bytes.saturating_add(bytes);
+        }
+    }
+    let budget = crate::image_content::fallback_image_request_budget();
+    let retire = crate::image_content::tool_image_ids_to_retire(
+        &carriers,
+        reserved_blocks,
+        reserved_bytes,
+        budget,
+        crate::image_content::IMAGE_RETIRE_BATCH,
+        latched,
+    );
+    for message in messages.iter_mut() {
+        if message
+            .content
+            .tool_image_carrier()
+            .is_some_and(|carrier| retire.contains(&carrier.id))
+        {
+            message.content.retire_images();
+        }
+    }
+    retire
+}
+
 fn validate_tool_results(
     result: &[ChatMessage],
     calls: &[crate::app::ToolCall],
@@ -2258,6 +2893,20 @@ fn retryable_status(status: u16) -> bool {
     matches!(status, 429 | 500 | 502 | 503 | 504)
 }
 
+/// One Codex refresh after the local chatgpt-shim rejects the token. A failed
+/// refresh leaves the original HTTP error in place. The test hook never reads
+/// or prints a credential.
+async fn refresh_consumer_shim_auth() -> bool {
+    #[cfg(test)]
+    if let Ok(mode) = std::env::var("CA_TEST_CODEX_REFRESH") {
+        return mode == "ok";
+    }
+    let Ok(Some(tokens)) = crate::codex_auth::load_tokens() else {
+        return false;
+    };
+    crate::codex_auth::refresh_tokens(&tokens).await.is_ok()
+}
+
 fn retry_delay(response: &reqwest::Response, policy: &ProviderCallPolicy) -> std::time::Duration {
     response
         .headers()
@@ -2271,6 +2920,10 @@ fn retry_delay(response: &reqwest::Response, policy: &ProviderCallPolicy) -> std
 
 #[async_trait::async_trait]
 impl ChatBackend for AgentClient {
+    fn inference_client(&self) -> Option<AgentClient> {
+        Some(self.clone())
+    }
+
     async fn prepare_harness_request(
         &self,
         request: crate::request::PreparedModelRequest,

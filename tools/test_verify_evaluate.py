@@ -74,16 +74,22 @@ class Run:
             (runtime / (name + ".stderr")).write_text("")
         terminal = runtime / "terminal.bin"
         final_prefix = b"fixture-report-parent"
-        terminal.write_bytes(final_prefix + b"\x1b[36;1H\x1b[38;5;244mDone\x1b[?1049l\x1b[?25h")
+        terminal.write_bytes(final_prefix + b"\x1b[31;3H\x1b[38;5;244mDone\x1b[?1049l\x1b[?25h")
         tool = runtime / "probe-output.txt"
         tool.write_bytes(b"VERIFY_TOOL_DISK\n")
+        workspace_message = {"role": "system", "content": "Working directory: " + str(tool.parent) + ". Platform: test."}
+        write_call = {"index": 0, "id": "verify-write-file", "type": "function",
+                      "function": {"name": "write_file", "arguments": json.dumps({
+                          "path": str(tool), "content": "VERIFY_TOOL_DISK\n"})}}
         bodies = [{"stream": True, "messages": [{"role": "user", "content": "VERIFY_CHAT_REQUEST"}]},
-                  {"stream": True, "messages": [{"role": "user", "content": "VERIFY_TOOL_REQUEST"}],
+                  {"stream": True, "messages": [{"role": "user", "content": "VERIFY_TOOL_REQUEST"}, workspace_message],
                    "tools": [{"function": {"name": "write_file"}}]},
-                  {"stream": True, "messages": [{"role": "user", "content": "VERIFY_TOOL_REQUEST"},
-                     {"role": "tool", "tool_call_id": "verify-write-file", "content": "VERIFY_TOOL_DISK"}]}]
+                  {"stream": True, "messages": [{"role": "user", "content": "VERIFY_TOOL_REQUEST"}, workspace_message,
+                     {"role": "assistant", "tool_calls": [write_call]},
+                     {"role": "tool", "tool_call_id": "verify-write-file", "content":
+                        "@@ " + str(tool) + " (Created, 17 bytes) @@\n+VERIFY_TOOL_DISK"}]}]
         review_report = {"approved": True, "findings": [],
-                         "summary": "Read probe-output.txt from disk; exact candidate has no actionable findings."}
+                         "summary": "Read the exact candidate from disk; no actionable findings."}
         self.turn = "33333333-3333-4333-8333-333333333333"
         candidate_hash = hashlib.sha256()
         candidate_hash.update(b"ca.automatic-review.v1:independent-readonly-exact-candidate")
@@ -130,7 +136,7 @@ class Run:
             body["model"] = "fixture-model"
         requests.write_text(json.dumps({"protocol_errors": [], "requests": [
             {"path": "/v1/chat/completions", "body": body,
-             "response_tool_calls": [read_call] if index == 3 else [report_call] if index == 4 else [],
+             "response_tool_calls": [write_call] if index == 1 else [read_call] if index == 3 else [report_call] if index == 4 else [],
              "response_content": "VERIFY_REVIEW_INTEGRATED_OK" if index == 5 else "",
              "response_completed_at": "2026-10-10T10:00:0" + str(index) + "+00:00"}
             for index, body in enumerate(bodies)]}))
@@ -312,6 +318,72 @@ class EvaluatorTests(unittest.TestCase):
     def test_required_runtime_case_cannot_be_omitted(self):
         self.run.runtime["cases"].pop()
         self.diagnostic("infrastructure_failed", "omitted required behavior")
+
+    def private_reference_requests(self):
+        candidate = Path(self.run.runtime["artifacts"]["tool_output"])
+        root = "__CA_PATH_" + "1" * 32 + "__"
+        reference = root + "/f001.txt"
+        def change(entries):
+            for entry in entries:
+                calls = list(entry["response_tool_calls"])
+                for message in entry["body"]["messages"]:
+                    if isinstance(message.get("content"), str):
+                        message["content"] = message["content"].replace(str(candidate), reference).replace(str(candidate.parent), root)
+                        message["content"] = message["content"].replace("Changed path: probe-output.txt", "Changed path: " + reference)
+                    calls.extend(message.get("tool_calls", []))
+                for call in calls:
+                    if call["function"]["name"] == "write_file":
+                        call["function"]["arguments"] = json.dumps({"path": root + "/probe-output.txt", "content": "VERIFY_TOOL_DISK\n"})
+                    elif call["function"]["name"] == "read_file":
+                        call["function"]["arguments"] = json.dumps({"path": reference})
+        self.run.change_requests(change)
+        return reference
+
+    def test_private_reference_is_bound_from_write_through_review(self):
+        self.private_reference_requests()
+        result = self.run.assessment()
+        self.assertEqual(result["status"], "passed", result)
+
+    def test_privacy_json_spacing_preserves_exact_tool_arguments(self):
+        self.private_reference_requests()
+        def compact(entries):
+            for entry in entries:
+                for message in entry["body"]["messages"]:
+                    for call in message.get("tool_calls", []):
+                        function = call["function"]
+                        function["arguments"] = json.dumps(json.loads(function["arguments"]), separators=(",", ":"))
+        self.run.change_requests(compact)
+        result = self.run.assessment()
+        self.assertEqual(result["status"], "passed", result)
+        self.run.change_requests(lambda entries: entries[4]["body"]["messages"][-2]["tool_calls"][0]["function"].update(
+            arguments='{"path":"unexpected","path":' + json.dumps("__CA_PATH_" + "1" * 32 + "__/f001.txt") + '}'))
+        self.diagnostic("infrastructure_failed", "matching real reviewer readback absent")
+
+    def test_private_write_cannot_substitute_a_raw_creation_path(self):
+        self.private_reference_requests()
+        def change(entries):
+            call = entries[1]["response_tool_calls"][0]
+            call["function"]["arguments"] = json.dumps({"path": "probe-output.txt", "content": "VERIFY_TOOL_DISK\n"})
+            entries[2]["body"]["messages"][-2]["tool_calls"] = [copy.deepcopy(call)]
+        self.run.change_requests(change)
+        self.diagnostic("infrastructure_failed", "actual directory reference and exact candidate bytes")
+
+    def test_private_inventory_cannot_substitute_another_issued_reference(self):
+        reference = self.private_reference_requests()
+        self.run.change_requests(lambda entries: entries[3]["body"]["messages"][0].update(
+            content=entries[3]["body"]["messages"][0]["content"].replace(reference, reference.replace("f001", "f002"))))
+        self.diagnostic("infrastructure_failed", "exact written candidate")
+
+    def test_private_review_read_cannot_substitute_a_raw_path(self):
+        self.private_reference_requests()
+        self.run.change_requests(lambda entries: entries[3]["response_tool_calls"][0]["function"].update(
+            arguments=json.dumps({"path": "probe-output.txt"})))
+        self.diagnostic("infrastructure_failed", "read a different candidate")
+
+    def test_failed_write_cannot_pass_using_successful_disk_bytes(self):
+        self.run.change_requests(lambda entries: entries[2]["body"]["messages"][-1].update(
+            content="[tool failed]\nVERIFY_TOOL_DISK"))
+        self.diagnostic("infrastructure_failed", "actual successful creation")
 
     def test_reviewer_cannot_receive_an_effect_tool_even_with_updated_hashes(self):
         self.run.change_requests(lambda entries: entries[3]["body"]["tools"].append(

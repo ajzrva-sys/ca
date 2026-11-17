@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&overwrite, 100, 30),\nrender_to_text(&overwrite, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
 
 
 
@@ -27,13 +27,13 @@ expression: "wide_narrow(render_to_text(&overwrite, 100, 30),\nrender_to_text(&o
 
 
 
-
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                                                                   │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
-/ commands
+│› Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto
+/ commands · Ctrl+\ dashboard · ↑ history
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
 
 
 
@@ -52,8 +52,8 @@ expression: "wide_narrow(render_to_text(&overwrite, 100, 30),\nrender_to_text(&o
 
 
 
-
 ╭──────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                           │
-╰──────────────────────────────────────────── agent · auto ╯
-/ commands
+│› Ask anything…                                           │
+╰──────────────────────────────────────────────────────────╯
+ca · model auto
+/ commands · Ctrl+\ dashboard · ↑ history

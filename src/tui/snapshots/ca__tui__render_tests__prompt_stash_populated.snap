@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
 
 
 
@@ -27,12 +27,13 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
        │                                                                                    │
        │                                                                                    │
        │                                                                                    │
-       └────────────────────────────────────────────────────────────────────────────────────┘
-╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› current composer stays visible behind the picker▌                                               │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
+╭──────└────────────────────────────────────────────────────────────────────────────────────┘──────╮
+│› current composer stays visible behind the picker                                                │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto
+Enter send · Shift+Enter newline · Ctrl+J newline
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
  ┌ Prompt Stash ──────────────────────────────────────────┐
  │ Saved composer drafts · newest first                   │
  │  2 of 50 entries · 64 KiB each · 1 MiB total           │
@@ -51,7 +52,8 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
  │                                                        │
  │                                                        │
  │                                                        │
- │                                                        │
 ╭│                                                        │╮
 ││                                                        ││
-╰└────────────────────────────────────────────────────────┘╯
+╰│                                                        │╯
+c└────────────────────────────────────────────────────────┘
+Enter send · Shift+Enter newline · Ctrl+J newline

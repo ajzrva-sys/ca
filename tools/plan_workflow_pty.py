@@ -133,6 +133,7 @@ class Provider:
                     self.send_error(500, str(error)[:200])
 
             def respond(self, lane, payload, calls, text):
+                input_tokens, output_tokens = provider.model_usage(payload)
                 if PROTOCOL[lane] == "openai_responses":
                     output = [{"id": "fc-" + call_id, "type": "function_call", "call_id": call_id,
                                "name": name, "arguments": json.dumps(arguments), "status": "completed"}
@@ -142,7 +143,7 @@ class Provider:
                             "status": "completed", "content": [{"type": "output_text", "text": text, "annotations": []}]})
                     response = {"id": "resp-workflow", "object": "response", "status": "completed",
                         "model": MODEL[lane], "output": output,
-                        "usage": {"input_tokens": 20, "output_tokens": 10, "total_tokens": 30}}
+                        "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens, "total_tokens": input_tokens + output_tokens}}
                     events = []
                     for index, item in enumerate(output):
                         if item["type"] == "function_call":
@@ -162,7 +163,7 @@ class Provider:
                             "name": name, "arguments": json.dumps(arguments)}} for call_id, name, arguments in calls]
                     response = {"id": "chat-workflow", "object": "chat.completion", "model": MODEL[lane],
                         "choices": [{"index": 0, "message": message, "finish_reason": "tool_calls" if calls else "stop"}],
-                        "usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30}}
+                        "usage": {"prompt_tokens": input_tokens, "completion_tokens": output_tokens, "total_tokens": input_tokens + output_tokens}}
                     delta = {"role": "assistant", "content": text}
                     if calls:
                         delta["tool_calls"] = [{"index": index, "id": call_id, "type": "function",
@@ -190,6 +191,9 @@ class Provider:
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.url = f"http://127.0.0.1:{self.server.server_port}"
+
+    def model_usage(self, payload):
+        return 20, 10
 
     def response(self, lane, payload):
         names = functions(payload)

@@ -2,58 +2,58 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&bare, 100, 30), render_to_text(&bare, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
-
-
-
-            ┌──────────────────────────────────────────────────────────────────────────┐
-            │ Configuration                                                            │
-            │                                                                          │
-            │> type to filter…                                                         │
-            │                                                                          │
-            │▸ Active profile  bare · persistent writes, sessions, MCP, skills, and hoo│
-            │                                                                          │
-            │Enter open/edit · Esc close · ↑↓ navigate · type to filter                │
-            │                                                                          │
-            │                                                                          │
-            │                                                                          │
-            │                                                                          │
-            │                                                                          │
-            │                                                                          │
-            │                                                                          │
-            │                                                                          │
-            │                                                                          │
-            │                                                                          │
-            │                                                                          │
-            └──────────────────────────────────────────────────────────────────────────┘
-
-╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                                                                   │
-╰───────────────────────────────────────────────────────────────────── agent · auto · profile bare ╯
-/ commands
+ ┌────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │Settings                                                                                     [x]│
+ │ / to search                                                                                    │
+ │                                                                                                │
+ │Session ────────────────────────────────────────────────────────────────────────────────────────│
+ │▶ Active profile  The profi… bare · persistent writes, sessions, MCP, skills, and hooks disabled│
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+╭│                                                                                                │╮
+││Tip · / searches settings                                                                       ││
+╰│↑↓/j/k nav  g/G top/btm  Enter open  / search  F2/Esc close                                     │╯
+c└────────────────────────────────────────────────────────────────────────────────────────────────┘
+/ commands · Ctrl+\ dashboard · ↑ history
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
 
-  ┌──────────────────────────────────────────────────────┐
-  │ Configuration                                        │
-  │                                                      │
-  │> type to filter…                                     │
-  │                                                      │
-  │▸ Active profile  bare · persistent writes, sessions, │
-  │                                                      │
-  │Enter open/edit · Esc close · ↑↓ navigate · type to fi│
-  │                                                      │
-  │                                                      │
-  │                                                      │
-  │                                                      │
-  │                                                      │
-  │                                                      │
-  │                                                      │
-  │                                                      │
-  │                                                      │
-  │                                                      │
-╭─│                                                      │─╮
-│›└──────────────────────────────────────────────────────┘ │
-╰───────────────────────────── agent · auto · profile bare ╯
-/ commands
+ ┌────────────────────────────────────────────────────────┐
+ │Settings                                             [x]│
+ │ / to search                                            │
+ │                                                        │
+ │Session ────────────────────────────────────────────────│
+ │bare · persistent writes, sessions, MCP, skills, and hoo│
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+╭│                                                        │╮
+││Tip · / searches settings                               ││
+╰│↑↓/j/k nav  g/G top/btm  Enter open  / search  F2/Esc c…│╯
+c└────────────────────────────────────────────────────────┘
+/ commands · Ctrl+\ dashboard · ↑ history

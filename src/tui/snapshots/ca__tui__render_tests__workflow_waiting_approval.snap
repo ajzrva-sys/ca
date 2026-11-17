@@ -2,17 +2,9 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 The verification needs a command.
 
-  ⟳ run_command {"command":"cargo test workflow"}
-
-
-  Approve command [1/1] — run_command
-    Reason: local process execution · [g] this exact command for this run
-    Command: cargo test workflow
-  [y] run  [n] deny  [e] edit  [s] all uses of this tool  [g] allow exact for run  [p] always allow
-exact path  [x] always deny  [a] yolo
+  ⠋ run_command {"command":"cargo test workflow"}
 
 
 
@@ -26,26 +18,24 @@ exact path  [x] always deny  [a] yolo
 
 
 
-
-
+│ Tool needs approval [1/1] (y/n/a/g/s/x/p)
+┌ Approval ────────────────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                  │
+│  Approve command [1/1] — run_command                                                             │
+│    Reason: local process execution · [g] this exact command for this run                         │
+│    Command: cargo test workflow                                                                  │
+│  [y] run  [n] deny                                                                               │
+│  [e] edit  [s] tool always  [g] this run  [p] path always  [x] always deny  [a] yolo             │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                                                                   │
-╰─────────────────────────────────────────────────────── agent · auto · workflow running · inspect ╯
-Tool needs approval [1/1] (y/n/a/g/s/x/p)
+│› Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto · 1 messages · workflow running · inspect
+[y] run · [n] deny · [e] edit
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
 The verification needs a command.
 
-  ⟳ run_command {"command":"cargo test workflow"}
-
-
-  Approve command [1/1] — run_command
-    Reason: local process execution · [g] this exact command
-for this run
-    Command: cargo test workflow
-  [y] run  [n] deny  [e] edit  [s] all uses of this tool
-[g] allow exact for run  [p] always allow exact path  [x]
-always deny  [a] yolo
+  ⠋ run_command {"command":"cargo test workflow"}
 
 
 
@@ -53,7 +43,17 @@ always deny  [a] yolo
 
 
 
+│ Tool needs approval [1/1] (y/n/a/g/s/x/p)
+┌ Approval ────────────────────────────────────────────────┐
+│                                                          │
+│  Approve command [1/1] — run_command                     │
+│    Reason: local process execution · [g] this exact      │
+│command for this run                                      │
+│    Command: cargo test workflow                          │
+│  [y] run  [n] deny                                       │
+└──────────────────────────────────────────────────────────┘
 ╭──────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                           │
-╰─────────────── agent · auto · workflow running · inspect ╯
-Tool needs approval [1/1] (y/n/a/g/s/x/p)
+│› Ask anything…                                           │
+╰──────────────────────────────────────────────────────────╯
+ca · model auto · 1 messages · workflow running · inspect
+[y] run · [n] deny · [e] edit

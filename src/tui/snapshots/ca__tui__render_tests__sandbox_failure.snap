@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&failed, 100, 30), render_to_text(&failed, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
 
 
          ┌────────────────────────────────────────────────────────────────────────────────┐
@@ -27,13 +27,13 @@ expression: "wide_narrow(render_to_text(&failed, 100, 30), render_to_text(&faile
          │                                                                                │
          │                                                                                │
          │                                                                                │
-         │                                                                                │
-╭────────└────────────────────────────────────────────────────────────────────────────────┘────────╮
-│› ▌Ask anything…                                                                                   │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
-/ commands
+╭────────│                                                                                │────────╮
+│› Ask an└────────────────────────────────────────────────────────────────────────────────┘        │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto
+/ commands · Ctrl+\ dashboard · ↑ history
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
   ┌──────────────────────────────────────────────────────┐
   │ Sandbox                                              │
   │                                                      │
@@ -52,8 +52,8 @@ expression: "wide_narrow(render_to_text(&failed, 100, 30), render_to_text(&faile
   │  off — no process sandbox                            │
   │                                                      │
   │Error: Could not save sandbox mode: permission denied │
-  │Enter choose · Esc close · ↑↓ navigate                │
-╭─│                                                      │─╮
+╭─│Enter choose · Esc close · ↑↓ navigate                │─╮
 │›│                                                      │ │
-╰─└──────────────────────────────────────────────────────┘ ╯
-/ commands
+╰─│                                                      │─╯
+ca└──────────────────────────────────────────────────────┘
+/ commands · Ctrl+\ dashboard · ↑ history

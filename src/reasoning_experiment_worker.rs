@@ -202,6 +202,8 @@ async fn preflight_required_tool_sandbox_in(experiment_dir: &Path) -> Result<(),
             .collect(),
         temporary_directory: temporary_directory.clone(),
         network_allowed: false,
+        host_credentials: true,
+        proxy_port: None,
         hide_other_processes: true,
     };
     let prepared = SandboxBackend::new(SandboxMode::Required)
@@ -313,6 +315,8 @@ pub(crate) async fn execute_tool_call(
         read_only_roots,
         temporary_directory: temporary_directory.clone(),
         network_allowed: false,
+        host_credentials: true,
+        proxy_port: None,
         hide_other_processes: true,
     };
     let prepared = match SandboxBackend::new(SandboxMode::Required).prepare_process(
@@ -1677,10 +1681,13 @@ mod tests {
     #[test]
     fn controller_turn_keeps_openai_output_items_only_in_the_ipc_payload() {
         let turn = AssembledAssistantTurn {
+            retrieved_spans: Vec::new(),
             content: "done".into(),
+            provider_content: "done".into(),
             reasoning: None,
             response_items: vec![
                 crate::agent::stream::ProviderResponseItem::ResponsesOutput {
+                    privacy_prefix_sha256: None,
                     source: crate::agent::stream::ProviderStateSourceV1::for_test(
                         "openai",
                         ProviderProtocol::OpenAiResponses,

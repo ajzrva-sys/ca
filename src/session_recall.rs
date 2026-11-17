@@ -52,10 +52,20 @@ pub(crate) enum ScrollDirection {
     After,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SessionSearchScope {
+    #[default]
+    CurrentProject,
+    AllProjects,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SessionSearchRequest {
     pub action: SessionSearchAction,
+    #[serde(default)]
+    pub scope: SessionSearchScope,
     #[serde(default)]
     pub query: Option<String>,
     #[serde(default)]
@@ -337,8 +347,10 @@ impl SessionRecallIndex {
     ) -> Result<SessionSearchResponse, String> {
         match request.action {
             SessionSearchAction::Search => self.search(request, current_workspace),
-            SessionSearchAction::Browse => self.browse(request),
-            SessionSearchAction::Read | SessionSearchAction::Scroll => self.read(request),
+            SessionSearchAction::Browse => self.browse(request, current_workspace),
+            SessionSearchAction::Read | SessionSearchAction::Scroll => {
+                self.read(request, current_workspace)
+            }
         }
     }
 
@@ -393,6 +405,11 @@ impl SessionRecallIndex {
             }) {
                 continue;
             }
+            if request.scope == SessionSearchScope::CurrentProject
+                && session.workspace_digest != workspace_digest
+            {
+                continue;
+            }
             let mut adjusted = score;
             if session.workspace_digest == workspace_digest {
                 adjusted -= 1.0;
@@ -439,13 +456,22 @@ impl SessionRecallIndex {
         ))
     }
 
-    fn browse(&self, request: SessionSearchRequest) -> Result<SessionSearchResponse, String> {
+    fn browse(
+        &self,
+        request: SessionSearchRequest,
+        current_workspace: &Path,
+    ) -> Result<SessionSearchResponse, String> {
         let source = normalized_source(request.source.as_deref())?;
         let limit = request.limit.unwrap_or(10).clamp(1, MAX_SESSION_RESULTS);
         let offset = decode_cursor(request.cursor.as_deref(), "browse")?;
+        let current_digest = workspace_digest(current_workspace);
         let mut sessions = self
             .sessions
             .values()
+            .filter(|session| {
+                request.scope == SessionSearchScope::AllProjects
+                    || session.workspace_digest == current_digest
+            })
             .filter(|session| {
                 source.as_ref().is_none_or(|source| {
                     session
@@ -474,7 +500,11 @@ impl SessionRecallIndex {
         ))
     }
 
-    fn read(&self, request: SessionSearchRequest) -> Result<SessionSearchResponse, String> {
+    fn read(
+        &self,
+        request: SessionSearchRequest,
+        current_workspace: &Path,
+    ) -> Result<SessionSearchResponse, String> {
         let requested = request
             .session_ref
             .as_deref()
@@ -490,6 +520,11 @@ impl SessionRecallIndex {
             .sessions
             .get(session_ref)
             .ok_or_else(|| format!("unknown session_ref: {requested}"))?;
+        if request.scope == SessionSearchScope::CurrentProject
+            && session.workspace_digest != workspace_digest(current_workspace)
+        {
+            return Err("This historical session belongs to another project; request scope all_projects explicitly".into());
+        }
         let limit = request
             .limit
             .unwrap_or(MAX_MESSAGE_RESULTS)
@@ -670,7 +705,8 @@ fn normalized_source(source: Option<&str>) -> Result<Option<String>, String> {
         "codex" => "Codex",
         "hermes" => "Hermes",
         "mimo" | "mimocode" | "xiao" => "MiMo",
-        _ => return Err("source must be one of ca, codex, hermes, or mimo".into()),
+        "grok" => "Grok",
+        _ => return Err("source must be one of ca, codex, hermes, mimo, or grok".into()),
     };
     Ok(Some(normalized.into()))
 }
@@ -876,6 +912,7 @@ pub(crate) fn parse_tui_request(arguments: &str) -> Result<SessionSearchRequest,
     let arguments = arguments.trim();
     if arguments.is_empty() {
         return Ok(SessionSearchRequest {
+            scope: SessionSearchScope::CurrentProject,
             action: SessionSearchAction::Browse,
             query: None,
             session_ref: None,
@@ -897,6 +934,7 @@ pub(crate) fn parse_tui_request(arguments: &str) -> Result<SessionSearchRequest,
             return Err("Usage: /recall read <session-ref> [cursor]".into());
         }
         return Ok(SessionSearchRequest {
+            scope: SessionSearchScope::CurrentProject,
             action: SessionSearchAction::Read,
             query: None,
             session_ref: Some(session_ref.into()),
@@ -911,6 +949,7 @@ pub(crate) fn parse_tui_request(arguments: &str) -> Result<SessionSearchRequest,
         return Err(format!("Recall query exceeds {MAX_QUERY_BYTES} bytes"));
     }
     Ok(SessionSearchRequest {
+        scope: SessionSearchScope::CurrentProject,
         action: SessionSearchAction::Search,
         query: Some(arguments.into()),
         session_ref: None,
@@ -935,7 +974,7 @@ mod tests {
                     source_revision: "a".repeat(64),
                     session_id: "ca-one".into(),
                     title: Some("BSD rsync recovery".into()),
-                    workspace_digest: "workspace".into(),
+                    workspace_digest: workspace_digest(Path::new("/tmp/workspace")),
                     messages: vec![
                         RecallProjectionMessage {
                             id: "u1".into(),
@@ -973,11 +1012,76 @@ mod tests {
     }
 
     #[test]
+    fn session_search_defaults_to_current_project_and_global_is_explicit() {
+        let index = SessionRecallIndex::from_projection(projection()).unwrap();
+        let search = |scope: Option<&str>| {
+            let mut value = serde_json::json!({"action":"search","query":"Transmission"});
+            if let Some(scope) = scope {
+                value["scope"] = serde_json::json!(scope);
+            }
+            index
+                .execute(
+                    serde_json::from_value(value).unwrap(),
+                    Path::new("/tmp/workspace"),
+                )
+                .unwrap()
+        };
+        assert!(search(None).results.is_empty());
+        assert_eq!(search(Some("all_projects")).results.len(), 1);
+        let browse: SessionSearchRequest =
+            serde_json::from_value(serde_json::json!({"action":"browse"})).unwrap();
+        let local = index.execute(browse, Path::new("/tmp/workspace")).unwrap();
+        assert_eq!(local.results.len(), 1);
+        assert!(local.results[0].title.contains("BSD rsync"));
+        let local_search: SessionSearchRequest =
+            serde_json::from_value(serde_json::json!({"action":"search","query":"rsync"})).unwrap();
+        assert_eq!(
+            index
+                .execute(local_search, Path::new("/tmp/workspace"))
+                .unwrap()
+                .results
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn session_search_foreign_exact_reads_require_explicit_all_projects_scope() {
+        let index = SessionRecallIndex::from_projection(projection()).unwrap();
+        let foreign = index
+            .sessions
+            .values()
+            .find(|session| session.title == "Transmission check")
+            .unwrap()
+            .session_ref
+            .clone();
+        for action in ["read", "scroll"] {
+            let value = serde_json::json!({"action":action,"session_ref":foreign});
+            let request = serde_json::from_value(value.clone()).unwrap();
+            assert!(index
+                .execute(request, Path::new("/tmp/workspace"))
+                .unwrap_err()
+                .contains("all_projects"));
+            let mut explicit = value;
+            explicit["scope"] = serde_json::json!("all_projects");
+            let result = index
+                .execute(
+                    serde_json::from_value(explicit).unwrap(),
+                    Path::new("/tmp/workspace"),
+                )
+                .unwrap();
+            assert_eq!(result.results.len(), 1);
+            assert!(result.results[0].messages[0].text.contains("Transmission"));
+        }
+    }
+
+    #[test]
     fn search_browse_read_and_scroll_are_bounded_and_stable() {
         let index = SessionRecallIndex::from_projection(projection()).unwrap();
         let search = index
             .execute(
                 SessionSearchRequest {
+                    scope: SessionSearchScope::AllProjects,
                     action: SessionSearchAction::Search,
                     query: Some("rsync recovered".into()),
                     session_ref: None,
@@ -1005,6 +1109,7 @@ mod tests {
         let read = index
             .execute(
                 SessionSearchRequest {
+                    scope: SessionSearchScope::AllProjects,
                     action: SessionSearchAction::Read,
                     query: None,
                     session_ref: Some(session_ref.clone()),
@@ -1022,6 +1127,7 @@ mod tests {
         let scrolled = index
             .execute(
                 SessionSearchRequest {
+                    scope: SessionSearchScope::AllProjects,
                     action: SessionSearchAction::Scroll,
                     query: None,
                     session_ref: Some(session_ref),
@@ -1064,6 +1170,7 @@ mod tests {
         let request = |query: Option<&str>, source: Option<&str>, cursor: Option<&str>| {
             index.execute(
                 SessionSearchRequest {
+                    scope: SessionSearchScope::AllProjects,
                     action: SessionSearchAction::Search,
                     query: query.map(str::to_string),
                     session_ref: None,
@@ -1109,30 +1216,38 @@ mod tests {
             .session_ref
             .clone();
         let first = index
-            .read(SessionSearchRequest {
-                action: SessionSearchAction::Read,
-                query: None,
-                session_ref: Some(session_ref.clone()),
-                message_id: None,
-                cursor: None,
-                direction: None,
-                source: None,
-                limit: Some(1),
-            })
+            .read(
+                SessionSearchRequest {
+                    scope: SessionSearchScope::AllProjects,
+                    action: SessionSearchAction::Read,
+                    query: None,
+                    session_ref: Some(session_ref.clone()),
+                    message_id: None,
+                    cursor: None,
+                    direction: None,
+                    source: None,
+                    limit: Some(1),
+                },
+                Path::new("/tmp/workspace"),
+            )
             .unwrap();
         assert!(first.results[0].messages[0].text.starts_with("start:"));
         assert!(first.results[0].messages[0].truncated);
         let second = index
-            .read(SessionSearchRequest {
-                action: SessionSearchAction::Scroll,
-                query: None,
-                session_ref: Some(session_ref),
-                message_id: None,
-                cursor: first.next_cursor,
-                direction: None,
-                source: None,
-                limit: Some(1),
-            })
+            .read(
+                SessionSearchRequest {
+                    scope: SessionSearchScope::AllProjects,
+                    action: SessionSearchAction::Scroll,
+                    query: None,
+                    session_ref: Some(session_ref),
+                    message_id: None,
+                    cursor: first.next_cursor,
+                    direction: None,
+                    source: None,
+                    limit: Some(1),
+                },
+                Path::new("/tmp/workspace"),
+            )
             .unwrap();
         assert_eq!(second.results[0].messages[0].id, "u1");
         assert!(second.results[0].messages[0]
@@ -1162,16 +1277,20 @@ mod tests {
             .session_ref
             .clone();
         let read = index
-            .read(SessionSearchRequest {
-                action: SessionSearchAction::Read,
-                query: None,
-                session_ref: Some(session_ref),
-                message_id: None,
-                cursor: None,
-                direction: None,
-                source: None,
-                limit: Some(MAX_MESSAGE_RESULTS),
-            })
+            .read(
+                SessionSearchRequest {
+                    scope: SessionSearchScope::AllProjects,
+                    action: SessionSearchAction::Read,
+                    query: None,
+                    session_ref: Some(session_ref),
+                    message_id: None,
+                    cursor: None,
+                    direction: None,
+                    source: None,
+                    limit: Some(MAX_MESSAGE_RESULTS),
+                },
+                Path::new("/tmp/workspace"),
+            )
             .unwrap();
         assert!(read.next_cursor.is_some());
         assert!(serde_json::to_vec(&read).unwrap().len() <= MAX_RESULT_BYTES);
@@ -1179,6 +1298,7 @@ mod tests {
         let search = index
             .search(
                 SessionSearchRequest {
+                    scope: SessionSearchScope::AllProjects,
                     action: SessionSearchAction::Search,
                     query: Some("needle".into()),
                     session_ref: None,
@@ -1192,5 +1312,47 @@ mod tests {
             )
             .unwrap();
         assert!(serde_json::to_vec(&search).unwrap().len() <= MAX_RESULT_BYTES);
+    }
+
+    #[test]
+    fn grok_source_filter_selects_grok_sessions() {
+        let mut batch = projection();
+        batch.sessions.push(RecallProjectionSession {
+            source: "Grok",
+            source_revision: "c".repeat(64),
+            session_id: "grok-one".into(),
+            title: Some("Grok wiring".into()),
+            workspace_digest: "other".into(),
+            messages: vec![RecallProjectionMessage {
+                id: "g1".into(),
+                role: "user",
+                text: "wire grok sessions".into(),
+                timestamp: Some("2026-11-13T00:00:00Z".into()),
+                safe_action_summaries: Vec::new(),
+            }],
+        });
+        let index = SessionRecallIndex::from_projection(batch).unwrap();
+        let request = |source: &str| {
+            index.search(
+                SessionSearchRequest {
+                    scope: SessionSearchScope::AllProjects,
+                    action: SessionSearchAction::Search,
+                    query: Some("wire grok".into()),
+                    session_ref: None,
+                    message_id: None,
+                    cursor: None,
+                    direction: None,
+                    source: Some(source.into()),
+                    limit: Some(5),
+                },
+                Path::new("/tmp/workspace"),
+            )
+        };
+        let selected = request("grok").unwrap();
+        assert_eq!(selected.results.len(), 1);
+        assert_eq!(selected.results[0].sources, ["Grok"]);
+        assert!(selected.results[0].title.contains("Grok wiring"));
+        let rejected = request("cursor").unwrap_err();
+        assert!(rejected.contains("grok"));
     }
 }

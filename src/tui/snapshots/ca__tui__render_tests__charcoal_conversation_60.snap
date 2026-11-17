@@ -2,7 +2,6 @@
 source: src/tui/render_tests.rs
 expression: text
 ---
- ca v0.0.0 │ /workspace/ca         78K / 256K │ [Dashboard]
 
  › Review this workspace for public release.
 
@@ -21,8 +20,9 @@ I am checking the release surfaces.
 
 
 
-
+  Public release · 7m07s · Waiting for response…
 ╭──────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                           │
-╰────────────────────────────────── agent · Fixture (high) ╯
-2 messages · / commands
+│› Ask anything…                                           │
+╰──────────────────────────────────────────────────────────╯
+ca · model Fixture (high) · 78K/256K · 2 messages
+/ commands · Ctrl+\ dashboard · ↑ history

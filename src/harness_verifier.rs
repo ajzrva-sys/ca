@@ -53,6 +53,8 @@ fn verify_request(request: VerifyRequest) -> Result<VerifiedCodingResult> {
                 read_only_roots,
                 temporary_directory: temporary.into(),
                 network_allowed: false,
+                host_credentials: true,
+                proxy_port: None,
                 hide_other_processes: true,
             };
             let mut profile =

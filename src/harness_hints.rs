@@ -43,8 +43,59 @@ impl ExecutionHint {
 
 /// One experiment adds one intervention, keeping existing interventions fixed.
 /// This prevents attributing a bundle of prompt and middleware changes to one hint.
+#[allow(dead_code)]
 pub(crate) fn single_addition(baseline: &HintPolicy, candidate: &HintPolicy) -> bool {
-    baseline.is_subset(candidate) && candidate.len() == baseline.len() + 1
+    matches!(
+        classify_hint_edit(baseline, candidate),
+        Some(HintEdit::Addition(_))
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HintEdit {
+    Unchanged,
+    Addition(ExecutionHint),
+    Removal(ExecutionHint),
+}
+
+/// Unchanged, exactly one addition, or exactly one removal. Swaps and mixed
+/// edits are rejected.
+pub(crate) fn classify_hint_edit(
+    baseline: &HintPolicy,
+    candidate: &HintPolicy,
+) -> Option<HintEdit> {
+    if baseline == candidate {
+        return Some(HintEdit::Unchanged);
+    }
+    let added = candidate.difference(baseline).copied().collect::<Vec<_>>();
+    let removed = baseline.difference(candidate).copied().collect::<Vec<_>>();
+    match (added.as_slice(), removed.as_slice()) {
+        ([hint], []) => Some(HintEdit::Addition(*hint)),
+        ([], [hint]) => Some(HintEdit::Removal(*hint)),
+        _ => None,
+    }
+}
+
+pub(crate) fn one_hint_delta(baseline: &HintPolicy, candidate: &HintPolicy) -> bool {
+    matches!(
+        classify_hint_edit(baseline, candidate),
+        Some(HintEdit::Addition(_) | HintEdit::Removal(_))
+    )
+}
+
+/// Addition exposes the hint only to the candidate. Removal exposes it only
+/// to the baseline. A missing exposure artifact is not a match.
+#[allow(dead_code)]
+pub(crate) fn exposure_matches(
+    edit: HintEdit,
+    baseline_exposed: bool,
+    candidate_exposed: bool,
+) -> bool {
+    match edit {
+        HintEdit::Unchanged => baseline_exposed == candidate_exposed,
+        HintEdit::Addition(_) => !baseline_exposed && candidate_exposed,
+        HintEdit::Removal(_) => baseline_exposed && !candidate_exposed,
+    }
 }
 
 /// Return only reminders whose third completed occurrence is in the latest tool
@@ -147,8 +198,8 @@ pub(crate) fn apply(messages: &mut [ChatMessage], policy: &HintPolicy) {
         return;
     }
     if let Some(message) = messages.iter_mut().find(|m| m.role == "system") {
-        if let Some(text) = message.content.as_str() {
-            message.content = crate::image_content::ModelContent::text(format!("{text}{suffix}"));
+        if message.content.as_str().is_some() {
+            message.content = message.content.append_authored(&suffix);
         }
     }
 }
@@ -172,6 +223,7 @@ pub(crate) mod tests {
             id: id.into(),
             call_type: "function".into(),
             function: FunctionCall {
+                arguments_retrieved_spans: Vec::new(),
                 name: "run_command".into(),
                 arguments: serde_json::json!({"command":command}).to_string(),
             },
@@ -206,6 +258,30 @@ pub(crate) mod tests {
             vec![ExecutionHint::DependencyProbes]
         );
         assert!(!ExecutionHint::DependencyProbes.text().is_empty());
+        let mut sourced = message("system", "Host directions. PRIVATE_CHILD_SUMMARY");
+        sourced.content =
+            sourced
+                .content
+                .with_retrieved_spans(vec![crate::retrieved_content::RetrievedSpan {
+                    source: None,
+                    start: "Host directions. ".len(),
+                    end: "Host directions. PRIVATE_CHILD_SUMMARY".len(),
+                }]);
+        messages.insert(0, sourced);
+        apply(&mut messages, &all());
+        let filter = crate::provider_filter::ProviderFilter::compile(
+            &crate::provider_filter::ProviderFilterConfig {
+                enabled: true,
+                page_stand_in: crate::provider_filter::PageStandIn::Latin,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let projected = messages[0].content.project_retrieved(&filter).unwrap();
+        let text = projected.as_str().unwrap();
+        assert!(text.starts_with("Host directions. "));
+        assert!(text.contains("Execution reminder:"));
+        assert!(!text.contains("PRIVATE_CHILD_SUMMARY"));
         command(&mut messages, "next", "cargo test");
         assert!(reminders(&messages, &all()).is_empty());
     }
@@ -234,6 +310,23 @@ pub(crate) mod tests {
             &[ExecutionHint::DependencyProbes].into_iter().collect()
         ));
         assert!(!single_addition(&HintPolicy::new(), &all()));
+        let added: HintPolicy = [ExecutionHint::DependencyProbes].into_iter().collect();
+        let removed = classify_hint_edit(&added, &HintPolicy::new());
+        assert_eq!(
+            removed,
+            Some(HintEdit::Removal(ExecutionHint::DependencyProbes))
+        );
+        assert!(exposure_matches(
+            HintEdit::Removal(ExecutionHint::DependencyProbes),
+            true,
+            false
+        ));
+        assert!(!exposure_matches(
+            HintEdit::Removal(ExecutionHint::DependencyProbes),
+            false,
+            false
+        ));
+        assert!(classify_hint_edit(&HintPolicy::new(), &all()).is_none());
     }
     #[test]
     fn hrs253_hints_handle_parallel_batches_without_repeating_old_reminders() {

@@ -820,12 +820,21 @@ fn open_browser(url: &str) -> Result<(), CodexAuthError> {
 }
 
 pub async fn refresh_tokens(tokens: &CodexTokens) -> Result<CodexTokens, CodexAuthError> {
+    let refreshed = request_token_refresh(tokens, &format!("{ISSUER}{TOKEN_PATH}")).await?;
+    store_tokens(&refreshed)?;
+    Ok(refreshed)
+}
+
+async fn request_token_refresh(
+    tokens: &CodexTokens,
+    token_url: &str,
+) -> Result<CodexTokens, CodexAuthError> {
     let client = auth_http_client().map_err(|error| CodexAuthError::Refresh(error.to_string()))?;
     let response = client
-        .post(format!("{ISSUER}{TOKEN_PATH}"))
+        .post(token_url)
         .form(&[
             ("grant_type", "refresh_token"),
-            ("refresh_token", &tokens.refresh_token),
+            ("refresh_token", tokens.refresh_token.as_str()),
             ("client_id", CLIENT_ID),
         ])
         .send()
@@ -845,8 +854,18 @@ pub async fn refresh_tokens(tokens: &CodexTokens) -> Result<CodexTokens, CodexAu
         other => other,
     })?;
     new_tokens.account_id = extract_account_id(&new_tokens.id_token);
-    store_tokens(&new_tokens)?;
     Ok(new_tokens)
+}
+
+#[cfg(test)]
+async fn refresh_tokens_at(
+    tokens: &CodexTokens,
+    token_url: &str,
+    cache_path: &Path,
+) -> Result<CodexTokens, CodexAuthError> {
+    let refreshed = request_token_refresh(tokens, token_url).await?;
+    write_file_tokens_at(cache_path, &refreshed)?;
+    Ok(refreshed)
 }
 
 pub async fn revoke_tokens() -> Result<(), CodexAuthError> {
@@ -1092,6 +1111,93 @@ mod tests {
                 0o600
             );
         }
+    }
+
+    #[tokio::test]
+    async fn chatgpt_shim_refresh_rewrites_tokens_from_a_fake_response() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 2048];
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                let count = tokio::time::timeout_at(deadline, stream.read(&mut chunk))
+                    .await
+                    .expect("token request")
+                    .unwrap();
+                if count == 0 {
+                    break;
+                }
+                request.extend_from_slice(&chunk[..count]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let text = String::from_utf8_lossy(&request);
+            assert!(text.contains("grant_type=refresh_token"));
+            assert!(text.contains(&format!("client_id={CLIENT_ID}")));
+            assert!(text.contains("refresh_token=refresh-one"));
+            let header = base64url_encode(br#"{"alg":"none"}"#);
+            let payload =
+                base64url_encode(br#"{"chatgpt_account_id":"acct-two","exp":9999999999}"#);
+            let body = serde_json::json!({
+                "access_token": "access-two",
+                "id_token": format!("{header}.{payload}.sig"),
+                "refresh_token": "refresh-two"
+            })
+            .to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("auth.json");
+        std::fs::write(
+            &path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "OPENAI_API_KEY": "leave-me",
+                "auth_mode": "chatgpt",
+                "tokens": {
+                    "access_token": "access-one",
+                    "id_token": "id-one",
+                    "refresh_token": "refresh-one",
+                    "account_id": "account-one"
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let updated = refresh_tokens_at(
+            &CodexTokens {
+                access_token: "access-one".into(),
+                id_token: "id-one".into(),
+                refresh_token: "refresh-one".into(),
+                account_id: Some("account-one".into()),
+            },
+            &format!("http://{address}/oauth/token"),
+            &path,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(updated.access_token, "access-two");
+        assert_eq!(updated.refresh_token, "refresh-two");
+        assert_eq!(updated.account_id.as_deref(), Some("acct-two"));
+        let value = read_auth_cache_value(&path).unwrap().unwrap();
+        assert_eq!(value["OPENAI_API_KEY"], "leave-me");
+        assert_eq!(value["auth_mode"], "chatgpt");
+        assert_eq!(value["tokens"]["access_token"], "access-two");
+        server.await.unwrap();
     }
 
     #[test]

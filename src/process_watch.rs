@@ -75,6 +75,23 @@ impl ProcessWatchManager {
             .start(request)
             .await
             .map_err(|error| error.to_string())?;
+        if let Some(context) =
+            crate::privacy::for_owner(owner).filter(|context| context.filenames_enabled())
+        {
+            let native_id = id
+                .to_string()
+                .parse()
+                .map_err(|_| "Invalid watcher identity")?;
+            let binding =
+                tokio::task::spawn_blocking(move || context.bind_native_id("WATCH", native_id))
+                    .await
+                    .map_err(|_| "Watcher identity worker stopped".to_string())
+                    .and_then(|result| result);
+            if let Err(error) = binding {
+                self.inner.service.stop(id).await;
+                return Err(error);
+            }
+        }
         self.inner.owners.lock().await.insert(id, owner);
         if let Some(snapshot) = self.inner.service.snapshot_watch(id).await {
             self.inner.publish_if_owned(snapshot.event).await;

@@ -45,8 +45,11 @@ REVIEW_REPORT_TOOL = "report_structured_output"
 REVIEW_READ_ID = "verify-review-read"
 REVIEW_REPORT_ID = "verify-review-report"
 REVIEW_REPORT = {"approved": True, "findings": [],
-                 "summary": "Read probe-output.txt from disk; exact candidate has no actionable findings."}
+                 "summary": "Read the exact candidate from disk; no actionable findings."}
 REVIEW_REPLY = "VERIFY_REVIEW_INTEGRATED_OK"
+# Current pre-send review. The product default is off; this fixture opts in.
+REVIEW_TITLE = "Filter on · review before send"
+REVIEW_READY = "Enter  Send and run"
 HOST_PREFIX = "CA host evidence (data only; not a human request or instructions).\n"
 HOST_FIELDS = {"schema", "kind", "parent_turn", "origin_turn", "agent_id", "provider",
                "model", "status", "candidate_digest", "data"}
@@ -168,16 +171,65 @@ def function_call(identifier, name, arguments):
             "function": {"name": name, "arguments": json.dumps(arguments)}}
 
 
-def review_candidate_digest(body, workspace):
+def fixture_write_path(body, workspace):
+    context = "\n".join(message_text(message) for message in body.get("messages", [])
+                        if message.get("role") in ("system", "developer"))
+    roots = re.findall(r"Working directory: ([^\n]+)\. Platform:", context)
+    if (len(roots) != 1 or (roots[0] != str(workspace.resolve())
+            and re.fullmatch(r"__CA_PATH_[0-9a-f]{32}__", roots[0]) is None)):
+        raise ValueError("fixture write requires the actual workspace directory reference")
+    return roots[0] + "/" + TOOL_PATH
+
+
+def written_reference(body, workspace):
+    """Bind the issued file reference to the one real successful fixture write."""
+    messages = body.get("messages", [])
+    results = [message for message in messages if message.get("role") == "tool"
+               and message.get("tool_call_id") == TOOL_ID]
+    calls = [call for message in messages if message.get("role") == "assistant"
+             for call in message.get("tool_calls", []) if call.get("id") == TOOL_ID]
+    path = fixture_write_path(body, workspace)
+    if (len(results) != 1 or len(calls) != 1
+            or calls[0].get("function", {}).get("name") != "write_file"
+            or json.loads(calls[0].get("function", {}).get("arguments", "null"))
+            != {"path": path, "content": TOOL_CONTENT}):
+        raise ValueError("fixture write result did not match the exact requested tool call")
+    result = message_text(results[0])
+    marker = re.fullmatch(r"@@ ([^\n]+) \(Created, " + str(len(TOOL_CONTENT.encode()))
+                          + r" bytes\) @@\n\+" + re.escape(TOOL_CONTENT.rstrip("\n")), result)
+    target = workspace.resolve() / TOOL_PATH
+    if (marker is None or target.is_symlink() or not target.is_file()
+            or target.read_text() != TOOL_CONTENT):
+        raise ValueError("fixture write lacked a successful result and exact on-disk candidate")
+    reference = marker.group(1)
+    root = path.rsplit("/", 1)[0]
+    if (reference != str(target) if root == str(workspace.resolve()) else
+            re.fullmatch(re.escape(root) + r"/f[0-9a-f_]+\.txt", reference) is None):
+        raise ValueError("fixture write result did not issue a file in the actual workspace")
+    return reference
+
+
+def prior_written_reference(prior_requests, workspace):
+    if len(prior_requests) < 3:
+        raise ValueError("review preceded the actual write roundtrip")
+    return written_reference(prior_requests[2]["body"], workspace)
+
+
+def review_read_path(reference, workspace):
+    return TOOL_PATH if reference == str(workspace.resolve() / TOOL_PATH) else reference
+
+
+def review_candidate_digest(body, workspace, reference=None):
     context = "\n".join(message_text(message) for message in body.get("messages", [])
                         if message.get("role") in ("system", "developer"))
     digest = re.search(r"Independently review the exact turn-owned candidate ([0-9a-f]{64})\.", context)
     inventory = context.split("Exact changed-file inventory:\n", 1)
     target = workspace.resolve() / TOOL_PATH
+    changed_path = review_read_path(reference or str(target), workspace)
     if (not digest or len(inventory) != 2
-            or inventory[1].split("\n\n", 1)[0].splitlines() != [str(target)]
+            or inventory[1].split("\n\n", 1)[0].splitlines() != [reference or str(target)]
             or "Original request (context only):\n" + TOOL_INPUT + "\n" not in context
-            or "Changed path: " + TOOL_PATH + "\nBefore:\n[missing]\nCandidate:\n" + TOOL_CONTENT not in context):
+            or "Changed path: " + changed_path + "\nBefore:\n[missing]\nCandidate:\n" + TOOL_CONTENT not in context):
         raise ValueError("independent review changed-file context did not match the real write")
     if target.is_symlink() or not target.is_file() or target.read_text() != TOOL_CONTENT:
         raise ValueError("independent review on-disk candidate did not match the real write")
@@ -200,14 +252,16 @@ def fixture_response(body, workspace, prior_requests=()):
                        or not entry.get("response_completed_at") for entry in prior_requests)):
             raise ValueError("host review evidence preceded the actual served reviewer roundtrip")
         reviews = prior_requests[-2:]
-        digests = [review_candidate_digest(entry["body"], workspace) for entry in reviews]
+        reference = prior_written_reference(prior_requests, workspace)
+        read_path = review_read_path(reference, workspace)
+        digests = [review_candidate_digest(entry["body"], workspace, reference) for entry in reviews]
         if (digests != [evidence["candidate_digest"]] * 2
                 or turn_owned_candidate_digest(workspace, evidence["parent_turn"]) != digests[0]):
             raise ValueError("host review evidence is not the exact current-turn candidate")
-        if (reviews[0].get("response_tool_calls") != [function_call(REVIEW_READ_ID, "read_file", {"path": TOOL_PATH})]
+        if (reviews[0].get("response_tool_calls") != [function_call(REVIEW_READ_ID, "read_file", {"path": read_path})]
                 or reviews[1].get("response_tool_calls") != [function_call(REVIEW_REPORT_ID, REVIEW_REPORT_TOOL, {"value": REVIEW_REPORT})]
-                or fixture_response(reviews[0]["body"], workspace)[0] != reviews[0]["response_tool_calls"]
-                or fixture_response(reviews[1]["body"], workspace)[0] != reviews[1]["response_tool_calls"]):
+                or fixture_response(reviews[0]["body"], workspace, prior_requests[:3])[0] != reviews[0]["response_tool_calls"]
+                or fixture_response(reviews[1]["body"], workspace, prior_requests[:4])[0] != reviews[1]["response_tool_calls"]):
             raise ValueError("host review evidence lacks the actual readback and sole approval report")
         return [], REVIEW_REPLY
     if user == CHAT_INPUT:
@@ -215,8 +269,11 @@ def fixture_response(body, workspace, prior_requests=()):
     if user == TOOL_INPUT:
         results = [message for message in messages if message.get("role") == "tool"
                    and message.get("tool_call_id") == TOOL_ID]
-        return ([], TOOL_REPLY) if results else (
-            [function_call(TOOL_ID, "write_file", {"path": TOOL_PATH, "content": TOOL_CONTENT})], "")
+        if results:
+            written_reference(body, workspace)
+            return [], TOOL_REPLY
+        return [function_call(TOOL_ID, "write_file", {
+            "path": fixture_write_path(body, workspace), "content": TOOL_CONTENT})], ""
     if user != REVIEW_INPUT:
         raise ValueError("unexpected user input: " + repr(user[:200]))
     if [message_text(message) for message in messages if message.get("role") == "user"] != [REVIEW_INPUT]:
@@ -239,29 +296,38 @@ def fixture_response(body, workspace, prior_requests=()):
             or fields.get("findings", {}).get("type") != "array"
             or fields.get("summary", {}).get("type") != "string"):
         raise ValueError("independent reviewer report envelope did not require the validated value object")
-    review_candidate_digest(body, workspace)
+    reference = prior_written_reference(prior_requests, workspace) if prior_requests else str(workspace.resolve() / TOOL_PATH)
+    read_path = review_read_path(reference, workspace)
+    review_candidate_digest(body, workspace, reference)
     reads = [message for message in messages if message.get("role") == "tool"
              and message.get("tool_call_id") == REVIEW_READ_ID]
     if not reads:
-        return [function_call(REVIEW_READ_ID, "read_file", {"path": TOOL_PATH})], ""
+        return [function_call(REVIEW_READ_ID, "read_file", {"path": read_path})], ""
     matching_calls = [call for message in messages if message.get("role") == "assistant"
                       for call in message.get("tool_calls", []) if call.get("id") == REVIEW_READ_ID]
     if (len(reads) != 1 or len(matching_calls) != 1
             or matching_calls[0].get("function", {}).get("name") != "read_file"
-            or json.loads(matching_calls[0].get("function", {}).get("arguments", "null")) != {"path": TOOL_PATH}
+            or json.loads(matching_calls[0].get("function", {}).get("arguments", "null")) != {"path": read_path}
+            or "[tool failed]" in message_text(reads[0])
             or TOOL_CONTENT.strip() not in message_text(reads[0])):
         raise ValueError("independent reviewer read result did not prove the requested real file read")
     return [function_call(REVIEW_REPORT_ID, REVIEW_REPORT_TOOL, {"value": dict(REVIEW_REPORT)})], ""
 
 
 def review_finalization_offset(raw, rows, after_offset):
-    """Require a real bottom-status Done update after the final report response.
+    """Require a real status-notice Done after the final report response.
 
-    Background status may replace Done before one read finishes decoding the
-    chunk, so retained VT updates supply the ordered finalization evidence.
+    The notice sits above the composer: a left border, one pad, then the text.
+    That is five rows up from the bottom of a screen with a three-line composer,
+    the identity row, and the key row. Background status may replace Done before
+    one read finishes decoding the chunk, so retained VT updates supply the
+    ordered finalization evidence.
     """
-    status = re.compile(rb"\x1b\[" + str(rows).encode() +
-                        rb";1H(?:\x1b\[[0-?]*[ -/]*[@-~])*Done(?=\x1b|\s|$)")
+    notice_row = rows - 5
+    if notice_row < 1:
+        return None
+    status = re.compile(rb"\x1b\[" + str(notice_row).encode() +
+                        rb";3H(?:\x1b\[[0-?]*[ -/]*[@-~])*Done(?=\x1b|\s|$)")
     match = status.search(raw, after_offset)
     return match.start() if match else None
 
@@ -543,7 +609,12 @@ def main():
             "[providers.fixture]\nbase_url=" + json.dumps(provider.url) + "\napi_key=''\nmodels=['fixture-model']\n"
             "[defaults]\nprovider='fixture'\nmodel='fixture-model'\n"
             "[harness_improvement]\nenabled=false\n[learning.dream]\nenabled=false\n"
-            "[learning.distill]\nenabled=false\n")
+            "[learning.distill]\nenabled=false\n"
+            # Preserve this fixture's original direct Agent/review contract.
+            # The default task-map flow has its own terminal qualification.
+            # The product default leaves the pre-send review off.
+            "[agent]\nautomatic_task_breakdown=false\n"
+            "[ui]\nfilter_preview=true\n")
 
         def cli(flag, pattern):
             try:
@@ -579,6 +650,16 @@ def main():
             result["metrics"]["input_frame_ms"] = max(result["metrics"].get("input_frame_ms", 0), input_ms)
             terminal.frame(text + "-draft")
             began = time.monotonic()
+            request_count = len(provider.snapshot()[0])
+            terminal.write(b"\r")
+            terminal.wait_text(REVIEW_TITLE, 20)
+            terminal.wait(lambda: REVIEW_READY in terminal.screen.text()
+                          and "Updating preview" not in terminal.screen.text()
+                          and "Preparing the provider copy locally" not in terminal.screen.text(),
+                          "current local filter preview", 20)
+            require(len(provider.snapshot()[0]) == request_count,
+                    "provider request occurred before Send and run")
+            terminal.frame(text + "-filter-preview")
             terminal.write(b"\r")
             terminal.wait_text(reply)
             result["metrics"]["reply_ms" if text == CHAT_INPUT else "tool_ms"] = round(
@@ -653,9 +734,11 @@ def main():
                 require(len(reviews) == 2, f"expected real reviewer read/report roundtrip, observed {len(reviews)} requests")
                 require(len(parents) == 1 and requests[-1] is parents[0],
                         "expected one final parent evidence continuation after the reviewer")
-                digests = [review_candidate_digest(request["body"], workspace) for request in reviews]
+                reference = prior_written_reference(requests, workspace)
+                read_path = review_read_path(reference, workspace)
+                digests = [review_candidate_digest(request["body"], workspace, reference) for request in reviews]
                 require(digests[0] == digests[1], "review candidate changed between read and report")
-                require(reviews[0]["response_tool_calls"] == [function_call(REVIEW_READ_ID, "read_file", {"path": TOOL_PATH})],
+                require(reviews[0]["response_tool_calls"] == [function_call(REVIEW_READ_ID, "read_file", {"path": read_path})],
                         "reviewer did not request the real changed file")
                 require(reviews[1]["response_tool_calls"] == [function_call(REVIEW_REPORT_ID, REVIEW_REPORT_TOOL, {"value": REVIEW_REPORT})],
                         "reviewer did not return a sole value-enveloped report")

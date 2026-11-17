@@ -307,6 +307,9 @@ mod tests {
 
     fn request(turn: Uuid) -> AgentSpawnRequest {
         AgentSpawnRequest {
+            repair_contract: None,
+            task_retrieved_spans: Vec::new(),
+            host_task: None,
             parent: None,
             parent_turn: turn,
             task_id: None,
@@ -326,6 +329,7 @@ mod tests {
             purpose: AgentRunPurpose::Subagent,
             output_contract: None,
             isolation: AgentIsolation::Shared,
+            admitted: None,
         }
     }
 

@@ -273,6 +273,17 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn policy_refusal_is_safe_and_non_retryable() {
+        let error = ProviderError::ResponseRefused;
+        let category = Category::of(&error);
+        assert_eq!(category, Category::Refused);
+        assert_eq!(category.label(), "provider refused response");
+        assert!(!category.retryable());
+        assert_eq!(error.to_string(), "provider response was refused");
+    }
+
     #[test]
     fn permanent_and_ambiguous_failures_do_not_retry() {
         assert_eq!(

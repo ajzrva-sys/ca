@@ -279,6 +279,9 @@ impl PreparedPrivilegeInvocation {
         sandbox_mode: crate::sandbox::SandboxMode,
         owner: crate::jobs::JobOwner,
     ) -> Result<Self, String> {
+        if crate::privacy::for_owner(owner).is_some() {
+            return Err("Project privacy requires protected sources to remain read-only to opaque privileged commands; use mapped file tools".into());
+        }
         if !supported_host() {
             return Err(
                 "Privilege handoff is available only in the interactive macOS, Linux, or FreeBSD TUI"
@@ -1652,6 +1655,8 @@ async fn execute_inner(
                 read_only_roots: Vec::new(),
                 temporary_directory: temporary_path.clone(),
                 network_allowed: false,
+                host_credentials: true,
+                proxy_port: None,
                 hide_other_processes: true,
             },
             std::slice::from_ref(&temporary_path),
@@ -1720,9 +1725,11 @@ async fn execute_inner(
         Err(error) => return crate::agent::registry::ToolExecutionResult::Failure(error),
     };
     let job = crate::jobs::JobInfo {
+        log_artifact: None,
         id: crate::jobs::JobId::new(),
         command: invocation.display_command(),
         cwd: invocation.cwd.to_string_lossy().into_owned(),
+        protected_sources: false,
         status: output.status,
         elapsed: output.elapsed,
         stdout: output.stdout.render("stdout"),
@@ -2171,9 +2178,13 @@ printf 'target-ok\n'
             "test-provider",
             "test-model",
             vec![crate::app::Message {
+                retrieved_spans: Some(Vec::new()),
                 role: crate::app::Role::Assistant,
                 content: String::new(),
                 tool_calls: Some(vec![crate::app::ToolCall {
+                    observation: None,
+                    output_source: None,
+                    arguments_retrieved_spans: Vec::new(),
                     id: "call-privilege".into(),
                     name: TOOL_NAME.into(),
                     arguments: serde_json::json!({
@@ -2184,6 +2195,7 @@ printf 'target-ok\n'
                     .to_string(),
                     status: crate::app::ToolStatus::Done,
                     output: Some(execution.model_text().into()),
+                    started_at: None,
                 }]),
                 thinking: None,
                 timestamp: chrono::Utc::now(),

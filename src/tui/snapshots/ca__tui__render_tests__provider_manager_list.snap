@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
 
 
 
@@ -27,13 +27,13 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
              │                                                                        │
              │                                                                        │
              └────────────────────────────────────────────────────────────────────────┘
-
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                                                                   │
-╰─────────────────────────────────────────────────────────────────────────── agent · mimo-v2.5-pro ╯
-/ commands
+│› Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model mimo-v2.5-pro
+/ commands · Ctrl+\ dashboard · ↑ history
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
 
   ┌──────────────────────────────────────────────────────┐
   │ Providers                                            │
@@ -52,8 +52,8 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
   │⇧A custom · ⇧E edit · ⇧D delete · ⇧R refresh          │
   │Esc close · ↑↓ wrap · PgUp/PgDn · Home/End            │
   │                                                      │
-  │                                                      │
 ╭─│                                                      │─╮
-│›└──────────────────────────────────────────────────────┘ │
-╰─────────────────────────────────── agent · mimo-v2.5-pro ╯
-/ commands
+│›│                                                      │ │
+╰─└──────────────────────────────────────────────────────┘─╯
+ca · model mimo-v2.5-pro
+/ commands · Ctrl+\ dashboard · ↑ history

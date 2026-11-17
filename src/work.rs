@@ -108,6 +108,15 @@ pub struct PlanArtifact {
     pub source_plan_id: Option<PlanId>,
 }
 
+/// Host-owned, one-use permission originating at the task's Send and run action.
+/// It is deliberately absent from serialized sessions and forked work.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutomaticTaskExecution {
+    workflow_id: Uuid,
+    author_stage_id: Uuid,
+    ready: Option<PlanReview>,
+}
+
 /// Process-local binding for an action on the exact artifact the user reviewed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlanReview {
@@ -176,8 +185,22 @@ impl PlanArtifact {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionTodo {
+    pub id: String,
+    pub content: String,
+    pub status: String,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WorkState {
+    /// Ordinary interactive task map; old sessions retain their existing workflow.
+    #[serde(default)]
+    pub automatic_task_map: bool,
+    #[serde(skip)]
+    pub automatic_task_execution: Option<AutomaticTaskExecution>,
+    #[serde(default)]
+    pub automatic_completion_reported: Option<PlanId>,
     pub plan: Option<PlanArtifact>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_workflow: Option<crate::plan_workflow::PlanWorkflowState>,
@@ -190,6 +213,13 @@ pub struct WorkState {
     #[serde(default)]
     pub agent_graph: crate::agent_graph::AgentGraphState,
     pub historical_notice: Option<String>,
+    /// Model-facing session todos. File TODO comments stay on `read_todos`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub session_todos: Vec<SessionTodo>,
+    #[serde(skip)]
+    pub session_goal: Option<crate::goal::GoalState>,
+    #[serde(skip)]
+    pub session_mode: Option<String>,
     /// Process-only host preview handoff. A model proposal is never persisted
     /// as automation authority or carried into a resumed/branched session.
     #[serde(skip)]
@@ -477,6 +507,13 @@ impl WorkState {
                 bump(plan);
             }
         }
+        if self
+            .automatic_task_execution
+            .as_ref()
+            .is_some_and(|authorization| authorization.ready.is_some())
+        {
+            self.cancel_automatic_task_execution();
+        }
         if invalidates_existing_graph {
             self.invalidate_agent_graph_after_plan_mutation();
         }
@@ -487,6 +524,7 @@ impl WorkState {
     }
 
     pub fn invalidate_verification_after_recovery(&mut self) {
+        self.cancel_automatic_task_execution();
         self.invalidate_agent_graph_after_plan_mutation();
     }
 
@@ -503,7 +541,123 @@ impl WorkState {
         );
     }
 
+    /// The host calls this only for the ordinary Agent submission whose local
+    /// preview was accepted with Send and run. Models cannot set this field.
+    pub fn authorize_automatic_task_execution(&mut self) -> Result<(), String> {
+        let workflow = self.plan_workflow.as_ref().ok_or("No task workflow")?;
+        if !self.automatic_task_map
+            || workflow.status != crate::plan_workflow::WorkflowStatus::Running
+            || workflow.steps.len() != 1
+            || workflow.steps[0].role != crate::plan_workflow::WorkflowRole::Author
+            || workflow.implementation.is_some()
+        {
+            return Err("Automatic execution requires a new ordinary task workflow".into());
+        }
+        let workflow_id = workflow.id;
+        self.automatic_task_execution = Some(AutomaticTaskExecution {
+            workflow_id,
+            author_stage_id: workflow.steps[0].id,
+            ready: None,
+        });
+        self.record_event(
+            WorkEventKind::Command,
+            format!("Send and run authorized automatic execution for task workflow {workflow_id}"),
+            true,
+        );
+        Ok(())
+    }
+
+    pub fn cancel_automatic_task_execution(&mut self) {
+        self.automatic_task_execution = None;
+    }
+
+    pub fn automatic_task_execution_authorized(&self) -> bool {
+        self.automatic_task_map
+            && self
+                .automatic_task_execution
+                .as_ref()
+                .is_some_and(|authorization| {
+                    self.plan_workflow.as_ref().is_some_and(|workflow| {
+                        workflow.id == authorization.workflow_id
+                            && matches!(
+                                workflow.status,
+                                crate::plan_workflow::WorkflowStatus::Running
+                                    | crate::plan_workflow::WorkflowStatus::Completed
+                            )
+                            && workflow.steps.len() == 1
+                            && workflow.steps[0].id == authorization.author_stage_id
+                    })
+                })
+    }
+
+    /// Called only after the completed planning snapshot has been persisted.
+    /// Freeze the exact configured revision that the start transaction may use.
+    pub fn ready_automatic_task_execution(&mut self) -> Option<PlanReview> {
+        if !self.automatic_task_execution_authorized()
+            || !self.plan_workflow.as_ref().is_some_and(|workflow| {
+                workflow.status == crate::plan_workflow::WorkflowStatus::Completed
+                    && workflow.steps[0].status
+                        == crate::plan_workflow::WorkflowStageStatus::Completed
+            })
+        {
+            return None;
+        }
+        let plan = self.plan.as_ref()?;
+        if plan.status != PlanStatus::Proposed
+            || self.agent_graph.plan_id != Some(plan.id)
+            || self.agent_graph.configuration_revision != Some(plan.revision)
+        {
+            return None;
+        }
+        let review = plan.review();
+        let authorization = self.automatic_task_execution.as_mut()?;
+        if authorization.ready.is_some_and(|ready| ready != review) {
+            self.cancel_automatic_task_execution();
+            return None;
+        }
+        authorization.ready = Some(review);
+        Some(review)
+    }
+
+    pub fn automatic_task_execution_matches(&self, review: PlanReview) -> bool {
+        self.automatic_task_execution_authorized()
+            && self
+                .automatic_task_execution
+                .as_ref()
+                .is_some_and(|authorization| authorization.ready == Some(review))
+            && self
+                .plan
+                .as_ref()
+                .is_some_and(|plan| plan.review() == review)
+            && self.plan_workflow.as_ref().is_some_and(|workflow| {
+                workflow.status == crate::plan_workflow::WorkflowStatus::Completed
+            })
+    }
+
+    pub fn approve_automatic_task_execution(
+        &mut self,
+        review: PlanReview,
+    ) -> Result<u64, WorkError> {
+        if !self.automatic_task_execution_matches(review) {
+            return Err(crate::agent_graph::AgentGraphError::InvalidTransition.into());
+        }
+        let revision = self.decide(review.revision, true, "automatic_task_send")?;
+        self.cancel_automatic_task_execution();
+        Ok(revision)
+    }
+
     pub fn user_decide(&mut self, expected_revision: u64, approve: bool) -> Result<u64, WorkError> {
+        let revision = self.decide(expected_revision, approve, "user")?;
+        self.cancel_automatic_task_execution();
+        Ok(revision)
+    }
+
+    fn decide(
+        &mut self,
+        expected_revision: u64,
+        approve: bool,
+        authority: &str,
+    ) -> Result<u64, WorkError> {
         let current = self.revision();
         if expected_revision != current {
             return Err(WorkError::StaleRevision {
@@ -527,7 +681,7 @@ impl WorkState {
             PlanStatus::Rejected
         };
         plan.approved_at = approve.then(Utc::now);
-        plan.approved_by = approve.then(|| "user".to_string());
+        plan.approved_by = approve.then(|| authority.to_string());
         bump(plan);
         let configuration_matches = self.agent_graph.plan_id == Some(plan.id)
             && self.agent_graph.configuration_revision.is_some();
@@ -774,6 +928,7 @@ impl WorkState {
                 finished_at: None,
                 successful_tools: Vec::new(),
                 summary: None,
+                provider_summary: None,
                 terminal_event_sequence: None,
                 verification_receipt: None,
                 workspace_snapshot,
@@ -830,6 +985,7 @@ impl WorkState {
                 finished_at: Some(now),
                 successful_tools: Vec::new(),
                 summary: Some(reason.clone()),
+                provider_summary: None,
                 terminal_event_sequence: None,
                 verification_receipt: None,
                 workspace_snapshot: None,
@@ -911,6 +1067,20 @@ impl WorkState {
         Ok(changed || ledger_changed)
     }
 
+    fn retain_provider_alias(value: &str) -> String {
+        let bounded = crate::agent_graph::bounded_summary(value);
+        if bounded.contains("__CA_PATH_") || bounded.contains("__CA_NAME_") {
+            return bounded;
+        }
+        let Some(line) = value
+            .lines()
+            .find(|line| line.contains("__CA_PATH_") || line.contains("__CA_NAME_"))
+        else {
+            return bounded;
+        };
+        format!("{}\n{bounded}", crate::agent_graph::bounded_summary(line))
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn observe_agent_task(
         &mut self,
@@ -930,6 +1100,7 @@ impl WorkState {
             summary,
             terminal_event_sequence,
             None,
+            None,
             crate::agent_graph::AgentGraphBudgetUsageV1::default(),
             now,
         )
@@ -944,6 +1115,7 @@ impl WorkState {
         successful_tools: Vec<String>,
         summary: Option<&str>,
         terminal_event_sequence: Option<u64>,
+        provider_summary: Option<&str>,
         host_verification: Option<crate::agent_graph::AgentHostVerificationV1>,
         budget_usage: crate::agent_graph::AgentGraphBudgetUsageV1,
         now: DateTime<Utc>,
@@ -971,6 +1143,7 @@ impl WorkState {
                 return Ok(false);
             }
             let next_summary = summary.map(crate::agent_graph::bounded_summary);
+            let next_provider_summary = provider_summary.map(Self::retain_provider_alias);
             let next_terminal_event_sequence = status
                 .terminal()
                 .then_some(terminal_event_sequence)
@@ -978,6 +1151,7 @@ impl WorkState {
             if attempt.status == status
                 && attempt.successful_tools == successful_tools
                 && attempt.summary == next_summary
+                && attempt.provider_summary == next_provider_summary
                 && attempt.terminal_event_sequence == next_terminal_event_sequence
             {
                 return Ok(false);
@@ -985,6 +1159,7 @@ impl WorkState {
             attempt.status = status;
             attempt.successful_tools = successful_tools;
             attempt.summary = next_summary;
+            attempt.provider_summary = next_provider_summary;
             attempt.terminal_event_sequence = next_terminal_event_sequence;
             if host_verification.is_some() {
                 attempt.host_verification = host_verification;
@@ -1091,6 +1266,7 @@ impl WorkState {
     }
 
     pub fn pause_agent_graph_after_restore(&mut self, now: DateTime<Utc>) -> bool {
+        self.cancel_automatic_task_execution();
         let workflow_paused = self
             .plan_workflow
             .as_mut()
@@ -1207,6 +1383,7 @@ impl WorkState {
     pub fn fork_full(&self) -> Self {
         let mut clone = self.clone();
         clone.historical_notice = None;
+        clone.cancel_automatic_task_execution();
         clone.pending_automation_proposal = None;
         clone.pending_plan_workflow = None;
         clone.plan_workflow = self
@@ -1239,6 +1416,9 @@ impl WorkState {
 
     pub fn historical_omission() -> Self {
         Self {
+            automatic_task_map: false,
+            automatic_task_execution: None,
+            automatic_completion_reported: None,
             pending_automation_proposal: None,
             plan_workflow: None,
             pending_plan_workflow: None,
@@ -1249,6 +1429,9 @@ impl WorkState {
             historical_notice: Some(
                 "Work state was omitted because exact historical state is unavailable".into(),
             ),
+            session_todos: Vec::new(),
+            session_goal: None,
+            session_mode: None,
         }
     }
 
@@ -1306,6 +1489,14 @@ impl WorkState {
                         "denied"
                     }
                 ));
+                let explanation = crate::agent_graph::explain_task_verification(
+                    self.agent_graph.verification_binding(),
+                    task,
+                    None,
+                );
+                if let Ok(value) = serde_json::to_string(&explanation) {
+                    lines.push(format!("  Verification: {value}"));
+                }
                 if let Some(failure) = &task.agent_runtime.failure {
                     lines.push(format!("  Agent failure: {failure}"));
                 }
@@ -1744,6 +1935,7 @@ mod tests {
             vec!["read_file".into()],
             Some("proved"),
             Some(17),
+            None,
             Some(host),
             crate::agent_graph::AgentGraphBudgetUsageV1::default(),
             Utc::now(),
@@ -1800,6 +1992,7 @@ mod tests {
             Vec::new(),
             Some("ready for review"),
             Some(18),
+            None,
             Some(host),
             crate::agent_graph::AgentGraphBudgetUsageV1::default(),
             Utc::now(),
@@ -2061,6 +2254,7 @@ mod tests {
             vec!["read_file".into()],
             Some("done"),
             Some(21),
+            None,
             Some(host),
             crate::agent_graph::AgentGraphBudgetUsageV1::default(),
             Utc::now(),
@@ -2186,6 +2380,7 @@ mod tests {
             vec!["read_file".into()],
             Some("done"),
             Some(23),
+            None,
             Some(host),
             crate::agent_graph::AgentGraphBudgetUsageV1::default(),
             Utc::now(),
@@ -2319,6 +2514,7 @@ mod tests {
             vec!["read_file".into()],
             Some("done"),
             Some(22),
+            None,
             Some(host),
             crate::agent_graph::AgentGraphBudgetUsageV1::default(),
             Utc::now(),

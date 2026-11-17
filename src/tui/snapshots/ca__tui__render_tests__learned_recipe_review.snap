@@ -2,7 +2,6 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
 
 
@@ -10,50 +9,51 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
 
 
 
-              ┌ Learned Rust Recipe ─────────────────────────────────────────────────┐
-              │Review learned Rust recipe cargo-check                                │
-              │Global approval automatically activates exact local matches.          │
-              │                                                                      │
-              │  (•) 1. Approve globally                                             │
-              │      Publish this exact digest after isolated validation.            │
-              │  ( ) 2. Reject                                                       │
-              │  ( ) 3. Later                                                        │
-              │                                                                      │
-              │↑/↓ or 1-9 choose · Enter submit · Esc cancel                         │
-              │                                                                      │
-              │                                                                      │
-              └──────────────────────────────────────────────────────────────────────┘
 
 
 
 
 
+
+
+
+
+
+┌ Learned Rust Recipe ─────────────────────────────────────────────────────────────────────────────┐
+│Review learned Rust recipe cargo-check                                                            │
+│Global approval automatically activates exact local matches.                                      │
+│                                                                                                  │
+│  (•) 1. Approve globally                                                                         │
+│      Publish this exact digest after isolated validation.                                        │
+│  ( ) 2. Reject                                                                                   │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                                                                   │
-╰───────────────────────────────────────────────────────────────────────────────────── plan · auto ╯
-/ commands
+│› Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto
+Tab choice · Enter submit · Esc park
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
 
 
 
 
-  ┌ Learned Rust Recipe ─────────────────────────────────┐
-  │Review learned Rust recipe cargo-check                │
-  │Global approval automatically activates exact local   │
-  │matches.                                              │
-  │                                                      │
-  │  (•) 1. Approve globally                             │
-  │      Publish this exact digest after isolated        │
-  │validation.                                           │
-  │  ( ) 2. Reject                                       │
-  │  ( ) 3. Later                                        │
-  │                                                      │
-  │↑/↓ or 1-9 choose · Enter submit · Esc cancel         │
-  └──────────────────────────────────────────────────────┘
 
 
+
+
+
+
+
+┌ Learned Rust Recipe ─────────────────────────────────────┐
+│Review learned Rust recipe cargo-check                    │
+│Global approval automatically activates exact local       │
+│matches.                                                  │
+│                                                          │
+│  (•) 1. Approve globally                                 │
+│      Publish this exact digest after isolated validation.│
+└──────────────────────────────────────────────────────────┘
 ╭──────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                           │
-╰───────────────────────────────────────────── plan · auto ╯
-/ commands
+│› Ask anything…                                           │
+╰──────────────────────────────────────────────────────────╯
+ca · model auto
+Tab choice · Enter submit · Esc park

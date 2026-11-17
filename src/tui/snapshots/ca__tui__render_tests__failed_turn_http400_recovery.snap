@@ -2,7 +2,6 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(wide, narrow)"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
  › Inspect the provider stream
 
@@ -27,13 +26,13 @@ expression: "wide_narrow(wide, narrow)"
 
 
 
-
+│ Request rejected (400) by test. Resend for a clean branch.
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                                                                   │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
-Request rejected (400) by test. Resend for a clean branch.
+│› Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto · 1 messages
+/ commands · Ctrl+\ dashboard · ↑ history
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
 
  › Inspect the provider stream
 
@@ -51,9 +50,10 @@ Request rejected (400) by test. Resend for a clean branch.
 
 
 
-
-
+│ Request rejected (400) by test. Resend for a clean
+│ branch.
 ╭──────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                           │
-╰──────────────────────────────────────────── agent · auto ╯
-Request rejected (400) by test. Resend for a clean branch.
+│› Ask anything…                                           │
+╰──────────────────────────────────────────────────────────╯
+ca · model auto · 1 messages
+/ commands · Ctrl+\ dashboard · ↑ history

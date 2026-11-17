@@ -1,6 +1,14 @@
+Do not start this plan unless the task names it. The continuation is [AGT-271](AGT-271-task-first-economic-delegation.md).
+
 # SEC-158 — Privilege Supervisor and Authenticated Service V2
 
-Status: ACTIVE
+Authentication lifecycle superseded by BUG-292 (2026-10-15): the user explicitly
+selected normal sudo timestamp reuse. Historical forced `sudo -k` and fresh
+password statements below describe the earlier implementation, not current
+policy. Exact command approval, masked secret transport, redaction and owned
+process cleanup remain applicable. See the BUG-292 plan and current source.
+
+Status: HELD
 Owner/session: current Codex session
 Last updated: 2026-08-23
 

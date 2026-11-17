@@ -2,7 +2,6 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&persisted, 100, 30),\nrender_to_text(&persisted, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
  › Continue even if the primary is temporarily unavailable
 
@@ -29,11 +28,11 @@ The request completed through the configured backup.
 
 
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                                                                   │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
-2 messages · / commands
+│› Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto · 2 messages
+/ commands · Ctrl+\ dashboard · ↑ history
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
 
  › Continue even if the primary is temporarily unavailable
 
@@ -54,6 +53,7 @@ The request completed through the configured backup.
 
 
 ╭──────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                           │
-╰──────────────────────────────────────────── agent · auto ╯
-2 messages · / commands
+│› Ask anything…                                           │
+╰──────────────────────────────────────────────────────────╯
+ca · model auto · 2 messages
+/ commands · Ctrl+\ dashboard · ↑ history

@@ -16,6 +16,8 @@ fn profile() -> Result<String> {
         read_only_roots: vec!["/opt/homebrew".into()],
         temporary_directory: format!("{PRIVATE}/tmp").into(),
         network_allowed: false,
+        host_credentials: true,
+        proxy_port: None,
         hide_other_processes: true,
     })?;
     // The worker is a file in the guest, regardless of host path metadata.

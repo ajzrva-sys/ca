@@ -2,7 +2,6 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
 
 
@@ -12,48 +11,49 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
 
 
 
-              ┌ Input required ──────────────────────────────────────────────────────┐
-              │What should the branch be called?                                     │
-              │                                                                      │
-              │  Answer:                                                             │
-              │  codex/interaction                                                   │
-              │                                                                      │
-              │Enter submit · Esc cancel                                             │
-              │                                                                      │
-              │                                                                      │
-              └──────────────────────────────────────────────────────────────────────┘
 
 
 
 
 
 
+
+
+┌ Input required ──────────────────────────────────────────────────────────────────────────────────┐
+│What should the branch be called?                                                                 │
+│                                                                                                  │
+│  Answer:                                                                                         │
+│  codex/interaction                                                                               │
+│                                                                                                  │
+│Enter submit · Esc cancel                                                                         │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                                                                   │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
-/ commands
+│› Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto
+Enter submit · Esc cancel
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
 
 
 
 
 
 
-  ┌ Input required ──────────────────────────────────────┐
-  │What should the branch be called?                     │
-  │                                                      │
-  │  Answer:                                             │
-  │  codex/interaction                                   │
-  │                                                      │
-  │Enter submit · Esc cancel                             │
-  │                                                      │
-  │                                                      │
-  └──────────────────────────────────────────────────────┘
 
 
 
+
+
+┌ Input required ──────────────────────────────────────────┐
+│What should the branch be called?                         │
+│                                                          │
+│  Answer:                                                 │
+│  codex/interaction                                       │
+│                                                          │
+│Enter submit · Esc cancel                                 │
+└──────────────────────────────────────────────────────────┘
 ╭──────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                           │
-╰──────────────────────────────────────────── agent · auto ╯
-/ commands
+│› Ask anything…                                           │
+╰──────────────────────────────────────────────────────────╯
+ca · model auto
+Enter submit · Esc cancel

@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&parts, 100, 30), render_to_text(&parts, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
 
 
 
@@ -27,13 +27,13 @@ expression: "wide_narrow(render_to_text(&parts, 100, 30), render_to_text(&parts,
       │Enter copy exact stored bytes · Esc back · ↑↓ navigate · type to filter               │
       │                                                                                      │
       └──────────────────────────────────────────────────────────────────────────────────────┘
-
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                                                                   │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
-/ commands
+│› Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto
+/ commands · Ctrl+\ dashboard · ↑ history
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
 
  ┌ Copy message part ─────────────────────────────────────┐
  │Search:                                                 │
@@ -52,8 +52,8 @@ expression: "wide_narrow(render_to_text(&parts, 100, 30), render_to_text(&parts,
  │                                                        │
  │                                                        │
  │                                                        │
- │Enter copy exact stored bytes · Esc back · ↑↓ navigate ·│
-╭│                                                        │╮
-│└────────────────────────────────────────────────────────┘│
-╰──────────────────────────────────────────── agent · auto ╯
-/ commands
+╭│Enter copy exact stored bytes · Esc back · ↑↓ navigate ·│╮
+││                                                        ││
+╰└────────────────────────────────────────────────────────┘╯
+ca · model auto
+/ commands · Ctrl+\ dashboard · ↑ history

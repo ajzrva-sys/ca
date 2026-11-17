@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
 
 
 
@@ -26,14 +26,14 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
                │Enter select · Esc close · ↑↓ move · PgUp/PgDn page                 │
                │Home/End jump · ⇧A model · ⇧P provider                              │
                │⇧F favorite · ⇧E edit model/key · ⇧R refresh                        │
-               └────────────────────────────────────────────────────────────────────┘
-
+│ 8 models · 0 └────────────────────────────────────────────────────────────────────┘
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                                                                   │
-╰───────────────────────────────────────────────────────────────────────────── agent · gpt-5.6-sol ╯
-8 models · 0 live · 1 cached
+│› Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model gpt-5.6-sol
+/ commands · Ctrl+\ dashboard · ↑ history
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
 
   ┌──────────────────────────────────────────────────────┐
   │ Switch model                                         │
@@ -51,9 +51,9 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
   │    [openai-codex]                                    │
   │                                                      │
   │Enter select · Esc close · ↑↓ move · PgUp/PgDn page   │
-  │Home/End jump · ⇧A model · ⇧P provider                │
-  │⇧F favorite · ⇧E edit model/key · ⇧R refresh          │
-╭─│                                                      │─╮
-│›└──────────────────────────────────────────────────────┘ │
-╰───────────────────────────────────── agent · gpt-5.6-sol ╯
-8 models · 0 live · 1 cached
+│ │Home/End jump · ⇧A model · ⇧P provider                │
+╭─│⇧F favorite · ⇧E edit model/key · ⇧R refresh          │─╮
+│›│                                                      │ │
+╰─└──────────────────────────────────────────────────────┘─╯
+ca · model gpt-5.6-sol
+/ commands · Ctrl+\ dashboard · ↑ history

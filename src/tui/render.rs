@@ -25,8 +25,8 @@ pub(super) struct ThemePalette {
     pub(super) border: Color,
     pub(super) muted: Color,
     strong: Color,
-    warning: Color,
-    error: Color,
+    pub(super) warning: Color,
+    pub(super) error: Color,
     success: Color,
     // Diff colors
     diff_insert_fg: Color,
@@ -58,6 +58,15 @@ pub(super) struct ThemePalette {
     // Borders
     selection_border: Color,
     hover_border: Color,
+    // Approval affordances
+    approval_pending: Color,
+    approval_accept: Color,
+    approval_deny: Color,
+    // Filter banner
+    banner_fg: Color,
+    banner_bg: Color,
+    // Tool / activity frames
+    tool_frame: Color,
 }
 
 fn active_theme(state: &AppState) -> crate::ui_settings::UiTheme {
@@ -68,7 +77,65 @@ fn active_theme(state: &AppState) -> crate::ui_settings::UiTheme {
         .unwrap_or(state.ui_theme)
 }
 
+pub(super) fn standalone_palette() -> ThemePalette {
+    mono_palette()
+}
+
+fn mono_palette() -> ThemePalette {
+    ThemePalette {
+        accent: Color::White,
+        heading: Color::White,
+        heading_text: Color::White,
+        link: Color::White,
+        plan: Color::White,
+        text: Color::White,
+        accent_foreground: Color::Black,
+        title_hint_background: Color::DarkGray,
+        surface: Color::Black,
+        code_background: Color::DarkGray,
+        border: Color::Gray,
+        muted: Color::Gray,
+        strong: Color::White,
+        warning: Color::White,
+        error: Color::LightRed,
+        success: Color::White,
+        diff_insert_fg: Color::White,
+        diff_insert_bg: Color::DarkGray,
+        diff_delete_fg: Color::LightRed,
+        diff_delete_bg: Color::Rgb(40, 0, 0),
+        diff_hunk_fg: Color::Gray,
+        diff_file_header_fg: Color::White,
+        paste_fg: Color::White,
+        paste_bg: Color::DarkGray,
+        md_h1: Color::White,
+        md_h2: Color::White,
+        md_h3: Color::White,
+        md_h4: Color::Gray,
+        md_h5: Color::Gray,
+        md_h6: Color::Gray,
+        state_needs_input: Color::White,
+        state_completed: Color::White,
+        state_failed: Color::LightRed,
+        state_blocked: Color::White,
+        state_idle: Color::Gray,
+        state_working: Color::White,
+        scrollbar_fg: Color::Gray,
+        scrollbar_bg: Color::Black,
+        selection_border: Color::White,
+        hover_border: Color::Gray,
+        approval_pending: Color::White,
+        approval_accept: Color::White,
+        approval_deny: Color::LightRed,
+        banner_fg: Color::Black,
+        banner_bg: Color::White,
+        tool_frame: Color::Gray,
+    }
+}
+
 pub(super) fn palette(state: &AppState) -> ThemePalette {
+    if std::env::var_os("NO_COLOR").is_some() {
+        return mono_palette();
+    }
     if state.theme_manager.is_none()
         && state.terminal_theme_auto
         && state.terminal_appearance == Some(crate::terminal_awareness::TerminalAppearance::Light)
@@ -114,6 +181,12 @@ pub(super) fn palette(state: &AppState) -> ThemePalette {
             scrollbar_bg: Color::Reset,
             selection_border: Color::Blue,
             hover_border: Color::Rgb(100, 150, 200),
+            approval_pending: Color::Rgb(160, 96, 0),
+            approval_accept: Color::Green,
+            approval_deny: Color::Red,
+            banner_fg: FILTER_BANNER_FG,
+            banner_bg: FILTER_BANNER_BG,
+            tool_frame: Color::DarkGray,
         };
     }
     match active_theme(state) {
@@ -158,6 +231,12 @@ pub(super) fn palette(state: &AppState) -> ThemePalette {
             scrollbar_bg: Color::Rgb(17, 17, 17),
             selection_border: Color::Rgb(189, 147, 249),
             hover_border: Color::Rgb(139, 139, 139),
+            approval_pending: Color::Rgb(229, 190, 111),
+            approval_accept: Color::Rgb(151, 190, 122),
+            approval_deny: Color::Rgb(240, 126, 126),
+            banner_fg: FILTER_BANNER_FG,
+            banner_bg: FILTER_BANNER_BG,
+            tool_frame: Color::Rgb(83, 83, 89),
         },
         crate::ui_settings::UiTheme::Ocean => ThemePalette {
             accent: Color::Rgb(82, 165, 255),
@@ -200,6 +279,12 @@ pub(super) fn palette(state: &AppState) -> ThemePalette {
             scrollbar_bg: Color::Rgb(18, 34, 48),
             selection_border: Color::Rgb(82, 165, 255),
             hover_border: Color::Rgb(100, 150, 200),
+            approval_pending: Color::Rgb(229, 190, 111),
+            approval_accept: Color::Rgb(144, 221, 181),
+            approval_deny: Color::Rgb(240, 126, 126),
+            banner_fg: Color::Black,
+            banner_bg: Color::Rgb(82, 165, 255),
+            tool_frame: Color::Rgb(83, 83, 89),
         },
         crate::ui_settings::UiTheme::Amber => ThemePalette {
             accent: Color::Rgb(255, 184, 77),
@@ -242,6 +327,12 @@ pub(super) fn palette(state: &AppState) -> ThemePalette {
             scrollbar_bg: Color::Rgb(38, 31, 20),
             selection_border: Color::Rgb(255, 184, 77),
             hover_border: Color::Rgb(200, 150, 80),
+            approval_pending: Color::Rgb(229, 190, 111),
+            approval_accept: Color::Rgb(151, 190, 122),
+            approval_deny: Color::Rgb(240, 126, 126),
+            banner_fg: Color::Black,
+            banner_bg: Color::Rgb(200, 150, 80),
+            tool_frame: Color::Rgb(83, 83, 89),
         },
         crate::ui_settings::UiTheme::Mimocode => ThemePalette {
             accent: Color::Rgb(255, 106, 0),
@@ -284,6 +375,12 @@ pub(super) fn palette(state: &AppState) -> ThemePalette {
             scrollbar_bg: Color::Rgb(30, 30, 30),
             selection_border: Color::Rgb(255, 106, 0),
             hover_border: Color::Rgb(180, 120, 60),
+            approval_pending: Color::Rgb(229, 190, 111),
+            approval_accept: Color::Rgb(151, 190, 122),
+            approval_deny: Color::Rgb(240, 126, 126),
+            banner_fg: Color::Black,
+            banner_bg: Color::Rgb(189, 147, 249),
+            tool_frame: Color::Rgb(83, 83, 89),
         },
         crate::ui_settings::UiTheme::Mono => ThemePalette {
             accent: Color::White,
@@ -326,6 +423,12 @@ pub(super) fn palette(state: &AppState) -> ThemePalette {
             scrollbar_bg: Color::Black,
             selection_border: Color::White,
             hover_border: Color::Gray,
+            approval_pending: Color::White,
+            approval_accept: Color::White,
+            approval_deny: Color::LightRed,
+            banner_fg: Color::Black,
+            banner_bg: Color::White,
+            tool_frame: Color::Gray,
         },
         crate::ui_settings::UiTheme::RosePine => ThemePalette {
             accent: Color::Rgb(196, 167, 231),
@@ -368,7 +471,70 @@ pub(super) fn palette(state: &AppState) -> ThemePalette {
             scrollbar_bg: Color::Rgb(34, 33, 48),
             selection_border: Color::Rgb(196, 167, 231),
             hover_border: Color::Rgb(140, 120, 180),
+            approval_pending: Color::Rgb(229, 190, 111),
+            approval_accept: Color::Rgb(151, 190, 122),
+            approval_deny: Color::Rgb(240, 126, 126),
+            banner_fg: Color::Black,
+            banner_bg: Color::Rgb(140, 120, 180),
+            tool_frame: Color::Rgb(83, 83, 89),
         },
+        crate::ui_settings::UiTheme::Terminal => ThemePalette {
+            accent: Color::Cyan,
+            heading: Color::Cyan,
+            heading_text: Color::Reset,
+            link: Color::Blue,
+            plan: Color::Green,
+            text: Color::Reset,
+            accent_foreground: Color::Black,
+            title_hint_background: Color::Reset,
+            surface: Color::Reset,
+            code_background: Color::Reset,
+            border: Color::Reset,
+            muted: Color::DarkGray,
+            strong: Color::Reset,
+            warning: Color::Yellow,
+            error: Color::Red,
+            success: Color::Green,
+            diff_insert_fg: Color::Green,
+            diff_insert_bg: Color::Rgb(24, 49, 24),
+            diff_delete_fg: Color::Red,
+            diff_delete_bg: Color::Rgb(61, 27, 27),
+            diff_hunk_fg: Color::Cyan,
+            diff_file_header_fg: Color::Reset,
+            paste_fg: Color::Reset,
+            paste_bg: Color::DarkGray,
+            md_h1: Color::Cyan,
+            md_h2: Color::Blue,
+            md_h3: Color::Magenta,
+            md_h4: Color::Magenta,
+            md_h5: Color::DarkGray,
+            md_h6: Color::DarkGray,
+            state_needs_input: Color::Yellow,
+            state_completed: Color::Green,
+            state_failed: Color::Red,
+            state_blocked: Color::Yellow,
+            state_idle: Color::DarkGray,
+            state_working: Color::Cyan,
+            scrollbar_fg: Color::DarkGray,
+            scrollbar_bg: Color::Reset,
+            selection_border: Color::Cyan,
+            hover_border: Color::Blue,
+            approval_pending: Color::Yellow,
+            approval_accept: Color::Green,
+            approval_deny: Color::Red,
+            banner_fg: Color::Black,
+            banner_bg: Color::Cyan,
+            tool_frame: Color::DarkGray,
+        },
+    }
+}
+
+fn painted(fg: Color, bg: Color) -> Style {
+    let style = Style::default().fg(fg);
+    if bg == Color::Reset {
+        style
+    } else {
+        style.bg(bg)
     }
 }
 
@@ -404,7 +570,6 @@ pub fn theme_accent_rgb(state: &AppState) -> (u8, u8, u8) {
     }
 }
 
-pub(crate) const FILTER_BANNER_LABEL: &str = "FILTER ON";
 pub(crate) const PROVIDER_PANE_LABEL: &str = "TO PROVIDER";
 /// Cyan from the confidential classification bar, with black text.
 pub(crate) const FILTER_BANNER_BG: Color = Color::Rgb(92, 227, 254);
@@ -419,18 +584,19 @@ pub(super) fn render_with_version_label(
     state: &AppState,
     version_label: &str,
 ) {
-    let (banner, summary, below) = split_filter_banner(frame.area(), state);
-    if banner.is_some() && summary.is_none() {
-        paint_filter_status_line(frame, below, state);
-        paint_filter_banner(frame, banner);
+    let presentation = filter_presentation(state);
+    let (status, below) = split_filter_status(frame.area(), state, &presentation);
+    if status.is_some() && below.height < 2 {
+        state.provider_pane.clear_viewport();
+        paint_filter_status(frame, status, state, &presentation);
         return;
     }
     let (area, provider) = split_provider_pane(below, state);
+    state.provider_pane.set_frame_open(provider.is_some());
     let Some(deck) = state.pane_deck.as_ref().filter(|deck| !deck.is_single()) else {
         render_pane(frame, area, state, true, version_label);
         paint_provider_pane(frame, provider, state);
-        paint_filter_summary(frame, summary, state);
-        paint_filter_banner(frame, banner);
+        paint_filter_status(frame, status, state, &presentation);
         return;
     };
 
@@ -472,92 +638,158 @@ pub(super) fn render_with_version_label(
         render_pane(frame, inner, pane, focused, version_label);
     }
     paint_provider_pane(frame, provider, state);
-    paint_filter_summary(frame, summary, state);
-    paint_filter_banner(frame, banner);
+    paint_filter_status(frame, status, state, &presentation);
 }
 
-fn split_filter_banner(area: Rect, state: &AppState) -> (Option<Rect>, Option<Rect>, Rect) {
-    if !state
-        .filter_banner
-        .load(std::sync::atomic::Ordering::Relaxed)
-        || area.height == 0
-        || area.width == 0
-    {
-        return (None, None, area);
+fn split_filter_status(
+    area: Rect,
+    state: &AppState,
+    presentation: &crate::provider_filter::FilterPresentation,
+) -> (Option<Rect>, Rect) {
+    let show = presentation.status != crate::provider_filter::FilterStatus::Off
+        || review_status_line(state).is_some();
+    if !show || area.height == 0 || area.width == 0 {
+        return (None, area);
     }
-    let rows = if area.height >= 3 { 2 } else { 1 };
-    let banner = Some(Rect {
-        x: area.x,
-        y: area.y,
-        width: area.width,
-        height: 1,
-    });
-    let summary = if rows == 2 {
-        Some(Rect {
-            x: area.x,
+    (
+        Some(Rect { height: 1, ..area }),
+        Rect {
             y: area.y.saturating_add(1),
-            width: area.width,
-            height: 1,
-        })
+            height: area.height.saturating_sub(1),
+            ..area
+        },
+    )
+}
+
+fn paint_filter_status(
+    frame: &mut ratatui::Frame,
+    row: Option<Rect>,
+    state: &AppState,
+    presentation: &crate::provider_filter::FilterPresentation,
+) {
+    use crate::provider_filter::FilterStatus;
+    let Some(row) = row else { return };
+    let theme = palette(state);
+    if presentation.status == crate::provider_filter::FilterStatus::Off {
+        if let Some(text) = review_status_line(state) {
+            let color = if text.starts_with("Filter off") {
+                theme.muted
+            } else {
+                theme.warning
+            };
+            let text = crate::tui::selection::truncate_cells(&text, usize::from(row.width));
+            frame.render_widget(
+                Paragraph::new(text).style(painted(color, theme.surface)),
+                row,
+            );
+        }
+        return;
+    }
+    if presentation.status == crate::provider_filter::FilterStatus::Active {
+        if let Some(context) = state
+            .request_store
+            .privacy_context()
+            .filter(|context| context.enabled())
+        {
+            let label = if review_gate_shown(state) {
+                "Filter on"
+            } else {
+                "Filter off"
+            };
+            let text = format!("{label} · {}", context.summary());
+            let text = crate::tui::selection::truncate_cells(&text, usize::from(row.width));
+            frame.render_widget(
+                Paragraph::new(text).style(painted(theme.muted, theme.surface)),
+                row,
+            );
+            return;
+        }
+    }
+    let (label, detail, color) = match presentation.status {
+        FilterStatus::Off => return,
+        FilterStatus::Empty => ("Filter on", "Nothing armed", theme.warning),
+        FilterStatus::Active => ("Filter active", presentation.detail.as_str(), theme.muted),
+        FilterStatus::Stopped => ("Filter stopped", presentation.detail.as_str(), theme.error),
+    };
+    let text = if detail.is_empty() {
+        label.to_string()
     } else {
-        None
+        format!("{label} · {detail}")
     };
-    let rest = Rect {
-        x: area.x,
-        y: area.y.saturating_add(rows),
-        width: area.width,
-        height: area.height.saturating_sub(rows),
-    };
-    (banner, summary, rest)
+    let text = crate::tui::selection::truncate_cells(&text, usize::from(row.width));
+    frame.render_widget(
+        Paragraph::new(text).style(painted(color, theme.surface)),
+        row,
+    );
 }
 
-fn paint_filter_banner(frame: &mut ratatui::Frame, banner: Option<Rect>) {
-    let Some(area) = banner else {
-        return;
-    };
-    paint_classified_row(frame, area, FILTER_BANNER_LABEL);
+fn review_gate_shown(state: &AppState) -> bool {
+    state.task_filter_preview_enabled
+        && !state
+            .current_model
+            .as_ref()
+            .is_some_and(|model| crate::chatgpt_plan_auth::skips_provider_filter(&model.provider))
 }
 
-fn paint_filter_summary(frame: &mut ratatui::Frame, summary: Option<Rect>, state: &AppState) {
-    let Some(area) = summary else {
-        return;
-    };
-    paint_left_row(frame, area, &filter_summary_text(state), classified_style());
-}
-
-fn paint_filter_status_line(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
-    let style = Style::default().fg(palette(state).warning);
-    paint_left_row(frame, area, &filter_summary_text(state), style);
-}
-
-fn paint_left_row(frame: &mut ratatui::Frame, area: Rect, text: &str, style: Style) {
-    if area.width == 0 || area.height == 0 {
-        return;
+/// Status text while the legacy process filter is off.
+/// Project privacy still rewrites the Active row in `paint_filter_status`.
+fn review_status_line(state: &AppState) -> Option<String> {
+    let privacy = state.request_store.privacy_context();
+    if privacy.as_ref().is_some_and(|context| context.enabled()) {
+        return None;
     }
-    let width = area.width as usize;
-    let mut line: String = text.chars().take(width).collect();
-    if line.len() < width {
-        line.push_str(&" ".repeat(width - line.len()));
+    if privacy
+        .as_ref()
+        .is_some_and(|context| context.filenames_enabled())
+    {
+        let label = if review_gate_shown(state) {
+            "Filter on"
+        } else {
+            "Filter off"
+        };
+        return Some(format!("{label} · Filename masking"));
     }
-    frame.buffer_mut().set_string(area.x, area.y, line, style);
+    review_gate_shown(state).then(|| "Filter on · review before send · /filter off".to_string())
+}
+
+fn filter_presentation(state: &AppState) -> crate::provider_filter::FilterPresentation {
+    if state
+        .current_model
+        .as_ref()
+        .is_some_and(|model| crate::chatgpt_plan_auth::skips_provider_filter(&model.provider))
+    {
+        return crate::provider_filter::FilterPresentation::default();
+    }
+    let mut presentation = state
+        .filter_presentation
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .clone();
+    if presentation.status != crate::provider_filter::FilterStatus::Stopped {
+        if let Some(context) = state
+            .request_store
+            .privacy_context()
+            .filter(|context| context.enabled())
+        {
+            presentation.status = crate::provider_filter::FilterStatus::Active;
+            presentation.detail = context.summary();
+        }
+    }
+    presentation
 }
 
 fn filter_summary_text(state: &AppState) -> String {
-    state
-        .filter_summary
-        .lock()
-        .map(|guard| guard.clone())
-        .unwrap_or_default()
+    filter_presentation(state).detail
 }
 
-fn classified_style() -> Style {
+fn classified_style(theme: &ThemePalette) -> Style {
     Style::default()
-        .fg(FILTER_BANNER_FG)
-        .bg(FILTER_BANNER_BG)
+        .fg(theme.banner_fg)
+        .bg(theme.banner_bg)
         .add_modifier(Modifier::BOLD)
 }
 
-fn paint_classified_row(frame: &mut ratatui::Frame, area: Rect, label: &str) {
+fn paint_classified_row(frame: &mut ratatui::Frame, area: Rect, label: &str, theme: &ThemePalette) {
     if area.width == 0 || area.height == 0 {
         return;
     }
@@ -565,7 +797,7 @@ fn paint_classified_row(frame: &mut ratatui::Frame, area: Rect, label: &str) {
         area.x,
         area.y,
         classified_banner_text(label, area.width as usize),
-        classified_style(),
+        classified_style(theme),
     );
 }
 
@@ -605,10 +837,11 @@ fn split_provider_pane(area: Rect, state: &AppState) -> (Rect, Option<Rect>) {
 }
 
 fn provider_pane_width(area: Rect, state: &AppState) -> u16 {
+    if !state.provider_pane.visible.get() || state.privacy_editor.is_some() {
+        return 0;
+    }
     let summary_empty = filter_summary_text(state).is_empty();
-    if !state
-        .filter_banner
-        .load(std::sync::atomic::Ordering::Relaxed)
+    if filter_presentation(state).status == crate::provider_filter::FilterStatus::Off
         || (state.provider_pane.is_empty() && summary_empty)
         || area.width < 80
         || area.height < 8
@@ -632,7 +865,7 @@ fn paint_provider_pane(frame: &mut ratatui::Frame, pane: Option<Rect>, state: &A
         state.provider_pane.clear_viewport();
         return;
     }
-    let style = classified_style();
+    let style = classified_style(&palette(state));
     let top = Rect {
         x: pane.x,
         y: pane.y,
@@ -645,8 +878,20 @@ fn paint_provider_pane(frame: &mut ratatui::Frame, pane: Option<Rect>, state: &A
         width: pane.width,
         height: 1,
     };
-    paint_classified_row(frame, top, PROVIDER_PANE_LABEL);
-    paint_classified_row(frame, bottom, PROVIDER_PANE_LABEL);
+    let theme = palette(state);
+    paint_classified_row(frame, top, PROVIDER_PANE_LABEL, &theme);
+    let generation = state.provider_pane.generation();
+    let status = if generation == 0 {
+        "Waiting for request".to_string()
+    } else {
+        let working = if state.streaming.is_some() {
+            " · working"
+        } else {
+            ""
+        };
+        format!("Latest request {generation}{working}")
+    };
+    paint_classified_row(frame, bottom, &status, &theme);
     let content = Rect {
         x: pane.x.saturating_add(1),
         y: pane.y.saturating_add(1),
@@ -687,13 +932,62 @@ fn render_pane(
     focused: bool,
     version_label: &str,
 ) {
+    state.composer_ui.queue_action_hits.borrow_mut().clear();
+    if let Some(editor) = state.privacy_editor.as_ref() {
+        editor.set_review_gate(state.task_filter_preview_enabled);
+        let request = state.provider_pane.text();
+        let exact = state
+            .request_store
+            .privacy_context()
+            .and_then(|context| context.outbound_snapshot());
+        let preview = if let Some(exact) = &exact {
+            crate::tui::privacy::RequestView {
+                generation: exact.generation,
+                original: Some(&exact.original),
+                sent: &exact.sent,
+                changes: Some(&exact.changes),
+                latest: &exact.latest,
+                sources: &exact.sources,
+                opaque_blocks: exact.opaque_blocks,
+                complete: true,
+                working: state.streaming.is_some(),
+            }
+        } else {
+            crate::tui::privacy::RequestView {
+                generation: state.provider_pane.generation(),
+                original: None,
+                sent: &request,
+                changes: None,
+                latest: "",
+                sources: &[],
+                opaque_blocks: 0,
+                complete: false,
+                working: state.streaming.is_some(),
+            }
+        };
+        crate::tui::privacy::render_with_version_label(
+            frame,
+            area,
+            editor,
+            version_label,
+            palette(state),
+            preview,
+        );
+        return;
+    }
     if let Some(editor) = state.personality_editor.as_ref() {
-        crate::tui::personality::render_with_version_label(frame, area, editor, version_label);
+        crate::tui::personality::render_with_version_label(
+            frame,
+            area,
+            editor,
+            version_label,
+            palette(state),
+        );
         return;
     }
     let theme = palette(state);
     frame.render_widget(
-        Block::default().style(Style::default().fg(theme.text).bg(theme.surface)),
+        Block::default().style(painted(theme.text, theme.surface)),
         area,
     );
     if state.dashboard.open {
@@ -725,44 +1019,63 @@ fn render_pane(
                 .top,
         ) as u16;
     let queue_rows = state.input_queue.len().min(3) as u16 + u16::from(state.input_queue.len() > 3);
-    let attachment_rows = u16::from(!state.pasted_images.is_empty() || state.image_attachment_busy);
+    let attachment_rows = u16::from(state.image_chip_preview().is_some());
     let paste_preview_rows = u16::from(
         state
             .composer_ui
             .active_large_paste_index(state.input_cursor)
             .is_some(),
     ) * (crate::tui::composer::PASTE_PREVIEW_ROWS as u16 + 1);
-    let input_height = state
+    let mut input_height = state
         .input_height
         .max(2 + composer_rows + queue_rows + attachment_rows + paste_preview_rows);
     let compact = state.ui_compact_mode;
-    let title_rows: u16 = 1;
-    let status_rows: u16 = if compact { 0 } else { 1 };
+    let key_rows: u16 = 1;
+    let mut identity_rows: u16 = u16::from(!compact);
+    let mut card_rows = pin_card_height(state, area.width);
+    let chrome = |input, identity, card| input + key_rows + identity + card + 1;
+    if area.height < chrome(input_height, identity_rows, card_rows) {
+        identity_rows = 0;
+    }
+    if area.height < chrome(input_height, identity_rows, card_rows) {
+        let overflow = chrome(input_height, identity_rows, card_rows) - area.height;
+        card_rows = card_rows.saturating_sub(overflow);
+    }
+    if area.height < chrome(input_height, identity_rows, card_rows) {
+        input_height = area
+            .height
+            .saturating_sub(key_rows + identity_rows + card_rows + 1);
+    }
+    let notice_rows = status_notice_rows(state, area.width);
     let activity_rows = background_activity_rows(
         state,
         area.height
-            .saturating_sub(title_rows + input_height + status_rows + 1),
+            .saturating_sub(input_height + key_rows + identity_rows + card_rows + notice_rows + 1),
     );
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(title_rows),    // title bar
             Constraint::Min(1),                // conversation
+            Constraint::Length(notice_rows),   // status notice, above the composer
             Constraint::Length(activity_rows), // activity strip
+            Constraint::Length(card_rows),     // pinned question or approval
             Constraint::Length(input_height),  // input box (dynamic)
-            Constraint::Length(status_rows),   // status bar
+            Constraint::Length(identity_rows), // session identity
+            Constraint::Length(key_rows),      // keys for the current focus
         ])
         .split(area);
 
-    render_title(frame, chunks[0], state, version_label);
-    let transcript_top = render_conversation(frame, chunks[1], state, focused);
+    let transcript_top = render_conversation(frame, chunks[0], state, focused);
+    render_toast(frame, chunks[1], state);
     render_background_activity(frame, chunks[2], state);
-    render_input(frame, chunks[3], state, focused);
-    render_status(frame, chunks[4], state);
+    render_pin_card(frame, chunks[3], state);
+    render_input(frame, chunks[4], state, focused);
+    render_identity(frame, chunks[5], state);
+    render_key_row(frame, chunks[6], state);
     state.transcript_scroll.capture_selectable_frame_at(
         frame.buffer_mut(),
-        chunks[1],
+        chunks[0],
         u32::from(transcript_top),
     );
     state.transcript_scroll.render_selection(frame.buffer_mut());
@@ -923,17 +1236,14 @@ fn render_pane(
     if state.setup_import_confirmation.is_some() {
         render_setup_import_confirmation(frame, area, state);
     }
-    if state.interaction.is_some() {
-        render_interaction(frame, area, state);
-    }
     if state.workspace_trust_prompt {
         render_workspace_trust_prompt(frame, area, state);
     }
     if let Some(confirmation) = &state.trace_delete_confirmation {
-        render_trace_delete_confirmation(frame, area, confirmation);
+        render_trace_delete_confirmation(frame, area, confirmation, &palette(state));
     }
     if let Some(init) = &state.project_init {
-        render_project_init(frame, area, init);
+        render_project_init(frame, area, init, &palette(state));
     }
     if state.loop_guard_interaction.is_some() {
         render_loop_guard_interaction(frame, area, state);
@@ -941,9 +1251,11 @@ fn render_pane(
     if transcript_activity_clicks_blocked(state) {
         state.transcript_scroll.clear_activity_hit_targets();
     }
-    render_toast(frame, area, state);
     if state.debug_render_overlay {
         render_runtime_debug_overlay(frame, area, state);
+    }
+    if !queue_chips_accept_clicks(state) {
+        state.composer_ui.queue_action_hits.borrow_mut().clear();
     }
 }
 
@@ -963,17 +1275,12 @@ fn render_runtime_debug_overlay(frame: &mut ratatui::Frame, area: Rect, state: &
     let theme = palette(state);
     let (builds, blocks, bytes, pending) = state.transcript_cache.debug_stats();
     let border = if snapshot.repaint_highlight {
-        Color::Magenta
+        theme.warning
     } else {
         theme.accent
     };
     if snapshot.repaint_highlight {
-        frame.render_widget(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Magenta)),
-            area,
-        );
+        frame.render_widget(crate::tui::overlay::plain_block(theme.warning), area);
     }
     let lines = vec![
         Line::from(format!("Redraws          {}", snapshot.redraw_count)),
@@ -1003,49 +1310,67 @@ fn render_runtime_debug_overlay(frame: &mut ratatui::Frame, area: Rect, state: &
     frame.render_widget(
         Paragraph::new(lines)
             .style(Style::default().fg(theme.text).bg(theme.surface))
-            .block(
-                Block::default()
-                    .title(" Render diagnostics ")
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(border)),
-            ),
+            .block(crate::tui::overlay::standard_block(
+                " Render diagnostics ",
+                border,
+            )),
         popup,
     );
 }
 
+fn status_notice_body(toast: &crate::app::UiToast) -> String {
+    let text = crate::terminal_text::sanitize_terminal_text(&toast.message);
+    if toast.is_sticky() {
+        format!("{text} · Esc dismiss")
+    } else {
+        text
+    }
+}
+
+fn status_notice_rows(state: &AppState, width: u16) -> u16 {
+    if width < 8 {
+        return 0;
+    }
+    let Some(toast) = notice_toast(state) else {
+        return 0;
+    };
+    let body = status_notice_body(&toast);
+    let inner = width.saturating_sub(3).max(1);
+    let rows = u16::try_from(
+        Paragraph::new(body.as_str())
+            .wrap(Wrap { trim: false })
+            .line_count(inner),
+    )
+    .unwrap_or(1);
+    rows.clamp(1, 2)
+}
+
 fn render_toast(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
-    if area.width < 4 || area.height < 3 {
+    if area.width < 8 || area.height < 1 {
         return;
     }
-    let Some(toast) = state.toast.as_ref().filter(|toast| toast.is_visible()) else {
+    let Some(toast) = notice_toast(state) else {
         return;
     };
     let theme = palette(state);
-    let text = crate::terminal_text::sanitize_terminal_text(&toast.message);
-    let text_width = unicode_width::UnicodeWidthStr::width(text.as_str()) as u16;
-    let width = text_width
-        .saturating_add(10)
-        .min(area.width.saturating_sub(4))
-        .max(18.min(area.width));
-    let popup = centered_rect(width, 3.min(area.height), area);
+    let body = status_notice_body(&toast);
     let color = match toast.kind {
         crate::app::ToastKind::Success => theme.accent,
         crate::app::ToastKind::Error => theme.error,
     };
-    frame.render_widget(Clear, popup);
+    frame.render_widget(Clear, area);
     frame.render_widget(
-        Paragraph::new(Text::from(vec![
-            Line::from(""),
-            Line::from(Span::styled(text, Style::default().fg(theme.text))),
-        ]))
-        .alignment(Alignment::Center)
-        .block(
-            Block::default()
-                .borders(Borders::LEFT | Borders::RIGHT)
-                .border_style(Style::default().fg(color))
-                .style(Style::default().bg(theme.surface)),
-        ),
-        popup,
+        Paragraph::new(body)
+            .wrap(Wrap { trim: false })
+            .style(Style::default().fg(theme.text).bg(theme.surface))
+            .block(
+                Block::default()
+                    .borders(Borders::LEFT)
+                    .padding(ratatui::widgets::Padding::horizontal(1))
+                    .border_style(Style::default().fg(color))
+                    .style(Style::default().bg(theme.surface)),
+            ),
+        area,
     );
 }
 
@@ -1062,10 +1387,8 @@ fn render_loop_guard_interaction(frame: &mut ratatui::Frame, area: Rect, state: 
     .min(area.height.saturating_sub(2));
     let popup = centered_rect(width, height, area);
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Low-yield loop paused ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow));
+    let theme = palette(state);
+    let block = crate::tui::overlay::standard_block(" Low-yield loop paused ", theme.warning);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     if inner.width == 0 || inner.height == 0 {
@@ -1074,7 +1397,7 @@ fn render_loop_guard_interaction(frame: &mut ratatui::Frame, area: Rect, state: 
 
     let evidence = crate::terminal_text::sanitize_terminal_text(&interaction.incident.evidence);
     let mut lines = vec![
-        Line::from(Span::styled(evidence, Style::default().fg(Color::Yellow))),
+        Line::from(Span::styled(evidence, Style::default().fg(theme.warning))),
         Line::from(""),
     ];
     if interaction.cancel_confirmation {
@@ -1083,14 +1406,18 @@ fn render_loop_guard_interaction(frame: &mut ratatui::Frame, area: Rect, state: 
         ));
         lines.push(Line::from(""));
         let keep_style = if interaction.cancel_confirm_selected {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(theme.muted)
         } else {
-            Style::default().fg(Color::Black).bg(Color::White)
+            Style::default()
+                .fg(theme.accent_foreground)
+                .bg(theme.surface)
         };
         let cancel_style = if interaction.cancel_confirm_selected {
-            Style::default().fg(Color::Black).bg(Color::Red)
+            Style::default()
+                .fg(theme.accent_foreground)
+                .bg(theme.approval_deny)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(theme.muted)
         };
         lines.push(Line::from(vec![
             Span::styled(" Keep paused ", keep_style),
@@ -1098,10 +1425,10 @@ fn render_loop_guard_interaction(frame: &mut ratatui::Frame, area: Rect, state: 
             Span::styled(" Cancel turn ", cancel_style),
         ]));
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
+        lines.push(crate::tui::overlay::footer_hint(
             "←/→ choose · Enter confirm · Esc back",
-            Style::default().fg(Color::DarkGray),
-        )));
+            theme.muted,
+        ));
     } else {
         lines.push(Line::from("Choose how to continue:"));
         lines.push(Line::from(""));
@@ -1124,9 +1451,11 @@ fn render_loop_guard_interaction(frame: &mut ratatui::Frame, area: Rect, state: 
         ];
         for (decision, label, description) in choices {
             let style = if interaction.selected == decision {
-                Style::default().fg(Color::Black).bg(Color::Yellow)
+                Style::default()
+                    .fg(theme.accent_foreground)
+                    .bg(theme.approval_pending)
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(theme.text)
             };
             lines.push(Line::from(vec![
                 Span::styled(label, style),
@@ -1134,10 +1463,10 @@ fn render_loop_guard_interaction(frame: &mut ratatui::Frame, area: Rect, state: 
             ]));
         }
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
+        lines.push(crate::tui::overlay::footer_hint(
             "←/→ choose · Enter select · r replan · o continue · c cancel",
-            Style::default().fg(Color::DarkGray),
-        )));
+            theme.muted,
+        ));
     }
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
@@ -1146,13 +1475,12 @@ fn render_project_init(
     frame: &mut ratatui::Frame,
     area: Rect,
     init: &crate::app::ProjectInitState,
+    theme: &ThemePalette,
 ) {
     use crate::app::ProjectInitPhase;
     frame.render_widget(Clear, area);
-    let block = Block::default()
-        .title(" Initialize project instructions ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+    let block =
+        crate::tui::overlay::standard_block(" Initialize project instructions ", theme.accent);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.width == 0 || inner.height == 0 {
@@ -1175,7 +1503,7 @@ fn render_project_init(
         ProjectInitPhase::Preparing => {
             lines.push(Line::from(Span::styled(
                 "Collecting bounded evidence and drafting with one tool-free request…",
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(theme.accent),
             )));
             lines.push(Line::from(
                 "Esc or Ctrl+C cancels without changing the workspace.",
@@ -1184,13 +1512,13 @@ fn render_project_init(
         ProjectInitPhase::Writing => {
             lines.push(Line::from(Span::styled(
                 "Revalidating evidence and creating AGENTS.md safely…",
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(theme.accent),
             )));
         }
         ProjectInitPhase::Preview => {
             lines.push(Line::from(Span::styled(
                 "Preview — no file has been written",
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme.warning),
             )));
             lines.push(Line::from(""));
             if let Some(draft) = &init.draft {
@@ -1206,7 +1534,7 @@ fn render_project_init(
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             crate::terminal_text::sanitize_terminal_text(error),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.error),
         )));
     }
     frame.render_widget(
@@ -1217,14 +1545,18 @@ fn render_project_init(
     );
     if init.phase == ProjectInitPhase::Preview {
         let cancel = if init.create_selected {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(theme.muted)
         } else {
-            Style::default().fg(Color::Black).bg(Color::Cyan)
+            Style::default()
+                .fg(theme.accent_foreground)
+                .bg(theme.accent)
         };
         let create = if init.create_selected {
-            Style::default().fg(Color::Black).bg(Color::Green)
+            Style::default()
+                .fg(theme.accent_foreground)
+                .bg(theme.success)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(theme.muted)
         };
         frame.render_widget(
             Paragraph::new(vec![
@@ -1233,23 +1565,20 @@ fn render_project_init(
                     Span::raw("  "),
                     Span::styled(" Create AGENTS.md ", create),
                 ]),
-                Line::from(Span::styled(
+                crate::tui::overlay::footer_hint(
                     "←/→ choose · ↑↓/Pg scroll · Enter select · Esc cancel",
-                    Style::default().fg(Color::DarkGray),
-                )),
+                    theme.muted,
+                ),
             ]),
             chunks[1],
         );
     } else {
-        frame.render_widget(
-            Paragraph::new(if init.phase == ProjectInitPhase::Preparing {
-                "Esc cancel"
-            } else {
-                "Writing is completing"
-            })
-            .style(Style::default().fg(Color::DarkGray)),
-            chunks[1],
-        );
+        let footer = if init.phase == ProjectInitPhase::Preparing {
+            crate::tui::overlay::esc_cancel_hint(theme.muted)
+        } else {
+            crate::tui::overlay::footer_hint("Writing is completing", theme.muted)
+        };
+        frame.render_widget(Paragraph::new(vec![footer]), chunks[1]);
     }
 }
 
@@ -1257,6 +1586,7 @@ fn render_trace_delete_confirmation(
     frame: &mut ratatui::Frame,
     area: Rect,
     confirmation: &crate::app::TraceDeleteConfirmation,
+    theme: &ThemePalette,
 ) {
     let width = 64.min(area.width.saturating_sub(4));
     let height =
@@ -1273,7 +1603,7 @@ fn render_trace_delete_confirmation(
         Line::from(Span::styled(
             "Delete provider trace?",
             Style::default()
-                .fg(Color::White)
+                .fg(theme.strong)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
@@ -1285,19 +1615,23 @@ fn render_trace_delete_confirmation(
     if let Some(error) = &confirmation.error {
         lines.push(Line::from(Span::styled(
             crate::terminal_text::sanitize_terminal_text(error),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.error),
         )));
         lines.push(Line::from(""));
     }
     let (cancel_style, delete_style) = if confirmation.delete_selected {
         (
-            Style::default().fg(Color::White),
-            Style::default().fg(Color::Black).bg(Color::Red),
+            Style::default().fg(theme.text),
+            Style::default()
+                .fg(theme.accent_foreground)
+                .bg(theme.approval_deny),
         )
     } else {
         (
-            Style::default().fg(Color::Black).bg(Color::Cyan),
-            Style::default().fg(Color::White),
+            Style::default()
+                .fg(theme.accent_foreground)
+                .bg(theme.accent),
+            Style::default().fg(theme.text),
         )
     };
     lines.push(Line::from(vec![
@@ -1305,19 +1639,15 @@ fn render_trace_delete_confirmation(
         Span::raw("   "),
         Span::styled(" Delete ", delete_style),
     ]));
-    lines.push(Line::from(Span::styled(
+    lines.push(crate::tui::overlay::footer_hint(
         "←/→ choose · Enter confirm · Esc cancel",
-        Style::default().fg(Color::DarkGray),
-    )));
+        theme.muted,
+    ));
 
     frame.render_widget(Clear, modal);
     frame.render_widget(
         Paragraph::new(lines)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Red)),
-            )
+            .block(crate::tui::overlay::plain_block(theme.approval_deny))
             .wrap(Wrap { trim: false }),
         modal,
     );
@@ -1331,10 +1661,9 @@ fn render_multi_run_manager(frame: &mut ratatui::Frame, area: Rect, state: &AppS
     let height = 31.min(area.height.saturating_sub(2));
     let popup = centered_rect(width, height, area);
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Multi-run · isolated candidates ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+    let theme = palette(state);
+    let block =
+        crate::tui::overlay::standard_block(" Multi-run · isolated candidates ", theme.accent);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     let mut lines = Vec::new();
@@ -1351,7 +1680,7 @@ fn render_multi_run_manager(frame: &mut ratatui::Frame, area: Rect, state: &AppS
             )),
             Line::from(""),
             Line::from(vec![
-                Span::styled("> ", Style::default().fg(Color::Cyan)),
+                Span::styled("> ", Style::default().fg(theme.accent)),
                 Span::raw(if manager.draft_request.is_empty() {
                     "describe the task…"
                 } else {
@@ -1359,25 +1688,25 @@ fn render_multi_run_manager(frame: &mut ratatui::Frame, area: Rect, state: &AppS
                 }),
             ]),
             Line::from(""),
-            Line::from(Span::styled(
+            crate::tui::overlay::footer_hint(
                 "Enter preview · Esc close · no worktrees or provider calls yet",
-                Style::default().fg(Color::DarkGray),
-            )),
+                theme.muted,
+            ),
         ]);
     } else if let Some(run) = manager.run.as_ref() {
         lines.push(Line::from(vec![
             Span::styled(
                 run.status.label(),
                 Style::default().fg(match run.status {
-                    crate::multi_run::MultiRunStatus::Failed => Color::Red,
+                    crate::multi_run::MultiRunStatus::Failed => theme.error,
                     crate::multi_run::MultiRunStatus::ReadyToJudge
                     | crate::multi_run::MultiRunStatus::Judged
-                    | crate::multi_run::MultiRunStatus::Complete => Color::Green,
+                    | crate::multi_run::MultiRunStatus::Complete => theme.success,
                     crate::multi_run::MultiRunStatus::Running
                     | crate::multi_run::MultiRunStatus::CreatingWorktrees
                     | crate::multi_run::MultiRunStatus::Judging
-                    | crate::multi_run::MultiRunStatus::Fusing => Color::Yellow,
-                    _ => Color::White,
+                    | crate::multi_run::MultiRunStatus::Fusing => theme.warning,
+                    _ => theme.text,
                 }),
             ),
             Span::raw(format!(
@@ -1387,7 +1716,7 @@ fn render_multi_run_manager(frame: &mut ratatui::Frame, area: Rect, state: &AppS
         ]));
         lines.push(Line::from(Span::styled(
             "Candidate worktrees and branches remain user-owned; nothing is merged or attached.",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
         lines.push(Line::from(""));
         let available = inner.height.saturating_sub(12) as usize;
@@ -1422,7 +1751,11 @@ fn render_multi_run_manager(frame: &mut ratatui::Frame, area: Rect, state: &AppS
                 candidate.estimated_cost
             ));
             lines.push(if selected {
-                line.style(Style::default().bg(Color::Cyan).fg(Color::Black))
+                line.style(
+                    Style::default()
+                        .bg(theme.accent)
+                        .fg(theme.accent_foreground),
+                )
             } else {
                 line
             });
@@ -1461,25 +1794,22 @@ fn render_multi_run_manager(frame: &mut ratatui::Frame, area: Rect, state: &AppS
             }
             _ => "Shift+R refresh evidence · Esc close",
         };
-        lines.push(Line::from(Span::styled(
-            controls,
-            Style::default().fg(Color::DarkGray),
-        )));
+        lines.push(crate::tui::overlay::footer_hint(controls, theme.muted));
     }
     if manager.busy {
         lines.push(Line::from(Span::styled(
             "Working… controls are locked",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme.warning),
         )));
     } else if let Some(error) = &manager.error {
         lines.push(Line::from(Span::styled(
             crate::terminal_text::sanitize_terminal_text(error),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.error),
         )));
     } else if let Some(notice) = &manager.notice {
         lines.push(Line::from(Span::styled(
             crate::terminal_text::sanitize_terminal_text(notice),
-            Style::default().fg(Color::Green),
+            Style::default().fg(theme.success),
         )));
     }
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
@@ -1506,12 +1836,10 @@ fn render_multi_run_manager(frame: &mut ratatui::Frame, area: Rect, state: &AppS
             Line::from("Arrow/Tab choose · Enter confirm · Esc cancel"),
         ];
         frame.render_widget(
-            Paragraph::new(body).block(
-                Block::default()
-                    .title(" Confirm multi-run action ")
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Yellow)),
-            ),
+            Paragraph::new(body).block(crate::tui::overlay::standard_block(
+                " Confirm multi-run action ",
+                theme.warning,
+            )),
             confirm_area,
         );
     }
@@ -1525,15 +1853,13 @@ fn render_workflow_preview(frame: &mut ratatui::Frame, area: Rect, state: &AppSt
     let height = 26.min(area.height.saturating_sub(2));
     let popup = centered_rect(width, height, area);
     frame.render_widget(Clear, popup);
+    let theme = palette(state);
     let title = if preview.resume_existing {
         " Resume workflow "
     } else {
         " Run workflow "
     };
-    let block = Block::default()
-        .title(title)
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+    let block = crate::tui::overlay::standard_block(title, theme.accent);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     let mut lines = crate::workflow::render_preview(preview)
@@ -1551,7 +1877,9 @@ fn render_workflow_preview(frame: &mut ratatui::Frame, area: Rect, state: &AppSt
             if preview.run_selected {
                 Style::default()
             } else {
-                Style::default().bg(Color::Cyan).fg(Color::Black)
+                Style::default()
+                    .bg(theme.accent)
+                    .fg(theme.accent_foreground)
             },
         ),
         Span::raw("   "),
@@ -1568,16 +1896,18 @@ fn render_workflow_preview(frame: &mut ratatui::Frame, area: Rect, state: &AppSt
                 "  Run  "
             },
             if preview.run_selected {
-                Style::default().bg(Color::Cyan).fg(Color::Black)
+                Style::default()
+                    .bg(theme.accent)
+                    .fg(theme.accent_foreground)
             } else {
                 Style::default()
             },
         ),
     ]));
-    lines.push(Line::from(Span::styled(
+    lines.push(crate::tui::overlay::footer_hint(
         "Arrow/Tab choose · Enter confirm · Esc close",
-        Style::default().fg(Color::DarkGray),
-    )));
+        theme.muted,
+    ));
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
@@ -1587,10 +1917,7 @@ fn render_plan_workflow_graph(frame: &mut ratatui::Frame, area: Rect, state: &Ap
     };
     let theme = palette(state);
     frame.render_widget(Clear, area);
-    let block = Block::default()
-        .title(" Plan workflow ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme.plan));
+    let block = crate::tui::overlay::standard_block(" Plan workflow ", theme.plan);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let chunks = Layout::default()
@@ -1780,10 +2107,8 @@ fn render_task_graph_manager(frame: &mut ratatui::Frame, area: Rect, state: &App
     let height = 30.min(area.height.saturating_sub(2));
     let popup = centered_rect(width, height, area);
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Tasks and agent graph ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+    let theme = palette(state);
+    let block = crate::tui::overlay::standard_block(" Tasks and agent graph ", theme.accent);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
@@ -1796,13 +2121,93 @@ fn render_task_graph_manager(frame: &mut ratatui::Frame, area: Rect, state: &App
     let Some(plan) = work.plan.as_ref() else {
         lines.push(Line::from("No plan tasks. Use /plan to propose one."));
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "Esc close",
-            Style::default().fg(Color::DarkGray),
-        )));
+        lines.push(crate::tui::overlay::footer_hint("Esc close", theme.muted));
         frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
         return;
     };
+    if manager.detail_open {
+        let filter = manager.filter.trim().to_ascii_lowercase();
+        let visible = plan
+            .tasks
+            .iter()
+            .enumerate()
+            .filter(|(_, task)| {
+                filter.is_empty()
+                    || task.title.to_ascii_lowercase().contains(&filter)
+                    || task.id.to_string().contains(&filter)
+            })
+            .collect::<Vec<_>>();
+        if let Some((index, task)) =
+            visible.get(manager.selected_idx.min(visible.len().saturating_sub(1)))
+        {
+            let color = task_identity_color(*index);
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "#{} {} · {:?}",
+                    index + 1,
+                    task.title,
+                    task.agent_runtime.state
+                ),
+                Style::default().fg(color),
+            )));
+            lines.push(Line::from(format!(
+                "Depends on: {}",
+                task_dependency_labels(plan, task)
+            )));
+            let live = task
+                .agent_runtime
+                .attempts
+                .last()
+                .and_then(|attempt| attempt.agent_id)
+                .and_then(|id| state.live_agent_activity.iter().find(|row| row.id.0 == id));
+            if let Some(failure) = &task.agent_runtime.failure {
+                lines.push(Line::from(Span::styled(
+                    crate::terminal_text::sanitize_terminal_text(failure),
+                    Style::default().fg(theme.error),
+                )));
+            }
+            let output = live
+                .map(|row| row.recent_output.as_str())
+                .filter(|text| !text.is_empty())
+                .or_else(|| {
+                    task.agent_runtime
+                        .attempts
+                        .last()
+                        .and_then(|attempt| attempt.summary.as_deref())
+                })
+                .unwrap_or("No output yet.");
+            let mut wrapped = output
+                .lines()
+                .flat_map(|line| {
+                    wrap_plan_text(
+                        &crate::terminal_text::sanitize_terminal_text(line),
+                        usize::from(inner.width.max(1)),
+                    )
+                })
+                .collect::<Vec<_>>();
+            if let Some(progress) = live.and_then(task_progress) {
+                wrapped.extend(progress.lines().flat_map(|line| {
+                    wrap_plan_text(
+                        &crate::terminal_text::sanitize_terminal_text(line),
+                        usize::from(inner.width.max(1)),
+                    )
+                }));
+            }
+            let header_rows = Paragraph::new(lines.clone())
+                .wrap(Wrap { trim: false })
+                .line_count(inner.width.max(1));
+            let count = usize::from(inner.height).saturating_sub(header_rows + 1);
+            for line in wrapped.iter().skip(wrapped.len().saturating_sub(count)) {
+                lines.push(Line::from(Span::styled(
+                    line.clone(),
+                    Style::default().fg(color),
+                )));
+            }
+        }
+        lines.push(Line::from("↑↓ select task · Enter/Esc back to map"));
+        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+        return;
+    }
     lines.push(Line::from(vec![
         Span::styled(
             crate::terminal_text::sanitize_terminal_text(&plan.title),
@@ -1816,7 +2221,7 @@ fn render_task_graph_manager(frame: &mut ratatui::Frame, area: Rect, state: &App
     if state.agent_graph_busy {
         lines.push(Line::from(Span::styled(
             "Updating agent graph… controls are temporarily locked",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme.warning),
         )));
     }
     lines.push(Line::from(format!("> {}", manager.filter)));
@@ -1846,23 +2251,55 @@ fn render_task_graph_manager(frame: &mut ratatui::Frame, area: Rect, state: &App
                 .as_ref()
                 .map(|_| format!("{:?}", task.agent_runtime.state))
                 .unwrap_or_else(|| format!("{:?}", task.status));
+            let identity_index = plan
+                .tasks
+                .iter()
+                .position(|candidate| candidate.id == task.id)
+                .unwrap_or(index);
+            let title = if work.automatic_task_map {
+                format!("#{} {}", identity_index + 1, task.title)
+            } else {
+                task.title.clone()
+            };
             let text = format!(
                 "{prefix} {:<18} {:<46} attempt {}/{}",
                 graph_state,
-                crate::terminal_text::sanitize_terminal_text(&task.title),
+                crate::terminal_text::sanitize_terminal_text(&title),
                 task.agent_runtime.attempts.len(),
                 task.agent.as_ref().map_or(0, |agent| agent.max_attempts)
             );
             lines.push(Line::from(Span::styled(
                 text,
                 if selected_row {
-                    Style::default().bg(Color::Cyan).fg(Color::Black)
+                    Style::default()
+                        .bg(theme.accent)
+                        .fg(theme.accent_foreground)
+                } else if work.automatic_task_map {
+                    Style::default().fg(task_identity_color(identity_index))
                 } else {
                     Style::default()
                 },
             )));
         }
         let task = visible[selected];
+        if work.automatic_task_map {
+            lines.push(Line::from(format!(
+                "Depends on: {}",
+                task_dependency_labels(plan, task)
+            )));
+            if let Some(output) = task
+                .agent_runtime
+                .attempts
+                .last()
+                .and_then(|attempt| attempt.summary.as_deref())
+            {
+                for line in output.lines().take(3) {
+                    lines.push(Line::from(crate::terminal_text::sanitize_terminal_text(
+                        line,
+                    )));
+                }
+            }
+        }
         lines.push(Line::from(""));
         lines.push(Line::from(format!("Task ID: {}", task.id)));
         if let Some(agent) = &task.agent {
@@ -1944,14 +2381,14 @@ fn render_task_graph_manager(frame: &mut ratatui::Frame, area: Rect, state: &App
                 if !receipt_valid {
                     lines.push(Line::from(Span::styled(
                         "Verification: stale/invalid receipt",
-                        Style::default().fg(Color::Yellow),
+                        Style::default().fg(theme.warning),
                     )));
                 } else {
                     let color = match receipt.disposition {
-                        crate::agent_graph::AgentVerificationDisposition::Pass => Color::Green,
-                        crate::agent_graph::AgentVerificationDisposition::Fail => Color::Red,
+                        crate::agent_graph::AgentVerificationDisposition::Pass => theme.success,
+                        crate::agent_graph::AgentVerificationDisposition::Fail => theme.error,
                         crate::agent_graph::AgentVerificationDisposition::Inconclusive => {
-                            Color::Yellow
+                            theme.warning
                         }
                     };
                     lines.push(Line::from(Span::styled(
@@ -1968,7 +2405,7 @@ fn render_task_graph_manager(frame: &mut ratatui::Frame, area: Rect, state: &App
             {
                 lines.push(Line::from(Span::styled(
                     "Verification: legacy-unverified",
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(theme.warning),
                 )));
             }
         } else {
@@ -2000,7 +2437,7 @@ fn render_task_graph_manager(frame: &mut ratatui::Frame, area: Rect, state: &App
                     "Failure: {}",
                     crate::terminal_text::sanitize_terminal_text(failure)
                 ),
-                Style::default().fg(Color::Red),
+                Style::default().fg(theme.error),
             )));
         }
     }
@@ -2010,19 +2447,19 @@ fn render_task_graph_manager(frame: &mut ratatui::Frame, area: Rect, state: &App
                 "Error: {}",
                 crate::terminal_text::sanitize_terminal_text(error)
             ),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.error),
         )));
     } else if let Some(notice) = &manager.notice {
         lines.push(Line::from(Span::styled(
             crate::terminal_text::sanitize_terminal_text(notice),
-            Style::default().fg(Color::Green),
+            Style::default().fg(theme.success),
         )));
     }
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
+    lines.push(crate::tui::overlay::footer_hint(
         "Shift+S start/resume · Shift+P pause · Shift+R retry · Shift+C cancel · Esc close",
-        Style::default().fg(Color::DarkGray),
-    )));
+        theme.muted,
+    ));
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 
     if let Some(confirmation) = &manager.confirmation {
@@ -2052,20 +2489,20 @@ fn render_task_graph_manager(frame: &mut ratatui::Frame, area: Rect, state: &App
                 "Record an explicit human pass for this task's human-review gate? Other artifact and command gates must already pass."
             }
         };
+        let selected_chip = Style::default()
+            .bg(theme.accent)
+            .fg(theme.accent_foreground);
         let cancel_style = if confirmation.confirm_selected {
             Style::default()
         } else {
-            Style::default().bg(Color::Cyan).fg(Color::Black)
+            selected_chip
         };
         let confirm_style = if confirmation.confirm_selected {
-            Style::default().bg(Color::Cyan).fg(Color::Black)
+            selected_chip
         } else {
             Style::default()
         };
-        let block = Block::default()
-            .title(title)
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan));
+        let block = crate::tui::overlay::standard_block(title, theme.accent);
         let inner = block.inner(confirm_area);
         frame.render_widget(block, confirm_area);
         frame.render_widget(
@@ -2091,10 +2528,10 @@ fn render_task_graph_manager(frame: &mut ratatui::Frame, area: Rect, state: &App
                         confirm_style,
                     ),
                 ]),
-                Line::from(Span::styled(
+                crate::tui::overlay::footer_hint(
                     "Arrow/Tab choose · Enter confirm · Esc close",
-                    Style::default().fg(Color::DarkGray),
-                )),
+                    theme.muted,
+                ),
             ])
             .wrap(Wrap { trim: false }),
             inner,
@@ -2108,10 +2545,8 @@ fn render_workflow_clear_confirmation(frame: &mut ratatui::Frame, area: Rect, st
     };
     let popup = centered_rect(62.min(area.width.saturating_sub(2)), 10, area);
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Clear workflow state? ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow));
+    let theme = palette(state);
+    let block = crate::tui::overlay::standard_block(" Clear workflow state? ", theme.warning);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     let workflow = state
@@ -2134,7 +2569,9 @@ fn render_workflow_clear_confirmation(frame: &mut ratatui::Frame, area: Rect, st
                 if confirm_selected {
                     Style::default()
                 } else {
-                    Style::default().bg(Color::Cyan).fg(Color::Black)
+                    Style::default()
+                        .bg(theme.accent)
+                        .fg(theme.accent_foreground)
                 },
             ),
             Span::raw("   "),
@@ -2145,16 +2582,18 @@ fn render_workflow_clear_confirmation(frame: &mut ratatui::Frame, area: Rect, st
                     "  Clear  "
                 },
                 if confirm_selected {
-                    Style::default().bg(Color::Red).fg(Color::White)
+                    Style::default()
+                        .bg(theme.approval_deny)
+                        .fg(theme.accent_foreground)
                 } else {
                     Style::default()
                 },
             ),
         ]),
-        Line::from(Span::styled(
+        crate::tui::overlay::footer_hint(
             "Arrow/Tab choose · Enter confirm · Esc close",
-            Style::default().fg(Color::DarkGray),
-        )),
+            theme.muted,
+        ),
     ];
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
@@ -2169,10 +2608,8 @@ fn render_worktree_cleanup_confirmation(frame: &mut ratatui::Frame, area: Rect, 
         area,
     );
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Clean up worktree? ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow));
+    let theme = palette(state);
+    let block = crate::tui::overlay::standard_block(" Clean up worktree? ", theme.warning);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     let mut lines = vec![
@@ -2193,7 +2630,9 @@ fn render_worktree_cleanup_confirmation(frame: &mut ratatui::Frame, area: Rect, 
                 if confirmation.remove_selected {
                     Style::default()
                 } else {
-                    Style::default().bg(Color::Cyan).fg(Color::Black)
+                    Style::default()
+                        .bg(theme.accent)
+                        .fg(theme.accent_foreground)
                 },
             ),
             Span::raw("   "),
@@ -2206,26 +2645,28 @@ fn render_worktree_cleanup_confirmation(frame: &mut ratatui::Frame, area: Rect, 
                     "  Remove  "
                 },
                 if confirmation.remove_selected {
-                    Style::default().bg(Color::Red).fg(Color::White)
+                    Style::default()
+                        .bg(theme.approval_deny)
+                        .fg(theme.accent_foreground)
                 } else {
                     Style::default()
                 },
             ),
         ]),
-        Line::from(Span::styled(
+        crate::tui::overlay::footer_hint(
             if confirmation.busy {
                 "Cleanup is running; controls are locked"
             } else {
                 "Arrow/Tab choose · Enter confirm · Esc close"
             },
-            Style::default().fg(Color::DarkGray),
-        )),
+            theme.muted,
+        ),
     ];
     if let Some(error) = &confirmation.error {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             crate::terminal_text::sanitize_terminal_text(error),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.error),
         )));
     }
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
@@ -2244,10 +2685,8 @@ fn render_worktree_setup_confirmation(frame: &mut ratatui::Frame, area: Rect, st
         area,
     );
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Worktree setup preview ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow));
+    let theme = palette(state);
+    let block = crate::tui::overlay::standard_block(" Worktree setup preview ", theme.warning);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     let preview = &confirmation.preview;
@@ -2283,7 +2722,7 @@ fn render_worktree_setup_confirmation(frame: &mut ratatui::Frame, area: Rect, st
     if let Some(error) = confirmation.error.as_deref() {
         lines.push(Line::from(Span::styled(
             format!("Setup failed; worktree retained: {error}"),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.error),
         )));
     }
     lines.extend([
@@ -2298,7 +2737,9 @@ fn render_worktree_setup_confirmation(frame: &mut ratatui::Frame, area: Rect, st
                 if confirmation.run_selected {
                     Style::default()
                 } else {
-                    Style::default().bg(Color::Cyan).fg(Color::Black)
+                    Style::default()
+                        .bg(theme.accent)
+                        .fg(theme.accent_foreground)
                 },
             ),
             Span::raw("   "),
@@ -2311,16 +2752,18 @@ fn render_worktree_setup_confirmation(frame: &mut ratatui::Frame, area: Rect, st
                     "  Run  "
                 },
                 if confirmation.run_selected {
-                    Style::default().bg(Color::Yellow).fg(Color::Black)
+                    Style::default()
+                        .bg(theme.warning)
+                        .fg(theme.accent_foreground)
                 } else {
                     Style::default()
                 },
             ),
         ]),
-        Line::from(Span::styled(
+        crate::tui::overlay::footer_hint(
             "Arrow/Tab choose · Enter confirm · Esc skip",
-            Style::default().fg(Color::DarkGray),
-        )),
+            theme.muted,
+        ),
     ]);
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
@@ -2339,10 +2782,8 @@ fn render_support_bundle_confirmation(frame: &mut ratatui::Frame, area: Rect, st
         area,
     );
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Support bundle preview ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow));
+    let theme = palette(state);
+    let block = crate::tui::overlay::standard_block(" Support bundle preview ", theme.warning);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     let mut lines = vec![
@@ -2373,7 +2814,7 @@ fn render_support_bundle_confirmation(frame: &mut ratatui::Frame, area: Rect, st
     if let Some(error) = confirmation.error.as_deref() {
         lines.push(Line::from(Span::styled(
             format!("Creation failed: {error}"),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.error),
         )));
     }
     lines.extend([
@@ -2388,7 +2829,9 @@ fn render_support_bundle_confirmation(frame: &mut ratatui::Frame, area: Rect, st
                 if confirmation.create_selected {
                     Style::default()
                 } else {
-                    Style::default().bg(Color::Cyan).fg(Color::Black)
+                    Style::default()
+                        .bg(theme.accent)
+                        .fg(theme.accent_foreground)
                 },
             ),
             Span::raw("   "),
@@ -2401,16 +2844,18 @@ fn render_support_bundle_confirmation(frame: &mut ratatui::Frame, area: Rect, st
                     "  Create  "
                 },
                 if confirmation.create_selected {
-                    Style::default().bg(Color::Yellow).fg(Color::Black)
+                    Style::default()
+                        .bg(theme.warning)
+                        .fg(theme.accent_foreground)
                 } else {
                     Style::default()
                 },
             ),
         ]),
-        Line::from(Span::styled(
+        crate::tui::overlay::footer_hint(
             "Arrow/Tab choose · Enter confirm · Esc cancel",
-            Style::default().fg(Color::DarkGray),
-        )),
+            theme.muted,
+        ),
     ]);
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
@@ -2433,10 +2878,8 @@ fn render_setup_import_confirmation(frame: &mut ratatui::Frame, area: Rect, stat
         area,
     );
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Claude setup import preview ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow));
+    let theme = palette(state);
+    let block = crate::tui::overlay::standard_block(" Claude setup import preview ", theme.warning);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     let mut lines = vec![
@@ -2462,7 +2905,9 @@ fn render_setup_import_confirmation(frame: &mut ratatui::Frame, area: Rect, stat
                 if confirmation.apply_selected {
                     Style::default()
                 } else {
-                    Style::default().bg(Color::Yellow).fg(Color::Black)
+                    Style::default()
+                        .bg(theme.accent)
+                        .fg(theme.accent_foreground)
                 },
             ),
             Span::raw("  "),
@@ -2473,18 +2918,20 @@ fn render_setup_import_confirmation(frame: &mut ratatui::Frame, area: Rect, stat
                     "  Apply exact preview  "
                 },
                 if confirmation.apply_selected && preview.collisions.is_empty() {
-                    Style::default().bg(Color::Yellow).fg(Color::Black)
+                    Style::default()
+                        .bg(theme.warning)
+                        .fg(theme.accent_foreground)
                 } else if confirmation.apply_selected {
-                    Style::default().fg(Color::DarkGray)
+                    Style::default().fg(theme.muted)
                 } else {
                     Style::default()
                 },
             ),
         ]),
-        Line::from(Span::styled(
+        crate::tui::overlay::footer_hint(
             "Left/Right/Tab choose · Up/Down details · Enter confirm · Esc cancel",
-            Style::default().fg(Color::DarkGray),
-        )),
+            theme.muted,
+        ),
         Line::from(""),
     ];
     for file in preview
@@ -2515,13 +2962,13 @@ fn render_setup_import_confirmation(frame: &mut ratatui::Frame, area: Rect, stat
     if !preview.collisions.is_empty() {
         lines.push(Line::from(Span::styled(
             format!("Blocked: {} target collision(s)", preview.collisions.len()),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.error),
         )));
     }
     if let Some(error) = confirmation.error.as_deref() {
         lines.push(Line::from(Span::styled(
             format!("Apply failed: {error}"),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.error),
         )));
     }
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
@@ -2535,10 +2982,8 @@ fn render_hook_manager(frame: &mut ratatui::Frame, area: Rect, state: &AppState)
     let height = 24.min(area.height.saturating_sub(2));
     let popup = centered_rect(width, height, area);
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Hooks ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+    let theme = palette(state);
+    let block = crate::tui::overlay::standard_block(" Hooks ", theme.accent);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
@@ -2555,7 +3000,7 @@ fn render_hook_manager(frame: &mut ratatui::Frame, area: Rect, state: &AppState)
         .collect::<Vec<_>>();
     let mut lines = vec![
         Line::from(vec![
-            Span::styled("> ", Style::default().fg(Color::Cyan)),
+            Span::styled("> ", Style::default().fg(theme.accent)),
             Span::raw(if manager.filter.is_empty() {
                 "type to filter…"
             } else {
@@ -2580,12 +3025,12 @@ fn render_hook_manager(frame: &mut ratatui::Frame, area: Rect, state: &AppState)
             } else {
                 "Updating hooks…"
             },
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme.warning),
         )));
     } else if visible.is_empty() {
         lines.push(Line::from(Span::styled(
             "No matching hooks",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
     } else {
         let available_rows = inner.height.saturating_sub(10) as usize;
@@ -2614,11 +3059,13 @@ fn render_hook_manager(frame: &mut ratatui::Frame, area: Rect, state: &AppState)
             lines.push(Line::from(Span::styled(
                 text,
                 if selected {
-                    Style::default().bg(Color::Cyan).fg(Color::Black)
+                    Style::default()
+                        .bg(theme.accent)
+                        .fg(theme.accent_foreground)
                 } else if entry.enabled {
-                    Style::default().fg(Color::White)
+                    Style::default().fg(theme.text)
                 } else {
-                    Style::default().fg(Color::DarkGray)
+                    Style::default().fg(theme.muted)
                 },
             )));
         }
@@ -2627,25 +3074,25 @@ fn render_hook_manager(frame: &mut ratatui::Frame, area: Rect, state: &AppState)
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             crate::terminal_text::sanitize_terminal_text(notice),
-            Style::default().fg(Color::Green),
+            Style::default().fg(theme.success),
         )));
     }
     if let Some(error) = &manager.error {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             crate::terminal_text::sanitize_terminal_text(error),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.error),
         )));
     }
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
+    lines.push(crate::tui::overlay::footer_hint(
         "Space toggle · ⇧T test · ⇧R reload · Esc close",
-        Style::default().fg(Color::DarkGray),
-    )));
+        theme.muted,
+    ));
     if !manager.writes_enabled {
         lines.push(Line::from(Span::styled(
             "Bare profile: view only; commands stay in config.toml",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme.warning),
         )));
     }
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
@@ -2659,10 +3106,8 @@ fn render_permission_manager(frame: &mut ratatui::Frame, area: Rect, state: &App
     let height = 22.min(area.height.saturating_sub(2));
     let popup = centered_rect(width, height, area);
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Permissions ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+    let theme = palette(state);
+    let block = crate::tui::overlay::standard_block(" Permissions ", theme.accent);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
@@ -2679,7 +3124,7 @@ fn render_permission_manager(frame: &mut ratatui::Frame, area: Rect, state: &App
         .collect::<Vec<_>>();
     let mut lines = vec![
         Line::from(vec![
-            Span::styled("> ", Style::default().fg(Color::Cyan)),
+            Span::styled("> ", Style::default().fg(theme.accent)),
             Span::raw(if manager.filter.is_empty() {
                 "type to filter…"
             } else {
@@ -2700,7 +3145,7 @@ fn render_permission_manager(frame: &mut ratatui::Frame, area: Rect, state: &App
     if visible.is_empty() {
         lines.push(Line::from(Span::styled(
             "No matching permission rules",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
     } else {
         let narrow_rows = popup.width < 70;
@@ -2738,7 +3183,9 @@ fn render_permission_manager(frame: &mut ratatui::Frame, area: Rect, state: &App
                 narrow_rows,
             );
             let style = if selected {
-                Style::default().bg(Color::Cyan).fg(Color::Black)
+                Style::default()
+                    .bg(theme.accent)
+                    .fg(theme.accent_foreground)
             } else {
                 Style::default()
             };
@@ -2756,17 +3203,17 @@ fn render_permission_manager(frame: &mut ratatui::Frame, area: Rect, state: &App
     if manager.busy {
         lines.push(Line::from(Span::styled(
             "Removing permission rule…",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme.warning),
         )));
     } else if let Some(error) = &manager.error {
         lines.push(Line::from(Span::styled(
             crate::terminal_text::sanitize_terminal_text(error),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.error),
         )));
     } else if let Some(notice) = &manager.notice {
         lines.push(Line::from(Span::styled(
             crate::terminal_text::sanitize_terminal_text(notice),
-            Style::default().fg(Color::Green),
+            Style::default().fg(theme.success),
         )));
     }
     lines.push(Line::from("Shift+D remove · Esc close · ↑↓ navigate"));
@@ -2780,17 +3227,14 @@ fn render_permission_manager(frame: &mut ratatui::Frame, area: Rect, state: &App
             area,
         );
         frame.render_widget(Clear, confirm);
-        let block = Block::default()
-            .title(" Remove permission rule? ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Yellow));
+        let block = crate::tui::overlay::standard_block(" Remove permission rule? ", theme.warning);
         let mut body = vec![Line::from(crate::terminal_text::sanitize_terminal_text(
             &confirmation.label,
         ))];
         if let Some(error) = &manager.error {
             body.push(Line::from(Span::styled(
                 crate::terminal_text::sanitize_terminal_text(error),
-                Style::default().fg(Color::Red),
+                Style::default().fg(theme.error),
             )));
         }
         body.extend([
@@ -2800,7 +3244,7 @@ fn render_permission_manager(frame: &mut ratatui::Frame, area: Rect, state: &App
             } else {
                 "[ Cancel ]     Remove"
             }),
-            Line::from("Enter confirm · Esc cancel · ←→ choose"),
+            crate::tui::overlay::footer_hint("Enter confirm · Esc cancel · ←→ choose", theme.muted),
         ]);
         frame.render_widget(
             Paragraph::new(body).block(block).wrap(Wrap { trim: false }),
@@ -2817,10 +3261,8 @@ fn render_memory_manager(frame: &mut ratatui::Frame, area: Rect, state: &AppStat
     let height = 25.min(area.height.saturating_sub(2));
     let popup = centered_rect(width, height, area);
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Memory ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+    let theme = palette(state);
+    let block = crate::tui::overlay::standard_block(" Memory ", theme.accent);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
@@ -2838,13 +3280,13 @@ fn render_memory_manager(frame: &mut ratatui::Frame, area: Rect, state: &AppStat
     };
     let mut lines = vec![
         Line::from(vec![
-            Span::styled("[", Style::default().fg(Color::DarkGray)),
-            Span::styled(view_label, Style::default().fg(Color::Cyan)),
-            Span::styled("]", Style::default().fg(Color::DarkGray)),
+            Span::styled("[", Style::default().fg(theme.muted)),
+            Span::styled(view_label, Style::default().fg(theme.accent)),
+            Span::styled("]", Style::default().fg(theme.muted)),
             Span::raw("  Tab switch scope"),
         ]),
         Line::from(vec![
-            Span::styled("> ", Style::default().fg(Color::Cyan)),
+            Span::styled("> ", Style::default().fg(theme.accent)),
             Span::raw(if manager.filter.is_empty() {
                 "type to filter…"
             } else {
@@ -2887,7 +3329,7 @@ fn render_memory_manager(frame: &mut ratatui::Frame, area: Rect, state: &AppStat
         if visible.is_empty() {
             lines.push(Line::from(Span::styled(
                 "No pending proposals",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.muted),
             )));
         }
         for (index, proposal) in visible.iter().enumerate().take(available) {
@@ -2904,7 +3346,11 @@ fn render_memory_manager(frame: &mut ratatui::Frame, area: Rect, state: &AppStat
                 text
             ));
             lines.push(if index == manager.selected_idx {
-                line.style(Style::default().bg(Color::Cyan).fg(Color::Black))
+                line.style(
+                    Style::default()
+                        .bg(theme.accent)
+                        .fg(theme.accent_foreground),
+                )
             } else {
                 line
             });
@@ -2927,7 +3373,7 @@ fn render_memory_manager(frame: &mut ratatui::Frame, area: Rect, state: &AppStat
         if visible.is_empty() {
             lines.push(Line::from(Span::styled(
                 "No matching memory entries",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.muted),
             )));
         }
         let start = manager
@@ -2947,7 +3393,11 @@ fn render_memory_manager(frame: &mut ratatui::Frame, area: Rect, state: &AppStat
                 text
             ));
             lines.push(if index == manager.selected_idx {
-                line.style(Style::default().bg(Color::Cyan).fg(Color::Black))
+                line.style(
+                    Style::default()
+                        .bg(theme.accent)
+                        .fg(theme.accent_foreground),
+                )
             } else {
                 line
             });
@@ -2957,7 +3407,7 @@ fn render_memory_manager(frame: &mut ratatui::Frame, area: Rect, state: &AppStat
     if let Some(editor) = &manager.editor {
         lines.push(Line::from(Span::styled(
             format!("{} · Tab changes kind", editor.kind.label()),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme.warning),
         )));
         lines.push(Line::from(format!("> {}", editor.text)));
         lines.push(Line::from("Enter save · Esc cancel"));
@@ -2970,7 +3420,7 @@ fn render_memory_manager(frame: &mut ratatui::Frame, area: Rect, state: &AppStat
         };
         lines.push(Line::from(Span::styled(
             action,
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme.warning),
         )));
         lines.push(Line::from(if confirmation.confirm_selected {
             "  Cancel     [Confirm]"
@@ -2980,17 +3430,17 @@ fn render_memory_manager(frame: &mut ratatui::Frame, area: Rect, state: &AppStat
     } else if manager.busy {
         lines.push(Line::from(Span::styled(
             "Updating memory…",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme.warning),
         )));
     } else if let Some(error) = &manager.error {
         lines.push(Line::from(Span::styled(
             crate::terminal_text::sanitize_terminal_text(error),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.error),
         )));
     } else if let Some(notice) = &manager.notice {
         lines.push(Line::from(Span::styled(
             crate::terminal_text::sanitize_terminal_text(notice),
-            Style::default().fg(Color::Green),
+            Style::default().fg(theme.success),
         )));
     } else {
         lines.push(Line::from(
@@ -3007,6 +3457,7 @@ fn render_keymap_hub(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
     let width = 84.min(area.width.saturating_sub(2));
     let height = 23.min(area.height.saturating_sub(2));
     let popup = centered_rect(width, height, area);
+    let theme = palette(state);
     let filter = hub.filter.trim().to_ascii_lowercase();
     let visible = crate::keymap::KeyAction::ALL
         .into_iter()
@@ -3026,18 +3477,18 @@ fn render_keymap_hub(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
         ListItem::new(Line::from(Span::styled(
             " Keyboard shortcuts",
             Style::default()
-                .fg(Color::White)
+                .fg(theme.strong)
                 .add_modifier(Modifier::BOLD),
         ))),
         ListItem::new(Line::from(vec![
-            Span::styled(" > ", Style::default().fg(Color::Cyan)),
+            Span::styled(" > ", Style::default().fg(theme.accent)),
             Span::styled(
                 if hub.filter.is_empty() {
                     "type to filter…"
                 } else {
                     &hub.filter
                 },
-                Style::default().fg(Color::White),
+                Style::default().fg(theme.text),
             ),
         ])),
         ListItem::new(""),
@@ -3045,7 +3496,7 @@ fn render_keymap_hub(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
     if visible.is_empty() {
         items.push(ListItem::new(Span::styled(
             "  No matching shortcuts",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
     } else {
         let capacity = height.saturating_sub(11).max(1) as usize;
@@ -3075,9 +3526,11 @@ fn render_keymap_hub(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
             items.push(ListItem::new(Span::styled(
                 pad_right(&line, width.saturating_sub(2) as usize),
                 if active {
-                    Style::default().fg(Color::Black).bg(Color::Cyan)
+                    Style::default()
+                        .fg(theme.accent_foreground)
+                        .bg(theme.accent)
                 } else {
-                    Style::default().fg(Color::White)
+                    Style::default().fg(theme.text)
                 },
             )));
         }
@@ -3085,17 +3538,17 @@ fn render_keymap_hub(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
     items.push(ListItem::new(""));
     if width < 70 {
         items.push(ListItem::new(Span::styled(
-            "  Fixed: Ctrl+R Diff · Ctrl+C cancel/quit",
-            Style::default().fg(Color::DarkGray),
+            "  Fixed: Ctrl+R Sessions · Ctrl+C cancel/quit",
+            Style::default().fg(theme.muted),
         )));
         items.push(ListItem::new(Span::styled(
             "  Enter/Esc and modal decisions are fixed",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
     } else {
         items.push(ListItem::new(Span::styled(
-            "  Fixed: Ctrl+R Diff · Ctrl+C cancel/quit · Enter/Esc and modal decisions",
-            Style::default().fg(Color::DarkGray),
+            "  Fixed: Ctrl+R Sessions · Ctrl+C cancel/quit · Enter/Esc and modal decisions",
+            Style::default().fg(theme.muted),
         )));
     }
     if let Some(capture) = &hub.capture {
@@ -3118,32 +3571,32 @@ fn render_keymap_hub(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
         );
         items.push(ListItem::new(Span::styled(
             instruction,
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme.warning),
         )));
     } else if hub.saving {
         items.push(ListItem::new(Span::styled(
             "Saving…",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme.warning),
         )));
     } else if hub.writes_enabled {
-        items.push(ListItem::new(Span::styled(
+        items.push(ListItem::new(crate::tui::overlay::footer_hint(
             if width < 70 {
                 "Enter capture · ⇧R reset · Esc close · ↑↓ move"
             } else {
                 "Enter capture · ⇧R reset selected · Esc close · ↑↓ navigate"
             },
-            Style::default().fg(Color::DarkGray),
+            theme.muted,
         )));
     } else {
-        items.push(ListItem::new(Span::styled(
+        items.push(ListItem::new(crate::tui::overlay::footer_hint(
             "View only in bare mode · Esc close · ↑↓ navigate",
-            Style::default().fg(Color::DarkGray),
+            theme.muted,
         )));
     }
     if let Some(notice) = &hub.notice {
         items.push(ListItem::new(Span::styled(
             crate::terminal_text::sanitize_terminal_text(notice),
-            Style::default().fg(Color::Green),
+            Style::default().fg(theme.success),
         )));
     }
     if let Some(error) = &hub.error {
@@ -3152,17 +3605,15 @@ fn render_keymap_hub(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
                 "Error: {}",
                 crate::terminal_text::sanitize_terminal_text(error)
             ),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.error),
         )));
     }
     frame.render_widget(Clear, popup);
     frame.render_widget(
-        List::new(items).block(
-            Block::default()
-                .title(" Keymap ")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
-        ),
+        List::new(items).block(crate::tui::overlay::standard_block(
+            " Keymap ",
+            theme.accent,
+        )),
         popup,
     );
 }
@@ -3174,6 +3625,7 @@ fn render_history_search(frame: &mut ratatui::Frame, area: Rect, state: &AppStat
     let width = 84.min(area.width.saturating_sub(2));
     let height = 21.min(area.height.saturating_sub(2));
     let popup = centered_rect(width, height, area);
+    let theme = palette(state);
     let filter = history.filter.to_ascii_lowercase();
     let visible = state
         .input_history
@@ -3187,30 +3639,30 @@ fn render_history_search(frame: &mut ratatui::Frame, area: Rect, state: &AppStat
         ListItem::new(Line::from(Span::styled(
             " Input history · newest first",
             Style::default()
-                .fg(Color::White)
+                .fg(theme.strong)
                 .add_modifier(Modifier::BOLD),
         ))),
         ListItem::new(Line::from(vec![
-            Span::styled(" > ", Style::default().fg(Color::Cyan)),
+            Span::styled(" > ", Style::default().fg(theme.accent)),
             Span::styled(
                 if history.filter.is_empty() {
                     "type to filter…"
                 } else {
                     &history.filter
                 },
-                Style::default().fg(Color::White),
+                Style::default().fg(theme.text),
             ),
         ])),
         ListItem::new(Span::styled(
             format!("  {} matching · process only", visible.len()),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )),
         ListItem::new(""),
     ];
     if visible.is_empty() {
         items.push(ListItem::new(Span::styled(
             "  No matching input history",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
     } else {
         let capacity = height.saturating_sub(8).max(1) as usize;
@@ -3230,30 +3682,30 @@ fn render_history_search(frame: &mut ratatui::Frame, area: Rect, state: &AppStat
                     width.saturating_sub(2) as usize,
                 ),
                 if active {
-                    Style::default().fg(Color::Black).bg(Color::Cyan)
+                    Style::default()
+                        .fg(theme.accent_foreground)
+                        .bg(theme.accent)
                 } else {
-                    Style::default().fg(Color::White)
+                    Style::default().fg(theme.text)
                 },
             )));
         }
     }
     items.push(ListItem::new(""));
-    items.push(ListItem::new(Span::styled(
+    items.push(ListItem::new(crate::tui::overlay::footer_hint(
         if width < 70 {
             "Enter restore · Esc close · ↑↓ move · PgUp/PgDn"
         } else {
             "Enter restore as draft · Esc close · ↑↓ navigate · PgUp/PgDn page"
         },
-        Style::default().fg(Color::DarkGray),
+        theme.muted,
     )));
     frame.render_widget(Clear, popup);
     frame.render_widget(
-        List::new(items).block(
-            Block::default()
-                .title(" History ")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
-        ),
+        List::new(items).block(crate::tui::overlay::standard_block(
+            " History ",
+            theme.accent,
+        )),
         popup,
     );
 }
@@ -3291,6 +3743,7 @@ fn render_prompt_stash(frame: &mut ratatui::Frame, area: Rect, state: &AppState)
     let width = 86.min(area.width.saturating_sub(2));
     let height = 22.min(area.height.saturating_sub(2));
     let popup = centered_rect(width, height, area);
+    let theme = palette(state);
     let selected = picker
         .selected_idx
         .min(picker.entries.len().saturating_sub(1));
@@ -3298,7 +3751,7 @@ fn render_prompt_stash(frame: &mut ratatui::Frame, area: Rect, state: &AppState)
         ListItem::new(Line::from(Span::styled(
             " Saved composer drafts · newest first",
             Style::default()
-                .fg(Color::White)
+                .fg(theme.strong)
                 .add_modifier(Modifier::BOLD),
         ))),
         ListItem::new(Span::styled(
@@ -3307,7 +3760,7 @@ fn render_prompt_stash(frame: &mut ratatui::Frame, area: Rect, state: &AppState)
                 picker.entries.len(),
                 crate::prompt_stash::MAX_ENTRIES
             ),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )),
         ListItem::new(""),
     ];
@@ -3318,7 +3771,7 @@ fn render_prompt_stash(frame: &mut ratatui::Frame, area: Rect, state: &AppState)
             } else {
                 "  Persistent drafts are unavailable in bare mode"
             },
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
     } else {
         let capacity = height.saturating_sub(11).max(2) as usize;
@@ -3336,9 +3789,11 @@ fn render_prompt_stash(frame: &mut ratatui::Frame, area: Rect, state: &AppState)
             items.push(ListItem::new(Span::styled(
                 pad_right(&row, width.saturating_sub(2) as usize),
                 if active {
-                    Style::default().fg(Color::Black).bg(Color::Cyan)
+                    Style::default()
+                        .fg(theme.accent_foreground)
+                        .bg(theme.accent)
                 } else {
-                    Style::default().fg(Color::White)
+                    Style::default().fg(theme.text)
                 },
             )));
         }
@@ -3347,7 +3802,7 @@ fn render_prompt_stash(frame: &mut ratatui::Frame, area: Rect, state: &AppState)
             items.push(ListItem::new(Span::styled(
                 "  Preview",
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(theme.muted)
                     .add_modifier(Modifier::BOLD),
             )));
             let safe = crate::terminal_text::sanitize_terminal_text(&entry.text);
@@ -3357,7 +3812,7 @@ fn render_prompt_stash(frame: &mut ratatui::Frame, area: Rect, state: &AppState)
                         "  {}",
                         prompt_stash_preview(line, width.saturating_sub(6) as usize)
                     ),
-                    Style::default().fg(Color::Gray),
+                    Style::default().fg(theme.muted),
                 )));
             }
         }
@@ -3370,14 +3825,14 @@ fn render_prompt_stash(frame: &mut ratatui::Frame, area: Rect, state: &AppState)
     } else {
         "View only in bare mode · Esc close"
     };
-    items.push(ListItem::new(Span::styled(
-        format!("  {controls}"),
-        Style::default().fg(Color::DarkGray),
+    items.push(ListItem::new(crate::tui::overlay::footer_hint(
+        format!("  {controls}").as_str(),
+        theme.muted,
     )));
     if let Some(notice) = &picker.notice {
         items.push(ListItem::new(Span::styled(
             format!("  {}", crate::terminal_text::sanitize_terminal_text(notice)),
-            Style::default().fg(Color::Green),
+            Style::default().fg(theme.success),
         )));
     }
     if let Some(error) = &picker.error {
@@ -3386,17 +3841,15 @@ fn render_prompt_stash(frame: &mut ratatui::Frame, area: Rect, state: &AppState)
                 "  Error: {}",
                 crate::terminal_text::sanitize_terminal_text(error)
             ),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.error),
         )));
     }
     frame.render_widget(Clear, popup);
     frame.render_widget(
-        List::new(items).block(
-            Block::default()
-                .title(" Prompt Stash ")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
-        ),
+        List::new(items).block(crate::tui::overlay::standard_block(
+            " Prompt Stash ",
+            theme.accent,
+        )),
         popup,
     );
 }
@@ -3408,17 +3861,18 @@ fn render_btw(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
     let width = 88.min(area.width.saturating_sub(2));
     let height = 22.min(area.height.saturating_sub(2));
     let popup = centered_rect(width, height, area);
+    let theme = palette(state);
     let mut lines = vec![
         Line::from(""),
         Line::from(vec![
-            Span::styled("Model  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Model  ", Style::default().fg(theme.muted)),
             Span::raw(format!("{}/{}", btw.provider, btw.model)),
         ]),
         Line::from(""),
         Line::from(Span::styled(
             "Question",
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),
         )),
     ];
@@ -3426,7 +3880,7 @@ fn render_btw(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
         lines.push(Line::from(vec![
             Span::raw("> "),
             Span::raw(btw.question[..btw.cursor].to_string()),
-            Span::styled("▏", Style::default().fg(Color::Cyan)),
+            Span::styled("▏", Style::default().fg(theme.accent)),
             Span::raw(btw.question[btw.cursor..].to_string()),
         ]));
     } else {
@@ -3434,11 +3888,11 @@ fn render_btw(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
     }
     lines.push(Line::from(""));
     let (status, style) = match &btw.status {
-        crate::app::BtwStatus::Editing => ("Ready", Style::default().fg(Color::DarkGray)),
-        crate::app::BtwStatus::Running => ("Answering…", Style::default().fg(Color::Yellow)),
-        crate::app::BtwStatus::Complete => ("Answer", Style::default().fg(Color::Green)),
-        crate::app::BtwStatus::Failed(_) => ("Could not answer", Style::default().fg(Color::Red)),
-        crate::app::BtwStatus::Cancelled => ("Cancelled", Style::default().fg(Color::Yellow)),
+        crate::app::BtwStatus::Editing => ("Ready", Style::default().fg(theme.muted)),
+        crate::app::BtwStatus::Running => ("Answering…", Style::default().fg(theme.warning)),
+        crate::app::BtwStatus::Complete => ("Answer", Style::default().fg(theme.success)),
+        crate::app::BtwStatus::Failed(_) => ("Could not answer", Style::default().fg(theme.error)),
+        crate::app::BtwStatus::Cancelled => ("Cancelled", Style::default().fg(theme.warning)),
     };
     lines.push(Line::from(Span::styled(
         status,
@@ -3447,12 +3901,12 @@ fn render_btw(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
     match &btw.status {
         crate::app::BtwStatus::Editing => lines.push(Line::from(Span::styled(
             "This answer stays out of the conversation and saved session.",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         ))),
         crate::app::BtwStatus::Running if btw.answer.is_empty() => {
             lines.push(Line::from(Span::styled(
                 "Waiting for the provider…",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.muted),
             )))
         }
         crate::app::BtwStatus::Failed(error) => {
@@ -3462,35 +3916,30 @@ fn render_btw(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
             }
             lines.push(Line::from(Span::styled(
                 error.clone(),
-                Style::default().fg(Color::Red),
+                Style::default().fg(theme.error),
             )));
         }
-        crate::app::BtwStatus::Cancelled if btw.answer.is_empty() => {
-            lines.push(Line::from(Span::styled(
-                "No side answer was kept.",
-                Style::default().fg(Color::DarkGray),
-            )))
-        }
+        crate::app::BtwStatus::Cancelled if btw.answer.is_empty() => lines.push(Line::from(
+            Span::styled("No side answer was kept.", Style::default().fg(theme.muted)),
+        )),
         _ => lines.extend(btw.answer.lines().map(|line| Line::from(line.to_string()))),
     }
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
+    lines.push(crate::tui::overlay::footer_hint(
         match btw.status {
             crate::app::BtwStatus::Editing => "Enter ask · Esc close",
             crate::app::BtwStatus::Running => "Esc cancel side question · ↑↓ scroll",
             _ => "Enter/Esc close · ↑↓ scroll",
         },
-        Style::default().fg(Color::DarkGray),
-    )));
+        theme.muted,
+    ));
     frame.render_widget(Clear, popup);
     frame.render_widget(
         Paragraph::new(Text::from(lines))
-            .block(
-                Block::default()
-                    .title(" BTW · ephemeral ")
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Cyan)),
-            )
+            .block(crate::tui::overlay::standard_block(
+                " BTW · ephemeral ",
+                theme.accent,
+            ))
             .scroll((btw.scroll, 0))
             .wrap(Wrap { trim: false }),
         popup,
@@ -3506,10 +3955,7 @@ fn render_voice(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
     let popup = centered_rect(width, height.min(area.height.saturating_sub(2)), area);
     frame.render_widget(Clear, popup);
     let theme = palette(state);
-    let block = Block::default()
-        .title(" Voice input ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme.accent));
+    let block = crate::tui::overlay::standard_block(" Voice input ", theme.accent);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     let (status, style, detail, controls) = match voice.phase {
@@ -3565,23 +4011,24 @@ fn render_provider_discovery(frame: &mut ratatui::Frame, area: Rect, state: &App
     let width = 88.min(area.width.saturating_sub(4));
     let height = 22.min(area.height.saturating_sub(2));
     let popup = centered_rect(width, height, area);
+    let theme = palette(state);
     let mut lines = Vec::new();
     lines.push(Line::from(""));
     if discovery.scanning {
         lines.push(Line::from(Span::styled(
             "Scanning approved 127.0.0.1 ports…",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme.warning),
         )));
     } else if let Some(error) = discovery.error.as_ref() {
         lines.push(Line::from(Span::styled(
             format!("Discovery failed: {error}"),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.error),
         )));
     } else if discovery.candidates.is_empty() {
         lines.push(Line::from("No compatible local providers found."));
         lines.push(Line::from(Span::styled(
             "Start a local OpenAI-compatible server, then rescan.",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
     } else {
         lines.push(Line::from(Span::styled(
@@ -3594,7 +4041,7 @@ fn render_provider_discovery(frame: &mut ratatui::Frame, area: Rect, state: &App
                     "providers"
                 }
             ),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
         lines.push(Line::from(""));
         for (index, candidate) in discovery.candidates.iter().enumerate() {
@@ -3621,31 +4068,31 @@ fn render_provider_discovery(frame: &mut ratatui::Frame, area: Rect, state: &App
                 model_count_label(candidate.models.len())
             );
             let style = if index == discovery.selected_idx {
-                Style::default().fg(Color::Black).bg(Color::Cyan)
+                Style::default()
+                    .fg(theme.accent_foreground)
+                    .bg(theme.accent)
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(theme.text)
             };
             lines.push(Line::from(Span::styled(row, style)));
         }
     }
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
+    lines.push(crate::tui::overlay::footer_hint(
         if discovery.scanning {
             "Esc cancel and close"
         } else {
             "Enter add · ⇧R rescan · Esc close · ↑↓ navigate"
         },
-        Style::default().fg(Color::DarkGray),
-    )));
+        theme.muted,
+    ));
     frame.render_widget(Clear, popup);
     frame.render_widget(
         Paragraph::new(Text::from(lines))
-            .block(
-                Block::default()
-                    .title(" Local provider discovery ")
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Cyan)),
-            )
+            .block(crate::tui::overlay::standard_block(
+                " Local provider discovery ",
+                theme.accent,
+            ))
             .wrap(Wrap { trim: false }),
         popup,
     );
@@ -3655,6 +4102,7 @@ fn render_provider_manager(frame: &mut ratatui::Frame, area: Rect, state: &AppSt
     let Some(manager) = state.provider_manager.as_ref() else {
         return;
     };
+    let theme = palette(state);
     match &manager.view {
         crate::app::ProviderManagerView::Providers => {
             render_provider_list(frame, area, state, manager)
@@ -3663,7 +4111,7 @@ fn render_provider_manager(frame: &mut ratatui::Frame, area: Rect, state: &AppSt
             render_provider_models(frame, area, state, manager, provider)
         }
         crate::app::ProviderManagerView::Templates { return_to } => {
-            render_provider_templates(frame, area, manager, *return_to)
+            render_provider_templates(frame, area, manager, *return_to, &theme)
         }
         crate::app::ProviderManagerView::SetupProviders => {
             render_provider_setup_list(frame, area, state, manager)
@@ -3676,7 +4124,7 @@ fn render_provider_manager(frame: &mut ratatui::Frame, area: Rect, state: &AppSt
         }
     }
     if let Some(confirmation) = manager.delete_confirmation.as_ref() {
-        render_provider_delete_confirmation(frame, area, manager, confirmation);
+        render_provider_delete_confirmation(frame, area, manager, confirmation, &theme);
     }
 }
 
@@ -3696,12 +4144,13 @@ fn render_provider_auth(frame: &mut ratatui::Frame, area: Rect, state: &AppState
     let width = 86.min(area.width.saturating_sub(2));
     let height = (if shows_mimo_discount { 22 } else { 20 }).min(area.height.saturating_sub(2));
     let popup = centered_rect(width, height, area);
+    let theme = palette(state);
     let mut lines = vec![
         Line::from(""),
         Line::from(Span::styled(
             format!("Connect {}", auth.provider.display_name()),
             Style::default()
-                .fg(Color::White)
+                .fg(theme.strong)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
@@ -3710,20 +4159,20 @@ fn render_provider_auth(frame: &mut ratatui::Frame, area: Rect, state: &AppState
     if auth.bare {
         lines.push(Line::from(Span::styled(
             "Bare profile: this credential is memory-only and cannot become the saved default.",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme.warning),
         )));
     }
     if shows_mimo_discount {
         lines.push(Line::from(Span::styled(
             format!("Token Plan: {}", crate::pricing::MIMO_OFF_PEAK_COPY),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
     }
     if auth.url.is_some() {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "Authorization URL ready.",
-            Style::default().fg(Color::Cyan),
+            Style::default().fg(theme.accent),
         )));
         lines.push(Line::from(
             "Ctrl+Y copies it and opens a borderless selectable handoff.",
@@ -3772,9 +4221,11 @@ fn render_provider_auth(frame: &mut ratatui::Frame, area: Rect, state: &AppState
         lines.push(Line::from(""));
         for (index, item) in items.iter().enumerate() {
             let style = if index == auth.selected_index {
-                Style::default().fg(Color::Black).bg(Color::Cyan)
+                Style::default()
+                    .fg(theme.accent_foreground)
+                    .bg(theme.accent)
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(theme.text)
             };
             lines.push(Line::from(Span::styled(
                 format!(
@@ -3792,11 +4243,11 @@ fn render_provider_auth(frame: &mut ratatui::Frame, area: Rect, state: &AppState
     if let Some(code) = auth.code.as_deref() {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
-            Span::styled("One-time code: ", Style::default().fg(Color::Cyan)),
+            Span::styled("One-time code: ", Style::default().fg(theme.accent)),
             Span::styled(
                 crate::terminal_text::sanitize_terminal_text(code),
                 Style::default()
-                    .fg(Color::White)
+                    .fg(theme.strong)
                     .add_modifier(Modifier::BOLD),
             ),
         ]));
@@ -3805,31 +4256,35 @@ fn render_provider_auth(frame: &mut ratatui::Frame, area: Rect, state: &AppState
         let masked = "•".repeat(auth.input.len().min(width.saturating_sub(8) as usize));
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
-            Span::styled("> ", Style::default().fg(Color::Cyan)),
-            Span::styled(masked, Style::default().fg(Color::White)),
+            Span::styled("> ", Style::default().fg(theme.accent)),
+            Span::styled(masked, Style::default().fg(theme.text)),
         ]));
     }
     if auth.stage == crate::app::ProviderAuthStage::PlanUsdInput {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
-            Span::styled("$ ", Style::default().fg(Color::Cyan)),
+            Span::styled("$ ", Style::default().fg(theme.accent)),
             Span::styled(
                 crate::terminal_text::sanitize_terminal_text(&auth.metadata_input),
-                Style::default().fg(Color::White),
+                Style::default().fg(theme.text),
             ),
         ]));
     }
     if auth.stage == crate::app::ProviderAuthStage::PriceConfirmation {
         lines.push(Line::from(""));
         let cancel = if auth.selected_index == 0 {
-            Style::default().fg(Color::Black).bg(Color::Cyan)
+            Style::default()
+                .fg(theme.accent_foreground)
+                .bg(theme.accent)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme.text)
         };
         let confirm = if auth.selected_index == 1 {
-            Style::default().fg(Color::Black).bg(Color::Yellow)
+            Style::default()
+                .fg(theme.accent_foreground)
+                .bg(theme.warning)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme.text)
         };
         lines.push(Line::from(vec![
             Span::styled(
@@ -3855,11 +4310,11 @@ fn render_provider_auth(frame: &mut ratatui::Frame, area: Rect, state: &AppState
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             crate::terminal_text::sanitize_terminal_text(error),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.error),
         )));
     }
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
+    lines.push(crate::tui::overlay::footer_hint(
         match auth.stage {
             crate::app::ProviderAuthStage::MethodPicker
             | crate::app::ProviderAuthStage::RegionPicker
@@ -3887,17 +4342,15 @@ fn render_provider_auth(frame: &mut ratatui::Frame, area: Rect, state: &AppState
             }
             _ => "Waiting for authorization… · Esc cancel",
         },
-        Style::default().fg(Color::DarkGray),
-    )));
+        theme.muted,
+    ));
     frame.render_widget(Clear, popup);
     frame.render_widget(
         Paragraph::new(Text::from(lines))
-            .block(
-                Block::default()
-                    .title(" Provider authentication ")
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Cyan)),
-            )
+            .block(crate::tui::overlay::standard_block(
+                " Provider authentication ",
+                theme.accent,
+            ))
             .wrap(Wrap { trim: false }),
         popup,
     );
@@ -3912,6 +4365,7 @@ fn render_provider_setup_list(
     let pw = 82.min(area.width.saturating_sub(4));
     let ph = 22.min(area.height.saturating_sub(2));
     let pa = centered_rect(pw, ph, area);
+    let theme = palette(state);
     let filter = manager.provider_filter.to_ascii_lowercase();
     let visible = manager
         .providers
@@ -3935,27 +4389,27 @@ fn render_provider_setup_list(
         ListItem::new(Span::styled(
             " Provider setup",
             Style::default()
-                .fg(Color::White)
+                .fg(theme.strong)
                 .add_modifier(Modifier::BOLD),
         )),
         ListItem::new(Span::styled(
             " Tests send one tiny isolated request; provider usage may apply.",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme.warning),
         )),
         ListItem::new(Line::from(vec![
-            Span::styled("> ", Style::default().fg(Color::Cyan)),
+            Span::styled("> ", Style::default().fg(theme.accent)),
             Span::styled(
                 if manager.provider_filter.is_empty() {
                     "type to filter providers…"
                 } else {
                     &manager.provider_filter
                 },
-                Style::default().fg(Color::White),
+                Style::default().fg(theme.text),
             ),
         ])),
         ListItem::new(Span::styled(
             format!("  {working} of {} working", manager.providers.len()),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )),
         ListItem::new(""),
     ];
@@ -3964,11 +4418,13 @@ fn render_provider_setup_list(
     for (index, entry) in visible.iter().enumerate().skip(start).take(capacity) {
         let is_selected = index == selected;
         let style = if is_selected {
-            Style::default().fg(Color::Black).bg(Color::Cyan)
+            Style::default()
+                .fg(theme.accent_foreground)
+                .bg(theme.accent)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme.text)
         };
-        let (check, _) = provider_check_label(state.provider_checks.get(&entry.id));
+        let (check, _) = provider_check_label(state.provider_checks.get(&entry.id), &theme);
         let label = format!(
             "{}{} · {} · {}",
             if is_selected { "▸ " } else { "  " },
@@ -3988,35 +4444,31 @@ fn render_provider_setup_list(
             } else {
                 "  No matching providers"
             },
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
     }
     items.push(ListItem::new(""));
     if let Some(error) = manager.error.as_deref() {
         items.push(ListItem::new(Span::styled(
             error,
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.error),
         )));
     }
-    items.push(ListItem::new(Span::styled(
+    items.push(ListItem::new(crate::tui::overlay::footer_hint(
         "Enter details · ⇧T test · ⇧E edit · ⇧F finish",
-        Style::default().fg(Color::DarkGray),
+        theme.muted,
     )));
-    items.push(ListItem::new(Span::styled(
+    items.push(ListItem::new(crate::tui::overlay::footer_hint(
         "⇧P templates · ⇧O OpenAI · ⇧A custom",
-        Style::default().fg(Color::DarkGray),
+        theme.muted,
     )));
-    items.push(ListItem::new(Span::styled(
+    items.push(ListItem::new(crate::tui::overlay::footer_hint(
         "Esc close · ↑↓ move · PgUp/PgDn · Home/End",
-        Style::default().fg(Color::DarkGray),
+        theme.muted,
     )));
     frame.render_widget(Clear, pa);
     frame.render_widget(
-        List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
-        ),
+        List::new(items).block(crate::tui::overlay::plain_block(theme.accent)),
         pa,
     );
 }
@@ -4031,8 +4483,9 @@ fn render_provider_setup_provider(
     let pw = 76.min(area.width.saturating_sub(4));
     let ph = 16.min(area.height.saturating_sub(4));
     let pa = centered_rect(pw, ph, area);
+    let theme = palette(state);
     let entry = manager.providers.iter().find(|entry| entry.id == provider);
-    let (status, color) = provider_check_label(state.provider_checks.get(provider));
+    let (status, color) = provider_check_label(state.provider_checks.get(provider), &theme);
     let test_model = state
         .provider_checks
         .get(provider)
@@ -4060,7 +4513,7 @@ fn render_provider_setup_provider(
                 crate::terminal_text::sanitize_terminal_text(provider)
             ),
             Style::default()
-                .fg(Color::White)
+                .fg(theme.strong)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(format!(
@@ -4081,26 +4534,19 @@ fn render_provider_setup_provider(
             Style::default().fg(color),
         )),
         Line::from(""),
-        Line::from(Span::styled(
+        crate::tui::overlay::footer_hint(
             if state.provider_check_running.as_deref() == Some(provider) {
                 "Testing… Esc cancel"
             } else {
                 "⇧T test provider · ⇧E edit settings/key · ⇧A add model"
             },
-            Style::default().fg(Color::DarkGray),
-        )),
-        Line::from(Span::styled(
-            "⇧R refresh models · Esc checklist",
-            Style::default().fg(Color::DarkGray),
-        )),
+            theme.muted,
+        ),
+        crate::tui::overlay::footer_hint("⇧R refresh models · Esc checklist", theme.muted),
     ];
     frame.render_widget(Clear, pa);
     frame.render_widget(
-        Paragraph::new(Text::from(lines)).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
-        ),
+        Paragraph::new(Text::from(lines)).block(crate::tui::overlay::plain_block(theme.accent)),
         pa,
     );
 }
@@ -4114,6 +4560,7 @@ fn render_provider_setup_finish(
     let pw = 72.min(area.width.saturating_sub(4));
     let ph = 16.min(area.height.saturating_sub(4));
     let pa = centered_rect(pw, ph, area);
+    let theme = palette(state);
     let passing = manager
         .providers
         .iter()
@@ -4132,7 +4579,7 @@ fn render_provider_setup_finish(
         ListItem::new(Span::styled(
             " Choose a working default",
             Style::default()
-                .fg(Color::White)
+                .fg(theme.strong)
                 .add_modifier(Modifier::BOLD),
         )),
         ListItem::new(""),
@@ -4146,9 +4593,11 @@ fn render_provider_setup_finish(
             crate::terminal_text::sanitize_terminal_text(model)
         );
         let style = if is_selected {
-            Style::default().fg(Color::Black).bg(Color::Cyan)
+            Style::default()
+                .fg(theme.accent_foreground)
+                .bg(theme.accent)
         } else {
-            Style::default().fg(Color::Green)
+            Style::default().fg(theme.success)
         };
         items.push(ListItem::new(Span::styled(
             pad_right(&label, pw.saturating_sub(2) as usize),
@@ -4159,65 +4608,62 @@ fn render_provider_setup_finish(
     if manager.busy {
         items.push(ListItem::new(Span::styled(
             "Saving default…",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme.warning),
         )));
     } else if let Some(error) = manager.error.as_deref() {
         items.push(ListItem::new(Span::styled(
             error,
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.error),
         )));
     }
-    items.push(ListItem::new(Span::styled(
+    items.push(ListItem::new(crate::tui::overlay::footer_hint(
         "Enter select and finish · Esc checklist · ↑↓ move",
-        Style::default().fg(Color::DarkGray),
+        theme.muted,
     )));
     frame.render_widget(Clear, pa);
     frame.render_widget(
-        List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
-        ),
+        List::new(items).block(crate::tui::overlay::plain_block(theme.accent)),
         pa,
     );
 }
 
 fn provider_check_label(
     status: Option<&crate::provider_probe::ProviderCheckStatus>,
+    theme: &ThemePalette,
 ) -> (String, Color) {
     use crate::provider_probe::ProviderCheckStatus;
     match status {
-        None => ("not checked".into(), Color::DarkGray),
-        Some(ProviderCheckStatus::Checking) => ("testing…".into(), Color::Yellow),
-        Some(ProviderCheckStatus::Working { .. }) => ("working".into(), Color::Green),
+        None => ("not checked".into(), theme.muted),
+        Some(ProviderCheckStatus::Checking) => ("testing…".into(), theme.warning),
+        Some(ProviderCheckStatus::Working { .. }) => ("working".into(), theme.success),
         Some(ProviderCheckStatus::MissingEnvironment { variable }) => {
-            (format!("env {variable} missing"), Color::Yellow)
+            (format!("env {variable} missing"), theme.warning)
         }
         Some(ProviderCheckStatus::CredentialRejected) => {
-            ("credential rejected (401)".into(), Color::Red)
+            ("credential rejected (401)".into(), theme.error)
         }
-        Some(ProviderCheckStatus::AccessDenied) => ("access denied (HTTP 403)".into(), Color::Red),
-        Some(ProviderCheckStatus::TimedOut) => ("timed out".into(), Color::Yellow),
-        Some(ProviderCheckStatus::CannotConnect) => ("cannot connect".into(), Color::Red),
+        Some(ProviderCheckStatus::AccessDenied) => ("access denied (HTTP 403)".into(), theme.error),
+        Some(ProviderCheckStatus::TimedOut) => ("timed out".into(), theme.warning),
+        Some(ProviderCheckStatus::CannotConnect) => ("cannot connect".into(), theme.error),
         Some(ProviderCheckStatus::EndpointNotFound) => {
-            ("endpoint not found (HTTP 404)".into(), Color::Red)
+            ("endpoint not found (HTTP 404)".into(), theme.error)
         }
-        Some(ProviderCheckStatus::RateLimited) => ("rate limited (HTTP 429)".into(), Color::Yellow),
+        Some(ProviderCheckStatus::RateLimited) => ("rate limited (HTTP 429)".into(), theme.warning),
         Some(ProviderCheckStatus::ProviderError {
             status: Some(status),
-        }) => (format!("provider error (HTTP {status})"), Color::Red),
+        }) => (format!("provider error (HTTP {status})"), theme.error),
         Some(ProviderCheckStatus::ProviderError { status: None }) => {
-            ("provider request failed".into(), Color::Red)
+            ("provider request failed".into(), theme.error)
         }
         Some(ProviderCheckStatus::InvalidResponse) => {
-            ("invalid or incomplete response".into(), Color::Red)
+            ("invalid or incomplete response".into(), theme.error)
         }
         Some(ProviderCheckStatus::FilterStopped) => {
-            ("provider filter stopped".into(), Color::Yellow)
+            ("provider filter stopped".into(), theme.warning)
         }
-        Some(ProviderCheckStatus::NeedsModel) => ("needs a model".into(), Color::Yellow),
+        Some(ProviderCheckStatus::NeedsModel) => ("needs a model".into(), theme.warning),
         Some(ProviderCheckStatus::AuthenticationRequired) => {
-            ("authentication required".into(), Color::Yellow)
+            ("authentication required".into(), theme.warning)
         }
     }
 }
@@ -4231,6 +4677,7 @@ fn render_provider_list(
     let pw = 74.min(area.width.saturating_sub(4));
     let ph = 20.min(area.height.saturating_sub(4));
     let pa = centered_rect(pw, ph, area);
+    let theme = palette(state);
     let filter = manager.provider_filter.to_ascii_lowercase();
     let visible = manager
         .providers
@@ -4249,19 +4696,19 @@ fn render_provider_list(
         ListItem::new(Span::styled(
             " Providers",
             Style::default()
-                .fg(Color::White)
+                .fg(theme.strong)
                 .add_modifier(Modifier::BOLD),
         )),
         ListItem::new(""),
         ListItem::new(Line::from(vec![
-            Span::styled("> ", Style::default().fg(Color::Cyan)),
+            Span::styled("> ", Style::default().fg(theme.accent)),
             Span::styled(
                 if manager.provider_filter.is_empty() {
                     "type to filter…"
                 } else {
                     &manager.provider_filter
                 },
-                Style::default().fg(Color::White),
+                Style::default().fg(theme.text),
             ),
         ])),
         ListItem::new(Span::styled(
@@ -4272,7 +4719,7 @@ fn render_provider_list(
                 configured_count,
                 if configured_count == 1 { "" } else { "s" }
             ),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )),
         ListItem::new(""),
     ];
@@ -4294,9 +4741,11 @@ fn render_provider_list(
             .as_ref()
             .is_some_and(|model| model.provider == entry.id);
         let style = if is_selected {
-            Style::default().fg(Color::Black).bg(Color::Cyan)
+            Style::default()
+                .fg(theme.accent_foreground)
+                .bg(theme.accent)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme.text)
         };
         let provider_name = crate::provider_connect::FirstClassProvider::for_id(&entry.id)
             .map_or(entry.id.as_str(), |provider| provider.display_name());
@@ -4353,40 +4802,36 @@ fn render_provider_list(
             } else {
                 "  No matching providers"
             },
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
     }
     items.push(ListItem::new(""));
     if manager.busy {
         items.push(ListItem::new(Span::styled(
             "Saving provider changes…",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme.warning),
         )));
     } else if let Some(error) = manager.error.as_deref() {
         items.push(ListItem::new(Span::styled(
             error,
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.error),
         )));
     }
-    items.push(ListItem::new(Span::styled(
+    items.push(ListItem::new(crate::tui::overlay::footer_hint(
         "Enter connect/models · ⇧L reconnect · ⇧P templates",
-        Style::default().fg(Color::DarkGray),
+        theme.muted,
     )));
-    items.push(ListItem::new(Span::styled(
+    items.push(ListItem::new(crate::tui::overlay::footer_hint(
         "⇧A custom · ⇧E edit · ⇧D delete · ⇧R refresh",
-        Style::default().fg(Color::DarkGray),
+        theme.muted,
     )));
-    items.push(ListItem::new(Span::styled(
+    items.push(ListItem::new(crate::tui::overlay::footer_hint(
         "Esc close · ↑↓ wrap · PgUp/PgDn · Home/End",
-        Style::default().fg(Color::DarkGray),
+        theme.muted,
     )));
     frame.render_widget(Clear, pa);
     frame.render_widget(
-        List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
-        ),
+        List::new(items).block(crate::tui::overlay::plain_block(theme.accent)),
         pa,
     );
 }
@@ -4396,6 +4841,7 @@ fn render_provider_templates(
     area: Rect,
     manager: &crate::app::ProviderManagerState,
     return_to: crate::app::ProviderTemplateReturn,
+    theme: &ThemePalette,
 ) {
     let pw = 82.min(area.width.saturating_sub(4));
     let ph = 22.min(area.height.saturating_sub(2));
@@ -4417,22 +4863,22 @@ fn render_provider_templates(
         ListItem::new(Span::styled(
             " Provider templates",
             Style::default()
-                .fg(Color::White)
+                .fg(theme.strong)
                 .add_modifier(Modifier::BOLD),
         )),
         ListItem::new(Span::styled(
             " Select a compatible template to review before saving.",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )),
         ListItem::new(Line::from(vec![
-            Span::styled("> ", Style::default().fg(Color::Cyan)),
+            Span::styled("> ", Style::default().fg(theme.accent)),
             Span::styled(
                 if manager.template_filter.is_empty() {
                     "type to filter names, aliases, or key env…"
                 } else {
                     &manager.template_filter
                 },
-                Style::default().fg(Color::White),
+                Style::default().fg(theme.text),
             ),
         ])),
         ListItem::new(Span::styled(
@@ -4440,7 +4886,7 @@ fn render_provider_templates(
                 "  {ready} ready · {} need integration",
                 crate::provider_templates::ALL.len().saturating_sub(ready)
             ),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )),
         ListItem::new(""),
     ];
@@ -4465,13 +4911,15 @@ fn render_provider_templates(
         );
         let label = truncate_middle_chars(&raw, pw.saturating_sub(2) as usize);
         let style = if is_selected {
-            Style::default().fg(Color::Black).bg(Color::Cyan)
+            Style::default()
+                .fg(theme.accent_foreground)
+                .bg(theme.accent)
         } else if configured {
-            Style::default().fg(Color::Green)
+            Style::default().fg(theme.success)
         } else if template.is_installable() {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme.text)
         } else {
-            Style::default().fg(Color::Yellow)
+            Style::default().fg(theme.warning)
         };
         items.push(ListItem::new(Span::styled(
             pad_right(&label, pw.saturating_sub(2) as usize),
@@ -4481,21 +4929,21 @@ fn render_provider_templates(
     if visible.is_empty() {
         items.push(ListItem::new(Span::styled(
             "  No matching provider templates",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
     }
     items.push(ListItem::new(""));
     if let Some(error) = manager.error.as_deref() {
         items.push(ListItem::new(Span::styled(
             truncate_middle_chars(error, pw.saturating_sub(2) as usize),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.error),
         )));
     }
-    items.push(ListItem::new(Span::styled(
+    items.push(ListItem::new(crate::tui::overlay::footer_hint(
         "Enter review · ↑↓ move · PgUp/PgDn · Home/End",
-        Style::default().fg(Color::DarkGray),
+        theme.muted,
     )));
-    items.push(ListItem::new(Span::styled(
+    items.push(ListItem::new(crate::tui::overlay::footer_hint(
         match return_to {
             crate::app::ProviderTemplateReturn::Providers => {
                 "Esc providers · unavailable rows show requirements"
@@ -4504,15 +4952,11 @@ fn render_provider_templates(
                 "Esc setup · unavailable rows show requirements"
             }
         },
-        Style::default().fg(Color::DarkGray),
+        theme.muted,
     )));
     frame.render_widget(Clear, pa);
     frame.render_widget(
-        List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
-        ),
+        List::new(items).block(crate::tui::overlay::plain_block(theme.accent)),
         pa,
     );
 }
@@ -4527,6 +4971,7 @@ fn render_provider_models(
     let pw = 76.min(area.width.saturating_sub(4));
     let ph = 22.min(area.height.saturating_sub(2));
     let pa = centered_rect(pw, ph, area);
+    let theme = palette(state);
     let entry = manager.providers.iter().find(|entry| entry.id == provider);
     let filter = manager.model_filter.to_ascii_lowercase();
     let visible = state
@@ -4558,7 +5003,7 @@ fn render_provider_models(
                 crate::terminal_text::sanitize_terminal_text(provider)
             ),
             Style::default()
-                .fg(Color::White)
+                .fg(theme.strong)
                 .add_modifier(Modifier::BOLD),
         )),
         ListItem::new(Span::styled(
@@ -4569,25 +5014,25 @@ fn render_provider_models(
                     pw.saturating_sub(13) as usize
                 )
             ),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )),
         ListItem::new(Span::styled(
             format!(
                 " Credential: {credential} · {}",
                 crate::terminal_text::sanitize_terminal_text(catalog)
             ),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )),
         ListItem::new(""),
         ListItem::new(Line::from(vec![
-            Span::styled("> ", Style::default().fg(Color::Cyan)),
+            Span::styled("> ", Style::default().fg(theme.accent)),
             Span::styled(
                 if manager.model_filter.is_empty() {
                     "type to filter models…"
                 } else {
                     &manager.model_filter
                 },
-                Style::default().fg(Color::White),
+                Style::default().fg(theme.text),
             ),
         ])),
         ListItem::new(""),
@@ -4599,9 +5044,11 @@ fn render_provider_models(
         let is_current = state.current_model.as_ref() == Some(*model);
         let configured = entry.is_some_and(|entry| entry.configured_models.contains(&model.id));
         let style = if is_selected {
-            Style::default().fg(Color::Black).bg(Color::Cyan)
+            Style::default()
+                .fg(theme.accent_foreground)
+                .bg(theme.accent)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme.text)
         };
         let label = format!(
             "{}{}{}{}",
@@ -4624,36 +5071,32 @@ fn render_provider_models(
     if visible.is_empty() {
         items.push(ListItem::new(Span::styled(
             "  No matching models. ⇧A add model",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
     }
     items.push(ListItem::new(""));
     if manager.busy {
         items.push(ListItem::new(Span::styled(
             "Saving provider changes…",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme.warning),
         )));
     } else if let Some(error) = manager.error.as_deref() {
         items.push(ListItem::new(Span::styled(
             error,
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.error),
         )));
     }
-    items.push(ListItem::new(Span::styled(
+    items.push(ListItem::new(crate::tui::overlay::footer_hint(
         "Enter select · ⇧A add model · ⇧E edit/add · ⇧C cache",
-        Style::default().fg(Color::DarkGray),
+        theme.muted,
     )));
-    items.push(ListItem::new(Span::styled(
+    items.push(ListItem::new(crate::tui::overlay::footer_hint(
         "⇧S settings · ⇧R refresh · ⇧D delete provider · Esc providers",
-        Style::default().fg(Color::DarkGray),
+        theme.muted,
     )));
     frame.render_widget(Clear, pa);
     frame.render_widget(
-        List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
-        ),
+        List::new(items).block(crate::tui::overlay::plain_block(theme.accent)),
         pa,
     );
 }
@@ -4663,6 +5106,7 @@ fn render_provider_delete_confirmation(
     area: Rect,
     manager: &crate::app::ProviderManagerState,
     confirmation: &crate::app::ProviderDeleteConfirmation,
+    theme: &ThemePalette,
 ) {
     let pw = 68.min(area.width.saturating_sub(4));
     let ph = 12.min(area.height.saturating_sub(4));
@@ -4681,14 +5125,18 @@ fn render_provider_delete_confirmation(
         "No saved credential is attached to this provider."
     };
     let cancel_style = if !confirmation.confirm_selected {
-        Style::default().fg(Color::Black).bg(Color::Cyan)
+        Style::default()
+            .fg(theme.accent_foreground)
+            .bg(theme.accent)
     } else {
-        Style::default().fg(Color::White)
+        Style::default().fg(theme.text)
     };
     let delete_style = if confirmation.confirm_selected {
-        Style::default().fg(Color::Black).bg(Color::Red)
+        Style::default()
+            .fg(theme.accent_foreground)
+            .bg(theme.approval_deny)
     } else {
-        Style::default().fg(Color::Red)
+        Style::default().fg(theme.error)
     };
     let configured_models = match confirmation.configured_model_count {
         1 => "1 configured model".to_string(),
@@ -4699,7 +5147,7 @@ fn render_provider_delete_confirmation(
         Line::from(Span::styled(
             format!("Delete provider {}?", confirmation.provider),
             Style::default()
-                .fg(Color::White)
+                .fg(theme.strong)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(format!(
@@ -4714,23 +5162,21 @@ fn render_provider_delete_confirmation(
             Span::styled("  Delete  ", delete_style),
         ]),
         Line::from(""),
-        Line::from(Span::styled(
+        crate::tui::overlay::footer_hint(
             if manager.busy {
                 "Deleting provider…"
             } else {
                 "←→ choose · Enter confirm · Esc cancel"
             },
-            Style::default().fg(Color::DarkGray),
-        )),
+            theme.muted,
+        ),
     ];
     frame.render_widget(Clear, pa);
     frame.render_widget(
-        Paragraph::new(Text::from(lines)).block(
-            Block::default()
-                .title(" Delete provider ")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Red)),
-        ),
+        Paragraph::new(Text::from(lines)).block(crate::tui::overlay::standard_block(
+            " Delete provider ",
+            theme.approval_deny,
+        )),
         pa,
     );
 }
@@ -4761,109 +5207,79 @@ fn compact_token_count(tokens: u64) -> String {
     }
 }
 
-fn render_title(frame: &mut ratatui::Frame, area: Rect, state: &AppState, version_label: &str) {
-    if area.height == 0 || area.width == 0 {
-        return;
-    }
-    let theme = palette(state);
-    let context = if let Some(window) = state.current_context_window_tokens {
-        format!(
-            "{} / {}",
-            compact_token_count(state.current_context_tokens),
-            compact_token_count(window)
-        )
-    } else if state.current_context_tokens > 0 {
-        format!(
-            "{} context",
-            compact_token_count(state.current_context_tokens)
-        )
-    } else {
-        String::new()
-    };
-    let mut right = if context.is_empty() {
-        "[Dashboard]".to_string()
-    } else {
-        format!("{context} │ [Dashboard]")
-    };
-    let identity = format!(" {version_label}");
-    let identity_width = unicode_width::UnicodeWidthStr::width(identity.as_str());
-    let remaining_width = (area.width as usize).saturating_sub(identity_width + 2);
-    if unicode_width::UnicodeWidthStr::width(right.as_str()) > remaining_width {
-        right = if remaining_width >= "[Dashboard]".len() {
-            "[Dashboard]".to_string()
-        } else {
-            String::new()
-        };
-    }
-    let right_width = unicode_width::UnicodeWidthStr::width(right.as_str());
-    let workspace_width = (area.width as usize).saturating_sub(identity_width + right_width + 5);
-    let workspace = crate::terminal_text::sanitize_terminal_text(&state.cwd);
-    let workspace = crate::tui::selection::truncate_cells(&workspace, workspace_width);
-    let left = if workspace.is_empty() {
-        identity
-    } else {
-        format!("{identity} │ {workspace}")
-    };
-    frame.render_widget(
-        Paragraph::new(Span::styled(left, Style::default().fg(theme.text))),
-        area,
-    );
-    frame.render_widget(
-        Paragraph::new(Span::styled(right, Style::default().fg(theme.muted)))
-            .alignment(Alignment::Right),
-        Rect::new(
-            area.right().saturating_sub(right_width as u16 + 1),
-            area.y,
-            right_width as u16,
-            1,
-        ),
-    );
+fn workspace_basename(cwd: &str) -> String {
+    std::path::Path::new(cwd)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| cwd.to_string())
 }
 
-fn composer_metadata(state: &AppState) -> String {
-    let mode_str = match state.mode {
-        crate::app::AgentMode::Agent => "agent",
-        crate::app::AgentMode::Plan => "plan",
-        crate::app::AgentMode::Ask => "ask",
-        crate::app::AgentMode::Debug => "debug",
-        crate::app::AgentMode::Custom(ref name) => name.as_str(),
-    };
+fn context_meter(state: &AppState) -> Option<String> {
+    let window = state.current_context_window_tokens?;
+    if window == 0 {
+        return None;
+    }
+    Some(format!(
+        "{}/{}",
+        compact_token_count(state.current_context_tokens),
+        compact_token_count(window)
+    ))
+}
+
+fn identity_line(state: &AppState) -> String {
+    let mut parts = Vec::new();
+    let workspace = workspace_basename(&state.cwd);
+    if !workspace.is_empty() {
+        parts.push(workspace);
+    }
     let model = state
         .current_model
         .as_ref()
-        .map(|m| m.display_name.as_str())
+        .map(|model| model.display_name.as_str())
         .unwrap_or("auto");
-    let mut details = Vec::new();
-    if !state
-        .statusline_fields
-        .contains(&crate::ui_settings::StatusField::Mode)
-    {
-        details.push(mode_str.to_string());
+    let model = state
+        .reasoning_effort
+        .map_or_else(|| model.to_string(), |effort| format!("{model} ({effort})"));
+    parts.push(format!("model {model}"));
+    if let Some(context) = context_meter(state) {
+        parts.push(context);
     }
-    if !state
-        .statusline_fields
-        .contains(&crate::ui_settings::StatusField::Model)
-    {
-        details.push(
+    if state.turn_lifecycle.phase == crate::activity::ActivityPhase::Paused {
+        parts.push(
             state
-                .reasoning_effort
-                .map_or_else(|| model.to_string(), |effort| format!("{model} ({effort})")),
+                .status_message
+                .as_deref()
+                .filter(|message| message.starts_with("Paused"))
+                .unwrap_or("Paused")
+                .to_string(),
         );
-    }
-    if !state
-        .statusline_fields
-        .contains(&crate::ui_settings::StatusField::Profile)
-    {
-        match &state.active_profile {
-            crate::runtime::ActiveProfile::Default => {}
-            profile => details.push(format!("profile {}", profile.label())),
+    } else {
+        match state.approval {
+            crate::app::ApprovalMode::Allowlist => {}
+            crate::app::ApprovalMode::AutoReview => parts.push("auto-review".into()),
+            crate::app::ApprovalMode::RunEverything => parts.push("always-approve".into()),
         }
     }
-    match state.approval {
-        crate::app::ApprovalMode::Allowlist => {}
-        crate::app::ApprovalMode::AutoReview => details.push("auto-review".into()),
-        crate::app::ApprovalMode::RunEverything => details.push("always-approve".into()),
+    for field in &state.statusline_fields {
+        let value = match field {
+            crate::ui_settings::StatusField::Model
+            | crate::ui_settings::StatusField::Workspace
+            | crate::ui_settings::StatusField::SendHint
+            | crate::ui_settings::StatusField::HistoryHint
+            | crate::ui_settings::StatusField::CommandsHint => None,
+            _ => statusline_field_value(state, field, false),
+        };
+        if let Some(value) = value {
+            parts.push(value);
+        }
     }
+    parts.extend(identity_operational_details(state));
+    crate::terminal_text::sanitize_terminal_text(&parts.join(" · "))
+}
+
+fn identity_operational_details(state: &AppState) -> Vec<String> {
+    let mut details = Vec::new();
     if !state.run_capabilities.session_persistence
         && !matches!(state.active_profile, crate::runtime::ActiveProfile::Bare)
     {
@@ -4875,10 +5291,16 @@ fn composer_metadata(state: &AppState) -> String {
         } else {
             goal.status.label()
         };
-        details.push(format!(
+        let mut detail = format!(
             "goal {} {}/{}",
             status, goal.continuations, goal.limits.max_continuations
-        ));
+        );
+        let condition = goal_footer_condition(&goal.condition);
+        if !condition.is_empty() {
+            detail.push(' ');
+            detail.push_str(&condition);
+        }
+        details.push(detail);
     }
     if let Some(run) = state
         .workflow_run
@@ -4903,8 +5325,187 @@ fn composer_metadata(state: &AppState) -> String {
     {
         details.push(format!("multi-run {}", run.status.label()));
     }
+    details
+}
 
-    crate::terminal_text::sanitize_terminal_text(&details.join(" · "))
+fn render_identity(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    let theme = palette(state);
+    let text = crate::tui::selection::truncate_cells(&identity_line(state), area.width as usize);
+    frame.render_widget(
+        Paragraph::new(Span::styled(text, Style::default().fg(theme.muted))),
+        area,
+    );
+}
+
+fn running_key_line(state: &AppState) -> Option<String> {
+    let queue_binding = state
+        .keymap
+        .display_binding(crate::keymap::KeyAction::QueueInput);
+    let steer_binding = state
+        .keymap
+        .display_binding(crate::keymap::KeyAction::SaveOrSteer);
+    if state.hook_running
+        || state.attachment_resolution_busy
+        || state.review_in_flight
+        || state.foreground_job.is_some()
+        || (state.turn_lifecycle.is_active()
+            && (state.interaction.is_some() || state.approval_queue.is_active()))
+    {
+        Some("Esc stop · Ctrl+C stop".to_string())
+    } else if state.input_queue.editing_id.is_some() {
+        if state.turn_lifecycle.is_active() {
+            Some(format!(
+                "Esc stop · Enter send now · {queue_binding} save to queue"
+            ))
+        } else {
+            Some(format!("Enter send now · {queue_binding} save to queue"))
+        }
+    } else if state.turn_lifecycle.is_active() {
+        let mode = state.busy_submit_mode.label();
+        if state.input.trim().is_empty() && !state.input_queue.is_empty() {
+            Some(format!("Esc stop · {mode} · Alt+S · Enter send now"))
+        } else {
+            Some(format!(
+                "Esc stop · {mode} · Alt+S · Enter {mode} · {steer_binding} send now"
+            ))
+        }
+    } else if !state.input_queue.is_empty() {
+        Some(format!(
+            "{} edit latest · /queue view all",
+            state
+                .keymap
+                .display_binding(crate::keymap::KeyAction::EditLastQueued)
+        ))
+    } else {
+        None
+    }
+}
+
+fn newline_key_line() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Enter send · Shift+Enter newline · Ctrl+J newline"
+    } else {
+        "Enter send · Ctrl+J newline"
+    }
+}
+
+fn scrollback_key_line(state: &AppState) -> String {
+    if state.interaction_parked {
+        "Tab question · ↑↓ select · ←→ fold · Enter open · Alt+Q quote".into()
+    } else {
+        "↑↓ select · ←→ fold · Enter open · Alt+Q quote · Tab composer".into()
+    }
+}
+
+fn question_key_line(state: &AppState) -> Option<String> {
+    let interaction = state.interaction.as_ref()?;
+    if state.interaction_parked {
+        return None;
+    }
+    if interaction.parks_on_escape() {
+        Some("Tab choice · Enter submit · Esc park".into())
+    } else {
+        Some("Enter submit · Esc cancel".into())
+    }
+}
+
+fn key_line(state: &AppState) -> String {
+    if state.slash_palette_open || state.file_picker_open || state.composer_ui.path_completion.open
+    {
+        return "↑↓ select · Tab complete · Enter choose · Esc dismiss".into();
+    }
+    if state.composer_focus == crate::app::ComposerFocus::Scrollback {
+        return scrollback_key_line(state);
+    }
+    if let Some(question) = question_key_line(state) {
+        return question;
+    }
+    if let Some(editor) = state.approval_queue.command_editor() {
+        return if editor.saving {
+            "Checking command… · Esc cancel".into()
+        } else {
+            "Ctrl+S save · Enter newline · Esc cancel".into()
+        };
+    }
+    if state.approval_queue.current().is_some() {
+        return "[y] run · [n] deny · [e] edit".into();
+    }
+    if let Some(message) = state
+        .status_message
+        .as_deref()
+        .filter(|message| message.contains("Press Esc"))
+    {
+        return crate::terminal_text::sanitize_terminal_text(message);
+    }
+    if let Some(running) = running_key_line(state) {
+        return running;
+    }
+    if !state.input.trim().is_empty() {
+        return newline_key_line().into();
+    }
+    "/ commands · Ctrl+\\ dashboard · ↑ history".into()
+}
+
+fn scroll_suffix(state: &AppState) -> String {
+    let offset = state.transcript_scroll.bottom_offset();
+    if offset == 0 {
+        return String::new();
+    }
+    let unseen = state.transcript_scroll.unseen_messages;
+    if unseen == 0 {
+        format!("{offset} rows up · Ctrl+End")
+    } else {
+        format!("{offset} rows up · {unseen} new · Ctrl+End")
+    }
+}
+
+fn render_key_row(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    let theme = palette(state);
+    let left = key_line(state);
+    let suffix = scroll_suffix(state);
+    let width = area.width as usize;
+    let suffix_width = unicode_width::UnicodeWidthStr::width(suffix.as_str());
+    let left_width = unicode_width::UnicodeWidthStr::width(left.as_str());
+    let show_suffix = !suffix.is_empty() && left_width + 2 + suffix_width <= width;
+    let budget = if show_suffix {
+        width.saturating_sub(suffix_width + 2)
+    } else {
+        width
+    };
+    let left = crate::tui::selection::truncate_cells(&left, budget);
+    frame.render_widget(
+        Paragraph::new(Span::styled(left, Style::default().fg(theme.muted))),
+        area,
+    );
+    if show_suffix {
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                suffix.clone(),
+                Style::default().fg(theme.accent),
+            ))
+            .alignment(Alignment::Right),
+            Rect::new(
+                area.right().saturating_sub(suffix_width as u16),
+                area.y,
+                suffix_width as u16,
+                1,
+            ),
+        );
+    }
+}
+
+const GOAL_CONDITION_CELLS: usize = 48;
+
+fn goal_footer_condition(condition: &str) -> String {
+    let sanitized = crate::terminal_text::sanitize_terminal_text(condition);
+    let collapsed = sanitized.split_whitespace().collect::<Vec<_>>().join(" ");
+    crate::tui::selection::truncate_cells(&collapsed, GOAL_CONDITION_CELLS)
 }
 
 #[derive(Clone, Copy)]
@@ -5355,6 +5956,7 @@ fn render_exploration_group(
     width: u16,
     expanded: bool,
     theme: &ThemePalette,
+    now: chrono::DateTime<chrono::Utc>,
 ) {
     let (label, icon, style) = if group.calls.iter().any(|call| call.is_active()) {
         ("Exploring…", "⟳", Style::default().fg(theme.state_working))
@@ -5378,7 +5980,7 @@ fn render_exploration_group(
         for call in &group.calls {
             match call {
                 ExplorationCallRef::Complete(call) => {
-                    render_tool_call(lines, call, width, true, None, theme)
+                    render_tool_call(lines, call, width, true, None, theme, now)
                 }
                 ExplorationCallRef::Partial(call) => render_partial_tool_call(lines, call, theme),
             }
@@ -5601,6 +6203,7 @@ fn push_activity_file_rows(
     state: &AppState,
     call: ActivityCallRef<'_>,
     width: u16,
+    theme: &ThemePalette,
 ) {
     let (kind, path) = activity_file_details(state, call);
     let verb = activity_file_verb(kind, call.is_active(), call.is_error());
@@ -5611,7 +6214,7 @@ fn push_activity_file_rows(
     if available == 0 {
         lines.push(Line::from(Span::styled(
             crate::tui::selection::truncate_cells(&format!("{prefix}{path}"), usize::from(width)),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
         return;
     }
@@ -5626,12 +6229,12 @@ fn push_activity_file_rows(
                 } else {
                     " ".repeat(prefix_width)
                 },
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.muted),
             ),
             Span::styled(
                 fragment,
                 Style::default()
-                    .fg(Color::Gray)
+                    .fg(theme.link)
                     .add_modifier(Modifier::UNDERLINED),
             ),
         ]));
@@ -5651,6 +6254,7 @@ fn push_activity_command_rows(
     lines: &mut Vec<Line<'static>>,
     call: ActivityCallRef<'_>,
     width: u16,
+    theme: &ThemePalette,
 ) {
     let (arguments, active, error) = match call {
         ActivityCallRef::Complete(call) => (
@@ -5669,7 +6273,7 @@ fn push_activity_command_rows(
     };
     lines.push(Line::from(Span::styled(
         crate::tui::selection::truncate_cells(&format!("    ▣ {label}"), usize::from(width)),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.muted),
     )));
     let command = activity_command_text(arguments);
     let indent = "      ";
@@ -5677,7 +6281,7 @@ fn push_activity_command_rows(
     for fragment in crate::tui::output_layout::wrap_cells(&command, available) {
         lines.push(Line::from(vec![
             Span::raw(indent),
-            Span::styled(fragment, Style::default().fg(Color::Gray)),
+            Span::styled(fragment, Style::default().fg(theme.muted)),
         ]));
     }
 }
@@ -5690,7 +6294,8 @@ fn render_activity_group(
     width: u16,
     expanded: bool,
 ) {
-    let style = activity_header_style(group, palette(state));
+    let style_theme = palette(state);
+    let style = activity_header_style(group, style_theme);
     let icon = if group.calls.iter().any(|call| call.is_error()) {
         "✗"
     } else if group.calls.iter().any(|call| call.is_active()) {
@@ -5729,10 +6334,10 @@ fn render_activity_group(
     for call in &group.calls {
         match call.kind() {
             Some(crate::agent::registry::ToolActivityKind::File) => {
-                push_activity_file_rows(lines, state, *call, width);
+                push_activity_file_rows(lines, state, *call, width, &style_theme);
             }
             Some(crate::agent::registry::ToolActivityKind::Command) => {
-                push_activity_command_rows(lines, *call, width);
+                push_activity_command_rows(lines, *call, width, &style_theme);
             }
             None => continue,
         }
@@ -5764,20 +6369,54 @@ fn render_partial_tool_call(
         Span::raw("  "),
         Span::styled("⟳ ", Style::default().fg(theme.state_working)),
         Span::styled(
-            crate::terminal_text::sanitize_terminal_text(name),
+            crate::terminal_text::sanitize_terminal_text(tool_display_name(name)),
             Style::default().fg(theme.muted),
         ),
         Span::styled(
             format!(
                 " {}",
-                truncate(
-                    &crate::terminal_text::sanitize_terminal_text(&call.arguments),
-                    60,
-                )
+                truncate(&tool_display_arguments(name, &call.arguments), 60,)
             ),
             Style::default().fg(theme.muted),
         ),
     ]));
+}
+
+fn tool_display_name(name: &str) -> &str {
+    if name == "browser_exec" {
+        "browser"
+    } else {
+        name
+    }
+}
+
+fn tool_display_arguments(name: &str, arguments: &str) -> String {
+    if name == "browser_exec" {
+        if let Some(label) = crate::browser_exec::step_label_from_arguments(arguments) {
+            return crate::terminal_text::sanitize_terminal_text(&label);
+        }
+    }
+    if name == "browser_vault" {
+        return crate::terminal_text::sanitize_terminal_text(
+            &arguments.replace("password", "secret"),
+        );
+    }
+    crate::terminal_text::sanitize_terminal_text(arguments)
+}
+
+fn running_spinner_glyph(now: chrono::DateTime<chrono::Utc>) -> char {
+    const FRAMES: [char; 4] = ['⠋', '⠙', '⠹', '⠸'];
+    let index = ((now.timestamp_subsec_millis() / 180) % FRAMES.len() as u32) as usize;
+    FRAMES[index]
+}
+
+fn tool_elapsed_label(call: &ToolCall, now: chrono::DateTime<chrono::Utc>) -> Option<String> {
+    if call.status != ToolStatus::Running {
+        return None;
+    }
+    let started = call.started_at?;
+    let seconds = (now - started).num_seconds().max(0) as u64;
+    Some(format_agent_elapsed(seconds))
 }
 
 fn render_tool_call(
@@ -5787,6 +6426,7 @@ fn render_tool_call(
     expanded: bool,
     semantic: Option<&crate::command_output::SemanticPresentation>,
     theme: &ThemePalette,
+    now: chrono::DateTime<chrono::Utc>,
 ) {
     if matches!(
         call.name.as_str(),
@@ -5805,16 +6445,19 @@ fn render_tool_call(
         return;
     }
     let (icon, style) = match call.status {
-        ToolStatus::Done => ("✓", Style::default().fg(theme.success)),
-        ToolStatus::Error => ("✗", Style::default().fg(theme.error)),
-        ToolStatus::Running => ("⟳", Style::default().fg(theme.state_working)),
-        ToolStatus::Pending => ("⋯", Style::default().fg(theme.muted)),
+        ToolStatus::Done => ("✓".to_string(), Style::default().fg(theme.success)),
+        ToolStatus::Error => ("✗".to_string(), Style::default().fg(theme.error)),
+        ToolStatus::Running => (
+            running_spinner_glyph(now).to_string(),
+            Style::default().fg(theme.state_working),
+        ),
+        ToolStatus::Pending => ("⋯".to_string(), Style::default().fg(theme.muted)),
     };
-    lines.push(Line::from(vec![
+    let mut spans = vec![
         Span::raw("  "),
         Span::styled(format!("{icon} "), style),
         Span::styled(
-            crate::terminal_text::sanitize_terminal_text(&call.name),
+            crate::terminal_text::sanitize_terminal_text(tool_display_name(&call.name)),
             Style::default()
                 .fg(theme.muted)
                 .add_modifier(Modifier::BOLD),
@@ -5822,14 +6465,18 @@ fn render_tool_call(
         Span::styled(
             format!(
                 " {}",
-                truncate(
-                    &crate::terminal_text::sanitize_terminal_text(&call.arguments),
-                    60,
-                )
+                truncate(&tool_display_arguments(&call.name, &call.arguments), 60,)
             ),
             Style::default().fg(theme.muted),
         ),
-    ]));
+    ];
+    if let Some(elapsed) = tool_elapsed_label(call, now) {
+        spans.push(Span::styled(
+            format!(" · {elapsed}"),
+            Style::default().fg(theme.state_working),
+        ));
+    }
+    lines.push(Line::from(spans));
     let Some(output) = &call.output else {
         return;
     };
@@ -5908,7 +6555,7 @@ fn render_tool_output(
                 .add_modifier(Modifier::ITALIC),
         )));
     } else if safe_output.starts_with("@@ ") {
-        render_diff_lines(&safe_output, area_width, lines, theme);
+        render_diff_lines_expanded(&safe_output, area_width, lines, theme, expanded);
         lines.push(Line::from(""));
     } else {
         let width = area_width.saturating_sub(8) as usize;
@@ -5929,10 +6576,10 @@ fn render_tool_output(
 
         lines.push(Line::from(Span::styled(
             format!("    ┌{border}┐"),
-            Style::default().fg(theme.border),
+            Style::default().fg(theme.tool_frame),
         )));
         for row in &layout.rows {
-            push_tool_output_card_row(lines, row, content_width);
+            push_tool_output_card_row(lines, row, content_width, theme);
         }
         if !expanded && layout.omitted_source_lines > 0 {
             push_tool_output_marker(
@@ -5942,6 +6589,7 @@ fn render_tool_output(
                     layout.omitted_source_lines
                 ),
                 content_width,
+                theme,
             );
         } else if expanded && layout.total_source_lines > 20 {
             push_tool_output_marker(
@@ -5951,11 +6599,12 @@ fn render_tool_output(
                     layout.total_source_lines
                 ),
                 content_width,
+                theme,
             );
         }
         lines.push(Line::from(Span::styled(
             format!("    └{border}┘"),
-            Style::default().fg(theme.border),
+            Style::default().fg(theme.tool_frame),
         )));
     }
 }
@@ -5964,39 +6613,45 @@ fn push_tool_output_card_row(
     lines: &mut Vec<Line<'static>>,
     row: &crate::tui::output_layout::ToolOutputRow,
     content_width: usize,
+    theme: &ThemePalette,
 ) {
     let used = unicode_width::UnicodeWidthStr::width(row.text.as_str());
     let padding = " ".repeat(content_width.saturating_sub(used));
     let style = match row.kind {
         crate::tui::output_layout::ToolOutputRowKind::Plain
         | crate::tui::output_layout::ToolOutputRowKind::TableRow => {
-            Style::default().fg(Color::Gray).add_modifier(Modifier::DIM)
+            Style::default().fg(theme.muted).add_modifier(Modifier::DIM)
         }
         crate::tui::output_layout::ToolOutputRowKind::TableHeader => Style::default()
-            .fg(Color::Cyan)
+            .fg(theme.accent)
             .add_modifier(Modifier::BOLD),
         crate::tui::output_layout::ToolOutputRowKind::TableDivider => {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(theme.muted)
         }
     };
     lines.push(Line::from(vec![
-        Span::styled("    │ ", Style::default().fg(Color::DarkGray)),
+        Span::styled("    │ ", Style::default().fg(theme.tool_frame)),
         Span::styled(row.text.clone(), style),
         Span::raw(padding),
-        Span::styled(" │", Style::default().fg(Color::DarkGray)),
+        Span::styled(" │", Style::default().fg(theme.tool_frame)),
     ]));
 }
 
-fn push_tool_output_marker(lines: &mut Vec<Line<'static>>, marker: &str, content_width: usize) {
+fn push_tool_output_marker(
+    lines: &mut Vec<Line<'static>>,
+    marker: &str,
+    content_width: usize,
+    theme: &ThemePalette,
+) {
     let marker = crate::tui::selection::truncate_cells(marker, content_width);
     let padding = " ".repeat(
         content_width.saturating_sub(unicode_width::UnicodeWidthStr::width(marker.as_str())),
     );
     lines.push(Line::from(vec![
-        Span::styled("    │ ", Style::default().fg(Color::DarkGray)),
-        Span::styled(marker, Style::default().fg(Color::DarkGray)),
+        Span::styled("    │ ", Style::default().fg(theme.tool_frame)),
+        Span::styled(marker, Style::default().fg(theme.muted)),
         Span::raw(padding),
-        Span::styled(" │", Style::default().fg(Color::DarkGray)),
+        Span::styled(" │", Style::default().fg(theme.tool_frame)),
     ]));
 }
 
@@ -6006,6 +6661,164 @@ struct ConversationContent {
     activity_headers: Vec<ActivityHeaderLine>,
     user_prompt_cards: Vec<UserPromptCardSpan>,
     links: Vec<crate::markdown::MarkdownLink>,
+    omitted_earlier: usize,
+    selectable: Vec<crate::tui::transcript::SelectableBlock>,
+}
+
+fn remember_block(
+    blocks: &mut Vec<crate::tui::transcript::SelectableBlock>,
+    lines: &[Line<'static>],
+    start: usize,
+    kind: crate::tui::transcript::SelectableKind,
+    text: &str,
+) {
+    if start >= lines.len() {
+        return;
+    }
+    let rendered = lines[start..]
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let source = if text.trim().is_empty() {
+        rendered
+    } else {
+        text.to_string()
+    };
+    let collapsed = source.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        return;
+    }
+    blocks.push(crate::tui::transcript::SelectableBlock {
+        kind,
+        first_line: start,
+        text: collapsed,
+    });
+}
+
+fn highlight_selection(
+    state: &AppState,
+    lines: &mut [Line<'static>],
+    blocks: &[crate::tui::transcript::SelectableBlock],
+) {
+    if state.composer_focus != crate::app::ComposerFocus::Scrollback {
+        return;
+    }
+    let Some(block) = blocks.get(state.transcript_selection) else {
+        return;
+    };
+    let Some(line) = lines.get_mut(block.first_line) else {
+        return;
+    };
+    let color = palette(state).selection_border;
+    for span in &mut line.spans {
+        span.style = span.style.fg(color).add_modifier(Modifier::BOLD);
+    }
+}
+
+pub(super) fn transcript_message_window(
+    message_count: usize,
+    viewport_rows: u16,
+    bottom_offset: u16,
+    last_user: Option<usize>,
+) -> std::ops::Range<usize> {
+    const ESTIMATE: usize = 2;
+    if message_count == 0 || viewport_rows == 0 {
+        return 0..message_count;
+    }
+    let total_rows = message_count.saturating_mul(ESTIMATE);
+    let view = usize::from(viewport_rows.max(1));
+    if message_count < 24 || total_rows <= view.saturating_add(ESTIMATE.saturating_mul(4)) {
+        return 0..message_count;
+    }
+    let offset = usize::from(bottom_offset).min(total_rows);
+    let bottom = total_rows.saturating_sub(offset);
+    let top = bottom.saturating_sub(view);
+    let mut start = top / ESTIMATE;
+    let mut end = (bottom / ESTIMATE).saturating_add(3).min(message_count);
+    if end <= start {
+        end = start.saturating_add(1).min(message_count);
+    }
+    if let Some(user) = last_user {
+        if user < start {
+            start = user;
+        }
+        if user >= end {
+            end = user.saturating_add(1).min(message_count);
+        }
+    }
+    let tail = message_count - 1;
+    if tail < start {
+        start = tail;
+    }
+    if tail >= end {
+        end = message_count;
+    }
+    start..end
+}
+
+pub(crate) fn pinned_prompt_text(
+    state: &AppState,
+    width: u16,
+    viewport_top: u32,
+    viewport_rows: Option<u16>,
+) -> Option<(i32, String)> {
+    let window = viewport_rows.map(|rows| {
+        transcript_message_window(
+            state.messages.len(),
+            rows,
+            state.transcript_scroll.bottom_offset(),
+            state
+                .messages
+                .iter()
+                .rposition(|message| message.role == Role::User),
+        )
+    });
+    let content = conversation_content(state, width.max(1), false, false, window);
+    let mut heights = vec![1_u32; content.lines.len()];
+    for card in &content.user_prompt_cards {
+        let start = card.first_line;
+        if start >= heights.len() {
+            continue;
+        }
+        let card_height = u32::try_from(card.height).unwrap_or(1).max(1);
+        heights[start] = card_height;
+        for line in (start + 1)..start.saturating_add(card.height).min(heights.len()) {
+            heights[line] = 0;
+        }
+    }
+    let prompts = content
+        .user_prompt_cards
+        .iter()
+        .map(|card| card.first_line)
+        .collect::<Vec<_>>();
+    let place = crate::tui::transcript::sticky_prompt_placement(&heights, &prompts, viewport_top)?;
+    let height = content
+        .user_prompt_cards
+        .iter()
+        .find(|card| card.first_line == place.prompt_row)
+        .map(|card| card.height)
+        .unwrap_or(1);
+    let end = place
+        .prompt_row
+        .saturating_add(height)
+        .min(content.lines.len());
+    let text = content.lines[place.prompt_row..end]
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.clone())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some((place.offset, text))
 }
 
 fn conversation_content(
@@ -6013,8 +6826,10 @@ fn conversation_content(
     width: u16,
     include_transient: bool,
     group_activity: bool,
+    message_window: Option<std::ops::Range<usize>>,
 ) -> ConversationContent {
     let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut blocks = Vec::new();
     let mut activity_headers = Vec::new();
     let mut user_prompt_cards = Vec::new();
     let mut links = Vec::new();
@@ -6081,9 +6896,9 @@ fn conversation_content(
             label,
             Style::default()
                 .fg(if history.error.is_some() {
-                    Color::Red
+                    palette(state).error
                 } else {
-                    Color::DarkGray
+                    palette(state).muted
                 })
                 .add_modifier(Modifier::ITALIC),
         )));
@@ -6093,36 +6908,51 @@ fn conversation_content(
                     "* Older history unavailable: {}",
                     crate::terminal_text::sanitize_terminal_text(error)
                 ),
-                Style::default().fg(Color::Red),
+                Style::default().fg(palette(state).error),
             )));
         }
         lines.push(Line::from(""));
     }
 
+    let window = message_window.clone().unwrap_or(0..state.messages.len());
+    let mut announced_gap = window.start == 0;
     for (local_idx, msg) in state.messages.iter().enumerate() {
+        if !window.contains(&local_idx) {
+            continue;
+        }
+        if !announced_gap {
+            lines.push(Line::from(Span::styled(
+                format!("* {} earlier messages", window.start),
+                Style::default()
+                    .fg(palette(state).muted)
+                    .add_modifier(Modifier::ITALIC),
+            )));
+            announced_gap = true;
+        }
         let msg_idx = history_start.saturating_add(local_idx);
         if state
             .context_checkpoint
             .as_ref()
             .is_some_and(|checkpoint| checkpoint.through_message_count == msg_idx)
         {
-            render_checkpoint_marker(&mut lines, msg_idx);
+            render_checkpoint_marker(&mut lines, msg_idx, &palette(state));
         }
         if let Some(provenance) = state
             .fallback_provenance
             .iter()
             .find(|entry| entry.user_message_index.saturating_add(1) == msg_idx)
         {
-            render_fallback_marker(&mut lines, provenance);
+            render_fallback_marker(&mut lines, provenance, &palette(state));
         }
         if state.show_transcript_timestamps && matches!(msg.role, Role::User | Role::Assistant) {
             lines.push(Line::from(Span::styled(
                 format!("[{} UTC]", msg.timestamp.format("%Y-%m-%d %H:%M:%S")),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette(state).muted),
             )));
         }
         match msg.role {
             Role::User => {
+                let start = lines.len();
                 let span = render_user_prompt_card(
                     &mut lines,
                     &msg.content,
@@ -6134,22 +6964,44 @@ fn conversation_content(
                 if span.height > 0 {
                     user_prompt_cards.push(span);
                 }
+                remember_block(
+                    &mut blocks,
+                    &lines,
+                    start,
+                    crate::tui::transcript::SelectableKind::User(msg_idx),
+                    &msg.content,
+                );
             }
             Role::Assistant => {
                 let annotation = annotations.get(&msg.timestamp).copied();
                 if let Some(thinking) = msg.thinking.as_deref() {
+                    let start = lines.len();
                     let duration_ms =
                         annotation.and_then(|annotation| annotation.reasoning_duration_ms);
+                    let expanded = state.show_thinking
+                        || state.expanded_blocks.contains(
+                            &crate::app::TranscriptBlockKey::Thinking {
+                                message_index: msg_idx,
+                            },
+                        );
                     render_reasoning_block(
                         &mut lines,
                         thinking,
-                        state.show_thinking,
+                        expanded,
                         duration_ms,
                         width,
                         palette(state),
                     );
+                    remember_block(
+                        &mut blocks,
+                        &lines,
+                        start,
+                        crate::tui::transcript::SelectableKind::Thinking(msg_idx),
+                        thinking,
+                    );
                 }
                 if !msg.content.is_empty() {
+                    let start = lines.len();
                     let rendered = render_safe_markdown_document(
                         &msg.content,
                         width.saturating_sub(2),
@@ -6158,11 +7010,20 @@ fn conversation_content(
                     );
                     links.extend(rendered.links);
                     lines.extend(rendered.lines);
+                    remember_block(
+                        &mut blocks,
+                        &lines,
+                        start,
+                        crate::tui::transcript::SelectableKind::Assistant(msg_idx),
+                        &msg.content,
+                    );
                 }
                 if let Some(ref tcs) = msg.tool_calls {
                     let mut index = 0;
                     while index < tcs.len() {
                         if let Some(group) = identical_spawn_failure_run(tcs, index) {
+                            let start = lines.len();
+                            let id = group[0].id.clone();
                             let expanded = TranscriptBlockKey::tool_calls(&group[0].id)
                                 .is_some_and(|key| state.expanded_blocks.contains(&key));
                             render_identical_spawn_failure_group(
@@ -6172,10 +7033,18 @@ fn conversation_content(
                                 expanded,
                                 &palette(state),
                             );
+                            remember_block(
+                                &mut blocks,
+                                &lines,
+                                start,
+                                crate::tui::transcript::SelectableKind::ToolRun(id),
+                                "",
+                            );
                             index += group.len();
                             continue;
                         }
                         let tc = &tcs[index];
+                        let start = lines.len();
                         if let Some(group) = activity_starts.get(tc.id.as_str()) {
                             let expanded = state.expanded_blocks.contains(&group.key);
                             render_activity_group(
@@ -6185,6 +7054,13 @@ fn conversation_content(
                                 group,
                                 width,
                                 expanded,
+                            );
+                            remember_block(
+                                &mut blocks,
+                                &lines,
+                                start,
+                                crate::tui::transcript::SelectableKind::ToolRun(tc.id.clone()),
+                                "",
                             );
                         } else if activity_members.contains(tc.id.as_str()) {
                             // Rendered by the group's first call.
@@ -6197,6 +7073,14 @@ fn conversation_content(
                                     width,
                                     expanded,
                                     &palette(state),
+                                    state.agent_activity_now,
+                                );
+                                remember_block(
+                                    &mut blocks,
+                                    &lines,
+                                    start,
+                                    crate::tui::transcript::SelectableKind::ToolRun(tc.id.clone()),
+                                    "",
                                 );
                             } else if !exploration_members.contains(tc.id.as_str()) {
                                 render_tool_call(
@@ -6206,6 +7090,14 @@ fn conversation_content(
                                     false,
                                     None,
                                     &palette(state),
+                                    state.agent_activity_now,
+                                );
+                                remember_block(
+                                    &mut blocks,
+                                    &lines,
+                                    start,
+                                    crate::tui::transcript::SelectableKind::ToolRun(tc.id.clone()),
+                                    "",
                                 );
                             }
                         } else {
@@ -6218,6 +7110,14 @@ fn conversation_content(
                                 expanded,
                                 state.command_presentations.get(&tc.id),
                                 &palette(state),
+                                state.agent_activity_now,
+                            );
+                            remember_block(
+                                &mut blocks,
+                                &lines,
+                                start,
+                                crate::tui::transcript::SelectableKind::ToolRun(tc.id.clone()),
+                                "",
                             );
                         }
                         index += 1;
@@ -6231,7 +7131,7 @@ fn conversation_content(
                         && state.active_agent_turn_id == Some(annotation.turn_id);
                     if !later_same_turn && !streaming_same_turn {
                         if state.show_assistant_footers {
-                            render_turn_footer(&mut lines, annotation);
+                            render_turn_footer(&mut lines, annotation, &palette(state));
                         }
                         render_agent_activity_group(&mut lines, state, annotation.turn_id, width);
                     }
@@ -6246,34 +7146,49 @@ fn conversation_content(
         .as_ref()
         .is_some_and(|checkpoint| checkpoint.through_message_count == state.messages.len())
     {
-        render_checkpoint_marker(&mut lines, state.messages.len());
+        render_checkpoint_marker(&mut lines, state.messages.len(), &palette(state));
     }
     if let Some(provenance) = state
         .fallback_provenance
         .iter()
         .find(|entry| entry.user_message_index.saturating_add(1) == state.messages.len())
     {
-        render_fallback_marker(&mut lines, provenance);
+        render_fallback_marker(&mut lines, provenance, &palette(state));
     }
 
-    // Streaming content
+    // The streaming reply is the tail of this window and replaces itself on
+    // each frame. Earlier messages in the window stay in the layout cache.
     if let Some(ref streaming) = state.streaming {
         if let Some(thinking) = streaming.thinking.as_deref() {
+            let start = lines.len();
+            let message_index = state.messages.len();
             let duration_ms = streaming.visible_reasoning_duration().map(|duration| {
                 u64::try_from(duration.as_millis())
                     .unwrap_or(u64::MAX)
                     .max(1)
             });
+            let expanded = state.show_thinking
+                || state
+                    .expanded_blocks
+                    .contains(&crate::app::TranscriptBlockKey::Thinking { message_index });
             render_reasoning_block(
                 &mut lines,
                 thinking,
-                state.show_thinking,
+                expanded,
                 duration_ms,
                 width,
                 palette(state),
             );
+            remember_block(
+                &mut blocks,
+                &lines,
+                start,
+                crate::tui::transcript::SelectableKind::Thinking(message_index),
+                thinking,
+            );
         }
         if !streaming.content.is_empty() {
+            let start = lines.len();
             let rendered = render_safe_markdown_document(
                 &streaming.content,
                 width.saturating_sub(2),
@@ -6285,7 +7200,7 @@ fn conversation_content(
             if include_transient {
                 let line = rendered.iter_mut().rfind(|line| line.width() > 0);
                 if let Some(line) = line {
-                    let cursor_style = Style::default().fg(Color::DarkGray);
+                    let cursor_style = Style::default().fg(palette(state).muted);
                     let cursor_style = if state.cursor_blink_visible {
                         cursor_style
                     } else {
@@ -6295,6 +7210,13 @@ fn conversation_content(
                 }
             }
             lines.extend(rendered);
+            remember_block(
+                &mut blocks,
+                &lines,
+                start,
+                crate::tui::transcript::SelectableKind::Assistant(state.messages.len()),
+                &streaming.content,
+            );
         } else if streaming.tool_calls.is_empty() {
             lines.push(Line::from(Span::styled(
                 "⟳ Thinking…",
@@ -6318,7 +7240,14 @@ fn conversation_content(
             } else if ptc.name.as_deref().is_some_and(is_exploration_tool) {
                 if let Some(group) = exploration_starts.get(id) {
                     let expanded = state.expanded_blocks.contains(&group.key);
-                    render_exploration_group(&mut lines, group, width, expanded, &palette(state));
+                    render_exploration_group(
+                        &mut lines,
+                        group,
+                        width,
+                        expanded,
+                        &palette(state),
+                        state.agent_activity_now,
+                    );
                 } else if !exploration_members.contains(id) {
                     render_partial_tool_call(&mut lines, ptc, &palette(state));
                 }
@@ -6332,11 +7261,51 @@ fn conversation_content(
     }
 
     append_conversation_controls(&mut lines, state, width, include_transient);
+    highlight_selection(state, &mut lines, &blocks);
     ConversationContent {
         lines,
         activity_headers,
         user_prompt_cards,
         links,
+        omitted_earlier: message_window.map(|window| window.start).unwrap_or(0),
+        selectable: blocks,
+    }
+}
+
+fn append_private_move_progress(lines: &mut Vec<Line<'static>>, state: &AppState, width: u16) {
+    // Live native job progress is rendered outside the transcript layout cache.
+    // Long history never delays a second pending update behind a full rebuild.
+    {
+        for call in state
+            .messages
+            .iter()
+            .flat_map(|m| m.tool_calls.iter().flatten())
+            .filter(|c| c.name == "move_files" && c.status == ToolStatus::Running)
+        {
+            if let Some(progress) = serde_json::from_str::<serde_json::Value>(&call.arguments)
+                .ok()
+                .and_then(|v| v.get("selection")?.as_str().map(str::to_owned))
+                .and_then(|id| crate::privacy::tasks::progress(&id))
+            {
+                let text = format!(
+                    "Moving files: {}/{} · {} skipped · {} errors · {} remaining",
+                    progress.moved,
+                    progress.total,
+                    progress.skipped,
+                    progress.errors,
+                    progress.remaining
+                );
+                for fragment in crate::tui::output_layout::wrap_cells(
+                    &text,
+                    usize::from(width).saturating_sub(2).max(1),
+                ) {
+                    lines.push(Line::from(Span::styled(
+                        format!("  {fragment}"),
+                        Style::default().fg(palette(state).state_working),
+                    )));
+                }
+            }
+        }
     }
 }
 
@@ -6355,129 +7324,148 @@ fn append_conversation_controls(
         render_plan_card(lines, state, width);
     }
 
-    // Approval prompt
-    if let Some(pa) = state.approval_queue.current().filter(|_| include_transient) {
-        let (resolved, total) = if state.manual_resolutions.is_active() {
-            state.manual_resolutions.progress()
-        } else {
-            state.approval_queue.progress()
-        };
-        let n = resolved + 1; // current item is 1-indexed
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![Span::styled(
-            format!(
-                "  Approve {} [{}/{}] — {}",
-                if pa.tool_name == "run_command" {
-                    "command"
-                } else {
-                    "tool"
-                },
-                n,
-                total,
-                pa.tool_name
-            ),
-            Style::default().fg(Color::Yellow),
-        )]));
-        if let Some(privilege) = state.manual_resolutions.current_privilege() {
-            lines.push(Line::from(format!(
-                "    Program: {}",
-                serde_json::to_string(&privilege.invocation.program.to_string_lossy())
-                    .unwrap_or_else(|_| "\"[invalid]\"".into())
-            )));
-            for (index, argument) in privilege.invocation.display_arguments() {
-                lines.push(Line::from(format!(
-                    "    argv[{index}]: {}",
-                    serde_json::to_string(argument).unwrap_or_else(|_| "\"[invalid]\"".into())
-                )));
-            }
-            lines.push(Line::from(format!(
-                "    cwd: {}",
-                serde_json::to_string(&privilege.invocation.cwd.to_string_lossy())
-                    .unwrap_or_else(|_| "\"[invalid]\"".into())
-            )));
-            lines.push(Line::from(format!(
-                "    Filesystem authority: {} · Network: {}",
-                privilege.invocation.filesystem_authority_summary(),
-                privilege.invocation.network_enforcement_summary()
-            )));
-            lines.push(Line::from(format!(
-                "    Invocation digest: {}",
-                privilege.invocation.digest()
-            )));
-            lines.push(Line::from(vec![
-                Span::styled("  [y] authorize once  ", Style::default().fg(Color::Green)),
-                Span::styled("[n/Esc] deny", Style::default().fg(Color::Red)),
-            ]));
-        } else if let Some(preview) = &pa.email_preview {
-            for (label, values) in [
-                ("Account", vec![preview.account_id.clone()]),
-                ("To", preview.to.clone()),
-                ("Cc", preview.cc.clone()),
-                ("Bcc", preview.bcc.clone()),
-            ] {
-                lines.push(Line::from(format!(
-                    "    {label}: {}",
-                    if values.is_empty() {
-                        "(none)".into()
-                    } else {
-                        values.join(", ")
-                    }
-                )));
-            }
-            lines.push(Line::from(format!("    Subject: {}", preview.subject)));
-            lines.push(Line::from(format!(
-                "    Body: {} bytes · sha256 {}",
-                preview.body_bytes, preview.body_sha256
-            )));
-            lines.push(Line::from(format!(
-                "    Draft sha256: {} · {} attachment(s)",
-                preview.draft_sha256,
-                preview.attachments.len()
-            )));
-            lines.push(Line::from(vec![
-                Span::styled(
-                    "  [y] send exactly once  ",
-                    Style::default().fg(Color::Green),
-                ),
-                Span::styled("[n/Esc] deny", Style::default().fg(Color::Red)),
-            ]));
-        } else if let Some(editor) = state.approval_queue.command_editor() {
-            lines.extend(inline_command_editor_lines(editor, width, &palette(state)));
-        } else {
-            let (reason, current_run_scope) = approval_reason_and_scope(pa);
-            lines.push(Line::from(vec![
-                Span::styled("    Reason: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(reason, Style::default().fg(Color::Yellow)),
-                Span::styled(" · [g] ", Style::default().fg(Color::DarkGray)),
-                Span::styled(current_run_scope, Style::default().fg(Color::Green)),
-            ]));
-            lines.extend(approval_argument_lines(pa));
-            lines.push(Line::from(vec![
-                Span::styled("  [y] run  ", Style::default().fg(Color::Green)),
-                Span::styled("[n] deny  ", Style::default().fg(Color::Red)),
-                Span::styled("[e] edit  ", Style::default().fg(Color::Yellow)),
-                Span::styled(
-                    "[s] all uses of this tool  ",
-                    Style::default().fg(Color::Cyan),
-                ),
-                Span::styled(
-                    "[g] allow exact for run  ",
-                    Style::default().fg(Color::Green),
-                ),
-                Span::styled(
-                    "[p] always allow exact path  ",
-                    Style::default().fg(Color::Blue),
-                ),
-                Span::styled("[x] always deny  ", Style::default().fg(Color::Red)),
-                Span::styled("[a] yolo", Style::default().fg(Color::Cyan)),
-            ]));
-        }
-        lines.push(Line::from(""));
+    if include_transient && state.task_graph_manager.is_none() && state.plan_proposal.is_none() {
+        render_running_plan_author(lines, state, width);
+        render_live_task_map(lines, state, width);
     }
 }
 
+fn approval_card_lines(state: &AppState, width: u16) -> Vec<Line<'static>> {
+    let Some(pa) = state.approval_queue.current() else {
+        return Vec::new();
+    };
+    let mut lines = Vec::new();
+    let (resolved, total) = if state.manual_resolutions.is_active() {
+        state.manual_resolutions.progress()
+    } else {
+        state.approval_queue.progress()
+    };
+    let n = resolved + 1; // current item is 1-indexed
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![Span::styled(
+        format!(
+            "  Approve {} [{}/{}] — {}",
+            if pa.tool_name == "run_command" {
+                "command"
+            } else {
+                "tool"
+            },
+            n,
+            total,
+            pa.tool_name
+        ),
+        Style::default().fg(palette(state).approval_pending),
+    )]));
+    if let Some(privilege) = state.manual_resolutions.current_privilege() {
+        lines.push(Line::from(format!(
+            "    Program: {}",
+            serde_json::to_string(&privilege.invocation.program.to_string_lossy())
+                .unwrap_or_else(|_| "\"[invalid]\"".into())
+        )));
+        for (index, argument) in privilege.invocation.display_arguments() {
+            lines.push(Line::from(format!(
+                "    argv[{index}]: {}",
+                serde_json::to_string(argument).unwrap_or_else(|_| "\"[invalid]\"".into())
+            )));
+        }
+        lines.push(Line::from(format!(
+            "    cwd: {}",
+            serde_json::to_string(&privilege.invocation.cwd.to_string_lossy())
+                .unwrap_or_else(|_| "\"[invalid]\"".into())
+        )));
+        lines.push(Line::from(format!(
+            "    Filesystem authority: {} · Network: {}",
+            privilege.invocation.filesystem_authority_summary(),
+            privilege.invocation.network_enforcement_summary()
+        )));
+        lines.push(Line::from(format!(
+            "    Invocation digest: {}",
+            privilege.invocation.digest()
+        )));
+        lines.push(Line::from(vec![
+            Span::styled(
+                "  [y] authorize once  ",
+                Style::default().fg(palette(state).approval_accept),
+            ),
+            Span::styled(
+                "[n/Esc] deny",
+                Style::default().fg(palette(state).approval_deny),
+            ),
+        ]));
+    } else if let Some(preview) = &pa.email_preview {
+        for (label, values) in [
+            ("Account", vec![preview.account_id.clone()]),
+            ("To", preview.to.clone()),
+            ("Cc", preview.cc.clone()),
+            ("Bcc", preview.bcc.clone()),
+        ] {
+            lines.push(Line::from(format!(
+                "    {label}: {}",
+                if values.is_empty() {
+                    "(none)".into()
+                } else {
+                    values.join(", ")
+                }
+            )));
+        }
+        lines.push(Line::from(format!("    Subject: {}", preview.subject)));
+        lines.push(Line::from(format!(
+            "    Body: {} bytes · sha256 {}",
+            preview.body_bytes, preview.body_sha256
+        )));
+        lines.push(Line::from(format!(
+            "    Draft sha256: {} · {} attachment(s)",
+            preview.draft_sha256,
+            preview.attachments.len()
+        )));
+        lines.push(Line::from(vec![
+            Span::styled(
+                "  [y] send exactly once  ",
+                Style::default().fg(palette(state).approval_accept),
+            ),
+            Span::styled(
+                "[n/Esc] deny",
+                Style::default().fg(palette(state).approval_deny),
+            ),
+        ]));
+    } else if let Some(editor) = state.approval_queue.command_editor() {
+        lines.extend(inline_command_editor_lines(editor, width, &palette(state)));
+    } else {
+        let (reason, current_run_scope) = approval_reason_and_scope(pa);
+        let theme = palette(state);
+        lines.push(Line::from(vec![
+            Span::styled("    Reason: ", Style::default().fg(theme.muted)),
+            Span::styled(reason, Style::default().fg(theme.approval_pending)),
+            Span::styled(" · [g] ", Style::default().fg(theme.muted)),
+            Span::styled(
+                current_run_scope,
+                Style::default().fg(theme.approval_accept),
+            ),
+        ]));
+        let theme = palette(state);
+        lines.extend(approval_argument_lines(pa, &theme));
+        // Primary pair first; secondary policy keys wrap to the next line.
+        lines.push(Line::from(vec![
+            Span::styled("  [y] run  ", Style::default().fg(theme.approval_accept)),
+            Span::styled("[n] deny", Style::default().fg(theme.approval_deny)),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("  [e] edit  ", Style::default().fg(theme.approval_pending)),
+            Span::styled("[s] tool always  ", Style::default().fg(theme.accent)),
+            Span::styled("[g] this run  ", Style::default().fg(theme.approval_accept)),
+            Span::styled("[p] path always  ", Style::default().fg(theme.link)),
+            Span::styled(
+                "[x] always deny  ",
+                Style::default().fg(theme.approval_deny),
+            ),
+            Span::styled("[a] yolo", Style::default().fg(theme.accent)),
+        ]));
+    }
+    lines
+}
+
 pub(crate) fn privacy_safe_transcript_text(state: &AppState, width: u16) -> String {
-    let mut output = conversation_content(state, width.max(1), false, false)
+    let mut output = conversation_content(state, width.max(1), false, false, None)
         .lines
         .into_iter()
         .map(|line| {
@@ -6495,6 +7483,118 @@ pub(crate) fn privacy_safe_transcript_text(state: &AppState, width: u16) -> Stri
     output.join("\n")
 }
 
+fn has_modal_overlay(state: &AppState) -> bool {
+    state.plan_workflow_graph.is_some()
+        || state.model_picker_open
+        || state.config_hub.is_some()
+        || state.sandbox_hub.is_some()
+        || state.context_limit_editor.is_some()
+        || state.provider_manager.is_some()
+        || state.provider_discovery.is_some()
+        || state.provider_editor.is_some()
+        || state.model_prompt_cache_editor.is_some()
+        || state.provider_auth.is_some()
+        || state.slash_palette_open
+        || state.session_picker_open
+        || state.session_portability.is_some()
+        || state.session_retention.is_some()
+        || state.timeline_open
+        || state.queue_view_open
+        || state.pager_open
+        || state.usage_modal.is_some()
+        || state.file_picker_open
+        || state.composer_ui.path_completion.open
+        || state.change_review.open
+        || state.change_walkthrough.is_some()
+        || state.terminal_manager.is_some()
+        || state.theme_manager.is_some()
+        || state.copy_picker.is_some()
+        || state.notification_picker.is_some()
+        || state.command_output_picker.is_some()
+        || state.output_full_confirmation.is_some()
+        || state.scratch_delete_confirmation.is_some()
+        || state.route_preset_picker.is_some()
+        || state.reasoning_picker.is_some()
+        || state.route_preset_overwrite.is_some()
+        || state.statusline_manager.is_some()
+        || state.jobs_view_open
+        || state.btw.is_some()
+        || state.voice.is_some()
+        || state.history_search.is_some()
+        || state.prompt_stash.is_some()
+        || state.hook_manager.is_some()
+        || state.permission_manager.is_some()
+        || state.memory_manager.is_some()
+        || state.keymap_hub.is_some()
+        || state.task_graph_manager.is_some()
+        || state.multi_run_manager.is_some()
+        || state.loop_guard_interaction.is_some()
+        || state.workspace_trust_prompt
+        || state.project_init.is_some()
+        || state.interaction.is_some()
+        || state.personality_editor.is_some()
+        || state.privacy_editor.is_some()
+        || state.support_bundle_confirmation.is_some()
+        || state.setup_import_confirmation.is_some()
+        || state.setup_import_request.is_some()
+        || state.worktree_setup_confirmation.is_some()
+        || state.trace_delete_confirmation.is_some()
+        || state.learning_review_interaction
+        || state.turn_lifecycle.is_active()
+        || state.manual_resolutions.is_active()
+}
+
+fn session_transcript_is_empty(state: &AppState) -> bool {
+    if state.streaming.is_some()
+        || state.approval_queue.current().is_some()
+        || state.plan_proposal.is_some()
+        || state.plan_workflow_graph.is_some()
+        || !state.live_agent_activity.is_empty()
+    {
+        return false;
+    }
+    state.messages.iter().all(|message| {
+        message.content.trim().is_empty()
+            && message
+                .tool_calls
+                .as_ref()
+                .is_none_or(|calls| calls.is_empty())
+    })
+}
+
+fn paint_empty_session_guidance(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
+    if area.height < 6 || area.width < 24 {
+        return;
+    }
+    let theme = palette(state);
+    let muted = Style::default().fg(theme.muted);
+    let strong = Style::default().fg(theme.strong);
+    let lines = vec![
+        Line::from(""),
+        Line::from(Span::styled("  Try one of these, or ask anything:", strong)),
+        Line::from(""),
+        Line::from(Span::styled(
+            "    · Fix the failing tests in this repo",
+            muted,
+        )),
+        Line::from(Span::styled(
+            "    · Explain how the approval flow works",
+            muted,
+        )),
+        Line::from(Span::styled(
+            "    · Summarize what changed in this workspace",
+            muted,
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  / shows commands · /help for help · /keymap for keys",
+            muted,
+        )),
+    ];
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, area);
+}
+
 fn render_conversation(
     frame: &mut ratatui::Frame,
     area: Rect,
@@ -6502,19 +7602,72 @@ fn render_conversation(
     focused: bool,
 ) -> u16 {
     let scroll = state.transcript_cache.render(frame, area, state, focused);
+    if session_transcript_is_empty(state) && !has_modal_overlay(state) {
+        paint_empty_session_guidance(frame, area, state);
+    }
     let theme = palette(state);
     for y in area.top()..area.bottom() {
         for x in area.left()..area.right() {
             let cell = &mut frame.buffer_mut()[(x, y)];
-            if cell.bg == Color::Reset {
+            if theme.surface != Color::Reset && cell.bg == Color::Reset {
                 cell.bg = theme.surface;
             }
-            if cell.fg == Color::Reset {
+            if theme.text != Color::Reset && cell.fg == Color::Reset {
                 cell.fg = theme.text;
             }
         }
     }
+    paint_pinned_prompt(frame, area, state, scroll);
     scroll
+}
+
+fn paint_pinned_prompt(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    state: &AppState,
+    viewport_top: u16,
+) {
+    if area.is_empty() {
+        return;
+    }
+    let Some((offset, text)) = pinned_prompt_text(
+        state,
+        area.width,
+        u32::from(viewport_top),
+        Some(area.height),
+    ) else {
+        return;
+    };
+    if text.trim().is_empty() {
+        return;
+    }
+    let theme = palette(state);
+    let style = painted(theme.text, theme.title_hint_background);
+    let origin = i32::from(area.y) + offset;
+    let rows: Vec<&str> = text.split('\n').collect();
+    for (index, line) in rows.iter().enumerate() {
+        let y = origin + i32::try_from(index).unwrap_or(i32::MAX);
+        if y < i32::from(area.top()) || y >= i32::from(area.bottom()) {
+            continue;
+        }
+        let y = u16::try_from(y).unwrap_or(area.bottom());
+        let mut x = area.left();
+        for ch in line.chars() {
+            if x >= area.right() {
+                break;
+            }
+            let cell = &mut frame.buffer_mut()[(x, y)];
+            cell.set_symbol(&ch.to_string());
+            cell.set_style(style);
+            x = x.saturating_add(1);
+        }
+        while x < area.right() {
+            let cell = &mut frame.buffer_mut()[(x, y)];
+            cell.set_symbol(" ");
+            cell.set_style(style);
+            x = x.saturating_add(1);
+        }
+    }
 }
 
 pub(super) fn apply_hyperlinks(
@@ -6750,7 +7903,10 @@ fn approval_reason_and_scope(pa: &crate::app::PendingApproval) -> (&'static str,
     )
 }
 
-fn approval_argument_lines(pa: &crate::app::PendingApproval) -> Vec<Line<'static>> {
+fn approval_argument_lines(
+    pa: &crate::app::PendingApproval,
+    theme: &ThemePalette,
+) -> Vec<Line<'static>> {
     let arguments = serde_json::from_str::<serde_json::Value>(&pa.tool_args).ok();
     if let Some(preview) = arguments
         .as_ref()
@@ -6784,7 +7940,7 @@ fn approval_argument_lines(pa: &crate::app::PendingApproval) -> Vec<Line<'static
                         } else {
                             format!("             {line}")
                         },
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(theme.muted),
                     ))
                 })
                 .collect::<Vec<_>>();
@@ -6797,7 +7953,7 @@ fn approval_argument_lines(pa: &crate::app::PendingApproval) -> Vec<Line<'static
                         "    cwd: {}",
                         crate::terminal_text::sanitize_terminal_text(cwd)
                     ),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.muted),
                 )));
             }
             return rendered;
@@ -6809,7 +7965,7 @@ fn approval_argument_lines(pa: &crate::app::PendingApproval) -> Vec<Line<'static
         .map(|line| {
             Line::from(Span::styled(
                 format!("    {line}"),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.muted),
             ))
         })
         .collect()
@@ -7100,9 +8256,9 @@ fn render_agent_activity_group<'a>(
         }
         lines.push(Line::from(Span::styled(
             if width < 80 {
-                "  ↑/↓ select · Enter · m · y/n · c · Esc"
+                "  ↑/↓ select · Enter · m · y/n · c · X subtree · Esc"
             } else {
-                "  ↑/↓ select · Enter details · m message · y/n approval · c cancel · Esc close"
+                "  ↑/↓ select · Enter details · m message · y/n approval · c cancel · X subtree · Esc close"
             },
             Style::default().fg(theme.muted),
         )));
@@ -7183,7 +8339,13 @@ fn render_agent_activity_detail<'a>(
                 Style::default().fg(theme.text),
             ),
             Span::styled(
-                if focus.cancel_confirm_selected {
+                if focus.cancel_subtree {
+                    if focus.cancel_confirm_selected {
+                        "> Stop subtree"
+                    } else {
+                        "[Stop subtree]"
+                    }
+                } else if focus.cancel_confirm_selected {
                     "> Confirm cancellation"
                 } else {
                     "[Confirm cancellation]"
@@ -7200,11 +8362,15 @@ fn render_agent_activity_detail<'a>(
     }
 }
 
-fn render_checkpoint_marker<'a>(lines: &mut Vec<Line<'a>>, covered_messages: usize) {
+fn render_checkpoint_marker<'a>(
+    lines: &mut Vec<Line<'a>>,
+    covered_messages: usize,
+    theme: &ThemePalette,
+) {
     lines.push(Line::from(Span::styled(
         format!("* Context checkpoint · {covered_messages} messages · /context to inspect"),
         Style::default()
-            .fg(Color::DarkGray)
+            .fg(theme.muted)
             .add_modifier(Modifier::ITALIC),
     )));
     lines.push(Line::from(""));
@@ -7213,6 +8379,7 @@ fn render_checkpoint_marker<'a>(lines: &mut Vec<Line<'a>>, covered_messages: usi
 fn render_fallback_marker<'a>(
     lines: &mut Vec<Line<'a>>,
     provenance: &crate::fallback::TurnProviderProvenance,
+    theme: &ThemePalette,
 ) {
     let primary = crate::terminal_text::sanitize_terminal_text(&format!(
         "{}/{}",
@@ -7228,7 +8395,7 @@ fn render_fallback_marker<'a>(
             provenance.cause
         ),
         Style::default()
-            .fg(Color::Yellow)
+            .fg(theme.warning)
             .add_modifier(Modifier::ITALIC),
     )));
     lines.push(Line::from(""));
@@ -7321,14 +8488,23 @@ fn awaited_job_preview(job: &crate::jobs::JobInfo) -> Vec<String> {
     lines
 }
 
+fn live_child_agents(state: &AppState) -> Vec<&crate::agent::subagent::AgentActivitySnapshot> {
+    state
+        .live_agent_activity
+        .iter()
+        .filter(|agent| !agent.status.terminal())
+        .collect()
+}
+
 fn background_activity_rows(state: &AppState, available: u16) -> u16 {
-    if let Some(job) = awaited_managed_job(state) {
-        (awaited_job_preview(job).len() as u16)
-            .min(5)
-            .min(available)
+    let children = live_child_agents(state).len() as u16;
+    let job_rows = if let Some(job) = awaited_managed_job(state) {
+        (awaited_job_preview(job).len() as u16).min(5)
     } else {
-        u16::from(has_active_background(state)).min(available)
-    }
+        u16::from(has_active_background(state))
+    };
+    let child_rows = children.min(available);
+    child_rows.saturating_add(job_rows.min(available.saturating_sub(child_rows)))
 }
 
 fn active_background_count(state: &AppState) -> usize {
@@ -7353,6 +8529,36 @@ fn render_background_activity(frame: &mut ratatui::Frame, area: Rect, state: &Ap
     if area.height == 0 || area.width == 0 {
         return;
     }
+    let children = live_child_agents(state);
+    let child_rows = (children.len() as u16).min(area.height);
+    if child_rows > 0 {
+        let lines = children
+            .iter()
+            .take(child_rows as usize)
+            .map(|agent| {
+                Line::from(crate::tui::selection::truncate_cells(
+                    &live_child_dock_line(state, agent),
+                    area.width as usize,
+                ))
+            })
+            .collect::<Vec<_>>();
+        frame.render_widget(
+            Paragraph::new(lines).style(Style::default().fg(palette(state).text)),
+            Rect {
+                height: child_rows,
+                ..area
+            },
+        );
+    }
+    let rest = Rect {
+        y: area.y.saturating_add(child_rows),
+        height: area.height.saturating_sub(child_rows),
+        ..area
+    };
+    if rest.height == 0 {
+        return;
+    }
+    let area = rest;
     if let Some(job) = awaited_managed_job(state) {
         let lines = awaited_job_preview(job)
             .into_iter()
@@ -7449,6 +8655,49 @@ fn render_background_activity(frame: &mut ratatui::Frame, area: Rect, state: &Ap
     );
 }
 
+fn live_child_dock_line(
+    state: &AppState,
+    agent: &crate::agent::subagent::AgentActivitySnapshot,
+) -> String {
+    let seconds = state
+        .agent_activity_now
+        .signed_duration_since(agent.created_at)
+        .num_seconds()
+        .max(0) as u64;
+    let activity = agent
+        .current_action
+        .as_deref()
+        .filter(|action| !action.trim().is_empty())
+        .unwrap_or_else(|| agent.phase.label());
+    let selected = state
+        .agent_activity_focus
+        .as_ref()
+        .and_then(|focus| focus.selected_agent)
+        == Some(agent.id);
+    let marker = if selected { "›" } else { " " };
+    let task = dock_task_label(agent);
+    let activity = crate::terminal_text::sanitize_terminal_text(activity);
+    format!(
+        " {marker}{task} · {} · {activity}",
+        format_agent_elapsed(seconds)
+    )
+}
+
+fn dock_task_label(agent: &crate::agent::subagent::AgentActivitySnapshot) -> String {
+    let raw = agent.task.trim();
+    let short = !raw.contains('\n') && raw.chars().count() <= 48;
+    let label = if short && !raw.is_empty() {
+        raw
+    } else {
+        agent
+            .role
+            .as_deref()
+            .filter(|role| !role.trim().is_empty())
+            .unwrap_or("Planning")
+    };
+    crate::terminal_text::sanitize_terminal_text(label)
+}
+
 fn watcher_activity_label(watcher: &ca_watch::WatchSnapshotV1) -> String {
     let elapsed = watcher
         .event
@@ -7481,78 +8730,8 @@ fn render_input(frame: &mut ratatui::Frame, area: Rect, state: &AppState, focuse
         height: area.height.saturating_sub(2),
     };
 
-    // This dedicated composer row is never replaced by a transient status.
-    // Keep the urgent action first so it survives even very narrow terminals.
-    let queue_binding = state
-        .keymap
-        .display_binding(crate::keymap::KeyAction::QueueInput);
-    let controls = if state.hook_running
-        || state.attachment_resolution_busy
-        || state.review_in_flight
-        || state.foreground_job.is_some()
-        || (state.turn_lifecycle.is_active()
-            && (state.interaction.is_some() || state.approval_queue.is_active()))
-    {
-        Some("Esc stop · Ctrl+C stop".to_string())
-    } else if state.turn_lifecycle.is_active() {
-        Some(format!(
-            "Esc stop · Enter interrupt · {queue_binding} queue"
-        ))
-    } else if state.input_queue.editing_id.is_some() {
-        Some(format!("Enter send now · {queue_binding} save to queue"))
-    } else if !state.input_queue.is_empty() {
-        Some(format!(
-            "{} edit latest · /queue view all",
-            state
-                .keymap
-                .display_binding(crate::keymap::KeyAction::EditLastQueued)
-        ))
-    } else {
-        None
-    };
-    let controls_width = controls
-        .as_deref()
-        .map_or(0, unicode_width::UnicodeWidthStr::width);
-    let metadata_budget = (area.width as usize).saturating_sub(controls_width + 6);
-    let metadata =
-        crate::tui::selection::truncate_cells(&composer_metadata(state), metadata_budget);
-    let metadata_width = unicode_width::UnicodeWidthStr::width(metadata.as_str());
-    let show_metadata = area.height >= 3 && metadata_width > 0 && metadata_budget >= 12;
-    if let Some(controls) = controls.as_deref().filter(|_| area.height >= 3) {
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                format!(" {controls} "),
-                Style::default().fg(palette.muted).bg(palette.surface),
-            )),
-            Rect::new(
-                inner.x,
-                area.bottom() - 1,
-                if show_metadata {
-                    inner.width.saturating_sub(metadata_width as u16 + 3)
-                } else {
-                    inner.width
-                },
-                1,
-            ),
-        );
-    }
-    if show_metadata {
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                format!(" {metadata} "),
-                Style::default().fg(palette.muted).bg(palette.surface),
-            ))
-            .alignment(Alignment::Right),
-            Rect::new(
-                inner.right().saturating_sub(metadata_width as u16 + 2),
-                area.bottom() - 1,
-                metadata_width as u16 + 2,
-                1,
-            ),
-        );
-    }
-
     let previews: Vec<_> = state.input_queue.items().take(3).collect();
+    let mut queue_hits = Vec::new();
     for (index, pending) in previews.iter().enumerate() {
         let marker = if state.input_queue.editing_id == Some(pending.id) {
             "Editing queued draft"
@@ -7561,24 +8740,74 @@ fn render_input(frame: &mut ratatui::Frame, area: Rect, state: &AppState, focuse
         } else {
             "Queued"
         };
+        let row_y = inner.y + index as u16;
+        let show_chips =
+            state.input_queue.editing_id.is_none() && index == state.input_queue.selected_index;
+        let placed = if show_chips {
+            queue_chip_placements(inner.width as usize)
+        } else {
+            Vec::new()
+        };
+        let text_budget = placed.first().map_or(inner.width as usize, |(_, _, cell)| {
+            (*cell).saturating_sub(1)
+        });
+        let full = format!("{marker} · {}", pending.text.replace('\n', " "));
+        let left = if text_budget == 0 {
+            String::new()
+        } else {
+            truncate(&full, text_budget)
+        };
+        let prefix = format!("{marker} · ");
+        let mut spans = if let Some(rest) = left.strip_prefix(&prefix) {
+            vec![
+                Span::styled(prefix, Style::default().fg(palette.accent)),
+                Span::styled(rest.to_string(), Style::default().fg(palette.muted)),
+            ]
+        } else if left.is_empty() {
+            Vec::new()
+        } else {
+            vec![Span::styled(
+                left.clone(),
+                Style::default().fg(palette.accent),
+            )]
+        };
+        if let Some((_, _, first_cell)) = placed.first() {
+            let text_cells = unicode_width::UnicodeWidthStr::width(left.as_str());
+            let gap = first_cell.saturating_sub(text_cells);
+            if gap > 0 {
+                spans.push(Span::raw(" ".repeat(gap)));
+            }
+            for (chip_index, (action, label, cell)) in placed.iter().enumerate() {
+                if chip_index > 0 {
+                    spans.push(Span::raw(" "));
+                }
+                spans.push(Span::styled(
+                    (*label).to_string(),
+                    Style::default()
+                        .fg(palette.accent)
+                        .add_modifier(Modifier::BOLD),
+                ));
+                queue_hits.push(crate::tui::composer::QueueActionHit {
+                    id: pending.id,
+                    action: *action,
+                    x: inner.x.saturating_add(*cell as u16),
+                    y: row_y,
+                    width: unicode_width::UnicodeWidthStr::width(*label) as u16,
+                });
+            }
+        }
         frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(format!("{marker} · "), Style::default().fg(palette.accent)),
-                Span::styled(
-                    truncate(
-                        &pending.text.replace('\n', " "),
-                        inner.width.saturating_sub(marker.len() as u16 + 3) as usize,
-                    ),
-                    Style::default().fg(palette.muted),
-                ),
-            ])),
+            Paragraph::new(Line::from(spans)),
             Rect {
                 x: inner.x,
-                y: inner.y + index as u16,
+                y: row_y,
                 width: inner.width,
                 height: 1,
             },
         );
+    }
+    if !state.queue_view_open {
+        *state.composer_ui.queue_action_hits.borrow_mut() = queue_hits;
     }
     let overflow = state.input_queue.len().saturating_sub(previews.len());
     let overflow_rows = u16::from(overflow > 0);
@@ -7600,26 +8829,11 @@ fn render_input(frame: &mut ratatui::Frame, area: Rect, state: &AppState, focuse
     inner.y += preview_rows;
     inner.height = inner.height.saturating_sub(preview_rows);
 
-    if !state.pasted_images.is_empty() || state.image_attachment_busy {
-        let label = if state.image_attachment_busy {
-            "[Image processing…]".to_string()
-        } else {
-            format!(
-                "[{} image attachment{}]",
-                state.pasted_images.len(),
-                if state.pasted_images.len() == 1 {
-                    ""
-                } else {
-                    "s"
-                }
-            )
-        };
+    if let Some(preview) = state.image_chip_preview() {
         frame.render_widget(
             Paragraph::new(Span::styled(
-                label,
-                Style::default()
-                    .fg(palette.accent_foreground)
-                    .bg(palette.accent),
+                crate::tui::selection::truncate_cells(&preview, inner.width as usize),
+                Style::default().fg(palette.muted),
             )),
             Rect {
                 x: inner.x,
@@ -7833,10 +9047,7 @@ fn composer_row_spans<'a>(
         let start = element.range.start.max(range.start);
         let end = element.range.end.min(range.end);
         if cursor < start {
-            spans.push(Span::styled(
-                &state.input[cursor..start],
-                Style::default().fg(Color::White),
-            ));
+            push_plain_composer_spans(&mut spans, &state.input[cursor..start], palette);
         }
         let style = match element.kind {
             crate::tui::composer::AtomicKind::Folder {
@@ -7852,16 +9063,85 @@ fn composer_row_spans<'a>(
         cursor = end;
     }
     if cursor < range.end {
-        spans.push(Span::styled(
-            &state.input[cursor..range.end],
-            Style::default().fg(Color::White),
-        ));
+        push_plain_composer_spans(&mut spans, &state.input[cursor..range.end], palette);
     }
     spans
 }
 
+fn push_plain_composer_spans<'a>(spans: &mut Vec<Span<'a>>, text: &'a str, palette: &ThemePalette) {
+    if text.is_empty() {
+        return;
+    }
+    let plain = Style::default().fg(palette.text);
+    let token = Style::default()
+        .fg(palette.accent_foreground)
+        .bg(palette.accent);
+    let mut last = 0;
+    for range in composer_token_ranges(text) {
+        if range.start > last {
+            spans.push(Span::styled(&text[last..range.start], plain));
+        }
+        if range.end > range.start {
+            spans.push(Span::styled(&text[range.start..range.end], token));
+        }
+        last = range.end;
+    }
+    if last < text.len() {
+        spans.push(Span::styled(&text[last..], plain));
+    }
+}
+
+fn composer_token_ranges(text: &str) -> Vec<std::ops::Range<usize>> {
+    let mut ranges = Vec::new();
+    let mut chars = text.char_indices().peekable();
+    let mut previous_whitespace = true;
+    while let Some((index, character)) = chars.next() {
+        if previous_whitespace && character == '/' {
+            if let Some((next_index, next)) = chars.peek().copied() {
+                if next.is_ascii_alphabetic() {
+                    let mut end = next_index + next.len_utf8();
+                    chars.next();
+                    while let Some((offset, token_char)) = chars.peek().copied() {
+                        if token_char.is_ascii_alphanumeric()
+                            || token_char == '_'
+                            || token_char == '-'
+                        {
+                            end = offset + token_char.len_utf8();
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    ranges.push(index..end);
+                    previous_whitespace = false;
+                    continue;
+                }
+            }
+        } else if previous_whitespace && character == '@' {
+            let mut end = index + character.len_utf8();
+            let mut any = false;
+            while let Some((offset, token_char)) = chars.peek().copied() {
+                if token_char.is_whitespace() {
+                    break;
+                }
+                any = true;
+                end = offset + token_char.len_utf8();
+                chars.next();
+            }
+            if any {
+                ranges.push(index..end);
+            }
+            previous_whitespace = false;
+            continue;
+        }
+        previous_whitespace = character.is_whitespace();
+    }
+    ranges
+}
+
 pub(crate) fn composer_has_focus(state: &AppState) -> bool {
-    !suggestion_overlay_open(state)
+    state.composer_focus == crate::app::ComposerFocus::Composer
+        && !suggestion_overlay_open(state)
         && state.provider_auth.is_none()
         && state.theme_manager.is_none()
         && state.scratch_delete_confirmation.is_none()
@@ -7897,158 +9177,122 @@ fn composer_cursor_position(inner: Rect, state: &AppState) -> Option<ratatui::la
     ))
 }
 
-fn render_status(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
-    if area.height == 0 {
-        return;
+fn status_is_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("could not") {
+        return true;
     }
-    let palette = palette(state);
-    let (value, style) = if state.turn_lifecycle.phase == crate::activity::ActivityPhase::Paused {
-        (
-            state
-                .status_message
-                .as_deref()
-                .unwrap_or("Paused · /unpause · Ctrl+C cancel")
-                .to_string(),
-            Style::default().fg(palette.warning),
-        )
-    } else if let Some(msg) = state
-        .turn_recovery
-        .notice
-        .as_ref()
-        .filter(|_| !state.turn_lifecycle.is_active())
-        .or(state.status_message.as_ref())
-    {
-        (
-            crate::terminal_text::sanitize_terminal_text(msg),
-            Style::default().fg(palette.warning),
-        )
-    } else if state.slash_palette_open
-        || state.file_picker_open
-        || state.composer_ui.path_completion.open
-    {
-        (
-            "↑↓ select · Tab complete · Enter choose · Esc dismiss".into(),
-            Style::default().fg(palette.accent),
-        )
-    } else if state.transcript_scroll.bottom_offset() > 0 {
-        (
-            format!(
-                "{} rows up{} · Ctrl+End latest",
-                state.transcript_scroll.bottom_offset(),
-                if state.transcript_scroll.unseen_messages == 0 {
-                    String::new()
-                } else {
-                    format!(" · {} new", state.transcript_scroll.unseen_messages)
-                }
-            ),
-            Style::default().fg(palette.accent),
-        )
-    } else if state.turn_lifecycle.is_active() {
-        (
-            if area.width < 80 {
-                format!("{} · Ctrl+C stops", composer_metadata(state))
-            } else {
-                format!(
-                    "Ctrl+C also stops · {} edits the latest queued message",
-                    state
-                        .keymap
-                        .display_binding(crate::keymap::KeyAction::EditLastQueued)
-                )
-            },
-            Style::default().fg(palette.muted),
-        )
-    } else if state.input.is_empty() {
-        let metadata = statusline_text(state, false);
-        (
-            if metadata.is_empty() {
-                "/ commands".into()
-            } else {
-                format!("{metadata} · / commands")
-            },
-            Style::default().fg(palette.muted),
-        )
-    } else {
-        (
-            statusline_text(state, false),
-            Style::default().fg(palette.muted),
-        )
-    };
-    frame.render_widget(
-        Paragraph::new(Span::styled(
-            crate::tui::selection::truncate_cells(&value, area.width as usize),
-            style,
-        )),
-        area,
-    );
+    lower
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .any(|word| {
+            matches!(
+                word,
+                "error" | "errors" | "failed" | "unable" | "denied" | "invalid"
+            )
+        })
 }
 
-fn statusline_text(state: &AppState, include_hints: bool) -> String {
-    let mut parts = Vec::new();
-    for field in &state.statusline_fields {
-        let value = match field {
-            crate::ui_settings::StatusField::Messages => {
-                (!state.messages.is_empty()).then(|| format!("{} messages", state.messages.len()))
-            }
-            crate::ui_settings::StatusField::Tokens => {
-                let total = state.token_count.0.saturating_add(state.token_count.1);
-                if total == 0 {
-                    None
-                } else if total >= 1_000 {
-                    Some(format!("{:.1}k tokens", total as f32 / 1_000.0))
-                } else {
-                    Some(format!("{total} tokens"))
-                }
-            }
-            crate::ui_settings::StatusField::Model => state
-                .current_model
-                .as_ref()
-                .map(|model| format!("model {}", model.display_name)),
-            crate::ui_settings::StatusField::Profile => {
-                Some(format!("profile {}", state.active_profile.label()))
-            }
-            crate::ui_settings::StatusField::Mode => Some(format!(
-                "mode {}",
-                match &state.mode {
-                    crate::app::AgentMode::Agent => "agent",
-                    crate::app::AgentMode::Plan => "plan",
-                    crate::app::AgentMode::Ask => "ask",
-                    crate::app::AgentMode::Debug => "debug",
-                    crate::app::AgentMode::Custom(name) => name,
-                }
-            )),
-            crate::ui_settings::StatusField::Workspace => std::path::Path::new(&state.cwd)
-                .file_name()
-                .map(|name| format!("workspace {}", name.to_string_lossy())),
-            crate::ui_settings::StatusField::GitBranch => state
-                .attached_worktree
-                .as_ref()
-                .map(|record| record.branch.clone())
-                .or_else(|| state.status_git_branch.clone())
-                .map(|branch| format!("branch {branch}")),
-            crate::ui_settings::StatusField::GenerationSpeed => state
-                .latest_generation_speed_tenths
-                .map(|tenths| format!("{}.{:01} tok/s", tenths / 10, tenths % 10))
-                .or_else(|| Some("speed unknown".into())),
-            crate::ui_settings::StatusField::SittingCost => {
-                Some(state.sitting_cost.compact_label())
-            }
-            crate::ui_settings::StatusField::Custom => state.status_command.output.clone(),
-            crate::ui_settings::StatusField::SendHint if include_hints => Some("Enter send".into()),
-            crate::ui_settings::StatusField::HistoryHint if include_hints => {
-                Some("↑↓ history".into())
-            }
-            crate::ui_settings::StatusField::CommandsHint if include_hints => {
-                Some("/ commands".into())
-            }
-            crate::ui_settings::StatusField::SendHint
-            | crate::ui_settings::StatusField::HistoryHint
-            | crate::ui_settings::StatusField::CommandsHint => None,
-        };
-        if let Some(value) = value.filter(|value| !value.is_empty()) {
-            parts.push(crate::terminal_text::sanitize_terminal_text(&value));
-        }
+fn status_notice_source(state: &AppState) -> Option<&str> {
+    if state.turn_lifecycle.phase == crate::activity::ActivityPhase::Paused {
+        return None;
     }
-    parts.join(" · ")
+    state
+        .turn_recovery
+        .notice
+        .as_deref()
+        .filter(|_| !state.turn_lifecycle.is_active())
+        .or(state.status_message.as_deref())
+        .filter(|message| !message.starts_with("Paused") && !message.contains("Press Esc"))
+}
+
+fn notice_toast(state: &AppState) -> Option<crate::app::UiToast> {
+    if let Some(toast) = state.toast.as_ref().filter(|toast| toast.is_visible()) {
+        return Some(toast.clone());
+    }
+    let message = crate::terminal_text::sanitize_terminal_text(status_notice_source(state)?);
+    if message.is_empty() {
+        return None;
+    }
+    if status_is_error(&message) {
+        return Some(crate::app::UiToast {
+            message,
+            kind: crate::app::ToastKind::Error,
+            expires_at: std::time::Instant::now() + std::time::Duration::from_secs(86_400),
+        });
+    }
+    let hash = {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        message.hash(&mut hasher);
+        hasher.finish()
+    };
+    let now = std::time::Instant::now();
+    let started = match state.status_notice_at.get() {
+        Some((seen, at)) if seen == hash => at,
+        _ => {
+            state.status_notice_at.set(Some((hash, now)));
+            now
+        }
+    };
+    let expires_at = started + std::time::Duration::from_millis(1_600);
+    (now < expires_at).then_some(crate::app::UiToast {
+        message,
+        kind: crate::app::ToastKind::Success,
+        expires_at,
+    })
+}
+
+fn statusline_field_value(
+    state: &AppState,
+    field: &crate::ui_settings::StatusField,
+    include_hints: bool,
+) -> Option<String> {
+    let value = match field {
+        crate::ui_settings::StatusField::Messages => {
+            (!state.messages.is_empty()).then(|| format!("{} messages", state.messages.len()))
+        }
+        crate::ui_settings::StatusField::Tokens => {
+            let total = state.token_count.0.saturating_add(state.token_count.1);
+            if total == 0 {
+                None
+            } else if total >= 1_000 {
+                Some(format!("{:.1}k tokens", total as f32 / 1_000.0))
+            } else {
+                Some(format!("{total} tokens"))
+            }
+        }
+        crate::ui_settings::StatusField::Model => state
+            .current_model
+            .as_ref()
+            .map(|model| format!("model {}", model.display_name)),
+        crate::ui_settings::StatusField::Profile => {
+            Some(format!("profile {}", state.active_profile.label()))
+        }
+        crate::ui_settings::StatusField::Mode => {
+            Some(format!("mode {}", state.mode.status_label(&state.approval)))
+        }
+        crate::ui_settings::StatusField::Workspace => std::path::Path::new(&state.cwd)
+            .file_name()
+            .map(|name| format!("workspace {}", name.to_string_lossy())),
+        crate::ui_settings::StatusField::GitBranch => state
+            .attached_worktree
+            .as_ref()
+            .map(|record| record.branch.clone())
+            .or_else(|| state.status_git_branch.clone())
+            .map(|branch| format!("branch {branch}")),
+        crate::ui_settings::StatusField::GenerationSpeed => state
+            .latest_generation_speed_tenths
+            .map(|tenths| format!("{}.{:01} tok/s", tenths / 10, tenths % 10)),
+        crate::ui_settings::StatusField::SittingCost => Some(state.sitting_cost.compact_label()),
+        crate::ui_settings::StatusField::Custom => state.status_command.output.clone(),
+        crate::ui_settings::StatusField::SendHint if include_hints => Some("Enter send".into()),
+        crate::ui_settings::StatusField::HistoryHint if include_hints => Some("↑↓ history".into()),
+        crate::ui_settings::StatusField::CommandsHint if include_hints => Some("/ commands".into()),
+        crate::ui_settings::StatusField::SendHint
+        | crate::ui_settings::StatusField::HistoryHint
+        | crate::ui_settings::StatusField::CommandsHint => None,
+    }?;
+    (!value.is_empty()).then(|| crate::terminal_text::sanitize_terminal_text(&value))
 }
 
 fn suggestion_overlay_open(state: &AppState) -> bool {
@@ -8087,6 +9331,7 @@ fn suggestion_overlay_open(state: &AppState) -> bool {
         || state.permission_manager.is_some()
         || state.memory_manager.is_some()
         || state.personality_editor.is_some()
+        || state.privacy_editor.is_some()
         || state.multi_run_manager.is_some()
         || state.task_graph_manager.is_some()
         || state.plan_workflow_graph.is_some()
@@ -8097,7 +9342,7 @@ fn suggestion_overlay_open(state: &AppState) -> bool {
         || state.worktree_setup_confirmation.is_some()
         || state.support_bundle_confirmation.is_some()
         || state.setup_import_confirmation.is_some()
-        || state.interaction.is_some()
+        || (state.interaction.is_some() && !state.interaction_parked)
         || state.workspace_trust_prompt
 }
 
@@ -8126,10 +9371,9 @@ fn render_user_prompt_card<'a>(
     if width == 0 {
         return UserPromptCardSpan::default();
     }
-    let style = Style::default()
-        .fg(theme.text)
-        .bg(theme.title_hint_background);
-    let safe = crate::terminal_text::sanitize_terminal_text(content).replace('\t', "    ");
+    let style = painted(theme.text, theme.title_hint_background);
+    let (body, sent_images) = split_sent_image_record(content);
+    let safe = crate::terminal_text::sanitize_terminal_text(body).replace('\t', "    ");
     let layout = crate::tui::composer::ComposerLayout::new(
         &safe,
         safe.len(),
@@ -8167,13 +9411,9 @@ fn render_user_prompt_card<'a>(
                 text = marker;
             }
         }
-        lines.push(
-            Line::from(vec![
-                Span::styled(prefix, style.add_modifier(Modifier::BOLD)),
-                Span::styled(text, style),
-            ])
-            .style(style),
-        );
+        let mut spans = vec![Span::styled(prefix, style.add_modifier(Modifier::BOLD))];
+        spans.extend(image_placeholder_spans(&text, sent_images, theme, style));
+        lines.push(Line::from(spans).style(style));
     }
     lines.push(Line::from("").style(style));
     UserPromptCardSpan {
@@ -8188,6 +9428,57 @@ pub(crate) struct UserPromptCardSpan {
     pub(crate) message_index: usize,
     pub(crate) first_line: usize,
     pub(crate) height: usize,
+}
+
+pub(crate) fn split_sent_image_record(content: &str) -> (&str, Option<u32>) {
+    let marker = "\n\n[sent-images:";
+    let Some(start) = content.rfind(marker) else {
+        return (content, None);
+    };
+    let rest = &content[start + marker.len()..];
+    let Some(end) = rest.find(']') else {
+        return (content, None);
+    };
+    if !rest[end + 1..].trim().is_empty() {
+        return (content, None);
+    }
+    let count = rest[..end].parse::<u32>().ok();
+    (&content[..start], count)
+}
+
+fn image_placeholder_spans(
+    text: &str,
+    sent: Option<u32>,
+    theme: ThemePalette,
+    base: Style,
+) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut cursor = 0usize;
+    while let Some(relative) = text[cursor..].find("[Image #") {
+        let start = cursor + relative;
+        let after = start + "[Image #".len();
+        let Some(end_rel) = text[after..].find(']') else {
+            break;
+        };
+        let end = after + end_rel + 1;
+        let number = text[after..after + end_rel].parse::<u32>().ok();
+        if cursor < start {
+            spans.push(Span::styled(text[cursor..start].to_string(), base));
+        }
+        let chip_style = match (sent, number) {
+            (Some(sent), Some(number)) if number >= 1 && number <= sent => {
+                base.fg(theme.accent).add_modifier(Modifier::BOLD)
+            }
+            (Some(_), Some(_)) => base.fg(theme.muted).add_modifier(Modifier::CROSSED_OUT),
+            _ => base,
+        };
+        spans.push(Span::styled(text[start..end].to_string(), chip_style));
+        cursor = end;
+    }
+    if cursor < text.len() {
+        spans.push(Span::styled(text[cursor..].to_string(), base));
+    }
+    spans
 }
 
 fn render_reasoning_block<'a>(
@@ -8225,6 +9516,7 @@ fn render_reasoning_block<'a>(
 fn render_turn_footer<'a>(
     lines: &mut Vec<Line<'a>>,
     annotation: &crate::app::TranscriptMessageAnnotation,
+    theme: &ThemePalette,
 ) {
     if annotation.terminal_outcome.is_none() {
         return;
@@ -8257,7 +9549,7 @@ fn render_turn_footer<'a>(
     }
     lines.push(Line::from(Span::styled(
         parts.join(" · "),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.muted),
     )));
 }
 
@@ -8354,7 +9646,7 @@ fn render_workspace_trust_prompt(frame: &mut ratatui::Frame, area: Rect, state: 
     let block = Block::default()
         .title(" Workspace Trust ")
         .borders(Borders::ALL)
-        .style(Style::default().bg(Color::DarkGray));
+        .style(Style::default().bg(palette(state).surface));
     let popup = centered_rect(72, 16, area);
     frame.render_widget(Clear, popup);
     let paragraph = Paragraph::new(Text::from(lines))
@@ -8367,73 +9659,749 @@ fn render_config_hub(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
     let Some(hub) = state.config_hub.as_ref() else {
         return;
     };
-    let pw = 76.min(area.width.saturating_sub(4));
-    let ph = 20.min(area.height.saturating_sub(4));
-    let pa = centered_rect(pw, ph, area);
-    let visible = hub
-        .items
-        .iter()
-        .filter(|item| item.matches(&hub.filter))
-        .collect::<Vec<_>>();
-    let selected = hub.selected_idx.min(visible.len().saturating_sub(1));
-    let mut items = vec![
-        ListItem::new(Span::styled(
-            " Configuration",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )),
-        ListItem::new(""),
-        ListItem::new(Line::from(vec![
-            Span::styled("> ", Style::default().fg(Color::Cyan)),
-            Span::styled(
-                if hub.filter.is_empty() {
-                    "type to filter…"
-                } else {
-                    &hub.filter
-                },
-                Style::default().fg(Color::White),
-            ),
-        ])),
-        ListItem::new(""),
-    ];
-    for (index, item) in visible.iter().enumerate() {
-        let is_selected = index == selected;
-        let style = if is_selected {
-            Style::default().fg(Color::Black).bg(Color::Cyan)
-        } else {
-            Style::default().fg(Color::White)
-        };
-        let line = format!(
-            "{}{}  {}",
-            if is_selected { "▸ " } else { "  " },
-            crate::terminal_text::sanitize_terminal_text(&item.label),
-            crate::terminal_text::sanitize_terminal_text(&item.value)
-        );
-        items.push(ListItem::new(Span::styled(
-            pad_right(&line, pw.saturating_sub(2) as usize),
-            style,
-        )));
+    let sheet = area.inner(ratatui::layout::Margin {
+        horizontal: 1,
+        vertical: 1,
+    });
+    if sheet.width < 8 || sheet.height < 6 {
+        return;
     }
-    if visible.is_empty() {
-        items.push(ListItem::new(Span::styled(
-            "  No matching settings",
-            Style::default().fg(Color::DarkGray),
-        )));
-    }
-    items.push(ListItem::new(""));
-    items.push(ListItem::new(Span::styled(
-        "Enter open/edit · Esc close · ↑↓ navigate · type to filter",
-        Style::default().fg(Color::DarkGray),
-    )));
-    frame.render_widget(Clear, pa);
+    let theme = palette(state);
+    frame.render_widget(Clear, sheet);
     frame.render_widget(
-        List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
-        ),
-        pa,
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme.border)),
+        sheet,
+    );
+    let inner = sheet.inner(ratatui::layout::Margin {
+        horizontal: 1,
+        vertical: 1,
+    });
+    let mut hits = Vec::new();
+    render_settings_title(frame, inner, theme);
+    hits.push((inner.y, crate::app::ConfigHubHit::Close));
+    let search = if hub.filter.is_empty() {
+        if hub.search_focused {
+            "/".to_string()
+        } else {
+            "/ to search".to_string()
+        }
+    } else {
+        hub.filter.clone()
+    };
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            format!(" {search}"),
+            Style::default().fg(if hub.search_focused {
+                theme.text
+            } else {
+                theme.muted
+            }),
+        )),
+        Rect {
+            x: inner.x,
+            y: inner.y + 1,
+            width: inner.width,
+            height: 1,
+        },
+    );
+    let body = Rect {
+        x: inner.x,
+        y: inner.y + 3,
+        width: inner.width,
+        height: inner.height.saturating_sub(5),
+    };
+    let footer = Rect {
+        x: inner.x,
+        y: inner.bottom().saturating_sub(2),
+        width: inner.width,
+        height: 2,
+    };
+    match &hub.page {
+        crate::app::ConfigHubPage::List => {
+            render_settings_list(frame, body, state, hub, theme, &mut hits)
+        }
+        crate::app::ConfigHubPage::Choices(page) => {
+            render_settings_choices(frame, body, hub, page, theme, &mut hits)
+        }
+        crate::app::ConfigHubPage::Personality(page) => {
+            render_personality_settings(frame, body, page, theme)
+        }
+    }
+    let hint = settings_footer(hub);
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            "Tip · / searches settings",
+            Style::default()
+                .fg(theme.muted)
+                .add_modifier(Modifier::ITALIC),
+        )),
+        Rect {
+            x: footer.x,
+            y: footer.y,
+            width: footer.width,
+            height: 1,
+        },
+    );
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            crate::tui::selection::truncate_cells(&hint, footer.width as usize),
+            Style::default().fg(theme.muted),
+        )),
+        Rect {
+            x: footer.x,
+            y: footer.y + 1,
+            width: footer.width,
+            height: 1,
+        },
+    );
+    *hub.hits.borrow_mut() = hits;
+}
+
+fn render_settings_title(frame: &mut ratatui::Frame, inner: Rect, theme: ThemePalette) {
+    let title = "Settings";
+    let close = "[x]";
+    let gap = (inner.width as usize)
+        .saturating_sub(title.len())
+        .saturating_sub(close.len());
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                title,
+                Style::default()
+                    .fg(theme.strong)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" ".repeat(gap)),
+            Span::styled(close, Style::default().fg(theme.muted)),
+        ])),
+        Rect {
+            x: inner.x,
+            y: inner.y,
+            width: inner.width,
+            height: 1,
+        },
+    );
+}
+
+fn settings_footer(hub: &crate::app::ConfigHubState) -> String {
+    match &hub.page {
+        crate::app::ConfigHubPage::Choices(_) => {
+            "↑↓/j/k nav  Enter select  double-click select  Esc back  F2/Esc close".into()
+        }
+        crate::app::ConfigHubPage::Personality(page) => {
+            if page.editing {
+                "Type  Enter newline  Esc stop editing  then Save".into()
+            } else {
+                "↑↓/j/k nav  Enter edit or open  Esc back".into()
+            }
+        }
+        crate::app::ConfigHubPage::List => {
+            let visible = hub.visible_items();
+            let item = visible.get(hub.selected_idx).copied();
+            let mut parts = vec!["↑↓/j/k nav".to_string(), "g/G top/btm".into()];
+            if item.is_some_and(|item| item.choices.is_some()) {
+                parts.push("Space toggle".into());
+            }
+            parts.push("Enter open".into());
+            if item.is_some_and(|item| item.opens_screen) {
+                parts.push("→ expand".into());
+            }
+            parts.push("/ search".into());
+            if item.is_some_and(|item| item.reset.is_some()) {
+                parts.push("d reset".into());
+            }
+            parts.push("F2/Esc close".into());
+            parts.join("  ")
+        }
+    }
+}
+
+fn render_personality_settings(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    page: &crate::app::PersonalitySettingsPage,
+    theme: ThemePalette,
+) {
+    let labels = ["Personality", "Pre-prompt", "Guided questions", "Save"];
+    let mut lines = Vec::new();
+    for (index, label) in labels.iter().enumerate() {
+        let marker = if page.selected == index { "▸ " } else { "  " };
+        lines.push(Line::from(Span::styled(
+            format!("{marker}{label}"),
+            Style::default().fg(if page.selected == index {
+                theme.accent
+            } else {
+                theme.text
+            }),
+        )));
+    }
+    lines.push(Line::raw(""));
+    let body = if page.selected == 0 {
+        page.personality.as_str()
+    } else if page.selected == 1 {
+        page.pre_prompt.as_str()
+    } else if page.selected == 2 {
+        "Open the question walkthrough."
+    } else {
+        "Write both fields to personality.md."
+    };
+    lines.push(Line::from(Span::styled(
+        body,
+        Style::default().fg(theme.muted),
+    )));
+    if let Some(error) = &page.error {
+        lines.push(Line::from(Span::styled(
+            error.clone(),
+            Style::default().fg(theme.error),
+        )));
+    }
+    if let Some(notice) = &page.notice {
+        lines.push(Line::from(Span::styled(
+            notice.clone(),
+            Style::default().fg(theme.success),
+        )));
+    }
+    frame.render_widget(
+        Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }),
+        area,
+    );
+}
+
+/// Move `scroll` only far enough to keep `focus_start..focus_end` inside the viewport.
+/// A focus taller than the viewport stays pinned to its first line.
+pub(crate) fn reveal_settings_window(
+    scroll: usize,
+    focus_start: usize,
+    focus_end: usize,
+    height: usize,
+    total: usize,
+) -> usize {
+    if height == 0 || total == 0 {
+        return 0;
+    }
+    let max_scroll = total.saturating_sub(height);
+    let focus_start = focus_start.min(total - 1);
+    let focus_end = focus_end.max(focus_start + 1).min(total);
+    if focus_end.saturating_sub(focus_start) > height {
+        return focus_start.min(max_scroll);
+    }
+    let mut scroll = scroll.min(max_scroll);
+    if focus_start < scroll {
+        scroll = focus_start;
+    } else if focus_end > scroll + height {
+        scroll = focus_end.saturating_sub(height);
+    }
+    scroll.min(max_scroll)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SettingsMark {
+    Gap,
+    Header,
+    Item(usize),
+    Detail,
+}
+
+fn settings_focus(marks: &[SettingsMark], selected: usize) -> (usize, usize) {
+    let Some(row) = marks
+        .iter()
+        .position(|mark| matches!(mark, SettingsMark::Item(index) if *index == selected))
+    else {
+        return (0, 1);
+    };
+    let start = if row > 0 && matches!(marks[row - 1], SettingsMark::Header) {
+        row - 1
+    } else {
+        row
+    };
+    let end = if matches!(marks.get(row + 1), Some(SettingsMark::Detail)) {
+        row + 2
+    } else {
+        row + 1
+    };
+    (start, end)
+}
+
+fn settings_list_lines(
+    hub: &crate::app::ConfigHubState,
+    theme: ThemePalette,
+    width: usize,
+    show_descriptions: bool,
+) -> Vec<(SettingsMark, Line<'static>)> {
+    let visible = hub.visible_items();
+    let selected = hub.selected_idx.min(visible.len().saturating_sub(1));
+    let mut lines = Vec::new();
+    if visible.is_empty() {
+        lines.push((
+            SettingsMark::Detail,
+            Line::from(Span::styled(
+                "No matching settings",
+                Style::default().fg(theme.muted),
+            )),
+        ));
+        return lines;
+    }
+    let note_column = show_descriptions
+        .then(|| settings_note_column(&visible, width))
+        .flatten();
+    let mut last_section = None;
+    for (index, item) in visible.iter().enumerate() {
+        if hub.filter.is_empty() && last_section != Some(item.section) {
+            last_section = Some(item.section);
+            if !lines.is_empty() {
+                lines.push((SettingsMark::Gap, Line::from("")));
+            }
+            let title = item.section.title();
+            let rule = "─".repeat(width.saturating_sub(title.len()).saturating_sub(1));
+            lines.push((
+                SettingsMark::Header,
+                Line::from(vec![
+                    Span::styled(
+                        title.to_string(),
+                        Style::default()
+                            .fg(theme.muted)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(format!(" {rule}"), Style::default().fg(theme.border)),
+                ]),
+            ));
+        }
+        let chosen = index == selected;
+        let value = crate::terminal_text::sanitize_terminal_text(&item.value);
+        let chevron = if item.opens_screen { " ›" } else { "" };
+        let label = format!(
+            "▶ {}",
+            crate::terminal_text::sanitize_terminal_text(&item.label)
+        );
+        let right = format!("{value}{chevron}");
+        let column =
+            note_column.unwrap_or_else(|| unicode_width::UnicodeWidthStr::width(label.as_str()));
+        let row = settings_note_line(
+            &label,
+            &item.description,
+            &right,
+            width,
+            show_descriptions.then_some(column),
+            chosen,
+            theme,
+        );
+        lines.push((SettingsMark::Item(index), row));
+    }
+    lines
+}
+
+fn settings_note_column(visible: &[&crate::app::ConfigHubItem], width: usize) -> Option<usize> {
+    let label_width = |item: &crate::app::ConfigHubItem| {
+        let label = format!(
+            "▶ {}",
+            crate::terminal_text::sanitize_terminal_text(&item.label)
+        );
+        unicode_width::UnicodeWidthStr::width(label.as_str())
+    };
+    let right_width = |item: &crate::app::ConfigHubItem| {
+        let value = crate::terminal_text::sanitize_terminal_text(&item.value);
+        let chevron = if item.opens_screen { " ›" } else { "" };
+        let right = format!("{value}{chevron}");
+        unicode_width::UnicodeWidthStr::width(right.as_str())
+    };
+    let widest_label = visible.iter().copied().map(label_width).max()?;
+    let widest_right = visible.iter().copied().map(right_width).max().unwrap_or(0);
+    let tail = widest_right.saturating_add(11);
+    (width > tail && widest_label.saturating_add(tail) <= width).then_some(widest_label)
+}
+
+fn settings_note_line(
+    label: &str,
+    description: &str,
+    right: &str,
+    width: usize,
+    column: Option<usize>,
+    chosen: bool,
+    theme: ThemePalette,
+) -> Line<'static> {
+    let row_bg = if chosen {
+        theme.title_hint_background
+    } else {
+        Color::Reset
+    };
+    let left_style = Style::default().fg(theme.text).bg(row_bg);
+    let right_style = Style::default()
+        .fg(if chosen { theme.text } else { theme.muted })
+        .bg(row_bg);
+    let Some(column) = column else {
+        return settings_value_line(label, right, width, left_style, right_style);
+    };
+    let description = crate::terminal_text::sanitize_terminal_text(description);
+    let description = description.split_whitespace().collect::<Vec<_>>().join(" ");
+    let label_width = unicode_width::UnicodeWidthStr::width(label);
+    let right_width = unicode_width::UnicodeWidthStr::width(right);
+    let column = column.max(label_width).min(width);
+    let room = width
+        .saturating_sub(column)
+        .saturating_sub(2)
+        .saturating_sub(1)
+        .saturating_sub(right_width);
+    if description.is_empty() || room < 8 {
+        return settings_value_line(label, right, width, left_style, right_style);
+    }
+    let note = crate::tui::selection::truncate_cells(&description, room);
+    let note_width = unicode_width::UnicodeWidthStr::width(note.as_str());
+    let pad = column.saturating_sub(label_width);
+    let flex = width
+        .saturating_sub(column)
+        .saturating_sub(2)
+        .saturating_sub(note_width)
+        .saturating_sub(right_width);
+    let note_style = Style::default()
+        .fg(if chosen { theme.text } else { theme.muted })
+        .bg(row_bg)
+        .add_modifier(Modifier::ITALIC);
+    Line::from(vec![
+        Span::styled(label.to_string(), left_style),
+        Span::styled(" ".repeat(pad.saturating_add(2)), left_style),
+        Span::styled(note, note_style),
+        Span::styled(" ".repeat(flex), left_style),
+        Span::styled(right.to_string(), right_style),
+    ])
+}
+
+fn remember_settings_rows(hub: &crate::app::ConfigHubState, marks: &[SettingsMark], height: u16) {
+    let mut rows = Vec::new();
+    for (line, mark) in marks.iter().enumerate() {
+        if matches!(mark, SettingsMark::Item(index) if *index == rows.len()) {
+            rows.push(line);
+        }
+    }
+    *hub.row_lines.borrow_mut() = rows;
+    hub.viewport_rows.set(height);
+}
+
+fn paint_settings_scrollbar(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    scroll: usize,
+    total: usize,
+    theme: ThemePalette,
+) {
+    let height = usize::from(area.height);
+    if height == 0 || area.width == 0 || total <= height {
+        return;
+    }
+    let thumb = (height.saturating_mul(height) / total).clamp(1, height);
+    let max_scroll = total - height;
+    let travel = height - thumb;
+    let start = scroll
+        .saturating_mul(travel)
+        .checked_div(max_scroll)
+        .unwrap_or(0);
+    let x = area.right().saturating_sub(1);
+    for row in 0..height {
+        let on_thumb = row >= start && row < start + thumb;
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                if on_thumb { "┃" } else { "│" },
+                Style::default().fg(if on_thumb {
+                    theme.scrollbar_fg
+                } else {
+                    theme.muted
+                }),
+            )),
+            Rect {
+                x,
+                y: area.y + row as u16,
+                width: 1,
+                height: 1,
+            },
+        );
+    }
+}
+
+fn render_settings_list(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    state: &AppState,
+    hub: &crate::app::ConfigHubState,
+    theme: ThemePalette,
+    hits: &mut Vec<(u16, crate::app::ConfigHubHit)>,
+) {
+    let height = usize::from(area.height);
+    if height == 0 {
+        return;
+    }
+    let mut width = usize::from(area.width);
+    let mut lines = settings_list_lines(hub, theme, width, state.show_setting_descriptions);
+    let overflow = lines.len() > height && area.width > 1;
+    if overflow {
+        width = width.saturating_sub(1);
+        lines = settings_list_lines(hub, theme, width, state.show_setting_descriptions);
+    }
+    let marks: Vec<SettingsMark> = lines.iter().map(|(mark, _)| *mark).collect();
+    let selected = hub
+        .selected_idx
+        .min(hub.visible_items().len().saturating_sub(1));
+    let (focus_start, focus_end) = settings_focus(&marks, selected);
+    let scroll = reveal_settings_window(
+        hub.scroll.get(),
+        focus_start,
+        focus_end,
+        height,
+        lines.len(),
+    );
+    hub.scroll.set(scroll);
+    remember_settings_rows(hub, &marks, area.height);
+    for (offset, (mark, line)) in lines.iter().skip(scroll).take(height).enumerate() {
+        let y = area.y + offset as u16;
+        if let SettingsMark::Item(index) = mark {
+            hits.push((y, crate::app::ConfigHubHit::Item(*index)));
+        }
+        frame.render_widget(
+            Paragraph::new(line.clone()),
+            Rect {
+                x: area.x,
+                y,
+                width: width as u16,
+                height: 1,
+            },
+        );
+    }
+    if overflow {
+        paint_settings_scrollbar(frame, area, scroll, lines.len(), theme);
+    }
+}
+
+fn settings_value_line<'a>(
+    left: &str,
+    right: &str,
+    width: usize,
+    left_style: Style,
+    right_style: Style,
+) -> Line<'a> {
+    let left_width = unicode_width::UnicodeWidthStr::width(left);
+    let right_width = unicode_width::UnicodeWidthStr::width(right);
+    let gap = width.saturating_sub(left_width).saturating_sub(right_width);
+    let left = crate::tui::selection::truncate_cells(left, width.saturating_sub(right_width));
+    Line::from(vec![
+        Span::styled(left, left_style),
+        Span::styled(" ".repeat(gap), left_style),
+        Span::styled(right.to_string(), right_style),
+    ])
+}
+
+fn render_settings_choices(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    hub: &crate::app::ConfigHubState,
+    page: &crate::app::ConfigHubChoicePage,
+    theme: ThemePalette,
+    hits: &mut Vec<(u16, crate::app::ConfigHubHit)>,
+) {
+    let mut y = area.y;
+    let bottom = area.bottom();
+    if y >= bottom {
+        return;
+    }
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            crate::tui::selection::truncate_cells(
+                &format!("Settings › {}", page.title),
+                area.width as usize,
+            ),
+            Style::default().fg(theme.muted),
+        )),
+        Rect {
+            x: area.x,
+            y,
+            width: area.width,
+            height: 1,
+        },
+    );
+    y += 1;
+    if y < bottom && !page.detail.is_empty() {
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                crate::tui::selection::truncate_cells(&page.detail, area.width as usize),
+                Style::default()
+                    .fg(theme.muted)
+                    .add_modifier(Modifier::ITALIC),
+            )),
+            Rect {
+                x: area.x,
+                y,
+                width: area.width,
+                height: 1,
+            },
+        );
+        y += 2;
+    }
+    let selected = page.selected_idx.min(page.choices.len().saturating_sub(1));
+    let preview: Vec<&str> = page
+        .choices
+        .get(selected)
+        .and_then(|choice| choice.preview.as_deref())
+        .map(|preview| preview.lines().collect())
+        .unwrap_or_default();
+    let room = usize::from(bottom.saturating_sub(y));
+    let inline_extra = if preview.is_empty() {
+        0
+    } else {
+        preview.len() + 1
+    };
+    *hub.row_lines.borrow_mut() = (0..page.choices.len()).collect();
+    let fits = page.choices.len().saturating_add(inline_extra) <= room;
+    if fits || room == 0 {
+        hub.choice_scroll.set(0);
+        hub.viewport_rows.set(u16::try_from(room).unwrap_or(0));
+        paint_choice_rows(
+            frame,
+            Rect {
+                x: area.x,
+                y,
+                width: area.width,
+                height: bottom.saturating_sub(y),
+            },
+            0,
+            page,
+            selected,
+            theme,
+            hits,
+        );
+        if let Some(text) = page
+            .choices
+            .get(selected)
+            .and_then(|choice| choice.preview.as_deref())
+        {
+            let preview_y = y
+                .saturating_add(u16::try_from(page.choices.len()).unwrap_or(0))
+                .saturating_add(1);
+            for (row, line) in (preview_y..bottom).zip(text.lines()) {
+                paint_choice_preview(frame, area.x, row, area.width, line, theme);
+            }
+        }
+        return;
+    }
+    let preview_limit = if room < 3 {
+        0
+    } else {
+        preview.len().min((room / 3).clamp(1, 4))
+    };
+    let preview_block = if preview_limit == 0 {
+        0
+    } else {
+        preview_limit + 1
+    };
+    let list_height = room.saturating_sub(preview_block);
+    let overflow = page.choices.len() > list_height && area.width > 1;
+    let row_width = if overflow {
+        area.width.saturating_sub(1)
+    } else {
+        area.width
+    };
+    let scroll = reveal_settings_window(
+        hub.choice_scroll.get(),
+        selected,
+        selected.saturating_add(1),
+        list_height,
+        page.choices.len(),
+    );
+    hub.choice_scroll.set(scroll);
+    hub.viewport_rows
+        .set(u16::try_from(list_height).unwrap_or(0));
+    let list_bottom = y.saturating_add(u16::try_from(list_height).unwrap_or(0));
+    paint_choice_rows(
+        frame,
+        Rect {
+            x: area.x,
+            y,
+            width: row_width,
+            height: list_bottom.min(bottom).saturating_sub(y),
+        },
+        scroll,
+        page,
+        selected,
+        theme,
+        hits,
+    );
+    if overflow {
+        paint_settings_scrollbar(
+            frame,
+            Rect {
+                x: area.x,
+                y,
+                width: area.width,
+                height: u16::try_from(list_height).unwrap_or(0),
+            },
+            scroll,
+            page.choices.len(),
+            theme,
+        );
+    }
+    for (preview_y, line) in
+        (list_bottom.saturating_add(1)..bottom).zip(preview.iter().take(preview_limit))
+    {
+        paint_choice_preview(frame, area.x, preview_y, area.width, line, theme);
+    }
+}
+
+fn paint_choice_rows(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    scroll: usize,
+    page: &crate::app::ConfigHubChoicePage,
+    selected: usize,
+    theme: ThemePalette,
+    hits: &mut Vec<(u16, crate::app::ConfigHubHit)>,
+) {
+    for (y, (index, choice)) in
+        (area.y..area.bottom()).zip(page.choices.iter().enumerate().skip(scroll))
+    {
+        let mark = if index == selected { "●" } else { "○" };
+        let chosen = index == selected;
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                crate::tui::selection::truncate_cells(
+                    &format!("{mark} {}  {}", choice.label, choice.description),
+                    usize::from(area.width),
+                ),
+                if chosen {
+                    Style::default()
+                        .fg(theme.text)
+                        .bg(theme.title_hint_background)
+                } else {
+                    Style::default().fg(theme.text)
+                },
+            )),
+            Rect {
+                x: area.x,
+                y,
+                width: area.width,
+                height: 1,
+            },
+        );
+        hits.push((y, crate::app::ConfigHubHit::Choice(index)));
+    }
+}
+
+fn paint_choice_preview(
+    frame: &mut ratatui::Frame,
+    x: u16,
+    y: u16,
+    width: u16,
+    line: &str,
+    theme: ThemePalette,
+) {
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            crate::tui::selection::truncate_cells(line, usize::from(width)),
+            Style::default().fg(theme.muted),
+        )),
+        Rect {
+            x,
+            y,
+            width,
+            height: 1,
+        },
     );
 }
 
@@ -8444,11 +10412,12 @@ fn render_sandbox_hub(frame: &mut ratatui::Frame, area: Rect, state: &AppState) 
     let pw = 82.min(area.width.saturating_sub(4));
     let ph = 24.min(area.height.saturating_sub(2));
     let pa = centered_rect(pw, ph, area);
+    let theme = palette(state);
     let mut items = vec![
         ListItem::new(Span::styled(
             " Sandbox",
             Style::default()
-                .fg(Color::White)
+                .fg(theme.strong)
                 .add_modifier(Modifier::BOLD),
         )),
         ListItem::new(""),
@@ -8486,7 +10455,7 @@ fn render_sandbox_hub(frame: &mut ratatui::Frame, area: Rect, state: &AppState) 
     if hub.writable_roots.is_empty() {
         items.push(ListItem::new(Span::styled(
             "    none",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme.warning),
         )));
     }
     items.push(ListItem::new(""));
@@ -8495,7 +10464,7 @@ fn render_sandbox_hub(frame: &mut ratatui::Frame, area: Rect, state: &AppState) 
         items.push(ListItem::new(Span::styled(
             format!("  Use {} on the next launch?", confirmation.target),
             Style::default()
-                .fg(Color::Yellow)
+                .fg(theme.warning)
                 .add_modifier(Modifier::BOLD),
         )));
         items.push(ListItem::new(format!(
@@ -8508,14 +10477,18 @@ fn render_sandbox_hub(frame: &mut ratatui::Frame, area: Rect, state: &AppState) 
         )));
         items.push(ListItem::new(""));
         let cancel_style = if confirmation.confirm_selected {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme.text)
         } else {
-            Style::default().fg(Color::Black).bg(Color::Cyan)
+            Style::default()
+                .fg(theme.accent_foreground)
+                .bg(theme.accent)
         };
         let save_style = if confirmation.confirm_selected {
-            Style::default().fg(Color::Black).bg(Color::Yellow)
+            Style::default()
+                .fg(theme.accent_foreground)
+                .bg(theme.warning)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme.text)
         };
         items.push(ListItem::new(Line::from(vec![
             Span::styled("  Cancel  ", cancel_style),
@@ -8523,9 +10496,9 @@ fn render_sandbox_hub(frame: &mut ratatui::Frame, area: Rect, state: &AppState) 
             Span::styled("  Save for next launch  ", save_style),
         ])));
         items.push(ListItem::new(""));
-        items.push(ListItem::new(Span::styled(
+        items.push(ListItem::new(crate::tui::overlay::footer_hint(
             "←→ choose · Enter confirm · Esc cancel",
-            Style::default().fg(Color::DarkGray),
+            theme.muted,
         )));
     } else {
         for (index, mode) in crate::app::SandboxHubState::MODES.iter().enumerate() {
@@ -8550,9 +10523,11 @@ fn render_sandbox_hub(frame: &mut ratatui::Frame, area: Rect, state: &AppState) 
                 sandbox_mode_description(*mode)
             );
             let style = if selected {
-                Style::default().fg(Color::Black).bg(Color::Cyan)
+                Style::default()
+                    .fg(theme.accent_foreground)
+                    .bg(theme.accent)
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(theme.text)
             };
             items.push(ListItem::new(Span::styled(
                 pad_right(&line, pw.saturating_sub(2) as usize),
@@ -8566,15 +10541,15 @@ fn render_sandbox_hub(frame: &mut ratatui::Frame, area: Rect, state: &AppState) 
                     "Error: {}",
                     crate::terminal_text::sanitize_terminal_text(error)
                 ),
-                Style::default().fg(Color::Red),
+                Style::default().fg(theme.error),
             )));
         } else if let Some(notice) = &hub.notice {
             items.push(ListItem::new(Span::styled(
                 crate::terminal_text::sanitize_terminal_text(notice),
                 Style::default().fg(if hub.busy {
-                    Color::Yellow
+                    theme.warning
                 } else {
-                    Color::Green
+                    theme.success
                 }),
             )));
         }
@@ -8585,19 +10560,15 @@ fn render_sandbox_hub(frame: &mut ratatui::Frame, area: Rect, state: &AppState) 
         } else {
             "View only in bare mode · Esc close · ↑↓ navigate"
         };
-        items.push(ListItem::new(Span::styled(
+        items.push(ListItem::new(crate::tui::overlay::footer_hint(
             footer,
-            Style::default().fg(Color::DarkGray),
+            theme.muted,
         )));
     }
 
     frame.render_widget(Clear, pa);
     frame.render_widget(
-        List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
-        ),
+        List::new(items).block(crate::tui::overlay::plain_block(theme.accent)),
         pa,
     );
 }
@@ -8625,6 +10596,7 @@ fn render_context_limit_editor(frame: &mut ratatui::Frame, area: Rect, state: &A
     let pw = 76.min(area.width.saturating_sub(4));
     let ph = 20.min(area.height.saturating_sub(2));
     let pa = centered_rect(pw, ph, area);
+    let theme = palette(state);
     let target = crate::terminal_text::sanitize_terminal_text(&format!(
         "{}/{}",
         editor.provider, editor.model
@@ -8644,7 +10616,7 @@ fn render_context_limit_editor(frame: &mut ratatui::Frame, area: Rect, state: &A
         ListItem::new(Span::styled(
             " Context limits",
             Style::default()
-                .fg(Color::White)
+                .fg(theme.strong)
                 .add_modifier(Modifier::BOLD),
         )),
         ListItem::new(""),
@@ -8714,9 +10686,11 @@ fn render_context_limit_editor(frame: &mut ratatui::Frame, area: Rect, state: &A
             )
         };
         let style = if selected {
-            Style::default().fg(Color::Black).bg(Color::Cyan)
+            Style::default()
+                .fg(theme.accent_foreground)
+                .bg(theme.accent)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme.text)
         };
         items.push(ListItem::new(Span::styled(
             pad_right(&line, pw.saturating_sub(2) as usize),
@@ -8740,23 +10714,23 @@ fn render_context_limit_editor(frame: &mut ratatui::Frame, area: Rect, state: &A
     )));
     items.push(ListItem::new(Span::styled(
         "  Empty values inherit independently.",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.muted),
     )));
     if let Some(error) = &editor.error {
         let safe_error = crate::terminal_text::sanitize_terminal_text(error);
         if pw < 70 {
             items.push(ListItem::new(Span::styled(
                 "Error:",
-                Style::default().fg(Color::Red),
+                Style::default().fg(theme.error),
             )));
             items.push(ListItem::new(Span::styled(
                 format!("  {safe_error}"),
-                Style::default().fg(Color::Red),
+                Style::default().fg(theme.error),
             )));
         } else {
             items.push(ListItem::new(Span::styled(
                 format!("Error: {safe_error}"),
-                Style::default().fg(Color::Red),
+                Style::default().fg(theme.error),
             )));
         }
     }
@@ -8774,16 +10748,12 @@ fn render_context_limit_editor(frame: &mut ratatui::Frame, area: Rect, state: &A
     items.push(ListItem::new(""));
     items.push(ListItem::new(Span::styled(
         footer,
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.muted),
     )));
 
     frame.render_widget(Clear, pa);
     frame.render_widget(
-        List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
-        ),
+        List::new(items).block(crate::tui::overlay::plain_block(theme.accent)),
         pa,
     );
 }
@@ -8795,6 +10765,7 @@ fn render_model_prompt_cache_editor(frame: &mut ratatui::Frame, area: Rect, stat
     let pw = 78.min(area.width.saturating_sub(4));
     let ph = 22.min(area.height.saturating_sub(2));
     let pa = centered_rect(pw, ph, area);
+    let theme = palette(state);
     let target = crate::terminal_text::sanitize_terminal_text(&format!(
         "{}/{}",
         editor.provider, editor.model
@@ -8840,11 +10811,13 @@ fn render_model_prompt_cache_editor(frame: &mut ratatui::Frame, area: Rect, stat
         ListItem::new(Span::styled(
             line,
             if selected {
-                Style::default().fg(Color::Black).bg(Color::Cyan)
+                Style::default()
+                    .fg(theme.accent_foreground)
+                    .bg(theme.accent)
             } else if locked {
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(theme.muted)
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(theme.text)
             },
         ))
     };
@@ -8853,7 +10826,7 @@ fn render_model_prompt_cache_editor(frame: &mut ratatui::Frame, area: Rect, stat
         ListItem::new(Span::styled(
             " Prompt cache",
             Style::default()
-                .fg(Color::White)
+                .fg(theme.strong)
                 .add_modifier(Modifier::BOLD),
         )),
         ListItem::new(""),
@@ -8907,7 +10880,7 @@ fn render_model_prompt_cache_editor(frame: &mut ratatui::Frame, area: Rect, stat
     if let Some(error) = &editor.error {
         items.push(ListItem::new(Span::styled(
             format!("  {}", crate::terminal_text::sanitize_terminal_text(error)),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.error),
         )));
     } else if editor.formats_locked {
         items.push(ListItem::new(Span::styled(
@@ -8916,7 +10889,7 @@ fn render_model_prompt_cache_editor(frame: &mut ratatui::Frame, area: Rect, stat
             } else {
                 "  First-party request and usage formats are fixed for this exact route."
             },
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
     } else {
         items.push(ListItem::new(Span::styled(
@@ -8925,11 +10898,11 @@ fn render_model_prompt_cache_editor(frame: &mut ratatui::Frame, area: Rect, stat
             } else {
                 "  Select custom formats only when documented by the provider."
             },
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
     }
     items.push(ListItem::new(""));
-    let footer_style = Style::default().fg(Color::DarkGray);
+    let footer_style = Style::default().fg(theme.muted);
     if editor.saving {
         items.push(ListItem::new(Span::styled("Saving…", footer_style)));
     } else if editor.writes_enabled && pw < 70 {
@@ -8951,11 +10924,7 @@ fn render_model_prompt_cache_editor(frame: &mut ratatui::Frame, area: Rect, stat
     }
     frame.render_widget(Clear, pa);
     frame.render_widget(
-        List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
-        ),
+        List::new(items).block(crate::tui::overlay::plain_block(theme.accent)),
         pa,
     );
 }
@@ -8972,6 +10941,7 @@ fn render_model_picker(frame: &mut ratatui::Frame, area: Rect, state: &AppState)
     let pw = 70.min(area.width.saturating_sub(4));
     let ph = 20.min(area.height.saturating_sub(4));
     let pa = centered_rect(pw, ph, area);
+    let theme = palette(state);
 
     let visible = crate::tui::input::visible_model_rows(state);
 
@@ -8985,19 +10955,19 @@ fn render_model_picker(frame: &mut ratatui::Frame, area: Rect, state: &AppState)
             crate::app::ModelPickerTarget::PlanWorkflow => " Select plan agent provider/model",
         },
         Style::default()
-            .fg(Color::White)
+            .fg(theme.strong)
             .add_modifier(Modifier::BOLD),
     ))));
     items.push(ListItem::new(""));
     items.push(ListItem::new(Line::from(vec![
-        Span::styled("> ", Style::default().fg(Color::Cyan)),
+        Span::styled("> ", Style::default().fg(theme.accent)),
         Span::styled(
             if state.model_filter.is_empty() {
                 "type to filter…"
             } else {
                 &state.model_filter
             },
-            Style::default().fg(Color::White),
+            Style::default().fg(theme.text),
         ),
     ])));
     let catalog_status = state
@@ -9010,9 +10980,9 @@ fn render_model_picker(frame: &mut ratatui::Frame, area: Rect, state: &AppState)
             crate::terminal_text::sanitize_terminal_text(catalog_status)
         ),
         Style::default().fg(if state.model_catalog_refreshing {
-            Color::Yellow
+            theme.warning
         } else {
-            Color::DarkGray
+            theme.muted
         }),
     )));
     let inherit_visible = crate::tui::input::delegation_inherit_visible(state);
@@ -9058,7 +11028,7 @@ fn render_model_picker(frame: &mut ratatui::Frame, area: Rect, state: &AppState)
     };
     items.push(ListItem::new(Span::styled(
         format!("  {selection_status}"),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.muted),
     )));
     items.push(ListItem::new(""));
 
@@ -9089,9 +11059,11 @@ fn render_model_picker(frame: &mut ratatui::Frame, area: Rect, state: &AppState)
     if inherit_visible {
         let is_selected = selected_idx == 0;
         let style = if is_selected {
-            Style::default().fg(Color::Black).bg(Color::Cyan)
+            Style::default()
+                .fg(theme.accent_foreground)
+                .bg(theme.accent)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme.text)
         };
         let prefix = if is_selected { "▸ " } else { "  " };
         let label = format!("{prefix}  Same as current agent");
@@ -9136,7 +11108,7 @@ fn render_model_picker(frame: &mut ratatui::Frame, area: Rect, state: &AppState)
                     crate::terminal_text::sanitize_terminal_text(row.section.label())
                 ),
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(theme.muted)
                     .add_modifier(Modifier::BOLD),
             )));
             rendered = rendered.saturating_add(1);
@@ -9149,9 +11121,11 @@ fn render_model_picker(frame: &mut ratatui::Frame, area: Rect, state: &AppState)
             .as_ref()
             .is_some_and(|current| current == m);
         let style = if is_sel {
-            Style::default().fg(Color::Black).bg(Color::Cyan)
+            Style::default()
+                .fg(theme.accent_foreground)
+                .bg(theme.accent)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme.text)
         };
         let prefix = if is_sel { "▸ " } else { "  " };
         let favorite = if row.favorite { "★ " } else { "  " };
@@ -9208,7 +11182,7 @@ fn render_model_picker(frame: &mut ratatui::Frame, area: Rect, state: &AppState)
         } else {
             "Enter select · Esc close · ↑↓ move · PgUp/PgDn page"
         },
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.muted),
     )));
     if matches!(
         state.model_picker_target,
@@ -9216,11 +11190,11 @@ fn render_model_picker(frame: &mut ratatui::Frame, area: Rect, state: &AppState)
     ) {
         items.push(ListItem::new(Span::styled(
             "Home/End jump · ⇧R refresh · selection only",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
         items.push(ListItem::new(Span::styled(
             "Edit providers and models through /provider",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
     } else if matches!(
         state.model_picker_target,
@@ -9232,16 +11206,16 @@ fn render_model_picker(frame: &mut ratatui::Frame, area: Rect, state: &AppState)
             } else {
                 "Default inherits the active agent · cross-provider routes supported"
             },
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
         items.push(ListItem::new(Span::styled(
             "⇧R refresh · use /provider to add or edit routes",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
     } else {
         items.push(ListItem::new(Span::styled(
             "Home/End jump · ⇧A model · ⇧P provider",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
         items.push(ListItem::new(Span::styled(
             if matches!(
@@ -9252,14 +11226,12 @@ fn render_model_picker(frame: &mut ratatui::Frame, area: Rect, state: &AppState)
             } else {
                 "⇧E edit model/key · ⇧R refresh"
             },
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
     }
 
     frame.render_widget(Clear, pa);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+    let block = crate::tui::overlay::plain_block(theme.accent);
     let list = List::new(items).block(block);
     frame.render_widget(list, pa);
 }
@@ -9285,6 +11257,7 @@ fn render_provider_editor(frame: &mut ratatui::Frame, area: Rect, state: &AppSta
     }
     .min(area.height.saturating_sub(4));
     let pa = centered_rect(pw, ph, area);
+    let theme = palette(state);
     let existing_provider = editor.mode != crate::app::ProviderEditorMode::AddProvider;
     let title = match editor.mode {
         crate::app::ProviderEditorMode::AddProvider if editor.protocol_override.is_some() => {
@@ -9309,14 +11282,16 @@ fn render_provider_editor(frame: &mut ratatui::Frame, area: Rect, state: &AppSta
     let field = |label: &str, value: &str, selected: bool| {
         let marker = if selected { "›" } else { " " };
         let selected_style = if selected {
-            Style::default().fg(Color::Black).bg(Color::Cyan)
+            Style::default()
+                .fg(theme.accent_foreground)
+                .bg(theme.accent)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme.text)
         };
         let mut spans = vec![
             Span::styled(
                 format!("{marker} {label:<14}"),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(theme.accent),
             ),
             Span::raw(" "),
         ];
@@ -9333,7 +11308,7 @@ fn render_provider_editor(frame: &mut ratatui::Frame, area: Rect, state: &AppSta
             spans.push(Span::styled(before, selected_style));
             spans.push(Span::styled(
                 "▌",
-                Style::default().fg(Color::White).bg(Color::Cyan),
+                Style::default().fg(theme.text).bg(theme.accent),
             ));
             spans.push(Span::styled(after, selected_style));
         } else {
@@ -9352,7 +11327,7 @@ fn render_provider_editor(frame: &mut ratatui::Frame, area: Rect, state: &AppSta
     let hint = |text: &str| {
         Line::from(Span::styled(
             format!("                  {text}"),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         ))
     };
 
@@ -9438,9 +11413,9 @@ fn render_provider_editor(frame: &mut ratatui::Frame, area: Rect, state: &AppSta
             crate::config::PromptCacheMode::Off => "Off",
         };
         lines.push(Line::from(vec![
-            Span::styled("  Legacy cache    ", Style::default().fg(Color::Cyan)),
-            Span::styled(cache_label, Style::default().fg(Color::DarkGray)),
-            Span::styled("  [read only]", Style::default().fg(Color::DarkGray)),
+            Span::styled("  Legacy cache    ", Style::default().fg(theme.accent)),
+            Span::styled(cache_label, Style::default().fg(theme.muted)),
+            Span::styled("  [read only]", Style::default().fg(theme.muted)),
         ]));
         lines.push(hint("Use /cache provider/model"));
     }
@@ -9464,36 +11439,32 @@ fn render_provider_editor(frame: &mut ratatui::Frame, area: Rect, state: &AppSta
     if editor.saving {
         lines.push(Line::from(Span::styled(
             "Saving provider and API key…",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme.warning),
         )));
     } else if let Some(error) = &editor.error {
         lines.push(Line::from(Span::styled(
             error.as_str(),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.error),
         )));
     } else {
         lines.push(Line::from(Span::styled(
             "Key stays masked; config stores only a reference.",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "Tab fields · ←→ cursor · Enter save · Esc back",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.muted),
     )));
     lines.push(Line::from(Span::styled(
         "Home/End jump · Backspace/Delete edit",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.muted),
     )));
 
     frame.render_widget(Clear, pa);
-    let paragraph = Paragraph::new(Text::from(lines)).block(
-        Block::default()
-            .title(title)
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan)),
-    );
+    let paragraph = Paragraph::new(Text::from(lines))
+        .block(crate::tui::overlay::standard_block(title, theme.accent));
     frame.render_widget(paragraph, pa);
 }
 
@@ -9565,6 +11536,7 @@ fn editor_value_window(value: &str, cursor: usize, max_chars: usize) -> (String,
 }
 
 fn render_slash_palette(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
+    let theme = palette(state);
     let palette = palette(state);
     let busy = state.streaming.is_some() || state.approval_queue.is_active();
     let commands = crate::tui::commands::matching_commands(&state.slash_filter, busy);
@@ -9597,7 +11569,7 @@ fn render_slash_palette(frame: &mut ratatui::Frame, area: Rect, state: &AppState
                 .fg(palette.accent_foreground)
                 .bg(palette.accent)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme.text)
         };
         let usage = if usage.is_empty() {
             String::new()
@@ -9707,7 +11679,7 @@ fn composer_popup_rect(area: Rect, state: &AppState, desired_height: u16, max_wi
     );
     let viewport = composer_layout.visible_window(state.composer_ui.viewport_top);
     let queue_rows = state.input_queue.len().min(3) as u16 + u16::from(state.input_queue.len() > 3);
-    let attachment_rows = u16::from(!state.pasted_images.is_empty() || state.image_attachment_busy);
+    let attachment_rows = u16::from(state.image_chip_preview().is_some());
     let paste_preview_rows = u16::from(
         state
             .composer_ui
@@ -9908,7 +11880,7 @@ fn render_session_picker(frame: &mut ratatui::Frame, area: Rect, state: &AppStat
     if let Some(error) = &state.session_picker_error {
         items.push(ListItem::new(Span::styled(
             crate::terminal_text::sanitize_terminal_text(error),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.error),
         )));
     }
     let footer_style = Style::default().fg(theme.muted);
@@ -9921,10 +11893,10 @@ fn render_session_picker(frame: &mut ratatui::Frame, area: Rect, state: &AppStat
         if inner.width >= 78 {
             let primary = match state.session_picker_view {
                 crate::app::SessionPickerView::Active => {
-                    "Enter open  ·  Ctrl+R rename  ·  Ctrl+G generate name"
+                    "Enter open  ·  Shift+R rename  ·  Ctrl+G generate name"
                 }
                 crate::app::SessionPickerView::Archive => {
-                    "Shift+U restore  ·  Ctrl+R rename  ·  Ctrl+G generate name"
+                    "Shift+U restore  ·  Shift+R rename  ·  Ctrl+G generate name"
                 }
             };
             let secondary = match state.session_picker_view {
@@ -9939,8 +11911,8 @@ fn render_session_picker(frame: &mut ratatui::Frame, area: Rect, state: &AppStat
             items.push(ListItem::new(Span::styled(secondary, footer_style)));
         } else {
             let primary = match state.session_picker_view {
-                crate::app::SessionPickerView::Active => "Enter open · Ctrl+R rename",
-                crate::app::SessionPickerView::Archive => "Shift+U restore · Ctrl+R rename",
+                crate::app::SessionPickerView::Active => "Enter open · Shift+R rename",
+                crate::app::SessionPickerView::Archive => "Shift+U restore · Shift+R rename",
             };
             let tab = match state.session_picker_view {
                 crate::app::SessionPickerView::Active => "archived",
@@ -9966,10 +11938,10 @@ fn render_session_picker(frame: &mut ratatui::Frame, area: Rect, state: &AppStat
     frame.render_widget(List::new(items), inner);
 
     if let Some(confirmation) = &state.session_delete_confirmation {
-        render_session_delete_confirmation(frame, area, confirmation);
+        render_session_delete_confirmation(frame, area, confirmation, &theme);
     }
     if let Some(confirmation) = &state.session_archive_confirmation {
-        render_session_archive_confirmation(frame, area, confirmation);
+        render_session_archive_confirmation(frame, area, confirmation, &theme);
     }
     if let Some(rename) = &state.session_rename {
         render_session_rename(frame, area, rename, theme);
@@ -10026,9 +11998,7 @@ fn render_session_rename(
     frame.render_widget(Clear, modal);
     frame.render_widget(
         Paragraph::new(Text::from(lines)).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme.accent))
+            crate::tui::overlay::plain_block(theme.accent)
                 .style(Style::default().bg(theme.surface)),
         ),
         modal,
@@ -10049,6 +12019,7 @@ fn render_session_portability(frame: &mut ratatui::Frame, area: Rect, state: &Ap
     }
     .min(area.height.saturating_sub(4));
     let modal = centered_rect(width, height, area);
+    let theme = palette(state);
     let path_width = width.saturating_sub(6) as usize;
     let safe_path =
         crate::terminal_text::sanitize_terminal_text(&portability.path.to_string_lossy());
@@ -10059,7 +12030,7 @@ fn render_session_portability(frame: &mut ratatui::Frame, area: Rect, state: &Ap
         lines.push(Line::from(Span::styled(
             "Replace existing export?",
             Style::default()
-                .fg(Color::White)
+                .fg(theme.strong)
                 .add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(""));
@@ -10067,14 +12038,18 @@ fn render_session_portability(frame: &mut ratatui::Frame, area: Rect, state: &Ap
         lines.push(Line::from("The previous file is replaced atomically."));
         lines.push(Line::from(""));
         let cancel_style = if portability.overwrite_selected {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme.text)
         } else {
-            Style::default().fg(Color::Black).bg(Color::Cyan)
+            Style::default()
+                .fg(theme.accent_foreground)
+                .bg(theme.accent)
         };
         let replace_style = if portability.overwrite_selected {
-            Style::default().fg(Color::Black).bg(Color::Yellow)
+            Style::default()
+                .fg(theme.accent_foreground)
+                .bg(theme.warning)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme.text)
         };
         lines.push(Line::from(vec![
             Span::styled(" Cancel ", cancel_style),
@@ -10083,7 +12058,7 @@ fn render_session_portability(frame: &mut ratatui::Frame, area: Rect, state: &Ap
         ]));
         lines.push(Line::from(Span::styled(
             "←→ choose · Enter confirm · Esc cancel",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
     } else if let Some(error) = &portability.error {
         let operation = match portability.operation {
@@ -10095,7 +12070,9 @@ fn render_session_portability(frame: &mut ratatui::Frame, area: Rect, state: &Ap
         };
         lines.push(Line::from(Span::styled(
             operation,
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.error)
+                .add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(""));
         lines.push(Line::from(safe_path));
@@ -10103,18 +12080,18 @@ fn render_session_portability(frame: &mut ratatui::Frame, area: Rect, state: &Ap
         let safe_error = crate::terminal_text::sanitize_terminal_text(error);
         lines.push(Line::from(Span::styled(
             truncate(&safe_error, path_width.max(1)),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.error),
         )));
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "Enter or Esc close",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
     } else if let Some(preview) = &portability.import_preview {
         lines.push(Line::from(Span::styled(
             format!("{} import preview", preview.source.label()),
             Style::default()
-                .fg(Color::White)
+                .fg(theme.strong)
                 .add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(""));
@@ -10151,23 +12128,27 @@ fn render_session_portability(frame: &mut ratatui::Frame, area: Rect, state: &Ap
         if let Some(error) = preview.errors.first() {
             lines.push(Line::from(Span::styled(
                 truncate(error, path_width.max(1)),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme.warning),
             )));
         } else {
             lines.push(Line::from(""));
         }
         lines.push(Line::from(""));
         let cancel_style = if portability.import_selected {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme.text)
         } else {
-            Style::default().fg(Color::Black).bg(Color::Cyan)
+            Style::default()
+                .fg(theme.accent_foreground)
+                .bg(theme.accent)
         };
         let import_style = if portability.import_selected && preview.sessions > 0 {
-            Style::default().fg(Color::Black).bg(Color::Yellow)
+            Style::default()
+                .fg(theme.accent_foreground)
+                .bg(theme.warning)
         } else if preview.sessions > 0 {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme.text)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(theme.muted)
         };
         lines.push(Line::from(vec![
             Span::styled(" Cancel ", cancel_style),
@@ -10176,7 +12157,7 @@ fn render_session_portability(frame: &mut ratatui::Frame, area: Rect, state: &Ap
         ]));
         lines.push(Line::from(Span::styled(
             "←→ choose · L learning · Enter confirm · Esc cancel",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
     } else {
         let (title, detail) = match portability.operation {
@@ -10202,7 +12183,7 @@ fn render_session_portability(frame: &mut ratatui::Frame, area: Rect, state: &Ap
         lines.push(Line::from(Span::styled(
             title,
             Style::default()
-                .fg(Color::White)
+                .fg(theme.strong)
                 .add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(""));
@@ -10211,18 +12192,16 @@ fn render_session_portability(frame: &mut ratatui::Frame, area: Rect, state: &Ap
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "Controls locked while the file is checked",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
     }
 
     frame.render_widget(Clear, modal);
     frame.render_widget(
-        Paragraph::new(Text::from(lines)).block(
-            Block::default()
-                .title(" Session portability ")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
-        ),
+        Paragraph::new(Text::from(lines)).block(crate::tui::overlay::standard_block(
+            " Session portability ",
+            theme.accent,
+        )),
         modal,
     );
 }
@@ -10244,11 +12223,12 @@ fn render_session_retention(frame: &mut ratatui::Frame, area: Rect, state: &AppS
     let width = 72.min(area.width.saturating_sub(4));
     let height = 22.min(area.height.saturating_sub(4));
     let modal = centered_rect(width, height, area);
+    let theme = palette(state);
     let inner_width = width.saturating_sub(4) as usize;
     let mut lines = vec![Line::from(Span::styled(
         "Saved session retention",
         Style::default()
-            .fg(Color::White)
+            .fg(theme.strong)
             .add_modifier(Modifier::BOLD),
     ))];
 
@@ -10256,14 +12236,14 @@ fn render_session_retention(frame: &mut ratatui::Frame, area: Rect, state: &AppS
         crate::app::SessionRetentionMode::Overview => {
             lines.push(Line::from(""));
             lines.push(Line::from(vec![
-                Span::styled("Age rule       ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Age rule       ", Style::default().fg(theme.muted)),
                 Span::raw(retention.settings.days.map_or_else(
                     || "disabled".into(),
                     |days| format!("delete older than {days} days"),
                 )),
             ]));
             lines.push(Line::from(vec![
-                Span::styled("Count rule     ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Count rule     ", Style::default().fg(theme.muted)),
                 Span::raw(retention.settings.count.map_or_else(
                     || "disabled".into(),
                     |count| format!("keep newest {count} eligible sessions"),
@@ -10276,12 +12256,12 @@ fn render_session_retention(frame: &mut ratatui::Frame, area: Rect, state: &AppS
             )));
             lines.push(Line::from(Span::styled(
                 "Current and pinned sessions are always protected.",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.muted),
             )));
             if !retention.settings.enabled() {
                 lines.push(Line::from(Span::styled(
                     "Retention is disabled. Nothing runs automatically.",
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(theme.warning),
                 )));
             }
             lines.push(Line::from(""));
@@ -10294,14 +12274,14 @@ fn render_session_retention(frame: &mut ratatui::Frame, area: Rect, state: &AppS
             };
             lines.push(Line::from(Span::styled(
                 footer,
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.muted),
             )));
         }
         crate::app::SessionRetentionMode::Edit => {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 "Blank disables a rule. Saving never deletes sessions.",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.muted),
             )));
             lines.push(Line::from(""));
             for (field, label, value, suffix) in [
@@ -10324,16 +12304,18 @@ fn render_session_retention(frame: &mut ratatui::Frame, area: Rect, state: &AppS
                 lines.push(Line::from(Span::styled(
                     pad_right(&content, inner_width),
                     if selected {
-                        Style::default().fg(Color::Black).bg(Color::Cyan)
+                        Style::default()
+                            .fg(theme.accent_foreground)
+                            .bg(theme.accent)
                     } else {
-                        Style::default().fg(Color::White)
+                        Style::default().fg(theme.text)
                     },
                 )));
             }
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 "Tab/↑↓ field · Enter save · Esc cancel",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.muted),
             )));
         }
         crate::app::SessionRetentionMode::Preview => {
@@ -10353,7 +12335,7 @@ fn render_session_retention(frame: &mut ratatui::Frame, area: Rect, state: &AppS
                 if preview.candidates.is_empty() {
                     lines.push(Line::from(Span::styled(
                         "No active sessions match these rules.",
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(theme.muted),
                     )));
                 } else {
                     let visible_rows = 8usize;
@@ -10387,9 +12369,11 @@ fn render_session_retention(frame: &mut ratatui::Frame, area: Rect, state: &AppS
                         lines.push(Line::from(Span::styled(
                             pad_right(&row, inner_width),
                             if selected {
-                                Style::default().fg(Color::Black).bg(Color::Cyan)
+                                Style::default()
+                                    .fg(theme.accent_foreground)
+                                    .bg(theme.accent)
                             } else {
-                                Style::default().fg(Color::White)
+                                Style::default().fg(theme.text)
                             },
                         )));
                     }
@@ -10397,14 +12381,18 @@ fn render_session_retention(frame: &mut ratatui::Frame, area: Rect, state: &AppS
             }
             lines.push(Line::from(""));
             let cancel_style = if !retention.delete_selected {
-                Style::default().fg(Color::Black).bg(Color::Cyan)
+                Style::default()
+                    .fg(theme.accent_foreground)
+                    .bg(theme.accent)
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(theme.text)
             };
             let delete_style = if retention.delete_selected && candidate_count > 0 {
-                Style::default().fg(Color::White).bg(Color::Red)
+                Style::default()
+                    .fg(theme.accent_foreground)
+                    .bg(theme.approval_deny)
             } else {
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(theme.muted)
             };
             lines.push(Line::from(vec![
                 Span::styled(" Cancel ", cancel_style),
@@ -10413,7 +12401,7 @@ fn render_session_retention(frame: &mut ratatui::Frame, area: Rect, state: &AppS
             ]));
             lines.push(Line::from(Span::styled(
                 "←→ choose · Enter confirm · Esc cancel · ↑↓ inspect",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.muted),
             )));
         }
     }
@@ -10426,7 +12414,7 @@ fn render_session_retention(frame: &mut ratatui::Frame, area: Rect, state: &AppS
         };
         lines.push(Line::from(Span::styled(
             format!("{label} · controls locked"),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme.warning),
         )));
     }
     if let Some(notice) = &retention.notice {
@@ -10435,7 +12423,7 @@ fn render_session_retention(frame: &mut ratatui::Frame, area: Rect, state: &AppS
                 &crate::terminal_text::sanitize_terminal_text(notice),
                 inner_width,
             ),
-            Style::default().fg(Color::Green),
+            Style::default().fg(theme.success),
         )));
     }
     if let Some(error) = &retention.error {
@@ -10444,17 +12432,13 @@ fn render_session_retention(frame: &mut ratatui::Frame, area: Rect, state: &AppS
                 &crate::terminal_text::sanitize_terminal_text(error),
                 inner_width,
             ),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.error),
         )));
     }
 
     frame.render_widget(Clear, modal);
     frame.render_widget(
-        Paragraph::new(lines).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
-        ),
+        Paragraph::new(lines).block(crate::tui::overlay::plain_block(theme.accent)),
         modal,
     );
 }
@@ -10463,6 +12447,7 @@ fn render_session_archive_confirmation(
     frame: &mut ratatui::Frame,
     area: Rect,
     confirmation: &crate::app::SessionArchiveConfirmation,
+    theme: &ThemePalette,
 ) {
     let width = 58.min(area.width.saturating_sub(4));
     let height =
@@ -10478,7 +12463,7 @@ fn render_session_archive_confirmation(
         Line::from(Span::styled(
             "Archive saved session?",
             Style::default()
-                .fg(Color::White)
+                .fg(theme.strong)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
@@ -10493,24 +12478,28 @@ fn render_session_archive_confirmation(
     if let Some(error) = &confirmation.error {
         lines.push(Line::from(Span::styled(
             crate::terminal_text::sanitize_terminal_text(error),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.error),
         )));
         lines.push(Line::from(""));
     }
     let (cancel_style, archive_style) = if confirmation.busy {
         (
-            Style::default().fg(Color::DarkGray),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
+            Style::default().fg(theme.muted),
         )
     } else if confirmation.archive_selected {
         (
-            Style::default().fg(Color::White),
-            Style::default().fg(Color::Black).bg(Color::Yellow),
+            Style::default().fg(theme.text),
+            Style::default()
+                .fg(theme.accent_foreground)
+                .bg(theme.warning),
         )
     } else {
         (
-            Style::default().fg(Color::Black).bg(Color::Cyan),
-            Style::default().fg(Color::White),
+            Style::default()
+                .fg(theme.accent_foreground)
+                .bg(theme.accent),
+            Style::default().fg(theme.text),
         )
     };
     lines.push(Line::from(vec![
@@ -10531,17 +12520,13 @@ fn render_session_archive_confirmation(
         } else {
             "←/→ choose · Enter confirm · Esc cancel"
         },
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.muted),
     )));
 
     frame.render_widget(Clear, modal);
     frame.render_widget(
         Paragraph::new(lines)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Yellow)),
-            )
+            .block(crate::tui::overlay::plain_block(theme.warning))
             .wrap(Wrap { trim: false }),
         modal,
     );
@@ -10551,6 +12536,7 @@ fn render_session_delete_confirmation(
     frame: &mut ratatui::Frame,
     area: Rect,
     confirmation: &crate::app::SessionDeleteConfirmation,
+    theme: &ThemePalette,
 ) {
     let width = 58.min(area.width.saturating_sub(4));
     let height =
@@ -10570,7 +12556,7 @@ fn render_session_delete_confirmation(
                 "Purge saved session?"
             },
             Style::default()
-                .fg(Color::White)
+                .fg(theme.strong)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
@@ -10589,24 +12575,28 @@ fn render_session_delete_confirmation(
     if let Some(error) = &confirmation.error {
         lines.push(Line::from(Span::styled(
             crate::terminal_text::sanitize_terminal_text(error),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.error),
         )));
         lines.push(Line::from(""));
     }
     let (cancel_style, delete_style) = if confirmation.busy {
         (
-            Style::default().fg(Color::DarkGray),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
+            Style::default().fg(theme.muted),
         )
     } else if confirmation.delete_selected {
         (
-            Style::default().fg(Color::White),
-            Style::default().fg(Color::Black).bg(Color::Red),
+            Style::default().fg(theme.text),
+            Style::default()
+                .fg(theme.accent_foreground)
+                .bg(theme.approval_deny),
         )
     } else {
         (
-            Style::default().fg(Color::Black).bg(Color::Cyan),
-            Style::default().fg(Color::White),
+            Style::default()
+                .fg(theme.accent_foreground)
+                .bg(theme.accent),
+            Style::default().fg(theme.text),
         )
     };
     lines.push(Line::from(vec![
@@ -10627,17 +12617,13 @@ fn render_session_delete_confirmation(
         } else {
             "←/→ choose · Enter confirm · Esc cancel"
         },
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.muted),
     )));
 
     frame.render_widget(Clear, modal);
     frame.render_widget(
         Paragraph::new(lines)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Red)),
-            )
+            .block(crate::tui::overlay::plain_block(theme.error))
             .wrap(Wrap { trim: false }),
         modal,
     );
@@ -10647,6 +12633,7 @@ fn render_timeline(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
     let pw = 72.min(area.width.saturating_sub(4));
     let ph = 20.min(area.height.saturating_sub(4));
     let pa = centered_rect(pw, ph, area);
+    let theme = palette(state);
     let title = if state.timeline_mode == crate::app::TimelineMode::Rewind {
         " Rewind by creating a branch"
     } else {
@@ -10656,21 +12643,23 @@ fn render_timeline(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
         ListItem::new(Span::styled(
             title,
             Style::default()
-                .fg(Color::White)
+                .fg(theme.strong)
                 .add_modifier(Modifier::BOLD),
         )),
         ListItem::new(Span::styled(
             " Source history will not be changed",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )),
         ListItem::new(""),
     ];
     for (index, entry) in state.timeline_entries.iter().enumerate() {
         let selected = index == state.selected_timeline_idx;
         let style = if selected {
-            Style::default().fg(Color::Black).bg(Color::Cyan)
+            Style::default()
+                .fg(theme.accent_foreground)
+                .bg(theme.accent)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme.text)
         };
         let prefix = if selected { "▸" } else { " " };
         items.push(ListItem::new(Span::styled(
@@ -10686,77 +12675,245 @@ fn render_timeline(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
     if state.timeline_entries.is_empty() {
         items.push(ListItem::new(Span::styled(
             "  No completed turns",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
     }
     items.push(ListItem::new(""));
     items.push(ListItem::new(Span::styled(
         "Enter branch here · Esc close · ↑↓ navigate",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.muted),
     )));
     frame.render_widget(Clear, pa);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+    let block = crate::tui::overlay::plain_block(theme.accent);
     frame.render_widget(List::new(items).block(block), pa);
 }
 
+pub(crate) fn queue_action_labels(
+    row_width: usize,
+) -> Vec<(&'static str, crate::tui::composer::QueueRowAction)> {
+    use crate::tui::composer::QueueRowAction;
+    const SEND: &str = "[Send now]";
+    const EDIT: &str = "[edit]";
+    const CANCEL: &str = "[cancel]";
+    let send_w = unicode_width::UnicodeWidthStr::width(SEND);
+    let edit_w = unicode_width::UnicodeWidthStr::width(EDIT);
+    let cancel_w = unicode_width::UnicodeWidthStr::width(CANCEL);
+    if row_width >= send_w + 1 + edit_w + 1 + cancel_w {
+        vec![
+            (SEND, QueueRowAction::SendNow),
+            (EDIT, QueueRowAction::Edit),
+            (CANCEL, QueueRowAction::Cancel),
+        ]
+    } else if row_width >= send_w + 1 + cancel_w {
+        vec![
+            (SEND, QueueRowAction::SendNow),
+            (CANCEL, QueueRowAction::Cancel),
+        ]
+    } else if row_width >= send_w {
+        vec![(SEND, QueueRowAction::SendNow)]
+    } else {
+        Vec::new()
+    }
+}
+
+fn queue_chip_placements(
+    row_width: usize,
+) -> Vec<(crate::tui::composer::QueueRowAction, &'static str, usize)> {
+    let labels = queue_action_labels(row_width);
+    let mut chips_width = 0usize;
+    for (index, (label, _)) in labels.iter().enumerate() {
+        if index > 0 {
+            chips_width += 1;
+        }
+        chips_width += unicode_width::UnicodeWidthStr::width(*label);
+    }
+    let mut cell = row_width.saturating_sub(chips_width);
+    let mut placed = Vec::with_capacity(labels.len());
+    for (index, (label, action)) in labels.into_iter().enumerate() {
+        if index > 0 {
+            cell += 1;
+        }
+        placed.push((action, label, cell));
+        cell += unicode_width::UnicodeWidthStr::width(label);
+    }
+    placed
+}
+
+pub(crate) fn queue_action_at(
+    state: &AppState,
+    column: u16,
+    row: u16,
+) -> Option<crate::tui::composer::QueueActionHit> {
+    if !queue_chips_accept_clicks(state) {
+        return None;
+    }
+    state
+        .composer_ui
+        .queue_action_hits
+        .borrow()
+        .iter()
+        .copied()
+        .find(|hit| hit.contains(column, row))
+}
+
+fn queue_chips_accept_clicks(state: &AppState) -> bool {
+    if state.dashboard.open
+        || state.privacy_editor.is_some()
+        || state.personality_editor.is_some()
+        || overlay_after_queue_view(state)
+    {
+        return false;
+    }
+    if state.queue_view_open {
+        return true;
+    }
+    !crate::any_overlay_open(state)
+        && state.config_hub.is_none()
+        && state.session_portability.is_none()
+        && state.session_retention.is_none()
+        && state.model_prompt_cache_editor.is_none()
+        && state.provider_auth.is_none()
+        && composer_has_focus(state)
+}
+
+fn overlay_after_queue_view(state: &AppState) -> bool {
+    state.pager_open
+        || state.usage_modal.is_some()
+        || state.file_picker_open
+        || state.composer_ui.path_completion.open
+        || state.change_review.open
+        || state.change_walkthrough.is_some()
+        || state.terminal_manager.is_some()
+        || state.theme_manager.is_some()
+        || state.copy_picker.is_some()
+        || state.notification_picker.is_some()
+        || state.command_output_picker.is_some()
+        || state.output_full_confirmation.is_some()
+        || state.scratch_delete_confirmation.is_some()
+        || state.route_preset_picker.is_some()
+        || state.reasoning_picker.is_some()
+        || state.route_preset_overwrite.is_some()
+        || state.statusline_manager.is_some()
+        || state.jobs_view_open
+        || state.btw.is_some()
+        || state.voice.is_some()
+        || state.history_search.is_some()
+        || state.prompt_stash.is_some()
+        || state.hook_manager.is_some()
+        || state.permission_manager.is_some()
+        || state.memory_manager.is_some()
+        || state.multi_run_manager.is_some()
+        || state.task_graph_manager.is_some()
+        || state.keymap_hub.is_some()
+        || state.workflow_preview.is_some()
+        || state.workflow_clear_confirmation.is_some()
+        || state.worktree_cleanup_confirmation.is_some()
+        || state.worktree_setup_confirmation.is_some()
+        || state.support_bundle_confirmation.is_some()
+        || state.setup_import_confirmation.is_some()
+        || state.interaction.is_some()
+        || state.workspace_trust_prompt
+        || state.trace_delete_confirmation.is_some()
+        || state.project_init.is_some()
+        || state.loop_guard_interaction.is_some()
+}
+
 fn render_queue_view(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
+    let theme = palette(state);
     let pw = area.width;
     let pa = area;
     let mut items = vec![
         ListItem::new(Span::styled(
             " Queued messages",
             Style::default()
-                .fg(Color::White)
+                .fg(theme.strong)
                 .add_modifier(Modifier::BOLD),
         )),
         ListItem::new(""),
     ];
+    let row_width = pw.saturating_sub(2) as usize;
+    let mut queue_hits = Vec::new();
+    let content_y = pa.y.saturating_add(1);
+    let content_bottom = pa.y.saturating_add(pa.height).saturating_sub(1);
     for (index, pending) in state.input_queue.items().enumerate() {
         let selected = index == state.input_queue.selected_index;
         let style = if selected {
-            Style::default().fg(Color::Black).bg(Color::Cyan)
+            Style::default()
+                .fg(theme.accent_foreground)
+                .bg(theme.accent)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme.text)
         };
         let prefix = if selected { "▸" } else { " " };
-        items.push(ListItem::new(Span::styled(
-            pad_right(
-                &format!(
-                    " {prefix} {} · {}",
-                    if state.restored_queue_ids.contains(&pending.id) {
-                        "On hold"
-                    } else {
-                        "Queued"
-                    },
-                    pending.text.replace('\n', " ")
-                ),
-                pw.saturating_sub(2) as usize,
-            ),
-            style,
-        )));
+        let marker = if state.restored_queue_ids.contains(&pending.id) {
+            "On hold"
+        } else {
+            "Queued"
+        };
+        let show_chips = state.input_queue.editing_id.is_none() && selected;
+        let placed = if show_chips {
+            queue_chip_placements(row_width)
+        } else {
+            Vec::new()
+        };
+        let text_budget = placed
+            .first()
+            .map_or(row_width, |(_, _, cell)| (*cell).saturating_sub(1));
+        let left = truncate(
+            &format!(" {prefix} {marker} · {}", pending.text.replace('\n', " ")),
+            text_budget,
+        );
+        let line = if placed.is_empty() {
+            pad_right(&left, row_width)
+        } else {
+            let mut line = left;
+            let text_cells = unicode_width::UnicodeWidthStr::width(line.as_str());
+            if let Some((_, _, first_cell)) = placed.first() {
+                line.push_str(&" ".repeat(first_cell.saturating_sub(text_cells)));
+            }
+            for (chip_index, (_, label, _)) in placed.iter().enumerate() {
+                if chip_index > 0 {
+                    line.push(' ');
+                }
+                line.push_str(label);
+            }
+            line
+        };
+        let row_y = content_y.saturating_add(2 + index as u16);
+        if show_chips && row_y < content_bottom {
+            for (action, label, cell) in &placed {
+                queue_hits.push(crate::tui::composer::QueueActionHit {
+                    id: pending.id,
+                    action: *action,
+                    x: pa.x.saturating_add(1 + *cell as u16),
+                    y: row_y,
+                    width: unicode_width::UnicodeWidthStr::width(*label) as u16,
+                });
+            }
+        }
+        items.push(ListItem::new(Span::styled(line, style)));
     }
+    *state.composer_ui.queue_action_hits.borrow_mut() = queue_hits;
     if state.input_queue.is_empty() {
         items.push(ListItem::new(Span::styled(
             "  Queue is empty",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
     }
     items.push(ListItem::new(""));
-    let hint = if pw < 68 {
-        "Enter edit · Del remove · Shift+↑↓ move · Esc"
+    let wide_hint =
+        "s/Ctrl+S send now · Enter/e edit · Delete/d cancel · Shift+↑↓ reorder · Esc close";
+    let hint = if unicode_width::UnicodeWidthStr::width(wide_hint) + 2 <= pw as usize {
+        wide_hint
     } else {
-        "Enter/e edit · Delete/d remove · Shift+↑↓ reorder · Esc close"
+        "s send · Enter edit · Del cancel · Esc"
     };
     items.push(ListItem::new(Span::styled(
         hint,
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.muted),
     )));
     frame.render_widget(Clear, pa);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+    let block = crate::tui::overlay::plain_block(theme.accent);
     frame.render_widget(List::new(items).block(block), pa);
 }
 
@@ -10779,37 +12936,32 @@ fn centered_rect(w: u16, h: u16, r: Rect) -> Rect {
         .split(v[1])[1]
 }
 
-fn render_interaction(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
+fn interaction_card_lines(state: &AppState, _width: u16) -> Vec<Line<'static>> {
     let Some(interaction) = state.interaction.as_ref() else {
-        return;
+        return Vec::new();
     };
-    let width = area.width.saturating_sub(4).clamp(20, 72);
-    let requested_height = (10 + interaction.visible_count() as u16).min(22);
-    let height = area.height.saturating_sub(2).min(requested_height).max(8);
-    let popup = centered_rect(width, height, area);
-    frame.render_widget(Clear, popup);
-
+    let theme = palette(state);
     let learned_recipe = state.learned_recipe_review.is_some();
     let self_improve = state.self_improve_review.is_some();
     let learning_review = state.learning_review_interaction;
     let accent = if learned_recipe || self_improve || learning_review {
-        Color::Rgb(194, 226, 164)
+        theme.plan
     } else {
-        Color::Yellow
+        theme.warning
     };
     let selected_accent = if learned_recipe || self_improve || learning_review {
-        Color::Rgb(194, 226, 164)
+        theme.plan
     } else {
-        Color::Cyan
+        theme.accent
     };
     let mut lines = vec![Line::from(Span::styled(
         interaction.request.question.clone(),
         Style::default().fg(accent).add_modifier(Modifier::BOLD),
     ))];
-    if let Some(description) = interaction.request.description.as_deref() {
+    if let Some(description) = interaction.request.description.clone() {
         lines.push(Line::from(Span::styled(
             description,
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.muted),
         )));
     }
     if interaction.visible_count() > 0 && !interaction.other_editing() {
@@ -10831,7 +12983,7 @@ fn render_interaction(frame: &mut ratatui::Frame, area: Rect, state: &AppState) 
             let style = if selected {
                 Style::default().fg(selected_accent)
             } else {
-                Style::default().fg(Color::Gray)
+                Style::default().fg(theme.muted)
             };
             lines.push(Line::from(Span::styled(
                 format!("  {} {}. {}", checked, index + 1, choice.label),
@@ -10840,7 +12992,7 @@ fn render_interaction(frame: &mut ratatui::Frame, area: Rect, state: &AppState) 
             if let Some(description) = choice.description.as_deref() {
                 lines.push(Line::from(Span::styled(
                     format!("      {description}"),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.muted),
                 )));
             }
         }
@@ -10856,7 +13008,7 @@ fn render_interaction(frame: &mut ratatui::Frame, area: Rect, state: &AppState) 
                 if selected {
                     Style::default().fg(selected_accent)
                 } else {
-                    Style::default().fg(Color::Gray)
+                    Style::default().fg(theme.muted)
                 },
             )));
         }
@@ -10872,11 +13024,11 @@ fn render_interaction(frame: &mut ratatui::Frame, area: Rect, state: &AppState) 
             } else {
                 "  Answer:"
             },
-            Style::default().fg(Color::Cyan),
+            Style::default().fg(theme.accent),
         )));
         lines.push(Line::from(Span::styled(
             format!("  {}", interaction.draft_display()),
-            Style::default().fg(Color::White),
+            Style::default().fg(theme.text),
         )));
     }
 
@@ -10896,26 +13048,72 @@ fn render_interaction(frame: &mut ratatui::Frame, area: Rect, state: &AppState) 
     };
     lines.push(Line::from(Span::styled(
         hint,
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.muted),
     )));
+    lines
+}
 
-    let block = Block::default()
-        .title(if learned_recipe {
-            " Learned Rust Recipe "
-        } else if self_improve {
-            " Autonomous Learning "
-        } else if learning_review {
-            " Learning Review "
-        } else {
-            " Input required "
-        })
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(accent));
+fn pin_card_lines(state: &AppState, width: u16) -> Vec<Line<'static>> {
+    if state.interaction.is_some() {
+        interaction_card_lines(state, width)
+    } else {
+        approval_card_lines(state, width)
+    }
+}
+
+fn pin_card_height(state: &AppState, width: u16) -> u16 {
+    let count = pin_card_lines(state, width).len();
+    if count == 0 {
+        0
+    } else {
+        (count as u16).saturating_add(2).clamp(3, 8)
+    }
+}
+
+fn pin_card_title(state: &AppState) -> &'static str {
+    if state.learned_recipe_review.is_some() {
+        " Learned Rust Recipe "
+    } else if state.self_improve_review.is_some() {
+        " Autonomous Learning "
+    } else if state.learning_review_interaction {
+        " Learning Review "
+    } else if state.interaction.is_some() {
+        " Input required "
+    } else {
+        " Approval "
+    }
+}
+
+fn render_pin_card(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    let lines = pin_card_lines(state, area.width);
+    if lines.is_empty() {
+        return;
+    }
+    let theme = palette(state);
+    let accent = if state.learned_recipe_review.is_some()
+        || state.self_improve_review.is_some()
+        || state.learning_review_interaction
+    {
+        theme.plan
+    } else if state.interaction.is_some() {
+        theme.warning
+    } else {
+        theme.approval_pending
+    };
     frame.render_widget(
         Paragraph::new(lines)
-            .block(block)
-            .wrap(Wrap { trim: false }),
-        popup,
+            .block(
+                Block::default()
+                    .title(pin_card_title(state))
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(accent)),
+            )
+            .wrap(Wrap { trim: false })
+            .style(painted(theme.text, theme.surface)),
+        area,
     );
 }
 
@@ -10928,9 +13126,18 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
-fn render_diff_lines(output: &str, width: u16, lines: &mut Vec<Line>, theme: &ThemePalette) {
+fn render_diff_lines_expanded(
+    output: &str,
+    width: u16,
+    lines: &mut Vec<Line>,
+    theme: &ThemePalette,
+    expanded: bool,
+) {
     let max = width.saturating_sub(4) as usize;
-    for line in output.lines().take(30) {
+    // Collapsed diffs preview the hunks; expanded diffs use a higher cap distinct
+    // from the normal tool-output source-line budget.
+    let take = if expanded { 200 } else { 30 };
+    for line in output.lines().take(take) {
         let (style, prefix) = if line.starts_with("+++") || line.starts_with("---") {
             (
                 Style::default()
@@ -10950,10 +13157,19 @@ fn render_diff_lines(output: &str, width: u16, lines: &mut Vec<Line>, theme: &Th
         lines.push(Line::from(Span::styled(truncate(prefix, max), style)));
     }
     let count = output.lines().count();
-    if count > 30 {
+    if count > take {
         lines.push(Line::from(Span::styled(
-            format!("… ({} more diff lines)", count - 30),
-            Style::default().fg(Color::DarkGray),
+            format!(
+                "… ({} more diff lines · ctrl+o {})",
+                count - take,
+                if expanded { "collapse" } else { "expand" }
+            ),
+            Style::default().fg(theme.muted),
+        )));
+    } else if expanded && count > 30 {
+        lines.push(Line::from(Span::styled(
+            format!("({count} diff lines total · ctrl+o collapse)"),
+            Style::default().fg(theme.muted),
         )));
     }
 }
@@ -10993,6 +13209,279 @@ fn wrap_plan_text(text: &str, width: usize) -> Vec<String> {
         rows.push(line);
     }
     rows
+}
+
+fn provider_alias_tokens(text: &str) -> Vec<&str> {
+    let mut tokens = Vec::new();
+    let mut rest = text;
+    while let Some(start) = ["__CA_PATH_", "__CA_NAME_"]
+        .iter()
+        .filter_map(|prefix| rest.find(prefix))
+        .min()
+    {
+        let token = &rest[start..];
+        let end = token
+            .find(|ch: char| {
+                ch.is_whitespace() || matches!(ch, '`' | ',' | ';' | ')' | ']' | '"' | '\'')
+            })
+            .unwrap_or(token.len());
+        let token = &token[..end];
+        if token.len() > "__CA_PATH_".len() && !tokens.contains(&token) {
+            tokens.push(token);
+        }
+        rest = &rest[start + end.max(1)..];
+        if tokens.len() == 4 {
+            break;
+        }
+    }
+    tokens
+}
+
+fn task_progress(row: &crate::agent::subagent::AgentActivitySnapshot) -> Option<&str> {
+    row.events.iter().rev().find_map(|event| {
+        event
+            .message
+            .strip_prefix(crate::agent::subagent::TASK_PROGRESS_PREFIX)
+    })
+}
+
+fn task_identity_color(index: usize) -> Color {
+    AGENT_WORKER_ICONS[index % AGENT_WORKER_ICONS.len()].color
+}
+
+fn task_dependency_labels(
+    plan: &crate::work::PlanArtifact,
+    task: &crate::work::PlanTask,
+) -> String {
+    task.agent
+        .as_ref()
+        .map(|agent| {
+            agent
+                .depends_on
+                .iter()
+                .filter_map(|id| {
+                    plan.tasks
+                        .iter()
+                        .position(|candidate| candidate.id == *id)
+                        .map(|index| format!("#{}", index + 1))
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default()
+}
+
+fn render_running_plan_author(lines: &mut Vec<Line<'static>>, state: &AppState, width: u16) {
+    let work = state
+        .work_state
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    if work.plan.is_some() {
+        return;
+    }
+    let Some(workflow) = work.plan_workflow.as_ref() else {
+        return;
+    };
+    if workflow.status != crate::plan_workflow::WorkflowStatus::Running {
+        return;
+    }
+    let Some(stage) = workflow.steps.get(workflow.cursor) else {
+        return;
+    };
+    if stage.status != crate::plan_workflow::WorkflowStageStatus::Running {
+        return;
+    }
+    let live = stage
+        .agent_id
+        .and_then(|id| state.live_agent_activity.iter().find(|row| row.id.0 == id));
+    let live = live.or_else(|| {
+        state
+            .live_agent_activity
+            .iter()
+            .find(|row| !row.status.terminal())
+    });
+    let tool = live
+        .and_then(|row| {
+            row.current_action
+                .as_deref()
+                .filter(|action| !action.trim().is_empty())
+                .or(Some(row.phase.label()))
+        })
+        .unwrap_or_else(|| stage.role.label());
+    let text = format!("  Planning with {} · {tool}", stage.route.model);
+    for part in wrap_plan_text(
+        &crate::terminal_text::sanitize_terminal_text(&text),
+        usize::from(width.saturating_sub(2).max(1)),
+    ) {
+        lines.push(Line::from(Span::styled(
+            part,
+            Style::default().fg(palette(state).accent),
+        )));
+    }
+    let preview = live.and_then(|row| {
+        row.events.iter().rev().find_map(|event| {
+            event
+                .message
+                .strip_prefix(crate::agent::subagent::TASK_PROGRESS_PREFIX)
+        })
+    });
+    if let Some(preview) = preview.map(str::trim).filter(|preview| !preview.is_empty()) {
+        let preview = crate::terminal_text::sanitize_terminal_text(preview);
+        let preview = preview.lines().next().unwrap_or("");
+        for part in wrap_plan_text(preview, usize::from(width.saturating_sub(2).max(1))) {
+            lines.push(Line::from(Span::styled(
+                format!("  {part}"),
+                Style::default().fg(palette(state).muted),
+            )));
+        }
+    }
+}
+
+fn render_live_task_map(lines: &mut Vec<Line<'static>>, state: &AppState, width: u16) {
+    let work = state.work_state.lock().unwrap_or_else(|p| p.into_inner());
+    if !work.automatic_task_map {
+        return;
+    }
+    let Some(plan) = work.plan.as_ref() else {
+        return;
+    };
+    let done = plan
+        .tasks
+        .iter()
+        .filter(|task| task.agent_runtime.state == crate::agent_graph::AgentTaskState::Completed)
+        .count();
+    lines.push(Line::from(Span::styled(
+        format!(
+            "  Tasks {done}/{} · {:?} · Ctrl+X T {} · /tasks",
+            plan.tasks.len(),
+            work.agent_graph.status,
+            if state.task_map_collapsed {
+                "expand"
+            } else {
+                "collapse"
+            }
+        ),
+        Style::default().fg(palette(state).accent),
+    )));
+    if state.task_map_collapsed {
+        return;
+    }
+    // Keep the currently running branches visible even with a large map.
+    let mut visible = plan.tasks.iter().enumerate().collect::<Vec<_>>();
+    visible.sort_by_key(|(index, task)| {
+        (
+            task.agent_runtime.state != crate::agent_graph::AgentTaskState::Running,
+            *index,
+        )
+    });
+    for (index, task) in visible.iter().take(4) {
+        let color = task_identity_color(*index);
+        let dependencies = task_dependency_labels(plan, task);
+        let status = task
+            .agent_runtime
+            .attempts
+            .last()
+            .and_then(|attempt| attempt.agent_id)
+            .and_then(|id| state.live_agent_activity.iter().find(|row| row.id.0 == id));
+        let phase = if task.agent_runtime.state == crate::agent_graph::AgentTaskState::Running {
+            status
+                .map(|row| {
+                    if row.status == crate::agent::subagent::AgentStatus::Completed {
+                        "Verifying".to_owned()
+                    } else {
+                        agent_status_label(&row.status).to_owned()
+                    }
+                })
+                .unwrap_or_else(|| "Running".into())
+        } else {
+            format!("{:?}", task.agent_runtime.state)
+        };
+        let label = format!(
+            "  #{} {} · {}{}",
+            index + 1,
+            task.title,
+            phase,
+            if dependencies.is_empty() {
+                String::new()
+            } else {
+                format!(" ← {dependencies}")
+            }
+        );
+        for line in wrap_plan_text(
+            &crate::terminal_text::sanitize_terminal_text(&label),
+            usize::from(width.saturating_sub(2).max(1)),
+        ) {
+            lines.push(Line::from(Span::styled(line, Style::default().fg(color))));
+        }
+        let attempt = task.agent_runtime.attempts.last();
+        let restored_summary = attempt
+            .filter(|attempt| attempt.status.terminal())
+            .and_then(|attempt| attempt.summary.as_deref())
+            .and_then(|summary| summary.lines().find(|line| !line.trim().is_empty()));
+        let output = restored_summary.or_else(|| {
+            task.agent_runtime
+                .failure
+                .as_deref()
+                .or_else(|| {
+                    status.and_then(task_progress).and_then(|progress| {
+                        progress.lines().rev().find(|line| !line.trim().is_empty())
+                    })
+                })
+                .or_else(|| {
+                    status.and_then(|row| {
+                        row.recent_output
+                            .lines()
+                            .rev()
+                            .find(|line| !line.trim().is_empty())
+                            .or(row.current_action.as_deref())
+                    })
+                })
+                .or_else(|| attempt.and_then(|attempt| attempt.summary.as_deref()))
+        });
+        if let Some(output) = output {
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "     {}",
+                    crate::tui::selection::truncate_cells(
+                        &crate::terminal_text::sanitize_terminal_text(output),
+                        usize::from(width.saturating_sub(7))
+                    )
+                ),
+                Style::default().fg(color),
+            )));
+        }
+        if !state.provider_pane.frame_open() {
+            let aliases = attempt
+                .and_then(|attempt| attempt.provider_summary.as_deref())
+                .map(provider_alias_tokens)
+                .unwrap_or_default();
+            for (index, alias) in aliases.iter().enumerate() {
+                let label = if index == 0 {
+                    format!("Provider listing: {alias}")
+                } else {
+                    (*alias).to_string()
+                };
+                lines.push(Line::from(Span::styled(
+                    format!(
+                        "     {}",
+                        crate::tui::selection::truncate_cells(
+                            &label,
+                            usize::from(width.saturating_sub(7).max(1))
+                        )
+                    ),
+                    Style::default()
+                        .fg(palette(state).muted)
+                        .add_modifier(Modifier::UNDERLINED),
+                )));
+            }
+        }
+    }
+    if plan.tasks.len() > 4 {
+        lines.push(Line::from(format!(
+            "  +{} tasks · /tasks to inspect",
+            plan.tasks.len() - 4
+        )));
+    }
 }
 
 fn render_plan_card(lines: &mut Vec<Line<'static>>, state: &AppState, width: u16) {
@@ -11036,6 +13525,23 @@ fn render_plan_card(lines: &mut Vec<Line<'static>>, state: &AppState, width: u16
         row(summary, Style::default());
     }
     row("", Style::default());
+    if work.automatic_task_map {
+        if let Some(budget) = &work.agent_graph.budget_limits {
+            row(
+                &format!(
+                    "Budget: {} provider requests · {} total tokens · {}",
+                    budget.max_physical_requests,
+                    budget.max_total_tokens,
+                    budget
+                        .max_cost_usd
+                        .as_ref()
+                        .map(|cost| format!("USD {cost}"))
+                        .unwrap_or_else(|| "unpriced route allowed".into())
+                ),
+                Style::default().fg(color),
+            );
+        }
+    }
     for (index, task) in plan.tasks.iter().enumerate() {
         let status = match task.status {
             crate::work::TaskStatus::Pending => "",
@@ -11044,14 +13550,32 @@ fn render_plan_card(lines: &mut Vec<Line<'static>>, state: &AppState, width: u16
             crate::work::TaskStatus::Blocked => " [blocked]",
         };
         row(
-            &format!("{}. {}{}", index + 1, task.title, status),
-            Style::default(),
+            &format!(
+                "{}. {}{}{}",
+                index + 1,
+                task.title,
+                status,
+                if work.automatic_task_map && !task_dependency_labels(plan, task).is_empty() {
+                    format!(" ← {}", task_dependency_labels(plan, task))
+                } else {
+                    String::new()
+                }
+            ),
+            if work.automatic_task_map {
+                Style::default().fg(task_identity_color(index))
+            } else {
+                Style::default()
+            },
         );
     }
     row("", Style::default());
     if state.plan_proposal.is_some() {
         row(
-            "Enter Execute · Ctrl+O View plan · /plan graph",
+            if work.automatic_task_map {
+                "Enter Approve and start · Ctrl+O View plan · /tasks"
+            } else {
+                "Enter Execute · Ctrl+O View plan · /plan graph"
+            },
             Style::default().fg(color),
         );
         row(
@@ -11070,10 +13594,8 @@ fn render_plan_card(lines: &mut Vec<Line<'static>>, state: &AppState, width: u16
 
 fn render_plan_reader(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
     frame.render_widget(Clear, area);
-    let block = Block::default()
-        .title(" Plan ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette(state).plan));
+    let theme = palette(state);
+    let block = crate::tui::overlay::standard_block(" Plan ", theme.plan);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let content_area = Rect {
@@ -11129,6 +13651,7 @@ fn render_plan_reader(frame: &mut ratatui::Frame, area: Rect, state: &AppState) 
 }
 
 fn render_pager(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
+    let theme = palette(state);
     if state.plan_reader.is_some() {
         render_plan_reader(frame, area, state);
         return;
@@ -11137,9 +13660,7 @@ fn render_pager(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
     let pa = area;
 
     frame.render_widget(Clear, pa);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+    let block = crate::tui::overlay::plain_block(theme.accent);
 
     let scroll = state.pager_scroll as usize;
     let inner_width = pa.width.saturating_sub(2);
@@ -11204,7 +13725,7 @@ fn render_pager(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
     all.push(Line::from(""));
     all.push(Line::from(Span::styled(
         hint,
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.muted),
     )));
 
     frame.render_widget(
@@ -11235,13 +13756,13 @@ fn context_grid_pager_line(line: &str) -> Option<Line<'static>> {
         return None;
     }
     let mut spans = Vec::with_capacity(crate::context::CONTEXT_GRID_WIDTH + 2);
-    spans.push(Span::styled("│", Style::default().fg(Color::DarkGray)));
+    spans.push(Span::styled("│", Style::default().fg(Color::Gray)));
     spans.extend(
         glyphs
             .chars()
             .map(|glyph| Span::styled(glyph.to_string(), context_grid_style(glyph))),
     );
-    spans.push(Span::styled("│", Style::default().fg(Color::DarkGray)));
+    spans.push(Span::styled("│", Style::default().fg(Color::Gray)));
     Some(Line::from(spans))
 }
 
@@ -11260,6 +13781,7 @@ pub(crate) fn context_grid_style(glyph: char) -> Style {
 }
 
 fn render_file_picker(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
+    let theme = palette(state);
     let palette = palette(state);
     let narrow = area.width < 80;
     let max_entries = if narrow { 5 } else { 8 };
@@ -11303,7 +13825,7 @@ fn render_file_picker(frame: &mut ratatui::Frame, area: Rect, state: &AppState) 
                 .fg(palette.accent_foreground)
                 .bg(palette.accent)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme.text)
         };
         let prefix = if is_sel { "▸ " } else { "  " };
         lines.push(Line::from(Span::styled(
@@ -11379,6 +13901,7 @@ fn render_file_picker(frame: &mut ratatui::Frame, area: Rect, state: &AppState) 
 }
 
 fn render_path_completion(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
+    let theme = palette(state);
     let palette = palette(state);
     let completion = &state.composer_ui.path_completion;
     let narrow = area.width < 80;
@@ -11424,7 +13947,7 @@ fn render_path_completion(frame: &mut ratatui::Frame, area: Rect, state: &AppSta
                 .fg(palette.accent_foreground)
                 .bg(palette.accent)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme.text)
         };
         let kind = if entry.is_dir { "folder" } else { "file" };
         let prefix = if active { "▸ " } else { "  " };
@@ -11486,6 +14009,7 @@ fn render_path_completion(frame: &mut ratatui::Frame, area: Rect, state: &AppSta
 }
 
 fn render_change_review(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
+    let theme = palette(state);
     use crate::changes::{ChangeReviewPurpose, ChangeViewMode, GitReviewOperation};
 
     frame.render_widget(Clear, area);
@@ -11506,10 +14030,7 @@ fn render_change_review(frame: &mut ratatui::Frame, area: Rect, state: &AppState
         ChangeViewMode::Subject => " Commit subject ".to_string(),
         ChangeViewMode::Confirm => " Confirm commit ".to_string(),
     };
-    let block = Block::default()
-        .title(title)
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+    let block = crate::tui::overlay::standard_block(title, theme.accent);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.height == 0 || inner.width == 0 {
@@ -11566,12 +14087,12 @@ fn render_change_review(frame: &mut ratatui::Frame, area: Rect, state: &AppState
                     "Error: {}",
                     crate::terminal_text::sanitize_terminal_text(error)
                 ),
-                Style::default().fg(Color::Red),
+                Style::default().fg(theme.error),
             )));
         } else if let Some(notice) = &state.change_review.notice {
             header.push(Line::from(Span::styled(
                 crate::terminal_text::sanitize_terminal_text(notice),
-                Style::default().fg(Color::Green),
+                Style::default().fg(theme.success),
             )));
         }
         frame.render_widget(Paragraph::new(header).wrap(Wrap { trim: false }), chunks[0]);
@@ -11586,7 +14107,7 @@ fn render_change_review(frame: &mut ratatui::Frame, area: Rect, state: &AppState
             Some(GitReviewOperation::Loading) | None => "Loading working tree changes…",
         };
         frame.render_widget(
-            Paragraph::new(label).style(Style::default().fg(Color::DarkGray)),
+            Paragraph::new(label).style(Style::default().fg(theme.muted)),
             chunks[1],
         );
     } else if state.change_review.error.is_some()
@@ -11595,7 +14116,7 @@ fn render_change_review(frame: &mut ratatui::Frame, area: Rect, state: &AppState
     {
         frame.render_widget(
             Paragraph::new("The commit workflow is unavailable until this Git state is resolved.")
-                .style(Style::default().fg(Color::Red))
+                .style(Style::default().fg(theme.error))
                 .wrap(Wrap { trim: false }),
             chunks[1],
         );
@@ -11605,7 +14126,7 @@ fn render_change_review(frame: &mut ratatui::Frame, area: Rect, state: &AppState
                 if state.change_review.files.is_empty() {
                     frame.render_widget(
                         Paragraph::new("No working tree changes")
-                            .style(Style::default().fg(Color::DarkGray)),
+                            .style(Style::default().fg(theme.muted)),
                         chunks[1],
                     );
                 } else {
@@ -11646,9 +14167,11 @@ fn render_change_review(frame: &mut ratatui::Frame, area: Rect, state: &AppState
                                 counts
                             );
                             let style = if index == selected {
-                                Style::default().fg(Color::Black).bg(Color::Cyan)
+                                Style::default()
+                                    .fg(theme.accent_foreground)
+                                    .bg(theme.accent)
                             } else {
-                                Style::default().fg(Color::White)
+                                Style::default().fg(theme.text)
                             };
                             ListItem::new(Line::from(Span::styled(line, style)))
                         })
@@ -11664,20 +14187,20 @@ fn render_change_review(frame: &mut ratatui::Frame, area: Rect, state: &AppState
                     .map(|line| {
                         let style = if line.starts_with("+++") || line.starts_with("---") {
                             Style::default()
-                                .fg(Color::Cyan)
+                                .fg(theme.accent)
                                 .add_modifier(Modifier::BOLD)
                         } else if line.starts_with('+') {
-                            Style::default().fg(Color::Green)
+                            Style::default().fg(theme.success)
                         } else if line.starts_with('-') {
-                            Style::default().fg(Color::Red)
+                            Style::default().fg(theme.error)
                         } else if line.starts_with("@@") {
-                            Style::default().fg(Color::Cyan)
+                            Style::default().fg(theme.accent)
                         } else if line == "Staged changes" || line == "Unstaged changes" {
                             Style::default()
-                                .fg(Color::Yellow)
+                                .fg(theme.warning)
                                 .add_modifier(Modifier::BOLD)
                         } else {
-                            Style::default().fg(Color::White)
+                            Style::default().fg(theme.text)
                         };
                         Line::from(Span::styled(line.to_string(), style))
                     })
@@ -11699,13 +14222,17 @@ fn render_change_review(frame: &mut ratatui::Frame, area: Rect, state: &AppState
                 if let Some(character) = after.chars().next() {
                     spans.push(Span::styled(
                         character.to_string(),
-                        Style::default().fg(Color::Black).bg(Color::Cyan),
+                        Style::default()
+                            .fg(theme.accent_foreground)
+                            .bg(theme.accent),
                     ));
                     spans.push(Span::raw(after[character.len_utf8()..].to_string()));
                 } else {
                     spans.push(Span::styled(
                         " ",
-                        Style::default().fg(Color::Black).bg(Color::Cyan),
+                        Style::default()
+                            .fg(theme.accent_foreground)
+                            .bg(theme.accent),
                     ));
                 }
                 let lines = vec![
@@ -11802,19 +14329,23 @@ fn render_change_review(frame: &mut ratatui::Frame, area: Rect, state: &AppState
     if state.change_review.operation.is_some() {
         frame.render_widget(
             Paragraph::new("Ctrl+C cancel operation · controls locked")
-                .style(Style::default().fg(Color::DarkGray)),
+                .style(Style::default().fg(theme.muted)),
             chunks[2],
         );
     } else if state.change_review.mode == ChangeViewMode::Confirm {
         let cancel_style = if state.change_review.commit_selected {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(theme.muted)
         } else {
-            Style::default().fg(Color::Black).bg(Color::Cyan)
+            Style::default()
+                .fg(theme.accent_foreground)
+                .bg(theme.accent)
         };
         let commit_style = if state.change_review.commit_selected {
-            Style::default().fg(Color::Black).bg(Color::Green)
+            Style::default()
+                .fg(theme.accent_foreground)
+                .bg(theme.success)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(theme.muted)
         };
         frame.render_widget(
             Paragraph::new(vec![
@@ -11823,29 +14354,27 @@ fn render_change_review(frame: &mut ratatui::Frame, area: Rect, state: &AppState
                     Span::raw("  "),
                     Span::styled(" Commit ", commit_style),
                 ]),
-                Line::from(Span::styled(hint, Style::default().fg(Color::DarkGray))),
+                Line::from(Span::styled(hint, Style::default().fg(theme.muted))),
             ]),
             chunks[2],
         );
     } else {
         frame.render_widget(
-            Paragraph::new(hint).style(Style::default().fg(Color::DarkGray)),
+            Paragraph::new(hint).style(Style::default().fg(theme.muted)),
             chunks[2],
         );
     }
 }
 
 fn render_change_walkthrough(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
+    let theme = palette(state);
     let Some(walkthrough) = state.change_walkthrough.as_ref() else {
         return;
     };
     use crate::change_walkthrough::ChangeWalkthroughStatus;
 
     frame.render_widget(Clear, area);
-    let block = Block::default()
-        .title(" Guided changes walkthrough ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+    let block = crate::tui::overlay::standard_block(" Guided changes walkthrough ", theme.accent);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.height == 0 || inner.width == 0 {
@@ -11865,11 +14394,11 @@ fn render_change_walkthrough(frame: &mut ratatui::Frame, area: Rect, state: &App
         ChangeWalkthroughStatus::Stale => "STALE · source changed after this explanation",
     };
     let status_style = match walkthrough.status {
-        ChangeWalkthroughStatus::Complete => Style::default().fg(Color::Green),
+        ChangeWalkthroughStatus::Complete => Style::default().fg(theme.success),
         ChangeWalkthroughStatus::Stale
         | ChangeWalkthroughStatus::Refused
-        | ChangeWalkthroughStatus::Failed => Style::default().fg(Color::Yellow),
-        _ => Style::default().fg(Color::Cyan),
+        | ChangeWalkthroughStatus::Failed => Style::default().fg(theme.warning),
+        _ => Style::default().fg(theme.accent),
     };
     let target = crate::change_walkthrough::target_label(&walkthrough.target);
     let mut lines = vec![
@@ -11911,7 +14440,7 @@ fn render_change_walkthrough(frame: &mut ratatui::Frame, area: Rect, state: &App
             if walkthrough.status == ChangeWalkthroughStatus::Stale {
                 lines.push(Line::from(Span::styled(
                     "This explanation is retained for comparison. Press Shift+R to recapture explicitly.",
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(theme.warning),
                 )));
                 lines.push(Line::from(""));
             }
@@ -11931,7 +14460,7 @@ fn render_change_walkthrough(frame: &mut ratatui::Frame, area: Rect, state: &App
                     lines.push(Line::from(Span::styled(
                         format!("{}. {}", step.order, step.title),
                         Style::default()
-                            .fg(Color::Cyan)
+                            .fg(theme.accent)
                             .add_modifier(Modifier::BOLD),
                     )));
                     if !step.files.is_empty() {
@@ -11993,7 +14522,7 @@ fn render_change_walkthrough(frame: &mut ratatui::Frame, area: Rect, state: &App
             if let Some(error) = &walkthrough.error {
                 lines.push(Line::from(Span::styled(
                     error.clone(),
-                    Style::default().fg(Color::Red),
+                    Style::default().fg(theme.error),
                 )));
             }
         }
@@ -12002,7 +14531,7 @@ fn render_change_walkthrough(frame: &mut ratatui::Frame, area: Rect, state: &App
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             error.clone(),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme.warning),
         )));
     }
 
@@ -12022,12 +14551,13 @@ fn render_change_walkthrough(frame: &mut ratatui::Frame, area: Rect, state: &App
         "↑↓/PgUp/PgDn scroll · Shift+R recapture · Esc close"
     };
     frame.render_widget(
-        Paragraph::new(hint).style(Style::default().fg(Color::DarkGray)),
+        Paragraph::new(hint).style(Style::default().fg(theme.muted)),
         chunks[1],
     );
 }
 
 fn render_jobs_view(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
+    let theme = palette(state);
     let activity_count =
         state.job_list.len() + state.watch_list.len() + state.delegation_list.len();
     let selected = state.selected_job_idx.min(activity_count.saturating_sub(1));
@@ -12052,10 +14582,7 @@ fn render_jobs_view(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
         " Background activity ".to_string()
     };
     frame.render_widget(Clear, area);
-    let block = Block::default()
-        .title(title)
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+    let block = crate::tui::overlay::standard_block(title, theme.accent);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.height == 0 || inner.width == 0 {
@@ -12162,7 +14689,7 @@ fn render_jobs_view(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
             Paragraph::new(
                 "No shell jobs, PID watchers, or codex-team delegations in this ca process",
             )
-            .style(Style::default().fg(Color::DarkGray)),
+            .style(Style::default().fg(theme.muted)),
             chunks[0],
         );
     } else {
@@ -12191,9 +14718,11 @@ fn render_jobs_view(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
                     job.elapsed.as_secs_f64(),
                 );
                 let style = if index == selected {
-                    Style::default().fg(Color::Black).bg(Color::Cyan)
+                    Style::default()
+                        .fg(theme.accent_foreground)
+                        .bg(theme.accent)
                 } else {
-                    Style::default().fg(Color::White)
+                    Style::default().fg(theme.text)
                 };
                 ListItem::new(Span::styled(line, style))
             })
@@ -12217,9 +14746,11 @@ fn render_jobs_view(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
                         watcher.event.summary,
                     );
                     let style = if index == selected {
-                        Style::default().fg(Color::Black).bg(Color::Cyan)
+                        Style::default()
+                            .fg(theme.accent_foreground)
+                            .bg(theme.accent)
                     } else {
-                        Style::default().fg(Color::White)
+                        Style::default().fg(theme.text)
                     };
                     ListItem::new(Span::styled(line, style))
                 }),
@@ -12235,9 +14766,11 @@ fn render_jobs_view(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
                     delegation.updated_at,
                 );
                 let style = if index == selected {
-                    Style::default().fg(Color::Black).bg(Color::Cyan)
+                    Style::default()
+                        .fg(theme.accent_foreground)
+                        .bg(theme.accent)
                 } else {
-                    Style::default().fg(Color::White)
+                    Style::default().fg(theme.text)
                 };
                 ListItem::new(Span::styled(line, style))
             },
@@ -12273,7 +14806,7 @@ fn render_jobs_view(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
         "↑↓ select · Enter open · i stdin (jobs) · x cancel/stop watching · r refresh · Esc close"
     };
     frame.render_widget(
-        Paragraph::new(hint).style(Style::default().fg(Color::DarkGray)),
+        Paragraph::new(hint).style(Style::default().fg(theme.muted)),
         chunks[1],
     );
 }
@@ -12285,11 +14818,9 @@ fn render_terminal_manager(frame: &mut ratatui::Frame, area: Rect, state: &AppSt
     let width = 88.min(area.width.saturating_sub(2));
     let height = 26.min(area.height.saturating_sub(2));
     let popup = centered_rect(width, height, area);
+    let theme = palette(state);
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Durable terminals ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+    let block = crate::tui::overlay::standard_block(" Durable terminals ", theme.accent);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     if inner.width == 0 || inner.height == 0 {
@@ -12315,7 +14846,7 @@ fn render_terminal_manager(frame: &mut ratatui::Frame, area: Rect, state: &AppSt
     };
     frame.render_widget(
         Paragraph::new(vec![
-            Line::from(Span::styled(status, Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled(status, Style::default().fg(theme.muted))),
             Line::from(format!("> {}", manager.filter)),
         ]),
         chunks[0],
@@ -12326,14 +14857,14 @@ fn render_terminal_manager(frame: &mut ratatui::Frame, area: Rect, state: &AppSt
             let lines = vec![
                 Line::from(Span::styled(
                     "Create a detached tmux session",
-                    Style::default().fg(Color::Cyan),
+                    Style::default().fg(theme.accent),
                 )),
                 Line::from(""),
                 Line::from(format!("Name: {name}")),
                 Line::from(""),
                 Line::from(Span::styled(
                     "The session is user-owned and survives ca shutdown.",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.muted),
                 )),
             ];
             frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), chunks[1]);
@@ -12356,7 +14887,7 @@ fn render_terminal_manager(frame: &mut ratatui::Frame, area: Rect, state: &AppSt
                     } else {
                         "No terminals match this filter."
                     })
-                    .style(Style::default().fg(Color::DarkGray)),
+                    .style(Style::default().fg(theme.muted)),
                     chunks[1],
                 );
             } else {
@@ -12383,11 +14914,13 @@ fn render_terminal_manager(frame: &mut ratatui::Frame, area: Rect, state: &AppSt
                                 attached,
                             );
                             let style = if visible_index == selected {
-                                Style::default().fg(Color::Black).bg(Color::Cyan)
+                                Style::default()
+                                    .fg(theme.accent_foreground)
+                                    .bg(theme.accent)
                             } else if session.attached_clients > 0 {
-                                Style::default().fg(Color::Green)
+                                Style::default().fg(theme.success)
                             } else {
-                                Style::default().fg(Color::White)
+                                Style::default().fg(theme.text)
                             };
                             ListItem::new(Span::styled(line, style))
                         })
@@ -12417,9 +14950,9 @@ fn render_terminal_manager(frame: &mut ratatui::Frame, area: Rect, state: &AppSt
     }
     frame.render_widget(
         Paragraph::new(footer).style(Style::default().fg(if manager.error.is_some() {
-            Color::Red
+            theme.error
         } else {
-            Color::DarkGray
+            theme.muted
         })),
         chunks[2],
     );
@@ -12427,19 +14960,20 @@ fn render_terminal_manager(frame: &mut ratatui::Frame, area: Rect, state: &AppSt
     if let Some(confirmation) = &manager.kill_confirmation {
         let confirm = centered_rect(64.min(area.width.saturating_sub(2)), 10, area);
         frame.render_widget(Clear, confirm);
-        let block = Block::default()
-            .title(" Kill durable terminal? ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Yellow));
+        let block = crate::tui::overlay::standard_block(" Kill durable terminal? ", theme.warning);
         let inner = block.inner(confirm);
         frame.render_widget(block, confirm);
         let cancel_style = if confirmation.kill_selected {
             Style::default()
         } else {
-            Style::default().fg(Color::Black).bg(Color::Cyan)
+            Style::default()
+                .fg(theme.accent_foreground)
+                .bg(theme.accent)
         };
         let kill_style = if confirmation.kill_selected {
-            Style::default().fg(Color::White).bg(Color::Red)
+            Style::default()
+                .fg(theme.accent_foreground)
+                .bg(theme.approval_deny)
         } else {
             Style::default()
         };
@@ -12472,7 +15006,7 @@ fn render_terminal_manager(frame: &mut ratatui::Frame, area: Rect, state: &AppSt
                 ]),
                 Line::from(Span::styled(
                     "Arrow/Tab choose · Enter confirm · Esc cancel",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.muted),
                 )),
             ])
             .wrap(Wrap { trim: false }),
@@ -12490,10 +15024,7 @@ fn render_theme_manager(frame: &mut ratatui::Frame, area: Rect, state: &AppState
     let height = 18.min(area.height.saturating_sub(2));
     let popup = centered_rect(width, height, area);
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Theme ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette.accent));
+    let block = crate::tui::overlay::standard_block(" Theme ", palette.accent);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     let chunks = Layout::default()
@@ -12581,10 +15112,7 @@ fn render_notification_picker(frame: &mut ratatui::Frame, area: Rect, state: &Ap
     let height = 13.min(area.height.saturating_sub(2));
     let popup = centered_rect(width, height, area);
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Completion notification ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette.accent));
+    let block = crate::tui::overlay::standard_block(" Completion notification ", palette.accent);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     let chunks = Layout::default()
@@ -12661,10 +15189,7 @@ fn render_copy_picker(frame: &mut ratatui::Frame, area: Rect, state: &AppState) 
         crate::app::CopyPickerLevel::Messages => " Copy message ",
         crate::app::CopyPickerLevel::Parts { .. } => " Copy message part ",
     };
-    let block = Block::default()
-        .title(title)
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette.accent));
+    let block = crate::tui::overlay::standard_block(title, palette.accent);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     let chunks = Layout::default()
@@ -12751,10 +15276,7 @@ fn render_command_output_picker(frame: &mut ratatui::Frame, area: Rect, state: &
         area,
     );
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Command output ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette.accent));
+    let block = crate::tui::overlay::standard_block(" Command output ", palette.accent);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     let chunks = Layout::default()
@@ -12826,10 +15348,7 @@ fn render_output_full_confirmation(frame: &mut ratatui::Frame, area: Rect, state
         area,
     );
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Full command output ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette.warning));
+    let block = crate::tui::overlay::standard_block(" Full command output ", palette.warning);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     let command = crate::terminal_text::sanitize_terminal_text(&confirmation.rerun.command);
@@ -12858,10 +15377,7 @@ fn render_scratch_delete_confirmation(frame: &mut ratatui::Frame, area: Rect, st
         area,
     );
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Delete scratch entry ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette.warning));
+    let block = crate::tui::overlay::standard_block(" Delete scratch entry ", palette.warning);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     let body = format!(
@@ -12900,10 +15416,7 @@ fn render_reasoning_picker(frame: &mut ratatui::Frame, area: Rect, state: &AppSt
     let height = desired_height.min(area.height.saturating_sub(2));
     let popup = centered_rect(width, height, area);
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Reasoning effort ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette.accent));
+    let block = crate::tui::overlay::standard_block(" Reasoning effort ", palette.accent);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     let chunks = Layout::default()
@@ -12968,10 +15481,7 @@ fn render_route_preset_picker(frame: &mut ratatui::Frame, area: Rect, state: &Ap
     let height = desired_height.min(area.height.saturating_sub(2));
     let popup = centered_rect(width, height, area);
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Route presets ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette.accent));
+    let block = crate::tui::overlay::standard_block(" Route presets ", palette.accent);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     let chunks = Layout::default()
@@ -13050,10 +15560,7 @@ fn render_route_preset_overwrite(frame: &mut ratatui::Frame, area: Rect, state: 
     let height = 14.min(area.height.saturating_sub(2));
     let popup = centered_rect(width, height, area);
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Overwrite route preset? ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette.warning));
+    let block = crate::tui::overlay::standard_block(" Overwrite route preset? ", palette.warning);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     let reasoning = confirmation
@@ -13121,10 +15628,7 @@ fn render_statusline_manager(frame: &mut ratatui::Frame, area: Rect, state: &App
     let height = 25.min(area.height.saturating_sub(2));
     let popup = centered_rect(width, height, area);
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Statusline ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette.accent));
+    let block = crate::tui::overlay::standard_block(" Statusline ", palette.accent);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     let chunks = Layout::default()
@@ -13225,12 +15729,124 @@ fn render_statusline_manager(frame: &mut ratatui::Frame, area: Rect, state: &App
 }
 
 #[cfg(test)]
+mod folded_transcript_tests {
+    use super::*;
+
+    fn call(id: &str, name: &str) -> ToolCall {
+        ToolCall {
+            observation: None,
+            output_source: None,
+            id: id.into(),
+            name: name.into(),
+            arguments: "{}".into(),
+            arguments_retrieved_spans: Vec::new(),
+            status: crate::app::ToolStatus::Done,
+            output: Some("ok".into()),
+            started_at: None,
+        }
+    }
+
+    fn message(role: Role, content: &str, tools: Option<Vec<ToolCall>>) -> crate::app::Message {
+        crate::app::Message {
+            retrieved_spans: Some(Vec::new()),
+            role,
+            content: content.into(),
+            tool_calls: tools,
+            thinking: None,
+            response_items: Vec::new(),
+            timestamp: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn renderer_folds_a_tool_run_and_pins_the_user_prompt() {
+        let mut state = crate::tui::test_support::test_state();
+        state
+            .messages
+            .push(message(Role::User, "first prompt", None));
+        state.messages.push(message(
+            Role::Assistant,
+            "",
+            Some(vec![
+                call("read-1", "read_file"),
+                call("read-2", "read_file"),
+                call("search-1", "grep"),
+                call("edit-1", "edit_file"),
+            ]),
+        ));
+        state
+            .messages
+            .push(message(Role::User, "second prompt", None));
+        let folded = privacy_safe_transcript_text(&state, 80);
+        assert!(folded.contains("Explored"), "{folded}");
+        assert!(folded.contains("edit_file"), "{folded}");
+        assert!(!folded.contains("Read file"), "{folded}");
+        if let Some(key) = crate::app::TranscriptBlockKey::tool_calls("read-1") {
+            state.expanded_blocks.push(key);
+        }
+        let expanded = privacy_safe_transcript_text(&state, 80);
+        assert!(expanded.contains("ok"), "{expanded}");
+        let (offset, pinned) = pinned_prompt_text(&state, 80, 0, None).unwrap();
+        assert_eq!(offset, 0);
+        assert!(pinned.contains("first prompt"), "{pinned}");
+        let content = conversation_content(&state, 80, false, false, None);
+        let next = content.user_prompt_cards[1].first_line as u32;
+        let displaced = pinned_prompt_text(&state, 80, next.saturating_sub(1), None).unwrap();
+        assert!(
+            displaced.0 < 0,
+            "viewport {} should slide the {}-line card, offset {}",
+            next.saturating_sub(1),
+            content.user_prompt_cards[0].height,
+            displaced.0
+        );
+        assert!(displaced.1.contains("first prompt"), "{}", displaced.1);
+        let later = pinned_prompt_text(&state, 80, 10_000, None).unwrap();
+        assert!(later.1.contains("second prompt"), "{}", later.1);
+
+        let mut scrolled = crate::tui::test_support::test_state();
+        scrolled
+            .messages
+            .push(message(Role::User, "PIN_FIRST_PROMPT", None));
+        scrolled
+            .messages
+            .push(message(Role::Assistant, &"filler\n".repeat(40), None));
+        scrolled
+            .messages
+            .push(message(Role::User, "PIN_LATER_PROMPT", None));
+        scrolled
+            .messages
+            .push(message(Role::Assistant, &"tail-line\n".repeat(40), None));
+        let backend = ratatui::backend::TestBackend::new(60, 8);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                render_conversation(frame, frame.area(), &scrolled, true);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let top = (0..3)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            top.contains("PIN_LATER_PROMPT"),
+            "pinned prompt was not painted:\n{top}"
+        );
+        assert!(!top.contains("tail-line"), "{top}");
+    }
+}
+
+#[cfg(test)]
 mod orc290_render_tests {
     use super::*;
     #[test]
     fn orc290_approval_shows_final_contents_without_internal_ticket() {
         let approval = crate::app::PendingApproval { tool_name: "write_file".into(), tool_id: "call".into(), tool_args: serde_json::json!({"path":"sample.rs","content":"raw","_ca_edit_token":"private-ticket","_ca_edit_preview":"FORMATTED\n"}).to_string(), network_requested: false, email_preview: None, email_draft_ref: None };
-        let lines = approval_argument_lines(&approval)
+        let lines = approval_argument_lines(&approval, &standalone_palette())
             .iter()
             .map(ToString::to_string)
             .collect::<Vec<_>>()

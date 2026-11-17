@@ -7,6 +7,39 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::{OnceLock, RwLock};
 
+// The qualification control ablates this one semantic feature boundary.
+const SEMANTIC_EVIDENCE: bool = true;
+
+fn coding_request(kind: RequestKind) -> bool {
+    matches!(
+        kind,
+        RequestKind::MainTurn
+            | RequestKind::ToolContinuation
+            | RequestKind::Headless
+            | RequestKind::Service
+            | RequestKind::Subagent
+            | RequestKind::Scheduled
+            | RequestKind::WorkflowStep
+            | RequestKind::RoleRun
+            | RequestKind::MultiRunCandidate
+    )
+}
+
+/// Fixed first-party request instruction; privacy recognizes only this exact
+/// text in an actual system-instruction envelope, never in user/source data.
+pub(crate) const EVIDENCE_GUIDANCE: &str = "Reuse retained reads and citations unless the task requests a reread or the evidence is missing, stale, or uncertain. For new reads, use the smallest relevant range. Omit start_line when it is 1; use end_line=1 for first-line facts. Expand when needed and honor explicit whole-file requests. State requested facts, citations, and unresolved conditions directly. Effects of isolated commands stay in their copies. For tasks that only ask to run, inspect, and report, leave originals unchanged and describe copy effects separately. Do not mirror copy changes into originals, including with edit_file, unless applying them is part of the task. A preserve-other-bytes constraint does not itself request an edit. Use original evidence for original-state claims and inspect only relevant copy files for copy-state claims.";
+
+pub(crate) fn evidence_guidance(kind: RequestKind) -> Option<&'static str> {
+    (SEMANTIC_EVIDENCE
+        && coding_request(kind)
+        && !policy().read().unwrap_or_else(|p| p.into_inner()).disabled)
+        .then_some(EVIDENCE_GUIDANCE)
+}
+
+pub(crate) fn fixed_evidence_instruction(role: &str, text: Option<&str>) -> bool {
+    role == "system" && text == Some(EVIDENCE_GUIDANCE)
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct PruningConfig {
@@ -27,11 +60,18 @@ impl Default for PruningConfig {
 pub struct PruningStats {
     pub results: usize,
     pub saved_tokens: u64,
+    pub added_tokens: u64,
 }
 impl PruningStats {
     pub fn apply(self, breakdown: &mut crate::context::ContextBreakdown) {
-        breakdown.conversation = breakdown.conversation.saturating_sub(self.saved_tokens);
-        breakdown.total = breakdown.total.saturating_sub(self.saved_tokens);
+        breakdown.conversation = breakdown
+            .conversation
+            .saturating_add(self.added_tokens)
+            .saturating_sub(self.saved_tokens);
+        breakdown.total = breakdown
+            .total
+            .saturating_add(self.added_tokens)
+            .saturating_sub(self.saved_tokens);
     }
 }
 #[derive(Default)]
@@ -83,18 +123,7 @@ pub fn project_request(
     provider: &str,
     model: &str,
 ) -> PruningStats {
-    if !matches!(
-        kind,
-        RequestKind::MainTurn
-            | RequestKind::ToolContinuation
-            | RequestKind::Headless
-            | RequestKind::Service
-            | RequestKind::Subagent
-            | RequestKind::Scheduled
-            | RequestKind::WorkflowStep
-            | RequestKind::RoleRun
-            | RequestKind::MultiRunCandidate
-    ) {
+    if !coding_request(kind) {
         return PruningStats::default();
     }
     let settings = policy().read().unwrap_or_else(|p| p.into_inner());
@@ -104,6 +133,136 @@ pub fn project_request(
         .or_else(|| settings.windows.get(model))
         .copied();
     project(messages, !settings.disabled, window)
+}
+
+/// A graph worker has one human turn, so ordinary multi-turn age pruning cannot
+/// retire its reads. Project only already-seen, successful read-only results;
+/// keep the newest complete batch exact, including private source receipts.
+pub(crate) fn project_graph_worker(
+    canonical: &[ChatMessage],
+    messages: &mut [ChatMessage],
+    tools: &[crate::agent::client::ToolDef],
+    remaining_tokens: u64,
+    remaining_requests: u32,
+) -> PruningStats {
+    let enabled = !policy().read().unwrap_or_else(|p| p.into_inner()).disabled;
+    project_worker(
+        canonical,
+        messages,
+        tools,
+        remaining_tokens,
+        remaining_requests,
+        enabled,
+    )
+}
+
+fn project_worker(
+    canonical: &[ChatMessage],
+    messages: &mut [ChatMessage],
+    tools: &[crate::agent::client::ToolDef],
+    remaining_tokens: u64,
+    remaining_requests: u32,
+    enabled: bool,
+) -> PruningStats {
+    if !enabled {
+        return PruningStats::default();
+    }
+    let target = remaining_tokens / u64::from(remaining_requests.max(1));
+    let mut estimate = estimate_worker_request(messages, tools);
+    let calls = paired(messages);
+    let protected_bases = crate::context_observation::retained_basis_indices(canonical, messages);
+    let incomplete = messages
+        .iter()
+        .enumerate()
+        .filter(|(_, message)| {
+            message.tool_calls.as_ref().is_some_and(|batch| {
+                batch
+                    .iter()
+                    .any(|call| !calls.contains_key(call.id.as_str()))
+            })
+        })
+        .map(|(index, _)| index)
+        .collect::<HashSet<_>>();
+    let latest_batch = calls.values().map(|(_, index)| *index).max();
+    let mut replacements = Vec::new();
+    for (index, message) in messages.iter().enumerate() {
+        if estimate <= target {
+            break;
+        }
+        if protected_bases.contains(&index)
+            || message.role != "tool"
+            || !message.content.is_prunable_tool_result()
+            || message.content.tool_result_success() != Some(true)
+        {
+            continue;
+        }
+        let Some((call, batch)) = message.tool_call_id.as_deref().and_then(|id| calls.get(id))
+        else {
+            continue;
+        };
+        if Some(*batch) == latest_batch
+            || incomplete.contains(batch)
+            || !matches!(
+                call.function.name.as_str(),
+                "read_file" | "list_dir" | "search_files" | "glob"
+            )
+            || !qualified_result(&call.function.name, &call.function.arguments, true)
+        {
+            continue;
+        }
+        let Some(text) = message.content.as_str() else {
+            continue;
+        };
+        let safe_id = call
+            .id
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+            .take(128)
+            .collect::<String>();
+        // No source bytes or receipt are sliced/relabelled. The unchanged call
+        // arguments retain the read/search location; canonical results remain
+        // in the worker's local history, subject to its existing output limits.
+        let marker = format!("[Earlier successful {} result from call {} omitted from this request to fit the shared graph token budget. Full result remains in this worker's local history. Use the original call arguments to repeat a narrow read/search if needed.]", call.function.name, safe_id);
+        let before = crate::context::estimate_text_tokens(text);
+        let after = crate::context::estimate_text_tokens(&marker);
+        if before > after {
+            estimate = estimate.saturating_sub(before - after);
+            replacements.push((index, marker, before - after));
+        }
+    }
+    let mut stats = PruningStats::default();
+    for (index, marker, saved) in replacements {
+        messages[index].content = crate::image_content::ModelContent::context_marker(marker)
+            .with_tool_result_status(true);
+        stats.results += 1;
+        stats.saved_tokens += saved;
+    }
+    stats
+}
+
+pub(crate) fn estimate_worker_request(
+    messages: &[ChatMessage],
+    tools: &[crate::agent::client::ToolDef],
+) -> u64 {
+    messages.iter().fold(
+        crate::context::estimate_serialized_tokens(&tools),
+        |total, message| {
+            total
+                .saturating_add(8)
+                .saturating_add(
+                    message
+                        .content
+                        .as_str()
+                        .map_or(0, crate::context::estimate_text_tokens),
+                )
+                .saturating_add(
+                    message
+                        .tool_calls
+                        .as_ref()
+                        .map_or(0, crate::context::estimate_serialized_tokens),
+                )
+        },
+    )
 }
 
 /// Eligibility is host provenance, never inferred from tool-output strings.
@@ -162,6 +321,7 @@ pub fn project(messages: &mut [ChatMessage], enabled: bool, capacity: Option<u64
     if !enabled {
         return PruningStats::default();
     }
+    let mut evidence = crate::context_observation::project_deferred(messages, SEMANTIC_EVIDENCE);
     let keep_from = messages
         .iter()
         .enumerate()
@@ -198,7 +358,11 @@ pub fn project(messages: &mut [ChatMessage], enabled: bool, capacity: Option<u64
         let tokens = crate::context::estimate_text_tokens(text);
         let protected_by_budget = retained < protected;
         retained = retained.saturating_add(tokens);
-        if index >= keep_from || protected_by_budget || !message.content.is_prunable_tool_result() {
+        if index >= keep_from
+            || protected_by_budget
+            || evidence.frozen(index)
+            || !message.content.is_prunable_tool_result()
+        {
             continue;
         }
         let Some(id) = message.tool_call_id.as_deref() else {
@@ -226,15 +390,25 @@ pub fn project(messages: &mut [ChatMessage], enabled: bool, capacity: Option<u64
         }
     }
     if savings < minimum {
-        return PruningStats::default();
+        return evidence.finish(messages);
     }
-    let stats = PruningStats {
-        results: candidates.len(),
-        saved_tokens: savings,
-    };
+    let mut legacy = PruningStats::default();
     for (index, marker) in candidates {
-        messages[index].content = crate::image_content::ModelContent::text(marker);
+        if !evidence.age(index) {
+            legacy.results += 1;
+            let before = crate::context::estimate_text_tokens(
+                messages[index].content.as_str().unwrap_or_default(),
+            );
+            let after = crate::context::estimate_text_tokens(&marker);
+            legacy.saved_tokens += before.saturating_sub(after);
+            legacy.added_tokens += after.saturating_sub(before);
+        }
+        messages[index].content = crate::image_content::ModelContent::context_marker(marker);
     }
+    let mut stats = evidence.finish(messages);
+    stats.results += legacy.results;
+    stats.saved_tokens += legacy.saved_tokens;
+    stats.added_tokens += legacy.added_tokens;
     stats
 }
 
@@ -259,6 +433,7 @@ mod tests {
                     id: format!("call{i}"),
                     call_type: "function".into(),
                     function: FunctionCall {
+                        arguments_retrieved_spans: Vec::new(),
                         name: "read_file".into(),
                         arguments: "{}".into(),
                     },
@@ -277,6 +452,132 @@ mod tests {
         }
         messages
     }
+
+    #[test]
+    fn graph_worker_ages_seen_reads_within_one_turn_without_changing_originals() {
+        let mut original = history();
+        let mut human_seen = false;
+        original.retain(|message| {
+            if message.role != "user" {
+                return true;
+            }
+            let keep = !human_seen;
+            human_seen = true;
+            keep
+        });
+        for message in &mut original {
+            if message.role == "tool" {
+                message.content = message
+                    .content
+                    .clone()
+                    .with_tool_result_status(true)
+                    .with_source_receipt(Some("source-receipt-must-stay-exact".into()));
+            }
+        }
+        let canonical = serde_json::to_vec(&original).unwrap();
+        let mut ordinary = original.clone();
+        assert_eq!(project(&mut ordinary, true, Some(8_000)).results, 0);
+        let mut projected = original.clone();
+        let stats = project_worker(&original, &mut projected, &[], 100_000, 24, true);
+        assert!(stats.results >= 3);
+        assert!(stats.saved_tokens > 10_000);
+        assert_eq!(serde_json::to_vec(&original).unwrap(), canonical);
+        assert_eq!(
+            projected.last().unwrap().content,
+            original.last().unwrap().content
+        );
+        assert_eq!(
+            projected.last().unwrap().content.source_receipt(),
+            Some("source-receipt-must-stay-exact".into())
+        );
+        for (before, after) in original.iter().zip(&projected) {
+            assert_eq!(before.tool_call_id, after.tool_call_id);
+            assert_eq!(
+                serde_json::to_vec(&before.tool_calls).unwrap(),
+                serde_json::to_vec(&after.tool_calls).unwrap()
+            );
+            if after.content.is_context_marker() {
+                assert!(after
+                    .content
+                    .as_str()
+                    .unwrap()
+                    .contains("original call arguments"));
+                assert!(after.content.source_receipt().is_none());
+            }
+        }
+        let mut disabled = original.clone();
+        assert_eq!(
+            project_worker(&original, &mut disabled, &[], 100_000, 24, false).results,
+            0
+        );
+        assert_eq!(serde_json::to_vec(&disabled).unwrap(), canonical);
+    }
+
+    #[test]
+    fn graph_worker_protects_errors_skills_commands_and_incomplete_batches() {
+        let mut messages = history();
+        messages[2].content = messages[2].content.clone().with_tool_result_status(false);
+        messages[4].tool_calls.as_mut().unwrap()[0]
+            .function
+            .arguments = r#"{"path":"skills/example/SKILL.md"}"#.into();
+        messages[5].content = messages[5].content.clone().with_tool_result_status(true);
+        messages[7].tool_calls.as_mut().unwrap()[0].function.name = "run_command".into();
+        messages[8].content = messages[8].content.clone().with_tool_result_status(true);
+        let mut pending = messages[10].tool_calls.as_ref().unwrap()[0].clone();
+        pending.id = "pending-batch-call".into();
+        messages[10].tool_calls.as_mut().unwrap().push(pending);
+        messages[11].content = messages[11].content.clone().with_tool_result_status(true);
+        messages[14].content = messages[14].content.clone().with_tool_result_status(true);
+        let before = serde_json::to_vec(&messages).unwrap();
+        let canonical = messages.clone();
+        assert_eq!(
+            project_worker(&canonical, &mut messages, &[], 100, 24, true).results,
+            0
+        );
+        assert_eq!(serde_json::to_vec(&messages).unwrap(), before);
+    }
+    #[test]
+    fn graph_worker_retains_authenticated_duplicate_basis() {
+        let mut canonical = history()[..3].to_vec();
+        let attach = |message: &mut ChatMessage| {
+            let text = message.content.as_str().unwrap().to_owned();
+            message.content = message
+                .content
+                .clone()
+                .with_tool_result_status(true)
+                .with_context_observation(crate::context_observation::capture_host(
+                    "read_file",
+                    "{}",
+                    &text,
+                    true,
+                    "/workspace",
+                    &["file.txt".into()],
+                    Some(&"a".repeat(64)),
+                ));
+        };
+        attach(&mut canonical[2]);
+        let mut first = canonical.clone();
+        project(&mut first, true, Some(8_000));
+        let mut next = canonical[1..3].to_vec();
+        next[0].tool_calls.as_mut().unwrap()[0].id = "duplicate".into();
+        next[1].tool_call_id = Some("duplicate".into());
+        attach(&mut next[1]);
+        canonical.extend(next);
+        let mut projected = canonical.clone();
+        project(&mut projected, true, Some(8_000));
+        assert!(projected[4].content.is_context_marker());
+        assert!(
+            crate::context_observation::retained_basis_indices(&canonical, &projected).contains(&2)
+        );
+        project_worker(&canonical, &mut projected, &[], 100, 24, true);
+        assert_eq!(projected[2].content.as_str(), canonical[2].content.as_str());
+        assert!(projected[4]
+            .content
+            .as_str()
+            .unwrap()
+            .contains("retained call call0"));
+    }
+
     #[test]
     fn orc290_prunes_old_results_preserves_pairing_recent_turns_and_original() {
         let original = history();
@@ -348,11 +649,15 @@ mod tests {
     #[test]
     fn orc290_qualification_requires_known_success_and_protects_skills() {
         let mut call = ToolCall {
+            observation: None,
+            output_source: None,
+            arguments_retrieved_spans: Vec::new(),
             id: "c".into(),
             name: "read_file".into(),
             arguments: "{}".into(),
             status: ToolStatus::Done,
             output: Some("text".into()),
+            started_at: None,
         };
         assert!(qualified(&call));
         call.status = ToolStatus::Error;

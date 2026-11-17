@@ -2,15 +2,14 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
+  Try one of these, or ask anything:
 
+    · Fix the failing tests in this repo
+    · Explain how the approval flow works
+    · Summarize what changed in this workspace
 
-
-
-
-
-
+  / shows commands · /help for help · /keymap for keys
 
 
 
@@ -29,19 +28,19 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
 
 
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                                                                   │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
-12.5 tok/s · 0.75 credits allocation · / commands
+│› Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto · 12.5 tok/s · 0.75 credits allocation
+/ commands · Ctrl+\ dashboard · ↑ history
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
 
+  Try one of these, or ask anything:
 
+    · Fix the failing tests in this repo
+    · Explain how the approval flow works
+    · Summarize what changed in this workspace
 
-
-
-
-
-
+  / shows commands · /help for help · /keymap for keys
 
 
 
@@ -54,6 +53,7 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
 
 
 ╭──────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                           │
-╰──────────────────────────────────────────── agent · auto ╯
-12.5 tok/s · 0.75 credits allocation · / commands
+│› Ask anything…                                           │
+╰──────────────────────────────────────────────────────────╯
+ca · model auto · 12.5 tok/s · 0.75 credits allocation
+/ commands · Ctrl+\ dashboard · ↑ history

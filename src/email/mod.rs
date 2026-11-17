@@ -1131,14 +1131,19 @@ mod tests {
     fn terminal_in_memory_scrub_replaces_email_arguments_and_results() {
         let sentinel = "terminal-private-email-sentinel";
         let mut messages = vec![crate::app::Message {
+            retrieved_spans: Some(Vec::new()),
             role: crate::app::Role::Assistant,
             content: String::new(),
             tool_calls: Some(vec![crate::app::ToolCall {
+                observation: None,
+                output_source: None,
+                arguments_retrieved_spans: Vec::new(),
                 id: "email-call".into(),
                 name: "email_read".into(),
                 arguments: json!({"body":sentinel}).to_string(),
                 status: crate::app::ToolStatus::Done,
                 output: Some(sentinel.into()),
+                started_at: None,
             }]),
             thinking: None,
             timestamp: chrono::Utc::now(),

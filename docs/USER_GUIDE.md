@@ -3,10 +3,18 @@
 ## Interactive work
 
 Start `ca` in a project directory or pass `--workspace PATH_OR_NAME`. The composer
-accepts prompts and `@path` attachments. Use the application's help/command menu
-to discover slash commands and current keyboard controls. Modes and tool catalogs
-are displayed as part of the active conversation; verify the selected mode before
-requesting a change.
+accepts prompts and `@path` attachments. Two rows sit under the composer. The
+first names the directory, model, context, and approval mode. The second names
+the keys for the current focus. Tab leaves the composer for the transcript.
+Up and Down select a block, Left and Right fold a tool run or thought, Enter
+opens it, and Alt+Q quotes it into the composer. Questions and approvals sit
+above the composer. Esc parks a choice there; a second Esc cancels it. On
+macOS, a non-empty draft shows Shift+Enter and Ctrl+J for a newline. Alt+Enter
+still queues the draft. Use the help menu for the rest of the keys.
+
+Sentence punctuation after an attachment is accepted: `Inspect @notes.md.` and
+`Check @notes.md#2.` resolve the file and line normally. If a real filename
+includes that trailing punctuation, the exact filename takes precedence.
 
 Agent work can use authorized tools. Ask and Plan provide narrower workflows;
 `--mode ask` and `--plan` select those launch modes. Plan review supports a durable
@@ -18,6 +26,65 @@ slash paths are accepted as prompt text when they do not match a real command.
 Cancellation, transport errors, and partial output are preserved rather than
 silently treated as a successful task. Inspect `/errors` for bounded local
 failure details. See the detailed engineering index for exact recovery contracts.
+
+Every new interactive task opens a local filter preview before a provider is
+contacted. **Private values** is selected initially: it masks discovered
+filenames, URL hosts, supported source data, and your saved selections.
+**Private values + suggestions** also selects editable phrase and identifier
+suggestions. The coverage note explains what remains readable.
+
+Use **P** to switch presets, **1–4** for Rules, Original, Provider copy and
+Changes, arrows/Space to select rules, and **A/E** to add or edit a term.
+**R** remembers the selected choices for this project; otherwise edits belong
+to this task. **Esc** restores the task without sending it. **Enter — Send and
+run** commits the selected filters and sends once. An existing stop rule keeps
+Send unavailable and explains the match without tripping the process merely
+because you opened a preview.
+
+After Send, ordinary Agent work prepares a task map and starts it automatically.
+The Send action authorizes automatic execution of this task; it is not recorded
+as manual review of the generated plan. Existing action permissions, grants,
+budgets and completion checks still apply. Explicit Plan mode keeps its plan
+review, and restored work remains paused. Active steering and tool continuations
+reuse the accepted task settings without another preview.
+
+The proposed graph explicitly declares each task's tools, paths, commands and
+completion evidence. Review those grants before starting. Planner and worker
+requests use the selected route's supported reasoning effort; another configured
+route uses its own supported default.
+
+Task-map workers share a fixed **100,000 total-token ceiling**, shown in review.
+Input and output count cumulatively, including repeated history. CA records known
+usage even if an already-running response crosses a limit, then stops further
+requests. Request, time and cost limits still apply.
+
+CA checks that the proposed graph can be configured before presenting it. Invalid
+structured output or execution policy gets one correction turn; another invalid
+result stops planning. Handoff names use lowercase letters, digits and underscores.
+Task paths cover workspace files; external executables/profiles belong only in
+the command grant. This preflight does not execute tasks or approve the plan.
+
+Once started, independent tasks run within the configured concurrency limits;
+shared-workspace writers are ordered. The compact live map connects numbered,
+colored task labels to progress and output. **Ctrl+X, then T** collapses or
+expands it. `/tasks` opens the full map; select a task and press Enter for live
+output, then Esc to return. A failed task blocks its dependents while unrelated
+work continues. Retry remains explicit; restored work stays paused.
+Tasks with a declared human-review gate need an explicit review through `/tasks`
+before dependents can continue. Other artifact and command checks must also pass.
+
+`/filter` opens the current task's filtering mode and latest provider-copy
+comparison. It follows new requests while work is pending. Press **G** for the
+advanced controls: Files, Rules, Preview and Settings. **Save project rules**
+applies at the next request; legacy profile settings still save for the next
+launch. `/filter off` skips that review for this ca, and `/filter on` brings it
+back. `/filter guide`, `/filter report`, and `/filter continue` remain available.
+A stop filter that is already armed stays until restart.
+
+A normal message is a chat turn. `[agent] automatic_task_breakdown = true`
+prepares a task plan after the filter preview. Ask remains read-only.
+Noninteractive commands retain their existing entry paths and do not open the
+interactive preview.
 
 ## Teams and final review
 
@@ -161,9 +228,27 @@ and budget. `ca learn service refresh` previews a digest-bound repair of stale
 enrollment/profile/binary/service bindings with recovery copies; apply its exact
 current confirmation digest only after reviewing the preview.
 
+Published lessons become useful through on-demand retrieval. `memory_search`
+reads fresh native memory stores: its default `current_project` scope combines
+the current project's matching records with matching global lessons; `global`
+searches only global lessons. `skill_search` refreshes published skill metadata
+and exact enabled generations, then the agent can activate or view an exact
+relevant skill. These searches do not preload stored memory or the full skill
+catalog into ordinary requests. Their availability follows the run's tool policy.
+
+Learning distinguishes project instructions from cross-project intent. A local
+statement such as “I prefer this project's formatter” does not by itself
+authorize a global preference. Say “across projects” or “for all projects” when
+that is your intent; only authored user text supplies that explicit authority.
+Existing corroborated evidence from multiple workspaces can also support a
+global lesson. Stored scopes, publication review and previous records remain
+intact. See [configuration](CONFIGURATION.md#context-and-on-demand-knowledge)
+for retrieval limits and scope settings.
+
 The Default theme uses charcoal panels, shaded user prompts, readable gray
 activity text, purple agent identities and green completion markers. Other
-themes remain selectable in UI settings.
+themes remain selectable in UI settings. Terminal leaves the background
+unpainted and keeps ANSI accents. `NO_COLOR` still selects Mono.
 
 ## Sessions and dashboard
 
@@ -185,6 +270,24 @@ portable export without importing it into saved storage, use
 `--conversation-history-file FILE` with a bounded `ca.session-export.v1` file.
 The dashboard shows active and saved-session information; observing another
 session does not grant authority to modify it.
+
+The existing `ca.native-history.v1` envelope also accepts supported provider-native
+history on its matching provider, protocol and model. To prepare a saved Codex
+rollout without converting encrypted state into ordinary prompt text:
+
+```sh
+python3 tools/prepare_native_history.py /absolute/rollout.jsonl /absolute/history.json
+ca --conversation-history-file /absolute/history.json
+```
+
+The helper creates new files and makes no provider calls. Native reasoning stays
+native; unsupported client records remain labelled data, with opaque values
+represented by size/hash receipts. The `.records.json` sidecar retains the
+complete selected original records, and `.ledger.json` records transformations.
+The `.visible.json` projection supports disposable persistent test sessions.
+Missing compaction replacement history or unresolved tool calls fail preparation.
+This preserves recorded context without claiming an identical historical
+Desktop request or granting authority to historical commands.
 
 ## Headless use
 
@@ -225,6 +328,11 @@ Skills, MCP, LSP, hooks, plugins, and managed local runtimes are optional.
 validated plugin for this process. Shell integration is available through
 `ca shell-integration zsh` and explicit install/uninstall commands.
 
+Use `/skills` to inspect the catalog explicitly. When available, the agent uses
+`skill_search` for bounded matching metadata and `activate_skill` or `skill_view`
+for exact instructions or files. Active skills and explicit skill requests stay
+in context; discovery alone does not activate them.
+
 ## Service and editor integration
 
 `ca serve --stdio` exposes the versioned JSONL service. A loopback service and
@@ -236,6 +344,16 @@ connection does not establish permission to execute arbitrary work. See
 ## Context reduction, formatting and service input
 
 CA automatically omits eligible older tool-result bodies from model requests while retaining complete canonical history. `/context` reports how many results were omitted and the estimated token savings. Use session search or recall when older evidence is needed. Disable this with `[context_pruning] enabled = false`.
+
+Task-map workers additionally omit older, already-seen successful file/search
+results when needed to fit their remaining shared budget. The latest tool batch,
+errors, skill content and command results remain protected. Original worker
+history stays intact; omitted evidence can be read again using its original call
+arguments. Explicitly disabling context pruning also disables this reduction.
+
+`session_search` starts within the current project. Searching, browsing or reading
+another project's historical session requires explicit `scope = "all_projects"`;
+an exact session reference alone does not widen that scope.
 
 Optional formatter presets and custom commands transform native edit candidates before approval, recovery publication and LSP diagnostics. Enable them in configuration and authorize the formatter command policy. Formatter failures remain visible and keep the requested unformatted edit.
 

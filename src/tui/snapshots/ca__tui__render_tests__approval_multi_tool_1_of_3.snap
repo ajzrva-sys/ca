@@ -2,16 +2,10 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
  › Edit multiple files
 
 
-  Approve tool [1/3] — write_file
-    Reason: workspace write · [g] this file for this run
-    {"path":"src/foo.rs"}
-  [y] run  [n] deny  [e] edit  [s] all uses of this tool  [g] allow exact for run  [p] always allow
-exact path  [x] always deny  [a] yolo
 
 
 
@@ -25,25 +19,24 @@ exact path  [x] always deny  [a] yolo
 
 
 
-
-
-
+┌ Approval ────────────────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                  │
+│  Approve tool [1/3] — write_file                                                                 │
+│    Reason: workspace write · [g] this file for this run                                          │
+│    {"path":"src/foo.rs"}                                                                         │
+│  [y] run  [n] deny                                                                               │
+│  [e] edit  [s] tool always  [g] this run  [p] path always  [x] always deny  [a] yolo             │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                                                                   │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
-1 messages · / commands
+│› Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto · 1 messages
+[y] run · [n] deny · [e] edit
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
 
  › Edit multiple files
 
 
-  Approve tool [1/3] — write_file
-    Reason: workspace write · [g] this file for this run
-    {"path":"src/foo.rs"}
-  [y] run  [n] deny  [e] edit  [s] all uses of this tool
-[g] allow exact for run  [p] always allow exact path  [x]
-always deny  [a] yolo
 
 
 
@@ -51,9 +44,16 @@ always deny  [a] yolo
 
 
 
-
-
+┌ Approval ────────────────────────────────────────────────┐
+│                                                          │
+│  Approve tool [1/3] — write_file                         │
+│    Reason: workspace write · [g] this file for this run  │
+│    {"path":"src/foo.rs"}                                 │
+│  [y] run  [n] deny                                       │
+│  [e] edit  [s] tool always  [g] this run  [p] path always│
+└──────────────────────────────────────────────────────────┘
 ╭──────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                           │
-╰──────────────────────────────────────────── agent · auto ╯
-1 messages · / commands
+│› Ask anything…                                           │
+╰──────────────────────────────────────────────────────────╯
+ca · model auto · 1 messages
+[y] run · [n] deny · [e] edit

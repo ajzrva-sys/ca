@@ -1,3 +1,5 @@
+Do not start this plan unless the task names it. The continuation is [AGT-271](AGT-271-task-first-economic-delegation.md).
+
 # Implementation Plan: `install_binary` Tool for ca
 
 ## Problem Statement

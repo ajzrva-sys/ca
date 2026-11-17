@@ -2,9 +2,8 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&complete, 100, 30),\nrender_to_text(&complete, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
-* Full saved history · 4 messages
 
+ › saved history message 0
 
  › saved history message 0
 
@@ -29,13 +28,13 @@ saved history message 3
 
 
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                                                                   │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
-4 messages · / commands
+│› Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto · 4 messages
+/ commands · Ctrl+\ dashboard · ↑ history
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
-* Full saved history · 4 messages
 
+ › saved history message 0
 
  › saved history message 0
 
@@ -54,6 +53,7 @@ saved history message 3
 
 
 ╭──────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                           │
-╰──────────────────────────────────────────── agent · auto ╯
-4 messages · / commands
+│› Ask anything…                                           │
+╰──────────────────────────────────────────────────────────╯
+ca · model auto · 4 messages
+/ commands · Ctrl+\ dashboard · ↑ history

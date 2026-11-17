@@ -247,6 +247,24 @@ impl WorktreeStore {
         ensure_generated_target(&self.root, &target)?;
         let branch = format!("ca/{label}-{}", &id.simple().to_string()[..8]);
         let target_text = target.to_string_lossy().into_owned();
+        // macOS registers the worktree without Git's checkout, then clones the
+        // source tree. Other platforms keep Git's checkout.
+        #[cfg(target_os = "macos")]
+        let add = run_git(
+            &repository_root,
+            &[
+                "worktree",
+                "add",
+                "--no-checkout",
+                "-b",
+                &branch,
+                &target_text,
+                &base_commit,
+            ],
+            64 * 1024,
+        )
+        .await;
+        #[cfg(not(target_os = "macos"))]
         let add = run_git(
             &repository_root,
             &["worktree", "add", "-b", &branch, &target_text, &base_commit],
@@ -262,6 +280,33 @@ impl WorktreeStore {
             }
             let _ = std::fs::remove_dir(&parent);
             return Err(error);
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let source_root = repository_root.clone();
+            let copy_target = target.clone();
+            let populated = tokio::task::spawn_blocking(move || {
+                populate_worktree_tree(&source_root, &copy_target)
+            })
+            .await
+            .map_err(|error| WorktreeError::CreatedButUnregistered {
+                path: target.clone(),
+                reason: error.to_string(),
+            })?;
+            if let Err(error) = populated {
+                return Err(WorktreeError::CreatedButUnregistered {
+                    path: target,
+                    reason: error.to_string(),
+                });
+            }
+            // `--no-checkout` leaves no index, so status would show every file
+            // deleted. Point the index at HEAD without rewriting cloned files.
+            if let Err(error) = run_git(&target, &["read-tree", "HEAD"], 64 * 1024).await {
+                return Err(WorktreeError::CreatedButUnregistered {
+                    path: target,
+                    reason: error.to_string(),
+                });
+            }
         }
         let path = canonical_regular_directory(&target).map_err(|error| {
             WorktreeError::CreatedButUnregistered {
@@ -875,6 +920,104 @@ fn is_full_oid(value: &str) -> bool {
     value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+/// Copy `source_root` onto an existing worktree directory.
+///
+/// The source `.git` entry is left alone so a linked worktree keeps the
+/// gitdir file `git worktree add` already wrote. On macOS each file (and
+/// each directory, as one call) is `clonefile` with flags 0, which clones
+/// file data; failure falls back to [`std::fs::copy`]. Symlinks are recreated
+/// because flags 0 follows them.
+fn populate_worktree_tree(source_root: &Path, target: &Path) -> Result<(), std::io::Error> {
+    std::fs::create_dir_all(target)?;
+    copy_worktree_entries(source_root, target, true)
+}
+
+fn copy_worktree_entries(
+    source: &Path,
+    destination: &Path,
+    skip_git: bool,
+) -> Result<(), std::io::Error> {
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if skip_git && name == ".git" {
+            continue;
+        }
+        let from = entry.path();
+        let to = destination.join(name);
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            copy_worktree_symlink(&from, &to)?;
+        } else if file_type.is_dir() {
+            if !clone_worktree_path(&from, &to) {
+                std::fs::create_dir(&to)?;
+                copy_worktree_entries(&from, &to, false)?;
+            }
+        } else if file_type.is_file() {
+            clone_or_copy_worktree_file(&from, &to)?;
+        } else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                format!(
+                    "unsupported file in worktree population: {}",
+                    from.display()
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn clone_or_copy_worktree_file(source: &Path, destination: &Path) -> Result<(), std::io::Error> {
+    if clone_worktree_path(source, destination) {
+        return Ok(());
+    }
+    std::fs::copy(source, destination).map(|_| ())
+}
+
+fn clone_worktree_path(source: &Path, destination: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        unsafe extern "C" {
+            fn clonefile(
+                source: *const std::ffi::c_char,
+                destination: *const std::ffi::c_char,
+                flags: i32,
+            ) -> i32;
+        }
+        let Ok(source) = std::ffi::CString::new(source.as_os_str().as_bytes()) else {
+            return false;
+        };
+        let Ok(destination) = std::ffi::CString::new(destination.as_os_str().as_bytes()) else {
+            return false;
+        };
+        // flags 0 clones file contents. 1 is CLONE_NOFOLLOW.
+        unsafe { clonefile(source.as_ptr(), destination.as_ptr(), 0) == 0 }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (source, destination);
+        false
+    }
+}
+
+fn copy_worktree_symlink(source: &Path, destination: &Path) -> Result<(), std::io::Error> {
+    let link = std::fs::read_link(source)?;
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(link, destination)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (link, destination);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "worktree symlinks are unsupported on this platform",
+        ))
+    }
+}
+
 fn parse_untracked_names(porcelain: &[u8]) -> Vec<String> {
     porcelain
         .split(|byte| *byte == 0)
@@ -1045,6 +1188,57 @@ mod tests {
     }
 
     #[test]
+    fn populate_worktree_tree_copies_bytes_without_aliasing_the_source() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let target = temp.path().join("target");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(source.join("one.txt"), b"alpha").unwrap();
+        std::fs::create_dir(source.join("nested")).unwrap();
+        std::fs::write(source.join("nested").join("two.txt"), b"beta").unwrap();
+        std::fs::create_dir(source.join(".git")).unwrap();
+        std::fs::write(source.join(".git").join("HEAD"), b"ref: refs/heads/main\n").unwrap();
+        std::fs::write(target.join(".git"), b"gitdir: preserved\n").unwrap();
+
+        populate_worktree_tree(&source, &target).unwrap();
+
+        assert_eq!(std::fs::read(target.join("one.txt")).unwrap(), b"alpha");
+        assert_eq!(
+            std::fs::read(target.join("nested").join("two.txt")).unwrap(),
+            b"beta"
+        );
+        assert_eq!(
+            std::fs::read(target.join(".git")).unwrap(),
+            b"gitdir: preserved\n"
+        );
+        assert!(!target.join(".git").join("HEAD").exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            assert_ne!(
+                std::fs::metadata(source.join("one.txt")).unwrap().ino(),
+                std::fs::metadata(target.join("one.txt")).unwrap().ino()
+            );
+            assert_ne!(
+                std::fs::metadata(source.join("nested").join("two.txt"))
+                    .unwrap()
+                    .ino(),
+                std::fs::metadata(target.join("nested").join("two.txt"))
+                    .unwrap()
+                    .ino()
+            );
+        }
+        std::fs::write(target.join("one.txt"), b"changed").unwrap();
+        std::fs::write(target.join("nested").join("two.txt"), b"changed").unwrap();
+        assert_eq!(std::fs::read(source.join("one.txt")).unwrap(), b"alpha");
+        assert_eq!(
+            std::fs::read(source.join("nested").join("two.txt")).unwrap(),
+            b"beta"
+        );
+    }
+
+    #[test]
     fn validates_labels_bases_and_bounds_text_at_utf8_boundaries() {
         assert!(validate_label("task_1").is_ok());
         assert!(validate_label("Task").is_err());
@@ -1067,6 +1261,10 @@ mod tests {
             .await
             .unwrap();
         assert!(record.path.is_dir());
+        assert_eq!(
+            std::fs::read(record.path.join("tracked.txt")).unwrap(),
+            b"base\n"
+        );
         assert_eq!(
             store.records().unwrap().as_slice(),
             std::slice::from_ref(&record)

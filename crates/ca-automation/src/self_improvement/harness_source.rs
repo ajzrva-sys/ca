@@ -312,6 +312,7 @@ mod tests {
             cycle.candidate_digest = Some("f".repeat(64));
             cycle.candidate_commit = Some(candidate.clone());
             cycle.engineering_checks_passed = true;
+            cycle.confirmation_accepted = true;
             cycle.stage = HarnessStage::Evaluating;
             for case in &plan.cases {
                 for repetition in 0..3 {

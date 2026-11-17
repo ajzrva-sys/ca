@@ -1946,22 +1946,7 @@ async fn run_turn(
         .collect::<HashSet<_>>();
     let mut loop_guard = crate::loop_guard::LoopGuard::default();
     let mut loop_guard_replan_prompt = None;
-    let _ = tokio::time::timeout(
-        std::time::Duration::from_secs(90),
-        run.memory_recall.prepare_local_hybrid(),
-    )
-    .await;
-    let memory_prompt = run
-        .memory_recall
-        .render_for_query_async(
-            messages
-                .iter()
-                .rev()
-                .find(|message| message.role == "user")
-                .and_then(|message| message.content.as_str())
-                .unwrap_or(""),
-        )
-        .await;
+    let memory_prompt = run.memory_recall.search_guidance();
 
     let mut step = 0;
     loop {
@@ -2056,14 +2041,15 @@ async fn run_turn(
                 response_items: Vec::new(),
             });
         }
-        let mut logical_turn_prompt = run.task_skill_prompt.clone();
-        logical_turn_prompt.push_str(&memory_prompt);
-        if !logical_turn_prompt.is_empty() {
+        if !run.task_skill_prompt.is_empty() || !memory_prompt.is_empty() {
             request_messages.insert(
                 stable_prefix_messages,
                 ChatMessage {
                     role: "system".into(),
-                    content: crate::image_content::ModelContent::text(logical_turn_prompt),
+                    content: crate::image_content::ModelContent::text(format!(
+                        "{}{}",
+                        run.task_skill_prompt, memory_prompt
+                    )),
                     tool_calls: None,
                     tool_call_id: None,
                     response_items: Vec::new(),
@@ -2165,7 +2151,8 @@ async fn run_turn(
             let safe_message = bounded_safe_text(&turn.content, &run.redaction_refs());
             messages.push(ChatMessage {
                 role: "assistant".into(),
-                content: crate::image_content::ModelContent::text(turn.content),
+                content: crate::image_content::ModelContent::text(turn.content)
+                    .with_retrieved_spans(turn.retrieved_spans),
                 tool_calls: None,
                 tool_call_id: None,
                 response_items: turn.response_items,
@@ -2416,6 +2403,9 @@ async fn run_turn(
                 completed_images.insert(call.id.clone(), image.clone());
             }
             completed_calls.push(ToolCall {
+                observation: None,
+                output_source: execution.source_for(execution.model_text()),
+                arguments_retrieved_spans: call.arguments_retrieved_spans.clone(),
                 id: call.id.clone(),
                 name: call.name.clone(),
                 arguments: call.arguments.clone(),
@@ -2428,10 +2418,12 @@ async fn run_turn(
                     &execution,
                     run.command_output_policy,
                 )),
+                started_at: None,
             });
             run.discovery.touch(&call.name);
         }
         let message = Message {
+            retrieved_spans: Some(turn.retrieved_spans),
             role: Role::Assistant,
             content: turn.content,
             tool_calls: Some(completed_calls),
@@ -3157,6 +3149,7 @@ fn provider_failure(error: &ProviderError) -> (i32, HeadlessFailureKind) {
 fn result_status(result: &ToolExecutionResult) -> ToolResultStatus {
     match result {
         ToolExecutionResult::Success(_)
+        | ToolExecutionResult::SourceSuccess { .. }
         | ToolExecutionResult::Command { success: true, .. }
         | ToolExecutionResult::SuccessMutation { .. }
         | ToolExecutionResult::SuccessImage { .. }
@@ -3305,6 +3298,12 @@ impl ProductionFactory {
         .map_err(|error| bounded_safe_text(&error.to_string(), &[]))?;
         crate::plugin::compose_enabled(&paths, &self.active_profile, &mut config)
             .map_err(|error| bounded_safe_text(&error.to_string(), &[]))?;
+        crate::memory::configure_search_process(
+            paths.clone(),
+            self.active_profile.clone(),
+            config.memory.user.recall,
+            config.memory.workspace.recall,
+        );
         if let Some(hub) = crate::provider_trace::process_hub() {
             hub.add_configured_secrets(
                 config
@@ -3473,6 +3472,7 @@ impl ProductionFactory {
             )
         };
         let lsp_enabled = capabilities.lsp && lsp.is_some();
+        let coding_schema = crate::git_status::head_readable(std::path::Path::new(&cwd));
         Ok(ServiceSession {
             id: session_id,
             provider: provider_id.clone(),
@@ -3531,6 +3531,8 @@ impl ProductionFactory {
                     memory_generation_enabled: false,
                     automation_proposals_enabled: false,
                     email_enabled: capabilities.email && config.email.enabled,
+                    browser_enabled: capabilities.browser,
+                    coding_schema,
                     allowed_names: None,
                 },
                 tool_profile: ToolProfile::Main,
@@ -4718,6 +4720,8 @@ mod tests {
                         memory_generation_enabled: false,
                         automation_proposals_enabled: false,
                         email_enabled: false,
+                        browser_enabled: false,
+                        coding_schema: false,
                         allowed_names: None,
                     },
                     tool_profile: ToolProfile::Main,
@@ -5046,7 +5050,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn service_reselects_recalled_memory_for_each_user_request() {
+    async fn service_defers_memory_to_explicit_search_for_each_user_request() {
         let root = tempfile::tempdir().unwrap();
         let provider = crate::memory::MemoryRecord::new(
             crate::memory::MemoryScope::Workspace,
@@ -5116,12 +5120,44 @@ mod tests {
                 .and_then(|message| message.content.as_str())
                 .expect("recalled memory is a logical-turn segment after the cache boundary")
         }
-        let first_memory = logical_turn(&requests[0]);
-        assert!(first_memory.contains("hermetic loopback transport"));
-        assert!(!first_memory.contains("garden irrigation"));
-        let second_memory = logical_turn(&requests[1]);
-        assert!(second_memory.contains("garden irrigation"));
-        assert!(!second_memory.contains("hermetic loopback transport"));
+        for request in &requests {
+            let guidance = logical_turn(request);
+            assert!(guidance.contains("memory_search"));
+            let body = serde_json::to_string(&request.messages).unwrap();
+            assert!(!body.contains("hermetic loopback transport"));
+            assert!(!body.contains("garden irrigation"));
+        }
+        let filter = crate::provider_filter::ProviderFilter::compile(
+            &crate::provider_filter::ProviderFilterConfig {
+                enabled: true,
+                page_stand_in: crate::provider_filter::PageStandIn::Latin,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let recalled = requests[0]
+            .messages
+            .iter()
+            .skip(1)
+            .find(|message| message.role == "system")
+            .unwrap()
+            .content
+            .project_retrieved(&filter)
+            .unwrap();
+        assert!(recalled.as_str().unwrap().contains("memory_search"));
+        assert!(!recalled
+            .as_str()
+            .unwrap()
+            .contains("hermetic loopback transport"));
+        let prompt = requests[0]
+            .messages
+            .iter()
+            .find(|message| message.role == "user")
+            .unwrap()
+            .content
+            .project_retrieved(&filter)
+            .unwrap();
+        assert_eq!(prompt.as_str(), Some("debug the provider loopback retry"));
     }
 
     #[tokio::test]

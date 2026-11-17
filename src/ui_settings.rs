@@ -21,16 +21,19 @@ pub enum UiTheme {
     Mimocode,
     Mono,
     RosePine,
+    /// No filled background. Body text and borders use the terminal default.
+    Terminal,
 }
 
 impl UiTheme {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Default,
         Self::Ocean,
         Self::Amber,
         Self::Mimocode,
         Self::Mono,
         Self::RosePine,
+        Self::Terminal,
     ];
 
     pub const fn label(self) -> &'static str {
@@ -41,6 +44,7 @@ impl UiTheme {
             Self::Mimocode => "Mimocode",
             Self::Mono => "Mono",
             Self::RosePine => "Rose Pine",
+            Self::Terminal => "Terminal",
         }
     }
 
@@ -52,6 +56,7 @@ impl UiTheme {
             Self::Mimocode => "mimocode",
             Self::Mono => "mono",
             Self::RosePine => "rose-pine",
+            Self::Terminal => "terminal",
         }
     }
 }
@@ -297,6 +302,40 @@ pub enum BulletStyle {
 }
 
 impl BulletStyle {
+    pub const ALL: [Self; 7] = [
+        Self::Diamond,
+        Self::Dot,
+        Self::SmallCircle,
+        Self::Circle,
+        Self::SmallTriangle,
+        Self::Triangle,
+        Self::None,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Diamond => "Diamond",
+            Self::Dot => "Dot",
+            Self::SmallCircle => "Small circle",
+            Self::Circle => "Circle",
+            Self::SmallTriangle => "Small triangle",
+            Self::Triangle => "Triangle",
+            Self::None => "None",
+        }
+    }
+
+    pub const fn config_value(self) -> &'static str {
+        match self {
+            Self::Diamond => "diamond",
+            Self::Dot => "dot",
+            Self::SmallCircle => "smallcircle",
+            Self::Circle => "circle",
+            Self::SmallTriangle => "smalltriangle",
+            Self::Triangle => "triangle",
+            Self::None => "none",
+        }
+    }
+
     pub const fn glyph(self) -> &'static str {
         match self {
             Self::Diamond => "◆",
@@ -412,7 +451,7 @@ impl Default for ScrollbarConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UiConfig {
     #[serde(default)]
     pub theme: UiTheme,
@@ -430,6 +469,15 @@ pub struct UiConfig {
     pub animation: AnimationConfig,
     #[serde(default)]
     pub compact_mode: bool,
+    /// Pre-send task review. Off sends the next message without that review.
+    #[serde(default)]
+    pub filter_preview: bool,
+    #[serde(default)]
+    pub line_numbers: bool,
+    #[serde(default)]
+    pub show_thinking: bool,
+    #[serde(default)]
+    pub vim_mode: bool,
     #[serde(default)]
     pub blocks: BlockStyleConfig,
     #[serde(default)]
@@ -438,6 +486,33 @@ pub struct UiConfig {
     pub auto_light_theme: Option<UiTheme>,
     #[serde(default)]
     pub scrollbar: ScrollbarConfig,
+    /// Notes beside each settings row. On keeps the note on that row.
+    #[serde(default = "default_true")]
+    pub setting_descriptions: bool,
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self {
+            theme: UiTheme::default(),
+            notification: NotificationStyle::default(),
+            status_indicators: false,
+            mouse: MouseMode::default(),
+            statusline: StatuslineConfig::default(),
+            transcript: TranscriptConfig::default(),
+            animation: AnimationConfig::default(),
+            compact_mode: false,
+            filter_preview: false,
+            line_numbers: false,
+            show_thinking: false,
+            vim_mode: false,
+            blocks: BlockStyleConfig::default(),
+            auto_dark_theme: None,
+            auto_light_theme: None,
+            scrollbar: ScrollbarConfig::default(),
+            setting_descriptions: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -576,6 +651,8 @@ impl StatusCommandRunner {
                     read_only_roots: Vec::new(),
                     temporary_directory: temporary_directory.clone(),
                     network_allowed: false,
+                    host_credentials: true,
+                    proxy_port: None,
                     hide_other_processes: false,
                 },
             )
@@ -754,6 +831,15 @@ mod tests {
         assert_eq!(config.theme, UiTheme::Default);
         assert_eq!(config.notification, NotificationStyle::Off);
         assert!(!config.status_indicators);
+        assert!(!config.filter_preview);
+        assert!(!config.line_numbers);
+        assert!(!config.show_thinking);
+        assert!(!config.vim_mode);
+        assert!(config.setting_descriptions);
+        let missing: UiConfig = toml::from_str("").unwrap();
+        assert!(missing.setting_descriptions);
+        let hidden: UiConfig = toml::from_str("setting_descriptions = false").unwrap();
+        assert!(!hidden.setting_descriptions);
         assert_eq!(config.mouse, MouseMode::Scroll);
         assert_eq!(config.statusline.fields, default_status_fields());
         assert!(!config.statusline.custom_enabled);
@@ -854,9 +940,11 @@ fields = ["generation_speed", "sitting_cost"]
             fake,
         );
         let runner = StatusCommandRunner::with_backend(backend, true);
+        let payload = [b"ready\n".as_slice(), &[b'x'; 5000]].concat();
+        std::fs::write(temp.path().join("output"), &payload).unwrap();
         let result = runner
             .run(
-                "printf 'ready\\n'; i=0; while [ $i -lt 5000 ]; do printf x; i=$((i+1)); done",
+                "cat \"$CA_PROJECT_DIR/output\"",
                 temp.path(),
                 &[temp.path().to_path_buf()],
             )
@@ -865,6 +953,10 @@ fields = ["generation_speed", "sitting_cost"]
         assert!(result.truncated);
         assert!(result.text.starts_with("ready "));
         assert!(result.text.contains("bytes omitted"));
+        assert!(result.text.contains(&format!(
+            "{} bytes omitted",
+            payload.len() - STATUS_COMMAND_CONTENT_BYTES
+        )));
         assert!(result.text.len() <= STATUS_COMMAND_OUTPUT_BYTES);
     }
 

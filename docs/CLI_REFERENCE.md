@@ -1,5 +1,10 @@
 # CLI reference
 
+The interactive personality questionnaire added on 2026-10-07 opens with
+`ca personality` or `/personality` inside CA. For audit commands, run
+`ca harness questionnaire --help`; see the
+[personality and continuous-learning guide](HARNESS_QUESTIONNAIRE.md).
+
 Captured from the signed all-feature release build on 2026-10-06.
 Run `ca --help` for the installed version and `ca COMMAND --help` for each
 command family. This page is generated help, not a substitute for the usage guides.
@@ -140,6 +145,7 @@ Commands:
   skill <COMMAND>                     Inspect and manage portable Agent Skills
   learn <COMMAND>                     Operate continuous local Dream/Distill learning
   audit                               Audit the local agent harness without execution
+  session export-review               Export sessions and recovery state for review
   support-bundle                      Create a private metadata-only support archive
   config explain [SELECTOR]           Explain setting origins without showing values
   import setup claude                 Preview/apply inert Claude setup assets
@@ -397,6 +403,26 @@ Options:
       --profile <NAME>  Select the active profile whose configured harness surfaces are audited
   -h, --help            Print help
 ```
+
+### `ca session export-review`
+
+```text
+Export sessions and recovery state into a titled review pack
+
+Usage: ca session export-review [OPTIONS] --output <DIR>
+
+Options:
+  -o, --output <DIR>      Destination directory for the review pack
+      --session <ID>      Export only this session (storage key, UUID, or public id; repeatable)
+      --include-archived  Include archived sessions
+      --overwrite         Replace a non-empty output directory
+      --limit <N>         Limit how many sessions are exported (most recently updated first)
+      --json              Print machine-readable result JSON
+  -h, --help              Print help
+```
+
+Titling reads only session metadata. Turn transcripts and recovery blobs are
+copied as opaque bytes and never parsed.
 
 ### `ca support-bundle`
 

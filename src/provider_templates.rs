@@ -1,7 +1,7 @@
 //! Audited provider-template catalog for the provider setup UI.
 //!
-//! The entries mirror the 40 rows in the Hermes Agent provider page as of
-//! 2026-08-12.  A row is actionable only when its authentication and wire
+//! The entries started as the 40 rows in the Hermes Agent provider page as of
+//! 2026-08-12, plus CA's ChatGPT plan (SIWC) row.  A row is actionable only when its authentication and wire
 //! format fit one of ca's existing provider adapters.  Keeping unsupported
 //! integrations in the catalog makes the boundary visible without pretending
 //! that a bearer token can stand in for OAuth, cloud SDK signing, or a
@@ -172,11 +172,22 @@ pub const ALL: &[ProviderTemplate] = &[
     template!(
         "openai-codex",
         "OpenAI Codex",
-        ["chatgpt", "codex oauth"],
+        ["codex oauth"],
         "openai-codex",
         Some("https://chatgpt.com/backend-api/codex"),
         None,
         Some("gpt-5.6-sol"),
+        Some(ProviderProtocol::OpenAiResponses),
+        Availability::Ready(AdapterCompatibility::OpenAiResponsesBearerOrNone)
+    ),
+    template!(
+        "openai-chatgpt",
+        "ChatGPT plan",
+        ["chatgpt", "chatgpt plan", "siwc"],
+        "openai-chatgpt",
+        Some("https://api.openai.com/v1"),
+        None,
+        Some("gpt-6.1-sol"),
         Some(ProviderProtocol::OpenAiResponses),
         Availability::Ready(AdapterCompatibility::OpenAiResponsesBearerOrNone)
     ),
@@ -352,9 +363,9 @@ pub const ALL: &[ProviderTemplate] = &[
         "xai",
         Some("https://api.x.ai/v1"),
         Some("XAI_API_KEY"),
-        Some("grok-build-0.1"),
+        Some("grok-4.7"),
         Some(ProviderProtocol::OpenAiResponses),
-        Availability::RequiresCustomTransport
+        RESPONSES
     ),
     template!(
         "xai-oauth",
@@ -363,9 +374,9 @@ pub const ALL: &[ProviderTemplate] = &[
         "xai-oauth",
         Some("https://api.x.ai/v1"),
         None,
-        Some("grok-build-0.1"),
+        Some("grok-4.7"),
         Some(ProviderProtocol::OpenAiResponses),
-        Availability::RequiresOAuth
+        RESPONSES
     ),
     template!(
         "alibaba",
@@ -614,6 +625,7 @@ mod tests {
         let expected: HashSet<_> = [
             "nous-portal",
             "openai-codex",
+            "openai-chatgpt",
             "github-copilot",
             "github-copilot-acp",
             "anthropic",
@@ -655,11 +667,24 @@ mod tests {
         ]
         .into_iter()
         .collect();
-        assert_eq!(ALL.len(), 40);
+        assert_eq!(ALL.len(), 41);
         let ids: HashSet<_> = ALL.iter().map(|template| template.id).collect();
         assert_eq!(ids, expected);
         assert!(ALL.iter().all(|template| valid_slug(template.id)));
         assert!(ALL.iter().all(|template| valid_slug(template.provider_id)));
+    }
+
+    #[test]
+    fn chatgpt_alias_selects_plan_provider_not_codex() {
+        let chatgpt = ALL
+            .iter()
+            .find(|t| t.search_aliases.contains(&"chatgpt"))
+            .unwrap();
+        assert_eq!(chatgpt.id, "openai-chatgpt");
+        assert_eq!(chatgpt.provider_id, "openai-chatgpt");
+        let codex = ALL.iter().find(|t| t.id == "openai-codex").unwrap();
+        assert!(codex.search_aliases.contains(&"codex oauth"));
+        assert!(!codex.search_aliases.contains(&"chatgpt"));
     }
 
     #[test]
@@ -687,8 +712,8 @@ mod tests {
             .iter()
             .filter(|template| template.is_installable())
             .collect();
-        assert_eq!(ready.len(), 17);
-        assert_eq!(installable.len(), 17);
+        assert_eq!(ready.len(), 20);
+        assert_eq!(installable.len(), 20);
         assert_eq!(
             installable
                 .iter()
@@ -701,7 +726,7 @@ mod tests {
                 .iter()
                 .filter(|template| template.availability == RESPONSES)
                 .count(),
-            4
+            7
         );
         assert_eq!(
             installable
@@ -787,6 +812,19 @@ mod tests {
         assert_eq!(get("deepseek").unwrap().availability, CHAT);
         assert_eq!(get("xiaomi").unwrap().availability, RESPONSES);
         assert_eq!(get("openai-api").unwrap().availability, RESPONSES);
+        let xai = get("xai").unwrap();
+        assert_eq!(xai.availability, RESPONSES);
+        assert_eq!(xai.provider_id, "xai");
+        assert_eq!(xai.base_url, Some("https://api.x.ai/v1"));
+        assert_eq!(xai.api_key_env, Some("XAI_API_KEY"));
+        assert_eq!(xai.starter_model, Some("grok-4.7"));
+        assert_eq!(xai.protocol, Some(ProviderProtocol::OpenAiResponses));
+        assert!(xai.matches("grok"));
+        let oauth = get("xai-oauth").unwrap();
+        assert_eq!(oauth.availability, RESPONSES);
+        assert_eq!(oauth.provider_id, "xai-oauth");
+        assert_eq!(oauth.starter_model, Some("grok-4.7"));
+        assert!(oauth.matches("supergrok") || oauth.matches("premium+"));
         for id in [
             "fireworks",
             "novita",
@@ -794,7 +832,6 @@ mod tests {
             "zai",
             "kimi-coding-cn",
             "gmi",
-            "xai",
             "kilocode",
             "huggingface",
             "nvidia",

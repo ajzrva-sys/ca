@@ -109,14 +109,13 @@ impl LearningLedger {
         let mut events = Vec::new();
         let load_count = loads.iter().count();
         for load in loads.iter() {
-            let instance = registry
-                .inspect_instance(&load.instance_id)
-                .map_err(|error| error.to_string())?;
+            let instance = registry.inspect_instance(&load.instance_id).ok();
             events.push(skill_event(
                 now,
                 LearningEventKind::SkillInvocation,
                 "started",
                 &group_id,
+                load,
                 instance,
                 workspace_digest.clone(),
             ));
@@ -126,6 +125,7 @@ impl LearningLedger {
                     LearningEventKind::SkillCorrection,
                     "explicit_correction",
                     &group_id,
+                    load,
                     instance,
                     workspace_digest.clone(),
                 ));
@@ -178,14 +178,13 @@ impl LearningLedger {
         let load_count = loads.iter().count();
         if outcome != SkillOutcome::Failed || load_count == 1 {
             for load in loads.iter() {
-                let instance = registry
-                    .inspect_instance(&load.instance_id)
-                    .map_err(|error| error.to_string())?;
+                let instance = registry.inspect_instance(&load.instance_id).ok();
                 events.push(skill_event(
                     now,
                     kind,
                     label,
                     group_id,
+                    load,
                     instance,
                     workspace_digest.clone(),
                 ));
@@ -554,21 +553,25 @@ fn skill_event(
     kind: LearningEventKind,
     outcome: &str,
     group_id: &str,
-    instance: &crate::skills::SkillInstance,
+    load: &crate::skills::SkillLoad,
+    instance: Option<&crate::skills::SkillInstance>,
     workspace_digest: Option<String>,
 ) -> LearningEvent {
+    let name = instance
+        .map(|instance| instance.metadata.name.clone())
+        .unwrap_or_else(|| load.instance_id.clone());
     LearningEvent {
         id: event_id(&format!(
             "{kind:?}:{group_id}:{}:{}",
-            instance.instance_id, instance.content_digest
+            load.instance_id, load.content_digest
         )),
         at,
         kind,
         outcome: outcome.into(),
         group_id: Some(group_id.into()),
-        skill_instance_id: Some(instance.instance_id.clone()),
-        skill_name: Some(instance.metadata.name.clone()),
-        skill_digest: Some(instance.content_digest.clone()),
+        skill_instance_id: Some(load.instance_id.clone()),
+        skill_name: Some(name),
+        skill_digest: Some(load.content_digest.clone()),
         bundle_name: None,
         run_id: None,
         journal_id: None,
@@ -1157,6 +1160,40 @@ mod tests {
         assert!(detail.contains("Workspace: workspace"));
         let raw = fs::read_to_string(temp.path().join("journey.json")).unwrap();
         assert!(!raw.contains("Do the bounded thing"));
+        let loaded = loads.iter().next().unwrap().content_digest.clone();
+        fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: demo\ndescription: Later\n---\nChanged after the load.\n",
+        )
+        .unwrap();
+        let later = SkillRegistry::discover_portable(
+            vec![SkillDiscoveryRoot::new(
+                SkillSourceScope::Workspace,
+                temp.path().join("skills"),
+                "test",
+            )],
+            &[],
+        );
+        assert_ne!(
+            later.inspect_instance("demo").unwrap().content_digest,
+            loaded
+        );
+        ledger
+            .record_skill_outcome(
+                group.as_deref(),
+                &loads,
+                &later,
+                SkillOutcome::Completed,
+                Some("workspace".into()),
+            )
+            .unwrap();
+        let completed = ledger
+            .events()
+            .unwrap()
+            .into_iter()
+            .find(|event| event.outcome == "completed")
+            .unwrap();
+        assert_eq!(completed.skill_digest.as_deref(), Some(loaded.as_str()));
     }
 
     #[test]
@@ -1333,24 +1370,36 @@ mod tests {
             )
             .unwrap();
         let alpha_instance = registry.inspect_instance("alpha").unwrap();
+        let alpha_load = crate::skills::SkillLoad {
+            instance_id: alpha_instance.instance_id.clone(),
+            content_digest: alpha_instance.content_digest.clone(),
+            requested_resources: Vec::new(),
+        };
         ledger
             .append(vec![skill_event(
                 Utc::now() - Duration::days(100),
                 LearningEventKind::SkillCompletion,
                 "completed",
                 "old-success",
-                alpha_instance,
+                &alpha_load,
+                Some(alpha_instance),
                 None,
             )])
             .unwrap();
         let gamma_instance = registry.inspect_instance("gamma").unwrap();
+        let gamma_load = crate::skills::SkillLoad {
+            instance_id: gamma_instance.instance_id.clone(),
+            content_digest: gamma_instance.content_digest.clone(),
+            requested_resources: Vec::new(),
+        };
         ledger
             .append(vec![skill_event(
                 Utc::now() - Duration::days(100),
                 LearningEventKind::SkillCompletion,
                 "completed",
                 "old-gamma-success",
-                gamma_instance,
+                &gamma_load,
+                Some(gamma_instance),
                 None,
             )])
             .unwrap();

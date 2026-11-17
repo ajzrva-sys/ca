@@ -18,8 +18,11 @@ pub enum CommandKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandObservation {
+    pub log_artifact: Option<Box<crate::inference_artifacts::JobLogArtifact>>,
+    pub build_diagnosis: Option<Box<serde_json::Value>>,
     pub command: String,
     pub cwd: String,
+    pub protected_sources: bool,
     pub network_requested: bool,
     pub status: crate::jobs::JobStatus,
     pub stdout: String,
@@ -32,8 +35,11 @@ pub struct CommandObservation {
 impl CommandObservation {
     pub fn from_job(job: &crate::jobs::JobInfo, network_requested: bool) -> Self {
         Self {
+            log_artifact: job.log_artifact.clone().map(Box::new),
+            build_diagnosis: None,
             command: job.command.clone(),
             cwd: job.cwd.clone(),
+            protected_sources: job.protected_sources,
             network_requested,
             status: job.status,
             stdout: job.stdout.clone(),
@@ -139,13 +145,30 @@ pub fn model_text_for_policy(
             summary.collapsed = summary
                 .collapsed
                 .replace(HUMAN_SUMMARY_MARKER, MODEL_SUMMARY_MARKER);
+            if let Some(observation) = result.command_observation() {
+                if let Some(artifact) = &observation.log_artifact {
+                    summary.collapsed.push_str(&format!(
+                        "\nStored log: {}",
+                        serde_json::to_string(artifact).unwrap_or_default()
+                    ));
+                }
+                if let Some(diagnosis) = &observation.build_diagnosis {
+                    summary
+                        .collapsed
+                        .push_str(&format!("\nBuild-log diagnosis (inferred): {diagnosis}"));
+                }
+            }
+            crate::context_observation::record_transformed_execution(
+                result.model_text(),
+                &summary.collapsed,
+            );
             return summary.collapsed;
         }
     }
     result.model_text().to_string()
 }
 
-fn closed_shell_words(command: &str) -> Option<Vec<String>> {
+pub(crate) fn closed_shell_words(command: &str) -> Option<Vec<String>> {
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Quote {
         None,
@@ -883,6 +906,56 @@ mod tests {
         );
     }
 
+    #[test]
+    fn hrs317_semantic_command_keeps_log_diagnosis_and_host_observation() {
+        let arguments = r#"{"command":"cargo test"}"#;
+        let native = "native command output";
+        let issued = crate::context_observation::capture_host(
+            "run_command",
+            arguments,
+            native,
+            false,
+            "/workspace",
+            &[],
+            None,
+        )
+        .unwrap();
+        assert!(issued.live());
+        let mut observed = observation(
+            "cargo test",
+            "test alpha ... ok\ntest beta ... FAILED\n\ntest result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out\n",
+            "",
+            crate::jobs::JobStatus::Failed {
+                exit_code: Some(101),
+            },
+        );
+        observed.log_artifact = Some(Box::new(crate::inference_artifacts::JobLogArtifact {
+            artifact_id: "stored-log-identity".into(),
+            stdout_bytes: 90000,
+            stderr_bytes: 0,
+            total_bytes: 90000,
+            complete: true,
+            error: None,
+        }));
+        observed.build_diagnosis = Some(Box::new(
+            serde_json::json!({"cause":"missing_symbol", "status":"complete"}),
+        ));
+        let result = crate::agent::registry::ToolExecutionResult::Command {
+            model_text: native.into(),
+            observation: observed,
+            success: false,
+            mutation: None,
+        };
+        let rendered = model_text_for_policy(&result, crate::config::CommandOutputPolicy::Semantic);
+        assert!(rendered.contains("stored-log-identity"));
+        assert!(rendered.contains("missing_symbol"));
+        let receipt =
+            crate::context_observation::bind_native_result("run_command", arguments, &rendered)
+                .unwrap();
+        assert!(receipt.live());
+        assert!(receipt.matches("run_command", arguments, &rendered));
+    }
+
     fn observation(
         command: &str,
         stdout: &str,
@@ -890,8 +963,11 @@ mod tests {
         status: crate::jobs::JobStatus,
     ) -> CommandObservation {
         CommandObservation {
+            log_artifact: None,
+            build_diagnosis: None,
             command: command.into(),
             cwd: "/workspace".into(),
+            protected_sources: false,
             network_requested: false,
             status,
             stdout: stdout.into(),

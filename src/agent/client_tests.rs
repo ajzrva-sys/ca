@@ -2,6 +2,7 @@ use super::*;
 use crate::agent::stream::FinishReason;
 use crate::app::{Message, Role, ToolCall, ToolStatus};
 use crate::config::{ProviderTimeoutConfig, ReasoningEffort, ReasoningRequestFormat};
+use crate::request::RequestStore;
 use std::time::Duration;
 
 fn fixed_time() -> chrono::DateTime<chrono::Utc> {
@@ -12,6 +13,7 @@ fn fixed_time() -> chrono::DateTime<chrono::Utc> {
 
 fn user(content: &str) -> Message {
     Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::User,
         content: content.to_string(),
         tool_calls: None,
@@ -23,6 +25,7 @@ fn user(content: &str) -> Message {
 
 fn system(content: &str) -> Message {
     Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::System,
         content: content.to_string(),
         tool_calls: None,
@@ -34,16 +37,21 @@ fn system(content: &str) -> Message {
 
 fn call(id: &str, status: ToolStatus, output: Option<&str>) -> ToolCall {
     ToolCall {
+        observation: None,
+        output_source: None,
+        arguments_retrieved_spans: Vec::new(),
         id: id.to_string(),
         name: "read_file".to_string(),
         arguments: r#"{"path":"input.txt"}"#.to_string(),
         status,
         output: output.map(str::to_string),
+        started_at: None,
     }
 }
 
 fn assistant_with_calls(calls: Vec<ToolCall>) -> Message {
     Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::Assistant,
         content: String::new(),
         tool_calls: Some(calls),
@@ -150,6 +158,43 @@ fn segmented_prompt_serializes_checkpoint_before_the_dynamic_cache_barrier() {
 }
 
 #[test]
+fn logical_context_keeps_its_sent_position_during_a_tool_continuation() {
+    let original = user("read input.txt");
+    let store = RequestStore::default();
+    let scope = crate::request::PromptCacheScope::conversation(uuid::Uuid::new_v4());
+    let project = |history: &[Message]| {
+        let assembly = AgentClient::build_segmented_messages(
+            Some("stable"),
+            Some("frozen turn context"),
+            history,
+            None,
+            &[],
+        )
+        .unwrap();
+        let mut prepared = crate::request::PreparedModelRequest::new(
+            crate::request::RequestKind::MainTurn,
+            "fixture",
+            "model",
+            assembly.messages,
+            Vec::new(),
+            ChatRequestOptions::default(),
+        )
+        .with_prompt_cache(scope, assembly.stable_prefix_messages);
+        store.prepare_host_contexts(&mut prepared).unwrap();
+        prepared.messages
+    };
+    let first = project(std::slice::from_ref(&original));
+    let second = project(&[
+        original,
+        assistant_with_calls(vec![call("read", ToolStatus::Done, Some("evidence"))]),
+    ]);
+    assert_eq!(
+        serde_json::to_value(&second[..first.len()]).unwrap(),
+        serde_json::to_value(&first).unwrap()
+    );
+}
+
+#[test]
 fn segmented_tool_continuation_keeps_the_turn_image_on_its_latest_user_message() {
     let image = crate::image_content::normalize_rgba(1, 1, vec![0, 0, 0, 255]).unwrap();
     let messages = [
@@ -184,6 +229,7 @@ fn segmented_tool_continuation_keeps_the_turn_image_on_its_latest_user_message()
 
 #[test]
 fn prepared_prompt_cache_key_is_stable_and_route_layout_scoped() {
+    crate::effective_route_cache_cases_hold();
     let scope = crate::request::PromptCacheScope::conversation(
         uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000151").unwrap(),
     );
@@ -485,6 +531,7 @@ fn runtime_prompt_cache_contract_sends_fields_only_for_declared_routes() {
 
 #[test]
 fn prompt_cache_epoch_is_an_extension_or_has_a_recognized_invalidation() {
+    crate::effective_route_cache_cases_hold();
     let session_id = uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000153").unwrap();
     let scope = crate::request::PromptCacheScope::conversation(session_id);
     let source = crate::agent::stream::ProviderStateSourceV1::from_route(
@@ -997,6 +1044,7 @@ fn final_reasoning_replay_is_deepseek_only_and_requires_provenance() {
         ("mimo", "mimo-v2.5-pro", None),
     ] {
         let mut assistant = Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::Assistant,
             content: "answer".into(),
             tool_calls: None,
@@ -1153,6 +1201,7 @@ fn duplicate_tool_result_id_prevents_request_construction() {
 #[test]
 fn legacy_tool_message_still_serializes_once() {
     let legacy = Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::Tool,
         content: String::new(),
         tool_calls: Some(vec![call("legacy-call", ToolStatus::Done, Some("legacy"))]),
@@ -1196,6 +1245,7 @@ fn mixed_assistant_and_legacy_duplicate_is_rejected() {
         Some("assistant result"),
     )]);
     let legacy = Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::Tool,
         content: String::new(),
         tool_calls: Some(vec![call(
@@ -1464,18 +1514,32 @@ fn request_body(request: &[u8]) -> &[u8] {
 }
 
 async fn capture_reasoning_content_tool_loop(provider: &'static str) -> Vec<Vec<u8>> {
+    capture_private_reasoning_tool_loop(provider, "  inspect\nλ\\tail  ", None).await
+}
+
+async fn capture_private_reasoning_tool_loop(
+    provider: &'static str,
+    exact_reasoning: &'static str,
+    privacy: Option<std::sync::Arc<crate::privacy::Context>>,
+) -> Vec<Vec<u8>> {
     use tokio::io::AsyncWriteExt;
 
-    let exact_reasoning = "  inspect\nλ\\tail  ";
+    let (task, tool, path, output) = if privacy.is_some() {
+        (
+            "list the current directory",
+            "list_dir",
+            ".",
+            "private-child.txt",
+        )
+    } else {
+        ("read input.txt", "read_file", "input.txt", "hello")
+    };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/v1", listener.local_addr().unwrap());
     let server = tokio::spawn(async move {
         let mut requests = Vec::new();
         for body in [
-            format!(
-                "data: {{\"choices\":[{{\"delta\":{{\"reasoning_content\":{},\"tool_calls\":[{{\"index\":0,\"id\":\"call-1\",\"function\":{{\"name\":\"read_file\",\"arguments\":\"{{\\\"path\\\":\\\"input.txt\\\"}}\"}}}}]}},\"finish_reason\":\"tool_calls\"}}]}}\n\ndata: [DONE]\n\n",
-                serde_json::to_string(exact_reasoning).unwrap()
-            ),
+            format!("data: {}\n\ndata: [DONE]\n\n", serde_json::json!({"choices":[{"delta":{"reasoning_content":exact_reasoning,"tool_calls":[{"index":0,"id":"call-1","function":{"name":tool,"arguments":serde_json::json!({"path":path}).to_string()}}]},"finish_reason":"tool_calls"}]})),
             "data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".into(),
         ] {
             let (mut stream, _) = listener.accept().await.unwrap();
@@ -1515,6 +1579,7 @@ async fn capture_reasoning_content_tool_loop(provider: &'static str) -> Vec<Vec<
         fast_policy(),
         crate::request::RequestStore::default(),
     )
+    .with_privacy_context(privacy)
     .with_contract_for_test(official_contract(
         provider,
         crate::agent::ProviderProtocol::ChatCompletions,
@@ -1522,7 +1587,7 @@ async fn capture_reasoning_content_tool_loop(provider: &'static str) -> Vec<Vec<
     ));
     let first_messages = vec![ChatMessage {
         role: "user".into(),
-        content: crate::image_content::ModelContent::text("read input.txt"),
+        content: crate::image_content::ModelContent::text(task),
         tool_calls: None,
         tool_call_id: None,
         response_items: Vec::new(),
@@ -1542,16 +1607,23 @@ async fn capture_reasoning_content_tool_loop(provider: &'static str) -> Vec<Vec<
     assert_eq!(first_turn.reasoning.as_deref(), Some(exact_reasoning));
 
     let continuation_state = vec![
-        user("read input.txt"),
+        user(task),
         Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::Assistant,
             content: first_turn.content,
             tool_calls: Some(vec![ToolCall {
+                observation: None,
+                output_source: None,
+                arguments_retrieved_spans: first_turn.tool_calls[0]
+                    .arguments_retrieved_spans
+                    .clone(),
                 id: first_turn.tool_calls[0].id.clone(),
                 name: first_turn.tool_calls[0].name.clone(),
                 arguments: first_turn.tool_calls[0].arguments.clone(),
                 status: ToolStatus::Done,
-                output: Some("hello".into()),
+                output: Some(output.into()),
+                started_at: None,
             }]),
             thinking: first_turn.reasoning,
             response_items: first_turn.response_items,
@@ -1575,6 +1647,216 @@ async fn capture_reasoning_content_tool_loop(provider: &'static str) -> Vec<Vec<
     assert_eq!(second_turn.content, "done");
 
     server.await.unwrap()
+}
+
+#[test]
+fn private_chat_reasoning_list_dir_continuation_is_byte_exact() {
+    let filter = crate::provider_filter::ProviderFilterConfig {
+        enabled: true,
+        hide: crate::provider_filter::FilterHide {
+            filenames: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    crate::provider_filter::with_test_filter(&filter, || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let temp = tempfile::tempdir().unwrap();
+                let root = temp.path().join("workspace");
+                std::fs::create_dir(&root).unwrap();
+                std::fs::write(root.join("private-child.txt"), "fixture").unwrap();
+                let privacy = crate::privacy::Context::open(
+                    temp.path().join("profile"),
+                    root,
+                    uuid::Uuid::new_v4(),
+                    None,
+                )
+                .unwrap();
+                privacy.allow_ephemeral();
+                let reasoning = "  synthetic opaque continuation __CA_NAME_example__ \n雪  ";
+                let requests =
+                    capture_private_reasoning_tool_loop("deepseek", reasoning, Some(privacy)).await;
+                assert_eq!(requests.len(), 2);
+                let continuation: serde_json::Value =
+                    serde_json::from_slice(request_body(&requests[1])).unwrap();
+                assert_eq!(continuation["messages"][1]["reasoning_content"], reasoning);
+                assert_eq!(
+                    continuation["messages"][1]["tool_calls"][0]["function"]["name"],
+                    "list_dir"
+                );
+                assert_eq!(
+                    continuation["messages"][1]["tool_calls"][0]["function"]["arguments"],
+                    "{\"path\":\".\"}"
+                );
+                assert!(!String::from_utf8_lossy(&requests[1]).contains("private-child.txt"));
+            });
+    });
+}
+
+#[test]
+fn private_chat_reasoning_receipt_keeps_visible_data_and_stops_guarded() {
+    use crate::agent::provider::ProviderProtocol;
+    use crate::agent::stream::{ProviderResponseItem, ProviderStateSourceV1};
+    let settings = crate::provider_filter::ProviderFilterConfig {
+        enabled: true,
+        hide: crate::provider_filter::FilterHide {
+            filenames: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    crate::provider_filter::with_test_filter(&settings, || {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("workspace");
+        std::fs::create_dir(&root).unwrap();
+        let privacy = crate::privacy::Context::open(
+            temp.path().join("profile"),
+            root,
+            uuid::Uuid::new_v4(),
+            None,
+        )
+        .unwrap();
+        privacy.allow_ephemeral();
+        let synthetic = "opaque receipt canary __CA_NAME_example__";
+        let mut source =
+            ProviderStateSourceV1::for_test("deepseek", ProviderProtocol::ChatCompletions);
+        source.privacy_policy_digest = Some(privacy.policy_fingerprint());
+        let mut request = crate::request::PreparedModelRequest::new(
+            crate::request::RequestKind::ToolContinuation,
+            "deepseek",
+            "deepseek-v4-pro",
+            vec![ChatMessage {
+                role: "assistant".into(),
+                content: crate::image_content::ModelContent::text(""),
+                tool_calls: Some(vec![ToolCallMsg {
+                    id: "list".into(),
+                    call_type: "function".into(),
+                    function: FunctionCall {
+                        name: "list_dir".into(),
+                        arguments: "{\"path\":\".\"}".into(),
+                        arguments_retrieved_spans: Vec::new(),
+                    },
+                }]),
+                tool_call_id: None,
+                response_items: vec![ProviderResponseItem::ChatReasoning {
+                    source: source.clone(),
+                    content: synthetic.into(),
+                }],
+            }],
+            Vec::new(),
+            Default::default(),
+        );
+        let revision = privacy.prepare_request(&mut request).unwrap();
+        let fingerprint = privacy.policy_fingerprint();
+        let adapter = ProviderProtocol::ChatCompletions.adapter();
+        let contract = official_contract(
+            "deepseek",
+            ProviderProtocol::ChatCompletions,
+            "deepseek-v4-pro",
+        );
+        let actual = adapter
+            .prepare(&request, &source, Some(contract), None, None)
+            .unwrap();
+        let marker = format!("__ca_continuation_{}__", uuid::Uuid::new_v4().simple());
+        let mut shadow = request.clone();
+        let ProviderResponseItem::ChatReasoning { content, .. } =
+            &mut shadow.messages[0].response_items[0]
+        else {
+            unreachable!()
+        };
+        *content = marker.clone();
+        let shadow = adapter
+            .prepare(&shadow, &source, Some(contract), None, None)
+            .unwrap();
+        let receipt = crate::host_instructions::WireReceipt::bind(
+            &actual.body,
+            &shadow.body,
+            vec![(marker, synthetic.into())],
+        )
+        .unwrap();
+        assert!(!format!("{receipt:?}").contains(synthetic));
+        assert!(privacy
+            .validate_wire(&actual.body, revision, &fingerprint)
+            .is_err());
+        let filter = crate::provider_filter::ProviderFilter::compile(&Default::default()).unwrap();
+        let (body, _, receipt) = crate::provider_replay::prepare_outbound_with_host(
+            &actual.body,
+            &actual.replay,
+            &filter,
+            None,
+            receipt,
+        )
+        .unwrap();
+        privacy
+            .validate_wire_with_receipts(&body, revision, &fingerprint, None, Some(&receipt))
+            .unwrap();
+        let mut changed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        changed["messages"][0]["reasoning_content"] = format!("{synthetic} changed").into();
+        assert!(privacy
+            .validate_wire_with_receipts(
+                &serde_json::to_vec(&changed).unwrap(),
+                revision,
+                &fingerprint,
+                None,
+                Some(&receipt)
+            )
+            .is_err());
+        for key in ["content", "arbitrary_untrusted_field"] {
+            let mut changed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            changed["messages"][0][key] = synthetic.into();
+            assert!(privacy
+                .validate_wire_with_receipts(
+                    &serde_json::to_vec(&changed).unwrap(),
+                    revision,
+                    &fingerprint,
+                    None,
+                    Some(&receipt)
+                )
+                .is_err());
+        }
+        let mut visible = request.clone();
+        visible.messages[0].content = crate::image_content::ModelContent::text(synthetic);
+        assert!(privacy.prepare_request(&mut visible).is_err());
+        let mut tool = request.clone();
+        tool.messages[0].tool_calls.as_mut().unwrap()[0]
+            .function
+            .arguments = serde_json::json!({"path":synthetic}).to_string();
+        assert!(privacy.prepare_request(&mut tool).is_err());
+        for mismatch in ["route", "policy"] {
+            let mut foreign = source.clone();
+            if mismatch == "route" {
+                foreign.endpoint_sha256 = "f".repeat(64);
+            } else {
+                foreign.privacy_policy_digest = Some("foreign policy".into());
+            }
+            let body = adapter
+                .prepare(&request, &foreign, Some(contract), None, None)
+                .unwrap()
+                .body;
+            let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert!(value["messages"][0].get("reasoning_content").is_none());
+        }
+        let stopped = crate::provider_filter::ProviderFilter::compile(
+            &crate::provider_filter::ProviderFilterConfig {
+                enabled: true,
+                phrases: vec!["opaque receipt canary".into()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(crate::provider_replay::prepare_outbound_with_host(
+            &body,
+            &actual.replay,
+            &stopped,
+            None,
+            receipt
+        )
+        .is_err());
+    });
 }
 
 #[tokio::test]
@@ -1687,14 +1969,19 @@ async fn deepseek_replays_tool_and_final_reasoning_on_the_next_question() {
             .tool_calls
             .into_iter()
             .map(|call| ToolCall {
+                observation: None,
+                output_source: None,
+                arguments_retrieved_spans: call.arguments_retrieved_spans.clone(),
                 id: call.id,
                 name: call.name,
                 arguments: call.arguments,
                 status: ToolStatus::Done,
                 output: Some("hello".into()),
+                started_at: None,
             })
             .collect::<Vec<_>>();
         history.push(Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::Assistant,
             content: turn.content,
             tool_calls: (!calls.is_empty()).then_some(calls),
@@ -1871,14 +2158,21 @@ async fn chat_reasoning_continuation_is_bound_to_the_exact_runtime_endpoint() {
         &[
             user("read input.txt"),
             Message {
+                retrieved_spans: Some(Vec::new()),
                 role: Role::Assistant,
                 content: first_turn.content,
                 tool_calls: Some(vec![ToolCall {
+                    observation: None,
+                    output_source: None,
+                    arguments_retrieved_spans: first_turn.tool_calls[0]
+                        .arguments_retrieved_spans
+                        .clone(),
                     id: first_turn.tool_calls[0].id.clone(),
                     name: first_turn.tool_calls[0].name.clone(),
                     arguments: first_turn.tool_calls[0].arguments.clone(),
                     status: ToolStatus::Done,
                     output: Some("hello".into()),
+                    started_at: None,
                 }]),
                 thinking: first_turn.reasoning,
                 response_items: first_turn.response_items,
@@ -1989,6 +2283,144 @@ async fn capture_chat_completions_request(api_key: &str) -> Vec<u8> {
         .await
         .unwrap();
     server.await.unwrap()
+}
+
+#[tokio::test]
+async fn chatgpt_plan_request_skips_provider_filter() {
+    let filter = std::sync::Arc::new(
+        crate::provider_filter::ProviderFilter::compile(
+            &crate::provider_filter::ProviderFilterConfig {
+                enabled: true,
+                adjustments: vec![crate::provider_filter::ContentAdjustment {
+                    from: "hello".into(),
+                    to: "rewritten".into(),
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap(),
+    );
+    let plan = capture_filtered_responses("openai-chatgpt", filter.clone()).await;
+    assert!(plan.contains("hello"), "{plan}");
+    assert!(!plan.contains("rewritten"), "{plan}");
+    assert!(!crate::provider_filter::is_tripped());
+
+    let codex = capture_filtered_responses("openai-codex", filter).await;
+    assert!(codex.contains("rewritten"), "{codex}");
+    assert!(!codex.contains("\"hello\""), "{codex}");
+}
+
+#[tokio::test]
+async fn chatgpt_plan_usage_limit_is_the_plan_message() {
+    use tokio::io::AsyncWriteExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = vec![0_u8; 8 * 1024];
+        let _ = tokio::io::AsyncReadExt::read(&mut stream, &mut request).await;
+        let body = r#"{"error":{"code":"subscription_sharing_usage_limit_exceeded"}}"#;
+        let response = format!(
+            "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(response.as_bytes()).await.unwrap();
+    });
+    let client = AgentClient::with_policy(
+        "openai-chatgpt",
+        &ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
+            base_url: url,
+            api_key: "plan-token".into(),
+            protocol: crate::agent::ProviderProtocol::OpenAiResponses,
+            prompt_cache_mode: crate::config::PromptCacheMode::Implicit,
+            models: vec!["gpt-6.1-sol".into()],
+            timeout: ProviderTimeoutConfig::default(),
+        },
+        "gpt-6.1-sol",
+        fast_policy(),
+        crate::request::RequestStore::default(),
+    );
+    let error = client
+        .chat_stream(
+            &[ChatMessage {
+                role: "user".into(),
+                content: crate::image_content::ModelContent::text("hello"),
+                tool_calls: None,
+                tool_call_id: None,
+                response_items: Vec::new(),
+            }],
+            &[],
+        )
+        .await
+        .unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("ChatGPT plan usage limit"), "{message}");
+    assert!(!message.contains("openai-codex"), "{message}");
+}
+
+async fn capture_filtered_responses(
+    provider_id: &str,
+    filter: std::sync::Arc<crate::provider_filter::ProviderFilter>,
+) -> String {
+    use tokio::io::AsyncWriteExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let request = read_http_request(&mut stream).await;
+        let body = concat!(
+            "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"OK\"}\n\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n"
+        );
+        stream
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        stream.write_all(body.as_bytes()).await.unwrap();
+        request
+    });
+    let client = AgentClient::with_policy(
+        provider_id,
+        &ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
+            base_url: url,
+            api_key: "plan-token".into(),
+            protocol: crate::agent::ProviderProtocol::OpenAiResponses,
+            prompt_cache_mode: crate::config::PromptCacheMode::Implicit,
+            models: vec!["gpt-6.1-sol".into()],
+            timeout: ProviderTimeoutConfig::default(),
+        },
+        "gpt-6.1-sol",
+        fast_policy(),
+        crate::request::RequestStore::default(),
+    )
+    .with_filter_for_test(filter);
+    let mut receiver = client
+        .chat_stream(
+            &[ChatMessage {
+                role: "user".into(),
+                content: crate::image_content::ModelContent::text("hello"),
+                tool_calls: None,
+                tool_call_id: None,
+                response_items: Vec::new(),
+            }],
+            &[],
+        )
+        .await
+        .unwrap();
+    crate::agent::stream::consume_stream(&mut receiver, |_| {})
+        .await
+        .unwrap();
+    String::from_utf8(server.await.unwrap()).unwrap()
 }
 
 async fn capture_openai_responses_request(api_key: &str) -> Vec<u8> {
@@ -2254,14 +2686,21 @@ async fn capture_openai_responses_reasoning_tool_loop() -> (Vec<Vec<u8>>, String
     let continuation_state = vec![
         user("read input.txt"),
         Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::Assistant,
             content: first_turn.content,
             tool_calls: Some(vec![ToolCall {
+                observation: None,
+                output_source: None,
+                arguments_retrieved_spans: first_turn.tool_calls[0]
+                    .arguments_retrieved_spans
+                    .clone(),
                 id: first_turn.tool_calls[0].id.clone(),
                 name: first_turn.tool_calls[0].name.clone(),
                 arguments: first_turn.tool_calls[0].arguments.clone(),
                 status: ToolStatus::Done,
                 output: Some("hello".into()),
+                started_at: None,
             }]),
             thinking: first_turn.reasoning,
             response_items: first_turn.response_items,
@@ -2463,14 +2902,21 @@ async fn capture_first_party_responses_tool_loop(provider: &str, model: &str) ->
     let continuation_state = vec![
         user("read input.txt"),
         Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::Assistant,
             content: first_turn.content,
             tool_calls: Some(vec![ToolCall {
+                observation: None,
+                output_source: None,
+                arguments_retrieved_spans: first_turn.tool_calls[0]
+                    .arguments_retrieved_spans
+                    .clone(),
                 id: first_turn.tool_calls[0].id.clone(),
                 name: first_turn.tool_calls[0].name.clone(),
                 arguments: first_turn.tool_calls[0].arguments.clone(),
                 status: ToolStatus::Done,
                 output: Some("hello".into()),
+                started_at: None,
             }]),
             thinking: first_turn.reasoning,
             response_items: first_turn.response_items,
@@ -3229,6 +3675,181 @@ async fn http_failure_discards_response_body_and_keeps_snapshot_safe() {
 }
 
 #[tokio::test]
+async fn chatgpt_shim_401_refreshes_once_then_reads_the_answer() {
+    use tokio::io::AsyncWriteExt;
+
+    std::env::set_var("CA_TEST_CODEX_REFRESH", "ok");
+    struct ClearHook;
+    impl Drop for ClearHook {
+        fn drop(&mut self) {
+            std::env::remove_var("CA_TEST_CODEX_REFRESH");
+        }
+    }
+    let _clear = ClearHook;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        for attempt in 1..=2 {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            read_http_request(&mut stream).await;
+            if attempt == 1 {
+                let body = br#"{"error":{"message":"prepare 401"}}"#;
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 401 Unauthorized\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+                stream.write_all(body).await.unwrap();
+            } else {
+                let body = "data: {\"choices\":[{\"delta\":{\"content\":\"ready\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        }
+    });
+    let mut receiver = AgentClient::with_policy(
+        "chatgpt-shim",
+        &ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
+            base_url: url,
+            api_key: "chatgpt-shim-local".into(),
+            protocol: crate::agent::ProviderProtocol::ChatCompletions,
+            prompt_cache_mode: crate::config::PromptCacheMode::Implicit,
+            models: vec!["gpt-5.6".into()],
+            timeout: ProviderTimeoutConfig::default(),
+        },
+        "gpt-5.6",
+        fast_policy(),
+        crate::request::RequestStore::default(),
+    )
+    .chat_stream(&[], &[])
+    .await
+    .unwrap();
+    let mut saw_ready = false;
+    while let Some(item) = receiver.recv().await {
+        if let Ok(ProviderEvent::Text(text)) = item {
+            if text == "ready" {
+                saw_ready = true;
+            }
+        }
+    }
+    assert!(saw_ready);
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn chatgpt_shim_upstream_error_fails_the_turn() {
+    use tokio::io::AsyncWriteExt;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        read_http_request(&mut stream).await;
+        let body = "data: {\"choices\":[{\"delta\":{\"content\":\"[chatgpt-shim upstream error 401: prepare]\"}}]}\n\ndata: [DONE]\n\n";
+        stream
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+    });
+    let mut receiver = test_client(url, fast_policy())
+        .chat_stream(&[], &[])
+        .await
+        .unwrap();
+    let mut failure = None;
+    let mut texts = Vec::new();
+    while let Some(item) = receiver.recv().await {
+        match item {
+            Ok(ProviderEvent::Text(text)) => texts.push(text),
+            Err(error) => {
+                failure = Some(error.to_string());
+                break;
+            }
+            Ok(_) => {}
+        }
+    }
+    let failure = failure.expect("upstream error text should fail the turn");
+    assert!(failure.contains("chatgpt-shim upstream error"));
+    assert!(texts.is_empty());
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn chatgpt_shim_interstitial_http_error_is_not_an_answer() {
+    use tokio::io::AsyncWriteExt;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        read_http_request(&mut stream).await;
+        let body =
+            br#"{"error":{"message":"chatgpt.com is still on the Cloudflare interstitial"}}"#;
+        stream
+            .write_all(
+                format!(
+                    "HTTP/1.1 503 Service Unavailable\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        stream.write_all(body).await.unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(200), listener.accept())
+                .await
+                .is_err(),
+            "an interstitial failure must not refresh or retry"
+        );
+    });
+    let error = AgentClient::with_policy(
+        "chatgpt-shim",
+        &ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
+            base_url: url,
+            api_key: "chatgpt-shim-local".into(),
+            protocol: crate::agent::ProviderProtocol::ChatCompletions,
+            prompt_cache_mode: crate::config::PromptCacheMode::Implicit,
+            models: vec!["gpt-5.6".into()],
+            timeout: ProviderTimeoutConfig::default(),
+        },
+        "gpt-5.6",
+        fast_policy(),
+        crate::request::RequestStore::default(),
+    )
+    .chat_stream(&[], &[])
+    .await
+    .unwrap_err();
+    let rendered = error.to_string();
+    assert!(rendered.contains("503"));
+    assert!(rendered.contains("Cloudflare interstitial"));
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn headers_and_first_event_deadlines_are_typed_timeouts() {
     use tokio::io::AsyncWriteExt;
 
@@ -3546,6 +4167,7 @@ async fn error_body_response_rule_stops_without_echoing_the_match() {
         crate::provider_filter::ProviderFilter::compile(
             &crate::provider_filter::ProviderFilterConfig {
                 enabled: true,
+                structural: false,
                 trip_file: None,
                 phrases: Vec::new(),
                 urls: Vec::new(),
@@ -3588,6 +4210,7 @@ async fn error_body_response_rule_stops_without_echoing_the_match() {
         crate::provider_filter::ProviderFilter::compile(
             &crate::provider_filter::ProviderFilterConfig {
                 enabled: true,
+                structural: false,
                 trip_file: None,
                 phrases: Vec::new(),
                 urls: Vec::new(),
@@ -5339,4 +5962,611 @@ async fn google_strict_schema_rejection_is_visible_before_any_post_without_schem
         ))
         .is_none()
     );
+}
+
+fn retrieved_wire_filter() -> std::sync::Arc<crate::provider_filter::ProviderFilter> {
+    std::sync::Arc::new(
+        crate::provider_filter::ProviderFilter::compile(
+            &crate::provider_filter::ProviderFilterConfig {
+                enabled: true,
+                page_stand_in: crate::provider_filter::PageStandIn::Latin,
+                ..Default::default()
+            },
+        )
+        .unwrap(),
+    )
+}
+
+/// Intentionally reject after reading: this fixture verifies the final HTTP
+/// request independently of any successful provider response or model service.
+async fn capture_retrieved_wire_request(
+    protocol: crate::agent::ProviderProtocol,
+    messages: &[ChatMessage],
+    tools: &[ToolDef],
+) -> serde_json::Value {
+    use tokio::io::AsyncWriteExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = tokio::time::timeout(Duration::from_secs(3), listener.accept())
+            .await
+            .expect("provider request must reach the loopback fixture")
+            .unwrap();
+        let bytes = read_http_request(&mut socket).await;
+        socket.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+            .await.unwrap();
+        serde_json::from_slice(request_body(&bytes)).unwrap()
+    });
+    let mut policy = fast_policy();
+    policy.connect_timeout = Duration::from_secs(2);
+    policy.headers_timeout = Duration::from_secs(2);
+    let client = test_client_with_protocol(format!("http://{address}/v1"), policy, protocol)
+        .with_filter_for_test(retrieved_wire_filter());
+    let result = client
+        .chat_stream_with_options(
+            messages,
+            tools,
+            &ChatRequestOptions {
+                reasoning_effort: Some(ReasoningEffort::High),
+                reasoning_request_format: (protocol
+                    == crate::agent::ProviderProtocol::ChatCompletions)
+                    .then_some(ReasoningRequestFormat::ReasoningEffort),
+                ..Default::default()
+            },
+        )
+        .await;
+    assert!(
+        matches!(result, Err(ProviderError::Http { status: 400, .. })),
+        "capture fixture must be the only rejection: {result:?}"
+    );
+    server.await.unwrap()
+}
+
+#[tokio::test]
+async fn retrieved_content_crosses_all_four_actual_provider_transports() {
+    use crate::agent::ProviderProtocol;
+    let raw = r#"LocalCanary /private/CustomerCanary/123456.txt https://HostCanary.invalid/SlugCanary <a class="AttributeCanary">TextCanary</a> {"name":"NameCanary","id":"IdCanary","KeyCanary":"ValueCanary"}"#;
+    let argument_value =
+        serde_json::json!({"path":"ArgumentCanary/<img src=\"ArgumentImage\">","mode":"safe"});
+    let schema = serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"ParameterInstructionCanary"},"mode":{"type":"string","enum":["safe"]}},"required":["path"]});
+    let names = [
+        "read_file",
+        "list_dir",
+        "run_command",
+        "search_files",
+        "await_agent",
+        "future_tool",
+    ];
+    let mut mixed_system = system("SystemInstructionCanary\nMemoryCanary\nSystemSuffixCanary");
+    let start = mixed_system.content.find("MemoryCanary").unwrap();
+    mixed_system.retrieved_spans = Some(vec![crate::retrieved_content::RetrievedSpan {
+        source: None,
+        start,
+        end: start + "MemoryCanary".len(),
+    }]);
+    let mut mixed_user = user("UserPromptCanary\nFileCanary\nUserSuffixCanary");
+    let start = mixed_user.content.find("FileCanary").unwrap();
+    mixed_user.retrieved_spans = Some(vec![crate::retrieved_content::RetrievedSpan {
+        source: None,
+        start,
+        end: start + "FileCanary".len(),
+    }]);
+    let calls = names
+        .iter()
+        .enumerate()
+        .map(|(index, name)| ToolCall {
+            observation: None,
+            output_source: None,
+            arguments_retrieved_spans: Vec::new(),
+            id: format!("retrieved-call-{index}"),
+            name: (*name).into(),
+            arguments: argument_value.to_string(),
+            status: ToolStatus::Done,
+            output: Some(raw.into()),
+            started_at: None,
+        })
+        .collect();
+    let mut assistant = assistant_with_calls(calls);
+    assistant.content = "AssistantHistoryCanary".into();
+    let canonical = vec![mixed_system, mixed_user, assistant];
+    let canonical_before = serde_json::to_vec(&canonical).unwrap();
+    let image = crate::image_content::normalize_rgba(1, 1, vec![0, 0, 0, 255]).unwrap();
+    let messages =
+        AgentClient::build_messages(Some("StableInstructionCanary"), &canonical, None, &[image])
+            .unwrap();
+    let message_before = serde_json::to_vec(&messages).unwrap();
+    let content_before: Vec<_> = messages
+        .iter()
+        .map(|message| message.content.clone())
+        .collect();
+    let tools: Vec<_> = names
+        .iter()
+        .map(|name| ToolDef {
+            def_type: "function".into(),
+            function: ToolFunction {
+                name: (*name).into(),
+                description: "ToolInstructionCanary".into(),
+                parameters: schema.clone(),
+            },
+        })
+        .collect();
+    let tools_before = serde_json::to_vec(&tools).unwrap();
+    for protocol in [
+        ProviderProtocol::ChatCompletions,
+        ProviderProtocol::OpenAiResponses,
+        ProviderProtocol::AnthropicMessages,
+        ProviderProtocol::GoogleGenerateContent,
+    ] {
+        let body = capture_retrieved_wire_request(protocol, &messages, &tools).await;
+        let sent = body.to_string();
+        for canary in [
+            "LocalCanary",
+            "CustomerCanary",
+            "123456",
+            "HostCanary",
+            "SlugCanary",
+            "AttributeCanary",
+            "TextCanary",
+            "NameCanary",
+            "IdCanary",
+            "KeyCanary",
+            "ValueCanary",
+            "MemoryCanary",
+            "FileCanary",
+        ] {
+            assert!(
+                !sent.contains(canary),
+                "{protocol:?} sent retrieved plaintext {canary}: {sent}"
+            );
+        }
+        for authored in [
+            "StableInstructionCanary",
+            "SystemInstructionCanary",
+            "SystemSuffixCanary",
+            "UserPromptCanary",
+            "UserSuffixCanary",
+            "AssistantHistoryCanary",
+            "ToolInstructionCanary",
+            "ParameterInstructionCanary",
+            "ArgumentCanary",
+            "ArgumentImage",
+        ] {
+            assert!(
+                sent.contains(authored),
+                "{protocol:?} changed authored text {authored}: {sent}"
+            );
+        }
+        assert!(
+            sent.contains("[image]"),
+            "{protocol:?} omitted the image placeholder"
+        );
+        for media_field in [
+            "image_url",
+            "input_image",
+            "inlineData",
+            "fileData",
+            "base64",
+            "image/png",
+        ] {
+            assert!(
+                !sent.contains(media_field),
+                "{protocol:?} kept opaque image field {media_field}"
+            );
+        }
+        let (sent_schema, sent_arguments) = match protocol {
+            ProviderProtocol::ChatCompletions => {
+                assert_eq!(body["stream"], true);
+                assert_eq!(body["model"], "model");
+                assert_eq!(body["reasoning_effort"], "high");
+                let call = body["messages"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find_map(|message| message.get("tool_calls"))
+                    .unwrap();
+                (
+                    body["tools"][0]["function"]["parameters"].clone(),
+                    serde_json::from_str::<serde_json::Value>(
+                        call[0]["function"]["arguments"].as_str().unwrap(),
+                    )
+                    .unwrap(),
+                )
+            }
+            ProviderProtocol::OpenAiResponses => {
+                assert_eq!(body["stream"], true);
+                assert_eq!(body["model"], "model");
+                assert_eq!(body["reasoning"]["effort"], "high");
+                let call = body["input"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|item| item["type"] == "function_call")
+                    .unwrap();
+                (
+                    body["tools"][0]["parameters"].clone(),
+                    serde_json::from_str::<serde_json::Value>(call["arguments"].as_str().unwrap())
+                        .unwrap(),
+                )
+            }
+            ProviderProtocol::AnthropicMessages => {
+                assert_eq!(body["stream"], true);
+                assert_eq!(body["model"], "model");
+                assert_eq!(body["output_config"]["effort"], "high");
+                let call = body["messages"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .flat_map(|message| message["content"].as_array().unwrap())
+                    .find(|block| block["type"] == "tool_use")
+                    .unwrap();
+                (
+                    body["tools"][0]["input_schema"].clone(),
+                    call["input"].clone(),
+                )
+            }
+            ProviderProtocol::GoogleGenerateContent => {
+                assert_eq!(
+                    body["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+                    "HIGH"
+                );
+                let call = body["contents"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .flat_map(|message| message["parts"].as_array().unwrap())
+                    .find_map(|part| part.get("functionCall"))
+                    .unwrap();
+                (
+                    body["tools"][0]["functionDeclarations"][0]["parameters"].clone(),
+                    call["args"].clone(),
+                )
+            }
+        };
+        let expected_schema = if protocol == ProviderProtocol::GoogleGenerateContent {
+            crate::tool_schema::translate(
+                "read_file",
+                &schema,
+                crate::tool_schema::Profile::Google,
+                crate::tool_schema::Policy::Compatible,
+            )
+            .unwrap()
+            .schema
+            .into_owned()
+        } else {
+            schema.clone()
+        };
+        assert_eq!(
+            sent_schema, expected_schema,
+            "{protocol:?} changed schema semantics"
+        );
+        assert_eq!(
+            sent_arguments, argument_value,
+            "{protocol:?} changed authored arguments"
+        );
+        assert_eq!(serde_json::to_vec(&messages).unwrap(), message_before);
+        assert_eq!(
+            messages
+                .iter()
+                .map(|message| message.content.clone())
+                .collect::<Vec<_>>(),
+            content_before
+        );
+        assert_eq!(serde_json::to_vec(&canonical).unwrap(), canonical_before);
+        assert_eq!(serde_json::to_vec(&tools).unwrap(), tools_before);
+    }
+}
+
+#[tokio::test]
+async fn restored_argument_sources_cross_all_four_actual_provider_transports() {
+    use crate::agent::ProviderProtocol;
+    use crate::retrieved_content::RetrievedSpan;
+
+    let canary = "CobaltR4WillowP8Meadow";
+    let guidance_prefix = "Forward the saved observation ";
+    let guidance_suffix = " and report the authored completion marker.";
+    let task = format!("{guidance_prefix}{canary}{guidance_suffix}");
+    let arguments = serde_json::json!({
+        "task": task,
+        "path": "/workspace/authored-followup.txt",
+        "wait": true,
+        "max_turns": 3
+    })
+    .to_string();
+    let argument_start = arguments.find(canary).unwrap();
+    let mut assistant = assistant_with_calls(vec![ToolCall {
+        observation: None,
+        output_source: None,
+        id: "restored-source-call".into(),
+        name: "spawn_agent".into(),
+        arguments,
+        arguments_retrieved_spans: vec![RetrievedSpan {
+            source: None,
+            start: argument_start,
+            end: argument_start + canary.len(),
+        }],
+        status: ToolStatus::Done,
+        output: Some("completed".into()),
+        started_at: None,
+    }]);
+    assistant.content = format!("Authored history prefix {canary} authored history suffix.");
+    let content_start = assistant.content.find(canary).unwrap();
+    assistant.retrieved_spans = Some(vec![RetrievedSpan {
+        source: None,
+        start: content_start,
+        end: content_start + canary.len(),
+    }]);
+    let saved = serde_json::to_vec(&vec![user("Continue the saved work."), assistant]).unwrap();
+    let canonical: Vec<Message> = serde_json::from_slice(&saved).unwrap();
+    assert_eq!(serde_json::to_vec(&canonical).unwrap(), saved);
+    let canonical_before = canonical.clone();
+    let messages = AgentClient::build_messages(None, &canonical, None, &[]).unwrap();
+    let messages_before = serde_json::to_vec(&messages).unwrap();
+    let content_before: Vec<_> = messages
+        .iter()
+        .map(|message| message.content.clone())
+        .collect();
+    let assistant_index = messages
+        .iter()
+        .position(|message| message.tool_calls.is_some())
+        .unwrap();
+    let argument_metadata_before = messages[assistant_index].tool_calls.as_ref().unwrap()[0]
+        .function
+        .arguments_retrieved_spans
+        .clone();
+    assert_eq!(
+        argument_metadata_before,
+        canonical[1].tool_calls.as_ref().unwrap()[0].arguments_retrieved_spans
+    );
+    assert!(messages[assistant_index].tool_calls.as_ref().unwrap()[0]
+        .function
+        .arguments
+        .contains(canary));
+    let tools = vec![ToolDef {
+        def_type: "function".into(),
+        function: ToolFunction {
+            name: "spawn_agent".into(),
+            description: "Run the authored follow-up task.".into(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string"},
+                    "path": {"type": "string"},
+                    "wait": {"type": "boolean"},
+                    "max_turns": {"type": "integer"}
+                },
+                "required": ["task", "path", "wait", "max_turns"]
+            }),
+        },
+    }];
+    let expected_task = format!(
+        "{guidance_prefix}{}{guidance_suffix}",
+        retrieved_wire_filter().encode_retrieved(canary)
+    );
+    assert!(!expected_task.contains(canary));
+    for protocol in [
+        ProviderProtocol::ChatCompletions,
+        ProviderProtocol::OpenAiResponses,
+        ProviderProtocol::AnthropicMessages,
+        ProviderProtocol::GoogleGenerateContent,
+    ] {
+        let body = capture_retrieved_wire_request(protocol, &messages, &tools).await;
+        let sent = body.to_string();
+        assert!(!sent.contains(canary), "{protocol:?} sent restored source");
+        assert!(!sent.contains("arguments_retrieved_spans"));
+        for authored in [
+            guidance_prefix,
+            guidance_suffix,
+            "Authored history prefix ",
+            " authored history suffix.",
+            "/workspace/authored-followup.txt",
+        ] {
+            assert!(sent.contains(authored), "{protocol:?} changed {authored}");
+        }
+        let sent_arguments = match protocol {
+            ProviderProtocol::ChatCompletions => {
+                let calls = body["messages"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find_map(|message| message.get("tool_calls"))
+                    .unwrap();
+                serde_json::from_str::<serde_json::Value>(
+                    calls[0]["function"]["arguments"].as_str().unwrap(),
+                )
+                .unwrap()
+            }
+            ProviderProtocol::OpenAiResponses => {
+                let call = body["input"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|item| item["type"] == "function_call")
+                    .unwrap();
+                serde_json::from_str::<serde_json::Value>(call["arguments"].as_str().unwrap())
+                    .unwrap()
+            }
+            ProviderProtocol::AnthropicMessages => body["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|message| message["content"].as_array().unwrap())
+                .find(|block| block["type"] == "tool_use")
+                .unwrap()["input"]
+                .clone(),
+            ProviderProtocol::GoogleGenerateContent => body["contents"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|message| message["parts"].as_array().unwrap())
+                .find_map(|part| part.get("functionCall"))
+                .unwrap()["args"]
+                .clone(),
+        };
+        assert_eq!(
+            sent_arguments,
+            serde_json::json!({
+                "task": expected_task,
+                "path": "/workspace/authored-followup.txt",
+                "wait": true,
+                "max_turns": 3
+            }),
+            "{protocol:?} changed authored argument structure"
+        );
+        assert_eq!(serde_json::to_vec(&messages).unwrap(), messages_before);
+        assert_eq!(
+            messages
+                .iter()
+                .map(|message| message.content.clone())
+                .collect::<Vec<_>>(),
+            content_before
+        );
+        assert_eq!(
+            messages[assistant_index].tool_calls.as_ref().unwrap()[0]
+                .function
+                .arguments_retrieved_spans,
+            argument_metadata_before
+        );
+        assert_eq!(canonical, canonical_before);
+        assert_eq!(serde_json::to_vec(&canonical).unwrap(), saved);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = test_client_with_protocol(
+            format!("http://{}/v1", listener.local_addr().unwrap()),
+            fast_policy(),
+            protocol,
+        )
+        .with_filter_for_test(retrieved_wire_filter());
+        let mut invalid = messages.clone();
+        let function = &mut invalid[assistant_index].tool_calls.as_mut().unwrap()[0].function;
+        function.arguments_retrieved_spans = vec![RetrievedSpan {
+            source: None,
+            start: argument_start,
+            end: function.arguments.len() + 1,
+        }];
+        let error = client.chat_stream(&invalid, &tools).await.unwrap_err();
+        assert!(
+            matches!(error, ProviderError::Protocol(_)),
+            "{protocol:?} did not reject invalid argument origins: {error}"
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(40), listener.accept())
+                .await
+                .is_err(),
+            "{protocol:?} sent arguments with invalid source metadata"
+        );
+    }
+}
+
+#[tokio::test]
+async fn retrieved_legacy_unknown_is_withheld_before_http_but_authored_markers_remain_readable() {
+    use crate::agent::ProviderProtocol;
+    let text = "UserPromptCanary\n\n--- Attached file: example.txt ---\nAuthoredMarkerCanary\n--- End file ---";
+    for protocol in [
+        ProviderProtocol::ChatCompletions,
+        ProviderProtocol::OpenAiResponses,
+        ProviderProtocol::AnthropicMessages,
+        ProviderProtocol::GoogleGenerateContent,
+    ] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = test_client_with_protocol(
+            format!("http://{}/v1", listener.local_addr().unwrap()),
+            fast_policy(),
+            protocol,
+        )
+        .with_filter_for_test(retrieved_wire_filter());
+        let mut legacy = user(text);
+        legacy.retrieved_spans = None;
+        let messages = AgentClient::build_messages(None, &[legacy], None, &[]).unwrap();
+        let error = client.chat_stream(&messages, &[]).await.unwrap_err();
+        assert!(
+            matches!(error,ProviderError::Protocol(ref message) if message.contains("source metadata")),
+            "{protocol:?}: {error}"
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(40), listener.accept())
+                .await
+                .is_err(),
+            "{protocol:?} sent legacy plaintext"
+        );
+        let messages = AgentClient::build_messages(None, &[user(text)], None, &[]).unwrap();
+        let sent = capture_retrieved_wire_request(protocol, &messages, &[])
+            .await
+            .to_string();
+        assert!(
+            sent.contains("AuthoredMarkerCanary"),
+            "{protocol:?} reclassified authored prose"
+        );
+    }
+}
+
+#[tokio::test]
+async fn privacy_prepared_body_receipt_rejects_tamper_before_socket() {
+    let root = tempfile::tempdir().unwrap();
+    let context = crate::privacy::Context::open(
+        root.path().join("profile"),
+        root.path().into(),
+        uuid::Uuid::new_v4(),
+        None,
+    )
+    .unwrap();
+    context.allow_ephemeral();
+    let mut policy = context.policy();
+    policy.enabled = true;
+    context.save_policy(policy).unwrap();
+    let prepared = br#"{"model":"model","messages":[{"role":"user","content":"PUBLIC_A"}]}"#;
+    let changed = br#"{"model":"model","messages":[{"role":"user","content":"PUBLIC_B"}]}"#;
+    assert_eq!(prepared.len(), changed.len());
+    for receipt in [
+        Some(crate::provider_replay::PreparedBodyReceipt::new(prepared)),
+        None,
+    ] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!(
+            "http://{}/v1/chat/completions",
+            listener.local_addr().unwrap()
+        );
+        let client = test_client(endpoint.clone(), fast_policy());
+        client
+            .request_store
+            .set_privacy_context(Some(context.clone()));
+        let replay = crate::provider_replay::ReplayBindings {
+            privacy_body: receipt,
+            privacy_context: Some(context.clone()),
+            privacy_revision: Some(context.policy().revision),
+            privacy_policy_digest: Some(context.policy_fingerprint()),
+            ..Default::default()
+        };
+        let result = execute_provider_request(
+            &client,
+            crate::agent::ProviderProtocol::ChatCompletions.adapter(),
+            &endpoint,
+            changed,
+            &replay,
+            1,
+            None,
+            None,
+        )
+        .await;
+        assert!(
+            matches!(result, Err(ProviderError::PrivacyBlocked { ref detail }) if detail.contains("changed after privacy projection")),
+            "{result:?}"
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(150), listener.accept())
+                .await
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn privacy_prepared_body_receipt_compares_all_bytes_and_hides_debug_content() {
+    let mut body = vec![b'x'; 1024 * 1024];
+    let receipt = crate::provider_replay::PreparedBodyReceipt::new(&body);
+    assert!(receipt.matches(&body));
+    body[512 * 1024] = b'y';
+    assert!(!receipt.matches(&body));
+    assert!(!receipt.matches(&body[..body.len() - 1]));
+    let secret = crate::provider_replay::PreparedBodyReceipt::new(b"private-body-canary");
+    assert!(!format!("{secret:?}").contains("private-body-canary"));
 }

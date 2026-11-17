@@ -1,6 +1,8 @@
+Do not start this plan unless the task names it. The continuation is [AGT-271](../../docs/exec-plans/active/AGT-271-task-first-economic-delegation.md).
+
 # ORCH-CA-001 — Production-Safe `codex-team` and `ca` Integration
 
-Status: ACTIVE — artifact learning loop validated; clean commits and production-isolation MCP pilot pending
+Status: HELD — artifact learning loop validated; clean commits and production-isolation MCP pilot pending
 Owner/session: Codex `/root`
 Last updated: 2026-08-22
 

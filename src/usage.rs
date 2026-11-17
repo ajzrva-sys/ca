@@ -316,6 +316,7 @@ pub enum UsageKind {
     ProjectInit,
     Review,
     Subagent,
+    Inference,
     ProviderProbe,
     Btw,
     SessionTitle,
@@ -332,7 +333,7 @@ pub enum UsageKind {
 }
 
 impl UsageKind {
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 22] = [
         Self::MainTurn,
         Self::ToolContinuation,
         Self::Check,
@@ -341,6 +342,7 @@ impl UsageKind {
         Self::ProjectInit,
         Self::Review,
         Self::Subagent,
+        Self::Inference,
         Self::ProviderProbe,
         Self::Btw,
         Self::SessionTitle,
@@ -366,6 +368,7 @@ impl UsageKind {
             Self::ProjectInit => "project initialization",
             Self::Review => "review",
             Self::Subagent => "subagent",
+            Self::Inference => "inference",
             Self::ProviderProbe => "provider probe",
             Self::Btw => "btw",
             Self::SessionTitle => "session title",
@@ -984,6 +987,10 @@ fn render_report_with_routes(
             continue;
         }
         let count = totals.by_kind.get(&kind).copied().unwrap_or(0);
+        // Keep the existing usage layout when no inference has occurred.
+        if kind == UsageKind::Inference && count == 0 {
+            continue;
+        }
         if kind == UsageKind::ContextCheckpoint {
             let handoffs = totals
                 .by_kind
@@ -1986,6 +1993,17 @@ mod tests {
         assert_eq!(truncated.snapshot.records.len(), MAX_USAGE_RECORDS);
         assert_eq!(truncated.dropped_since_cursor, 1);
         assert_eq!(truncated.snapshot.evicted_records, 1);
+    }
+
+    #[test]
+    fn hrs317_inference_usage_is_reported_after_a_request_without_empty_row_noise() {
+        let mut ledger = UsageLedger::default();
+        assert!(!render_report(&ledger.snapshot(), &HashMap::new()).contains("inference:"));
+        let request = ledger.begin(UsageKind::Inference, "local", "model");
+        ledger.finish(request, None, UsageOutcome::Completed);
+        let report = render_report(&ledger.snapshot(), &HashMap::new());
+        assert!(report.contains("inference: 1"));
+        assert!(report.contains("tokens unknown"));
     }
 
     #[test]

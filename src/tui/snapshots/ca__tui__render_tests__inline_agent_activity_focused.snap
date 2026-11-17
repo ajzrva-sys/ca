@@ -2,7 +2,6 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 I launched two focused explorations.
 
 
@@ -11,7 +10,7 @@ I launched two focused explorations.
  ›◆ Reviewer Audit session structure · Waiting for approval                         review-model 0s
       status: Waiting for approval · id: bbbbbbbb
       │ 00:00:00  approval required for run_command
-  ↑/↓ select · Enter details · m message · y/n approval · c cancel · Esc close
+  ↑/↓ select · Enter details · m message · y/n approval · c cancel · X subtree · Esc close
 
 
 
@@ -26,14 +25,14 @@ I launched two focused explorations.
 
 
 
-
-
+  Audit learning hooks and tools · 0s · read_file
+ ›Audit session structure · 0s · run_command
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                                                                   │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
-1 messages · / commands
+│› Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto · 1 messages
+/ commands · Ctrl+\ dashboard · ↑ history
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
 I launched two focused explorations.
 
 
@@ -42,7 +41,7 @@ I launched two focused explorations.
  ›◆ Reviewer Audit se… · Waiting for approval review-mo… 0s
       status: Waiting for approval · id: bbbbbbbb
       │ 00:00:00  approval required for run_command
-  ↑/↓ select · Enter · m · y/n · c · Esc
+  ↑/↓ select · Enter · m · y/n · c · X subtree · Esc
 
 
 
@@ -51,9 +50,10 @@ I launched two focused explorations.
 
 
 
-
-
+  Audit learning hooks and tools · 0s · read_file
+ ›Audit session structure · 0s · run_command
 ╭──────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                           │
-╰──────────────────────────────────────────── agent · auto ╯
-1 messages · / commands
+│› Ask anything…                                           │
+╰──────────────────────────────────────────────────────────╯
+ca · model auto · 1 messages
+/ commands · Ctrl+\ dashboard · ↑ history

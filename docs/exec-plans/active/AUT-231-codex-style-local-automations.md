@@ -1,6 +1,8 @@
+Do not start this plan unless the task names it. The continuation is [AGT-271](AGT-271-task-first-economic-delegation.md).
+
 # AUT-231 — Codex-Style Local Automations
 
-Status: IN PROGRESS (resumed 2026-10-05 as part of the user-authorized oracle feature implementation)
+Status: HELD (resumed 2026-10-05 as part of the user-authorized oracle feature implementation)
 Owner/session: current Codex collaboration; source implementation and temporary-fixture validation
 Last updated: 2026-10-06 01:34 UTC
 

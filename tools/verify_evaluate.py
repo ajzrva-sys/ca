@@ -25,7 +25,7 @@ HOST_FIELDS = {"schema", "kind", "parent_turn", "origin_turn", "agent_id", "prov
                "model", "status", "candidate_digest", "data"}
 REVIEW_REPLY = "VERIFY_REVIEW_INTEGRATED_OK"
 REVIEW_REPORT = {"approved": True, "findings": [],
-                 "summary": "Read probe-output.txt from disk; exact candidate has no actionable findings."}
+                 "summary": "Read the exact candidate from disk; no actionable findings."}
 CARGO_ARGS = {
     "preflight": ["metadata", "--locked", "--offline", "--format-version", "1", "--no-deps"],
     "format": ["fmt", "--all", "--", "--check"],
@@ -51,6 +51,26 @@ class EvidenceError(Exception):
 def require(condition, message):
     if not condition:
         raise EvidenceError(message)
+
+
+def same_tool_function(left, right):
+    """Privacy reserializes arguments; compare exact objects, not JSON spacing."""
+    def unique_keys(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("duplicate tool argument")
+            value[key] = item
+        return value
+    if (not isinstance(left, dict) or not isinstance(right, dict)
+            or set(left) != {"name", "arguments"} or set(right) != set(left)
+            or left["name"] != right["name"]):
+        return False
+    try:
+        return json.loads(left["arguments"], object_pairs_hook=unique_keys) == json.loads(
+            right["arguments"], object_pairs_hook=unique_keys)
+    except (ValueError, TypeError):
+        return False
 
 
 def digest(path):
@@ -307,13 +327,40 @@ def evaluate_runtime(path, report):
     results = [message for message in tools[1].get("messages", [])
                if message.get("role") == "tool" and message.get("tool_call_id") == "verify-write-file"]
     require(len(results) == 1 and "VERIFY_TOOL_DISK" in str(results[0].get("content")), "matching real tool result absent from continuation")
+    candidate = Path(artifacts["tool_output"])
+    context = "\n".join(message.get("content", "") for message in tools[0].get("messages", [])
+                        if message.get("role") in {"system", "developer"} and isinstance(message.get("content"), str))
+    roots = re.findall(r"Working directory: ([^\n]+)\. Platform:", context)
+    require(len(roots) == 1 and (roots[0] == str(candidate.parent)
+            or re.fullmatch(r"__CA_PATH_[0-9a-f]{32}__", roots[0]) is not None),
+            "write request did not carry the actual workspace directory reference")
+    calls = entries[1].get("response_tool_calls")
+    continued_calls = [call for message in tools[1].get("messages", []) if message.get("role") == "assistant"
+                       for call in message.get("tool_calls", []) if call.get("id") == "verify-write-file"]
+    require(isinstance(calls, list) and len(calls) == 1 and len(continued_calls) == 1
+            and calls[0].get("id") == "verify-write-file" and calls[0].get("type") == "function"
+            and calls[0].get("function", {}).get("name") == "write_file"
+            and same_tool_function(calls[0].get("function"), continued_calls[0].get("function")),
+            "successful write did not retain the exact requested tool call")
+    try:
+        arguments = json.loads(calls[0]["function"].get("arguments", ""))
+    except (ValueError, TypeError) as error:
+        raise EvidenceError("write request arguments invalid") from error
+    require(arguments == {"path": roots[0] + "/probe-output.txt", "content": "VERIFY_TOOL_DISK\n"},
+            "write request did not use the actual directory reference and exact candidate bytes")
+    marker = re.fullmatch(r"@@ ([^\n]+) \(Created, 17 bytes\) @@\n\+VERIFY_TOOL_DISK", str(results[0].get("content")))
+    require(marker is not None, "write result was not the actual successful creation")
+    reference = marker.group(1)
+    require(reference == str(candidate) if roots[0] == str(candidate.parent) else
+            re.fullmatch(re.escape(roots[0]) + r"/f[0-9a-f_]+\.txt", reference) is not None,
+            "write result reference does not belong to the actual workspace")
     require(all(isinstance(entry.get("response_completed_at"), str) and entry["response_completed_at"] for entry in entries),
             "fixture response was not served before continuation")
-    evaluate_review(runtime, reviews, entries[-1], Path(artifacts["tool_output"]), frames, Path(artifacts["terminal"]))
+    evaluate_review(runtime, reviews, entries[-1], candidate, frames, Path(artifacts["terminal"]), reference)
     return runtime, failures
 
 
-def evaluate_review(runtime, reviews, parent, candidate, frames, terminal):
+def evaluate_review(runtime, reviews, parent, candidate, frames, terminal, reference):
     """Reconcile independent raw requests, returned calls, disk bytes and completion frame."""
     receipt = runtime.get("independent_review")
     require(isinstance(receipt, dict), "independent review receipt missing")
@@ -324,6 +371,7 @@ def evaluate_review(runtime, reviews, parent, candidate, frames, terminal):
     require(all(receipt.get(name) is True for name in ("readback", "readonly", "reviewer_completed", "parent_finalized")),
             "independent review did not finish read-only review and parent finalization")
     digests = []
+    read_path = "probe-output.txt" if reference == str(candidate) else reference
     for entry in reviews:
         body = entry["body"]
         definitions = body.get("tools", [])
@@ -346,9 +394,9 @@ def evaluate_review(runtime, reviews, parent, candidate, frames, terminal):
         match = re.search(r"Independently review the exact turn-owned candidate ([0-9a-f]{64})\.", context)
         inventory = context.split("Exact changed-file inventory:\n", 1)
         require(match is not None and len(inventory) == 2
-                and inventory[1].split("\n\n", 1)[0].splitlines() == [str(candidate)]
+                and inventory[1].split("\n\n", 1)[0].splitlines() == [reference]
                 and "Original request (context only):\nVERIFY_TOOL_REQUEST\n" in context
-                and "Changed path: probe-output.txt\nBefore:\n[missing]\nCandidate:\nVERIFY_TOOL_DISK\n" in context,
+                and "Changed path: " + read_path + "\nBefore:\n[missing]\nCandidate:\nVERIFY_TOOL_DISK\n" in context,
                 "independent review context does not match the exact written candidate")
         digests.append(match.group(1))
     require(digests == [receipt["candidate_digest"]] * 2, "independent review candidate digest drifted")
@@ -365,7 +413,7 @@ def evaluate_review(runtime, reviews, parent, candidate, frames, terminal):
             raise EvidenceError("independent reviewer response arguments invalid") from error
         return arguments
 
-    require(sole_call(reviews[0], "read_file", "verify-review-read") == {"path": "probe-output.txt"},
+    require(sole_call(reviews[0], "read_file", "verify-review-read") == {"path": read_path},
             "independent reviewer read a different candidate")
     continuation = reviews[1]["body"].get("messages", [])
     reads = [message for message in continuation if message.get("role") == "tool"
@@ -373,7 +421,8 @@ def evaluate_review(runtime, reviews, parent, candidate, frames, terminal):
     calls = [call for message in continuation if message.get("role") == "assistant"
              for call in message.get("tool_calls", []) if call.get("id") == "verify-review-read"]
     require(len(reads) == 1 and "VERIFY_TOOL_DISK" in str(reads[0].get("content"))
-            and len(calls) == 1 and calls[0].get("function") == reviews[0]["response_tool_calls"][0].get("function"),
+            and "[tool failed]" not in str(reads[0].get("content"))
+            and len(calls) == 1 and same_tool_function(calls[0].get("function"), reviews[0]["response_tool_calls"][0].get("function")),
             "matching real reviewer readback absent from continuation")
     arguments = sole_call(reviews[1], "report_structured_output", "verify-review-report")
     report = arguments.get("value") if isinstance(arguments, dict) else None
@@ -411,8 +460,8 @@ def evaluate_review(runtime, reviews, parent, candidate, frames, terminal):
             and parent.get("response_terminal_offset") == parent_offset,
             "integrated-review parent response offset invalid")
     # The roster repaint may follow Done, and background status may replace it.
-    # Only a real bottom-row status update after the final report proves completion.
-    marker = re.compile(rb'\x1b\[36;1H(?:\x1b\[[0-?]*[ -/]*[@-~])*Done(?=\x1b|\s|$)')
+    # The notice is above the composer on a 36-row screen: row 31, column 3.
+    marker = re.compile(rb'\x1b\[31;3H(?:\x1b\[[0-?]*[ -/]*[@-~])*Done(?=\x1b|\s|$)')
     match = marker.search(raw, max(offset, parent_offset))
     require(match is not None and evidence.get("done_offset") == match.start(),
             "independent reviewer parent finalization absent after report response and parent response")

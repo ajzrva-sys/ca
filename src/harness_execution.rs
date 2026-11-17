@@ -77,6 +77,8 @@ pub async fn run_isolated_worker<B: ChatBackend + ?Sized>(
         read_only_roots,
         temporary_directory: temporary.path().into(),
         network_allowed: false,
+        host_credentials: true,
+        proxy_port: None,
         hide_other_processes: true,
     };
     let prepared = crate::sandbox::SandboxBackend::new(crate::sandbox::SandboxMode::Required)
@@ -339,6 +341,7 @@ fn decode_request(
                         id: call.id,
                         call_type: call.kind,
                         function: FunctionCall {
+                            arguments_retrieved_spans: Vec::new(),
                             name: call.function.name,
                             arguments: call.function.arguments,
                         },

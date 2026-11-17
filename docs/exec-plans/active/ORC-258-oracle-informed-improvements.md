@@ -1,6 +1,8 @@
+Do not start this plan unless the task names it. The continuation is [AGT-271](AGT-271-task-first-economic-delegation.md).
+
 # ORC-258 — Oracle-informed improvements
 
-Status: ACTIVE — source and integrated checks pass; duration, model and installation gates open
+Status: HELD — source and integrated checks pass; duration, model and installation gates open
 
 ## Objective and delivery boundaries
 

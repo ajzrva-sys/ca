@@ -2,12 +2,12 @@
 source: src/tui/render_tests.rs
 expression: "render_to_text(&state, 60, 24)"
 ---
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
   ┌──────────────────────────────────────────────────────┐
   │ Provider templates                                   │
   │ Select a compatible template to review before saving.│
   │> openai codex                                        │
-  │  17 ready · 23 need integration                      │
+  │  18 ready · 23 need integration                      │
   │                                                      │
   │▸ OpenAI Codex · ready · responses                    │
   │                                                      │
@@ -21,8 +21,8 @@ expression: "render_to_text(&state, 60, 24)"
   │                                                      │
   │                                                      │
   │                                                      │
-  │                                                      │
 ╭─│                                                      │─╮
 │›│                                                      │ │
-╰─└──────────────────────────────────────────────────────┘ ╯
-/ commands
+╰─│                                                      │─╯
+ca└──────────────────────────────────────────────────────┘
+/ commands · Ctrl+\ dashboard · ↑ history

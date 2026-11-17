@@ -26,6 +26,7 @@ regex = "1"
 walkdir = "2.5"
 os_pipe = "1"
 libc = "0.2"
+uuid = { version = "1", features = ["v4"] }
 rmcp = { version = "=3.1.2", features = ["client", "transport-child-process", "transport-io"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 

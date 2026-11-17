@@ -17,6 +17,27 @@ pub enum ApprovalMode {
     RunEverything,
 }
 
+impl AgentMode {
+    /// Label for the status line. Plan covers an armed approval mode, matching
+    /// the Shift+Tab cycle: Normal, Plan, Auto-review, Always-approve.
+    pub fn status_label<'a>(&'a self, approval: &ApprovalMode) -> &'a str {
+        if matches!(self, Self::Plan) {
+            return "plan";
+        }
+        match approval {
+            ApprovalMode::AutoReview => "auto-review",
+            ApprovalMode::RunEverything => "always-approve",
+            ApprovalMode::Allowlist => match self {
+                Self::Agent => "agent",
+                Self::Ask => "ask",
+                Self::Debug => "debug",
+                Self::Plan => "plan",
+                Self::Custom(name) => name.as_str(),
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToastKind {
     Success,
@@ -60,7 +81,15 @@ impl UiToast {
     }
 
     pub fn is_visible(&self) -> bool {
+        // Error toasts stay until dismissed or replaced; they are too easy to miss on a timer.
+        if self.kind == ToastKind::Error {
+            return true;
+        }
         std::time::Instant::now() < self.expires_at
+    }
+
+    pub fn is_sticky(&self) -> bool {
+        self.kind == ToastKind::Error
     }
 }
 
@@ -94,6 +123,9 @@ pub enum ToolStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Message {
+    /// Host-owned origins in canonical text. None is legacy, unknown origin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retrieved_spans: Option<Vec<crate::retrieved_content::RetrievedSpan>>,
     pub role: Role,
     pub content: String,
     pub tool_calls: Option<Vec<ToolCall>>,
@@ -156,15 +188,58 @@ pub struct AgentActivityFocusState {
     pub message_cursor: usize,
     pub cancel_confirmation: bool,
     pub cancel_confirm_selected: bool,
+    pub cancel_subtree: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolCall {
+    /// Descriptive, byte-bound native evidence. Restored metadata is not authority.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::context_observation::deserialize_optional"
+    )]
+    pub observation: Option<crate::context_observation::ObservationV1>,
+    /// Host-issued receipt for this exact completed source read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_source: Option<String>,
     pub id: String,
     pub name: String,
     pub arguments: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub arguments_retrieved_spans: Vec<crate::retrieved_content::RetrievedSpan>,
     pub status: ToolStatus,
     pub output: Option<String>,
+    /// Set when the tool enters Running; used for live elapsed display.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl ToolCall {
+    /// Called only after a native result has been published to this call.
+    pub(crate) fn bind_native_observation(&mut self) {
+        if self.observation.as_ref().is_some_and(|observation| {
+            (self.status == ToolStatus::Done
+                || observation.kind == crate::context_observation::ObservationKind::Execution)
+                && observation.matches(
+                    &self.name,
+                    &self.arguments,
+                    self.output.as_deref().unwrap_or_default(),
+                )
+        }) {
+            return;
+        }
+        self.observation = self
+            .output
+            .as_deref()
+            .and_then(|output| {
+                crate::context_observation::bind_native_result(&self.name, &self.arguments, output)
+            })
+            .filter(|observation| {
+                self.status == ToolStatus::Done
+                    || observation.kind == crate::context_observation::ObservationKind::Execution
+            });
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -224,9 +299,17 @@ impl FileActivityPresentation {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ComposerFocus {
+    #[default]
+    Composer,
+    Scrollback,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TranscriptBlockKey {
     ToolCalls { first_call_id: String },
+    Thinking { message_index: usize },
 }
 
 impl TranscriptBlockKey {
@@ -343,31 +426,316 @@ pub enum ConfigHubAction {
     Mouse,
     CommandOutput,
     ConfigFile(String),
+    NotificationSave(crate::ui_settings::NotificationStyle),
+    MouseSave(crate::ui_settings::MouseMode),
+    CommandOutputSave(crate::config::CommandOutputPolicy),
+    SandboxSave(crate::sandbox::SandboxMode),
+    ThemeSave(crate::ui_settings::UiTheme),
+    CompactSave(bool),
+    StatusIndicatorsSave(bool),
+    FilterPreviewSave(bool),
+    ToggleSave {
+        toggle: SettingsToggle,
+        enabled: bool,
+    },
+    ToolDiscoverySave(crate::config::ToolDiscoveryMode),
+    BulletSave(crate::ui_settings::BulletStyle),
+    AutoThemeSave {
+        light: bool,
+        theme: Option<crate::ui_settings::UiTheme>,
+    },
+    ApprovalSave(bool),
+    ToolSchemaSave(bool),
+    ReasoningSave(crate::config::ReasoningEffort),
+    OpenCommand {
+        id: crate::tui::commands::CommandId,
+        args: &'static str,
+    },
+    PersonalityMenu,
+    Statusline,
+    Keymap,
+    Permissions,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsToggle {
+    TranscriptTimestamps,
+    AssistantFooters,
+    Scrollbar,
+    ToolMuted,
+    ToolDim,
+    ThinkingAccent,
+    ThinkingAnimate,
+    EditIndent,
+    EditDualNumbers,
+    LineNumbers,
+    ShowThinking,
+    VimMode,
+    SettingDescriptions,
+    TaskBreakdown,
+    ProactiveDelegation,
+    ReviewChanges,
+    KeepAwake,
+}
+
+impl SettingsToggle {
+    pub const fn path(self) -> &'static [&'static str] {
+        match self {
+            Self::TranscriptTimestamps => &["ui", "transcript", "timestamps"],
+            Self::AssistantFooters => &["ui", "transcript", "assistant_footers"],
+            Self::Scrollbar => &["ui", "scrollbar", "enabled"],
+            Self::ToolMuted => &["ui", "blocks", "tool", "muted_collapsed"],
+            Self::ToolDim => &["ui", "blocks", "tool", "dim_details"],
+            Self::ThinkingAccent => &["ui", "blocks", "thinking", "accent_enabled"],
+            Self::ThinkingAnimate => &["ui", "blocks", "thinking", "animate"],
+            Self::EditIndent => &["ui", "blocks", "edit", "indent"],
+            Self::EditDualNumbers => &["ui", "blocks", "edit", "dual_line_numbers"],
+            Self::LineNumbers => &["ui", "line_numbers"],
+            Self::ShowThinking => &["ui", "show_thinking"],
+            Self::VimMode => &["ui", "vim_mode"],
+            Self::SettingDescriptions => &["ui", "setting_descriptions"],
+            Self::TaskBreakdown => &["agent", "automatic_task_breakdown"],
+            Self::ProactiveDelegation => &["agent", "proactive_delegation"],
+            Self::ReviewChanges => &["agent", "review_changes"],
+            Self::KeepAwake => &["agent", "keep_awake"],
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::TranscriptTimestamps => "Transcript timestamps",
+            Self::AssistantFooters => "Assistant footers",
+            Self::Scrollbar => "Scrollbar",
+            Self::ToolMuted => "Muted tool rows",
+            Self::ToolDim => "Dim tool details",
+            Self::ThinkingAccent => "Thinking accent",
+            Self::ThinkingAnimate => "Thinking animation",
+            Self::EditIndent => "Indent edits",
+            Self::EditDualNumbers => "Dual edit line numbers",
+            Self::LineNumbers => "Line numbers",
+            Self::ShowThinking => "Reasoning details",
+            Self::VimMode => "Vim mode",
+            Self::SettingDescriptions => "Setting descriptions",
+            Self::TaskBreakdown => "Task breakdown",
+            Self::ProactiveDelegation => "Proactive delegation",
+            Self::ReviewChanges => "Review changes",
+            Self::KeepAwake => "Keep awake",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingWrite {
+    Toggle {
+        toggle: SettingsToggle,
+        enabled: bool,
+    },
+    ToolDiscovery(crate::config::ToolDiscoveryMode),
+    Bullet(crate::ui_settings::BulletStyle),
+    AutoTheme {
+        light: bool,
+        theme: Option<crate::ui_settings::UiTheme>,
+    },
+    Approval(bool),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigHubSection {
+    Models,
+    AgentApproval,
+    Session,
+    Tools,
+    Appearance,
+    Advanced,
+}
+
+impl ConfigHubSection {
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::Models => "Models",
+            Self::AgentApproval => "Agent & Approval",
+            Self::Session => "Session",
+            Self::Tools => "Tools",
+            Self::Appearance => "Appearance",
+            Self::Advanced => "Advanced",
+        }
+    }
+
+    pub const fn order(self) -> u8 {
+        match self {
+            Self::Models => 0,
+            Self::AgentApproval => 1,
+            Self::Session => 2,
+            Self::Tools => 3,
+            Self::Appearance => 4,
+            Self::Advanced => 5,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigHubChoice {
+    pub label: String,
+    pub description: String,
+    pub action: ConfigHubAction,
+    pub preview: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigHubChoicePage {
+    pub title: String,
+    pub detail: String,
+    pub selected_idx: usize,
+    pub choices: Vec<ConfigHubChoice>,
+    pub sandbox_saved: Option<crate::sandbox::SandboxMode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersonalitySettingsPage {
+    pub personality: String,
+    pub pre_prompt: String,
+    pub selected: usize,
+    pub editing: bool,
+    pub cursor: usize,
+    pub error: Option<String>,
+    pub notice: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigHubPage {
+    List,
+    Choices(ConfigHubChoicePage),
+    Personality(PersonalitySettingsPage),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigHubHit {
+    Close,
+    Item(usize),
+    Choice(usize),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigHubItem {
+    pub section: ConfigHubSection,
     pub label: String,
     pub value: String,
     pub keywords: String,
+    pub description: String,
+    pub opens_screen: bool,
+    pub choices: Option<Vec<ConfigHubChoice>>,
+    pub reset: Option<ConfigHubAction>,
+    pub sandbox_saved: Option<crate::sandbox::SandboxMode>,
     pub action: ConfigHubAction,
 }
 
 impl ConfigHubItem {
+    pub fn row(
+        section: ConfigHubSection,
+        label: impl Into<String>,
+        value: impl Into<String>,
+        keywords: impl Into<String>,
+        description: impl Into<String>,
+        action: ConfigHubAction,
+    ) -> Self {
+        Self {
+            section,
+            label: label.into(),
+            value: value.into(),
+            keywords: keywords.into(),
+            description: description.into(),
+            opens_screen: false,
+            choices: None,
+            reset: None,
+            sandbox_saved: None,
+            action,
+        }
+    }
+
+    pub fn screen(mut self) -> Self {
+        self.opens_screen = true;
+        self
+    }
+
+    pub fn with_choices(
+        mut self,
+        choices: Vec<ConfigHubChoice>,
+        reset: Option<ConfigHubAction>,
+    ) -> Self {
+        self.choices = Some(choices);
+        self.reset = reset;
+        self.opens_screen = true;
+        self
+    }
+
+    pub fn with_optional_choices(self, choices: Option<Vec<ConfigHubChoice>>) -> Self {
+        if let Some(choices) = choices {
+            self.with_choices(choices, None)
+        } else {
+            self
+        }
+    }
+
+    pub fn sandbox_saved(mut self, mode: crate::sandbox::SandboxMode) -> Self {
+        self.sandbox_saved = Some(mode);
+        self
+    }
+
     pub fn matches(&self, filter: &str) -> bool {
         let filter = filter.to_ascii_lowercase();
         filter.is_empty()
             || self.label.to_ascii_lowercase().contains(&filter)
             || self.value.to_ascii_lowercase().contains(&filter)
             || self.keywords.to_ascii_lowercase().contains(&filter)
+            || self.section.title().to_ascii_lowercase().contains(&filter)
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct ConfigHubState {
     pub filter: String,
+    pub search_focused: bool,
     pub selected_idx: usize,
     pub items: Vec<ConfigHubItem>,
+    pub page: ConfigHubPage,
+    pub click_row: Option<u16>,
+    pub hits: std::cell::RefCell<Vec<(u16, ConfigHubHit)>>,
+    /// First rendered line of the settings list. The window moves only to keep
+    /// the selection on screen.
+    pub scroll: std::cell::Cell<usize>,
+    pub choice_scroll: std::cell::Cell<usize>,
+    /// Body height from the last paint. Page keys use it before the next frame.
+    pub viewport_rows: std::cell::Cell<u16>,
+    /// Line index of each visible row, in selection order.
+    pub row_lines: std::cell::RefCell<Vec<usize>>,
+}
+
+impl ConfigHubState {
+    pub fn list(items: Vec<ConfigHubItem>) -> Self {
+        Self {
+            filter: String::new(),
+            search_focused: false,
+            selected_idx: 0,
+            items,
+            page: ConfigHubPage::List,
+            click_row: None,
+            hits: std::cell::RefCell::new(Vec::new()),
+            scroll: std::cell::Cell::new(0),
+            choice_scroll: std::cell::Cell::new(0),
+            viewport_rows: std::cell::Cell::new(0),
+            row_lines: std::cell::RefCell::new(Vec::new()),
+        }
+    }
+
+    pub fn visible_items(&self) -> Vec<&ConfigHubItem> {
+        let mut items: Vec<&ConfigHubItem> = self
+            .items
+            .iter()
+            .filter(|item| item.matches(&self.filter))
+            .collect();
+        items.sort_by_key(|item| item.section.order());
+        items
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -744,6 +1112,7 @@ pub struct StreamingState {
 /// rather than repeatedly rewriting already restored conversation text.
 #[derive(Debug, Clone, Default)]
 pub struct StreamingProviderText {
+    pub retrieved_spans: Vec<crate::retrieved_content::RetrievedSpan>,
     pub content: Option<String>,
     pub thinking: Option<String>,
     pub tool_arguments: std::collections::BTreeMap<usize, String>,
@@ -753,6 +1122,7 @@ pub struct StreamingProviderText {
 pub struct ActiveTurnPromptState {
     pub stable_system: String,
     pub logical_turn_system: String,
+    pub logical_turn_retrieved_spans: Vec<crate::retrieved_content::RetrievedSpan>,
     pub skill_prompt: String,
     pub transient_user_prompts: Vec<String>,
     pub pasted_images: Vec<crate::image_content::ModelImage>,
@@ -850,6 +1220,7 @@ pub enum ResolvedToolStatus {
 /// A pre-resolved tool result carrying its classification.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedToolResult {
+    pub output_source: Option<String>,
     pub tool_id: String,
     pub output: String,
     pub status: ResolvedToolStatus,
@@ -1479,6 +1850,7 @@ pub struct TaskGraphConfirmation {
 
 #[derive(Debug, Clone)]
 pub struct TaskGraphManagerState {
+    pub detail_open: bool,
     pub filter: String,
     pub selected_idx: usize,
     pub confirmation: Option<TaskGraphConfirmation>,
@@ -1858,6 +2230,32 @@ pub enum AcceptanceUiRequest {
     Export(std::path::PathBuf),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BusySubmitMode {
+    Queue,
+    #[default]
+    Steer,
+    Interrupt,
+}
+
+impl BusySubmitMode {
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::Queue => Self::Steer,
+            Self::Steer => Self::Interrupt,
+            Self::Interrupt => Self::Queue,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Queue => "queue",
+            Self::Steer => "steer",
+            Self::Interrupt => "interrupt",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct AppState {
     pub(crate) memory_observer: crate::memory_observer::Observer,
@@ -1903,6 +2301,7 @@ pub struct AppState {
     pub(crate) host_evidence: crate::host_evidence::HostEvidence,
     pub pending_agent_completions: VecDeque<TranscriptAgentSummary>,
     pub pending_job_completions: VecDeque<crate::jobs::JobInfo>,
+    pub pending_log_analyses: Vec<crate::jobs::JobInfo>,
     pub agent_activity_focus: Option<AgentActivityFocusState>,
     pub streaming: Option<StreamingState>,
     pub active_turn_prompt: Option<ActiveTurnPromptState>,
@@ -1962,6 +2361,24 @@ pub struct AppState {
     pub(crate) personality_editor: Option<crate::tui::personality::Editor>,
     pub(crate) personality_editor_generation: u64,
     pub(crate) personality_operation: Option<crate::personality_questionnaire::Operation>,
+    pub(crate) privacy_editor: Option<crate::tui::privacy::Editor>,
+    pub(crate) privacy_editor_generation: u64,
+    /// A task held locally while the user reviews its filter suggestions.
+    pub(crate) pending_filter_task: Option<(String, String, Option<uuid::Uuid>)>,
+    pub(crate) reviewed_filter_task: Option<String>,
+    pub(crate) task_filter_preview_enabled: bool,
+    pub(crate) task_filter_review: Option<crate::filter_review::Review>,
+    pub(crate) task_filter_send_authorized: bool,
+    pub(crate) task_filter_skip_hook: bool,
+    pub(crate) task_filter_attachment_sources:
+        Vec<std::sync::Arc<crate::attachments::AttachmentSource>>,
+    pub(crate) filter_queue_origin: Option<crate::queue::PendingInput>,
+    pub(crate) privacy_binding_generation: u64,
+    pub(crate) privacy_binding_in_flight: bool,
+    pub(crate) privacy_turn_resume: bool,
+    pub(crate) privacy_binding_error: Option<String>,
+    pub(crate) privacy_attachment_sources:
+        Vec<std::sync::Arc<crate::attachments::AttachmentSource>>,
     pub user_memory_store: Option<crate::memory::MemoryStore>,
     pub workspace_memory_store: Option<crate::memory::MemoryStore>,
     pub maintenance_request: Option<crate::learning::MaintenanceRequest>,
@@ -1979,6 +2396,8 @@ pub struct AppState {
     pub reasoning_effort: Option<crate::config::ReasoningEffort>,
     pub reasoning_picker: Option<ReasoningPickerState>,
     pub show_thinking: bool,
+    /// Notes on each settings row. Off leaves the label and value only.
+    pub show_setting_descriptions: bool,
     pub slash_palette_open: bool,
     pub slash_filter: String,
     pub selected_slash_idx: usize,
@@ -2000,7 +2419,13 @@ pub struct AppState {
     pub recall_generation: u64,
     pub pending_input_action: Option<crate::tui::commands::InputAction>,
     pub status_message: Option<String>,
+    /// First time the current non-error status message was shown as a toast.
+    pub status_notice_at: std::cell::Cell<Option<(u64, std::time::Instant)>>,
     pub toast: Option<UiToast>,
+    pub composer_focus: ComposerFocus,
+    pub transcript_selection: usize,
+    /// A choice question stays on screen while the scrollback has the keyboard.
+    pub interaction_parked: bool,
     pub should_quit: bool,
     pub transcript_scroll: crate::tui::transcript::TranscriptScrollState,
     pub(crate) shown_adapter_warnings: std::collections::VecDeque<u64>,
@@ -2053,6 +2478,7 @@ pub struct AppState {
     pub acceptance_request: Option<AcceptanceUiRequest>,
     pub acceptance_running: bool,
     pub job_owner: crate::jobs::JobOwner,
+    pub observations_pending_validation: bool,
     pub pending_workspace_root: Option<std::path::PathBuf>,
     pub vim_mode: bool,
     pub vim_state: VimMode,
@@ -2109,6 +2535,17 @@ pub struct AppState {
     pub kill_ring: Vec<String>,
     pub kill_ring_idx: Option<usize>,
     pub input_queue: crate::queue::InputQueue,
+    pub busy_submit_mode: BusySubmitMode,
+    /// `None` follows the workspace. `Some(true)` is `/tools coding`. `Some(false)` is `/tools full`.
+    pub schema_posture_override: Option<bool>,
+    pub empty_reply_retried: bool,
+    pub direct_check_asked: bool,
+    pub turn_code_edits: Vec<String>,
+    pub turn_has_direct_check: bool,
+    pub retired_tool_image_ids: std::collections::HashSet<String>,
+    pub repetition_generation: Option<u64>,
+    /// How many times this turn has been resent after a server loop flag. Two stops.
+    pub server_loop_resamples: u8,
     pub restored_queue_ids: std::collections::HashSet<uuid::Uuid>,
     pub queue_view_open: bool,
     pub turn_lifecycle: crate::activity::TurnLifecycle,
@@ -2124,6 +2561,10 @@ pub struct AppState {
     pub retry_boundary: Option<RetryBoundary>,
     pub(crate) turn_recovery: crate::turn_recovery::State,
     pub retry_requested: bool,
+    pub(crate) privacy_retry_pending: bool,
+    /// Plan-stage alias commit is waiting for `SessionTurnReady`. Do not start a
+    /// user turn when that preparation finishes.
+    pub(crate) plan_privacy_owner_wait: bool,
     pub active_turn_route: Option<crate::fallback::TurnProviderRoute>,
     pub fallback_provenance: Vec<crate::fallback::TurnProviderProvenance>,
     pub external_editor_pending: Option<String>,
@@ -2208,12 +2649,15 @@ pub struct AppState {
     pub current_context_tokens: u64,
     pub current_context_window_tokens: Option<u64>,
     pub checkpoint_in_flight: bool,
+    /// A tool continuation is waiting for the compaction model's summary.
+    pub hold_continuation_for_summary: bool,
     pub(crate) checkpoint_abort: Option<tokio::task::AbortHandle>,
     pub(crate) checkpoint_writer: Option<crate::session_access::SessionWriterLease>,
     pub(crate) checkpoint_hook_owner: Option<crate::hooks::HookOwner>,
     pub checkpoint_request: Option<crate::context::ContextCheckpointRequest>,
     pub last_auto_checkpoint_attempt: Option<usize>,
     pub checkpoint_generation: u64,
+    pub checkpoint_owner: u64,
     pub change_review: crate::changes::ChangeReviewState,
     pub changes_load_requested: bool,
     pub change_walkthrough: Option<crate::change_walkthrough::ChangeWalkthroughState>,
@@ -2301,6 +2745,7 @@ pub struct AppState {
     pub attachment_frecency_generation: u64,
     pub composer_attachments: Vec<crate::attachments::ComposerAttachment>,
     pub pending_attachment_context: Option<String>,
+    pub pending_input_provenance: Option<(String, Vec<crate::retrieved_content::RetrievedSpan>)>,
     pub active_attachment_context: Option<String>,
     pub attachment_resolution_generation: u64,
     pub attachment_resolution_busy: bool,
@@ -2342,12 +2787,12 @@ pub struct AppState {
     pub worktree_setup_confirmation: Option<crate::worktree_setup::SetupConfirmation>,
     /// Tracks user session outcomes for harness improvement telemetry.
     pub outcome_tracker: crate::session_outcome::OutcomeTracker,
-    /// Full-width classification-style banner while the provider filter is active.
-    pub filter_banner: std::sync::atomic::AtomicBool,
-    /// Second banner row. The tick copies it from the installed filter.
-    pub filter_summary: std::sync::Mutex<String>,
+    /// One coherent presentation snapshot copied from the installed filter on refresh.
+    pub filter_presentation: std::sync::Mutex<crate::provider_filter::FilterPresentation>,
     /// Side pane holding the latest request body after the filter rewrites it.
     pub provider_pane: crate::tui::provider_pane::ProviderPane,
+    pub task_map_collapsed: bool,
+    pub automatic_task_breakdown: bool,
 }
 
 impl AppState {
@@ -2402,6 +2847,40 @@ impl AppState {
 
     pub fn expanded_composer_text(&self) -> String {
         self.composer_ui.expanded_text(&self.input)
+    }
+
+    /// One-line preview while an image chip is processing or the caret is on it.
+    pub fn image_chip_preview(&self) -> Option<String> {
+        if self.image_attachment_busy {
+            return Some("Processing clipboard image…".into());
+        }
+        let cursor = self.input_cursor;
+        let mut chips = Vec::new();
+        for element in &self.composer_ui.atomic_elements {
+            if let crate::tui::composer::AtomicKind::Image { source } = &element.kind {
+                chips.push((chips.len(), element.range.clone(), source));
+            }
+        }
+        let chosen = chips
+            .iter()
+            .find(|(_, range, _)| cursor == range.end)
+            .or_else(|| {
+                chips
+                    .iter()
+                    .find(|(_, range, _)| range.start <= cursor && cursor < range.end)
+            })?;
+        let (ordinal, _, source) = chosen;
+        let image = self.pasted_images.get(*ordinal)?;
+        let origin = match source {
+            crate::tui::composer::ImageChipSource::Clipboard => "clipboard".to_string(),
+            crate::tui::composer::ImageChipSource::File { name } => name.clone(),
+        };
+        Some(format!(
+            "#{} · {}×{} · {origin}",
+            ordinal + 1,
+            image.width(),
+            image.height()
+        ))
     }
 
     pub fn capture_composer_draft(&self) -> crate::tui::composer::HistoryDraft {
@@ -2545,6 +3024,7 @@ impl AppState {
         pane.provider_trace = self.provider_trace.clone();
         pane.show_line_numbers = self.show_line_numbers;
         pane.show_thinking = self.show_thinking;
+        pane.show_setting_descriptions = self.show_setting_descriptions;
         pane.show_transcript_timestamps = self.show_transcript_timestamps;
         pane.show_assistant_footers = self.show_assistant_footers;
         pane.vim_mode = self.vim_mode;
@@ -2619,6 +3099,7 @@ impl AppState {
             host_evidence: crate::host_evidence::HostEvidence::default(),
             pending_agent_completions: VecDeque::new(),
             pending_job_completions: VecDeque::new(),
+            pending_log_analyses: Vec::new(),
             agent_activity_focus: None,
             streaming: None,
             active_turn_prompt: None,
@@ -2672,6 +3153,7 @@ impl AppState {
             reasoning_effort: None,
             reasoning_picker: None,
             show_thinking: false,
+            show_setting_descriptions: true,
             slash_palette_open: false,
             slash_filter: String::new(),
             selected_slash_idx: 0,
@@ -2693,7 +3175,11 @@ impl AppState {
             recall_generation: 0,
             pending_input_action: None,
             status_message: None,
+            status_notice_at: std::cell::Cell::new(None),
             toast: None,
+            composer_focus: ComposerFocus::Composer,
+            transcript_selection: 0,
+            interaction_parked: false,
             should_quit: false,
             transcript_scroll: crate::tui::transcript::TranscriptScrollState::default(),
             shown_adapter_warnings: Default::default(),
@@ -2745,6 +3231,7 @@ impl AppState {
             acceptance_request: None,
             acceptance_running: false,
             job_owner: crate::jobs::JobOwner::new(None),
+            observations_pending_validation: false,
             pending_workspace_root: None,
             vim_mode: false,
             vim_state: VimMode::Normal,
@@ -2803,6 +3290,15 @@ impl AppState {
             kill_ring: Vec::new(),
             kill_ring_idx: None,
             input_queue: crate::queue::InputQueue::default(),
+            busy_submit_mode: BusySubmitMode::Steer,
+            schema_posture_override: None,
+            empty_reply_retried: false,
+            direct_check_asked: false,
+            turn_code_edits: Vec::new(),
+            turn_has_direct_check: false,
+            retired_tool_image_ids: std::collections::HashSet::new(),
+            repetition_generation: None,
+            server_loop_resamples: 0,
             restored_queue_ids: std::collections::HashSet::new(),
             queue_view_open: false,
             turn_lifecycle: crate::activity::TurnLifecycle::default(),
@@ -2818,6 +3314,8 @@ impl AppState {
             retry_boundary: None,
             turn_recovery: crate::turn_recovery::State::default(),
             retry_requested: false,
+            privacy_retry_pending: false,
+            plan_privacy_owner_wait: false,
             active_turn_route: None,
             fallback_provenance: Vec::new(),
             external_editor_pending: None,
@@ -2901,12 +3399,14 @@ impl AppState {
             current_context_tokens: 0,
             current_context_window_tokens: None,
             checkpoint_in_flight: false,
+            hold_continuation_for_summary: false,
             checkpoint_abort: None,
             checkpoint_writer: None,
             checkpoint_hook_owner: None,
             checkpoint_request: None,
             last_auto_checkpoint_attempt: None,
             checkpoint_generation: 0,
+            checkpoint_owner: 1,
             change_review: crate::changes::ChangeReviewState::default(),
             changes_load_requested: false,
             change_walkthrough: None,
@@ -2993,6 +3493,7 @@ impl AppState {
             attachment_frecency_generation: 0,
             composer_attachments: Vec::new(),
             pending_attachment_context: None,
+            pending_input_provenance: None,
             active_attachment_context: None,
             attachment_resolution_generation: 0,
             attachment_resolution_busy: false,
@@ -3040,6 +3541,21 @@ impl AppState {
             personality_editor: None,
             personality_editor_generation: 0,
             personality_operation: None,
+            privacy_editor: None,
+            privacy_editor_generation: 0,
+            pending_filter_task: None,
+            reviewed_filter_task: None,
+            task_filter_preview_enabled: false,
+            task_filter_review: None,
+            task_filter_send_authorized: false,
+            task_filter_skip_hook: false,
+            task_filter_attachment_sources: Vec::new(),
+            filter_queue_origin: None,
+            privacy_binding_generation: 0,
+            privacy_binding_in_flight: false,
+            privacy_turn_resume: false,
+            privacy_binding_error: None,
+            privacy_attachment_sources: Vec::new(),
             user_memory_store: None,
             workspace_memory_store: None,
             maintenance_request: None,
@@ -3054,9 +3570,10 @@ impl AppState {
             hook_blocked: false,
             hook_blocked_event: None,
             outcome_tracker: crate::session_outcome::OutcomeTracker::new(String::new(), ""),
-            filter_banner: std::sync::atomic::AtomicBool::new(false),
-            filter_summary: std::sync::Mutex::new(String::new()),
+            filter_presentation: std::sync::Mutex::new(Default::default()),
             provider_pane: crate::tui::provider_pane::ProviderPane::default(),
+            task_map_collapsed: false,
+            automatic_task_breakdown: false,
         }
     }
 }

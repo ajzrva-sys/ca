@@ -71,15 +71,19 @@ class IndependentReviewFixtureTests(unittest.TestCase):
 
     def approved_parent(self):
         write = runtime.function_call(runtime.TOOL_ID, "write_file",
-                                      {"path": runtime.TOOL_PATH, "content": runtime.TOOL_CONTENT})
+                                      {"path": str(self.path), "content": runtime.TOOL_CONTENT})
         chat = {"model": "fixture-model", "stream": True,
                 "messages": [{"role": "user", "content": runtime.CHAT_INPUT}]}
         tool = copy.deepcopy(chat)
         tool["messages"].append({"role": "user", "content": runtime.TOOL_INPUT})
+        tool["messages"].append({"role": "system", "content":
+            "Working directory: " + str(self.workspace) + ". Platform: test."})
         result = copy.deepcopy(tool)
         result["messages"] += [{"role": "assistant", "tool_calls": [write]},
                                {"role": "tool", "tool_call_id": runtime.TOOL_ID,
-                                "content": runtime.TOOL_CONTENT}]
+                                "content": "@@ " + str(self.path) + " (Created, " +
+                                    str(len(runtime.TOOL_CONTENT.encode())) + " bytes) @@\n+" +
+                                    runtime.TOOL_CONTENT.rstrip("\n")}]
         review = copy.deepcopy(self.body)
         read, _ = runtime.fixture_response(review, self.workspace)
         continuation = copy.deepcopy(review)
@@ -109,6 +113,47 @@ class IndependentReviewFixtureTests(unittest.TestCase):
     def test_actual_served_read_report_and_current_turn_enable_one_final_parent_text(self):
         parent, _, history = self.approved_parent()
         self.assertEqual(runtime.fixture_response(parent, self.workspace, history), ([], runtime.REVIEW_REPLY))
+
+    def test_private_write_reference_is_consumed_by_the_actual_read_report_roundtrip(self):
+        parent, _, history = self.approved_parent()
+        root = "__CA_PATH_" + "1" * 32 + "__"
+        reference = root + "/f001.txt"
+        for entry in history:
+            for message in entry["body"]["messages"]:
+                if message.get("role") in ("system", "tool"):
+                    message["content"] = message["content"].replace(str(self.path), reference).replace(str(self.workspace), root)
+                    message["content"] = message["content"].replace("Changed path: " + runtime.TOOL_PATH, "Changed path: " + reference)
+                for call in message.get("tool_calls", []):
+                    if call["id"] == runtime.TOOL_ID:
+                        call["function"]["arguments"] = json.dumps({"path": root + "/" + runtime.TOOL_PATH,
+                                                                     "content": runtime.TOOL_CONTENT})
+                    elif call["id"] == runtime.REVIEW_READ_ID:
+                        call["function"]["arguments"] = json.dumps({"path": reference})
+            for call in entry["response_tool_calls"]:
+                if call["id"] == runtime.TOOL_ID:
+                    call["function"]["arguments"] = json.dumps({"path": root + "/" + runtime.TOOL_PATH,
+                                                                 "content": runtime.TOOL_CONTENT})
+                elif call["id"] == runtime.REVIEW_READ_ID:
+                    call["function"]["arguments"] = json.dumps({"path": reference})
+        self.assertEqual(runtime.fixture_response(history[1]["body"], self.workspace)[0], history[1]["response_tool_calls"])
+        self.assertEqual(runtime.fixture_response(parent, self.workspace, history), ([], runtime.REVIEW_REPLY))
+        for wrong in (runtime.TOOL_PATH, root + "/f002.txt"):
+            bad = copy.deepcopy(history)
+            bad[3]["body"]["messages"][0]["content"] = bad[3]["body"]["messages"][0]["content"].replace(reference, wrong)
+            with self.subTest(reference=wrong), self.assertRaisesRegex(ValueError, "changed-file context"):
+                runtime.fixture_response(parent, self.workspace, bad)
+        bad = copy.deepcopy(history[2]["body"])
+        bad["messages"][-2]["tool_calls"][0]["function"]["arguments"] = json.dumps({
+            "path": runtime.TOOL_PATH, "content": runtime.TOOL_CONTENT})
+        with self.assertRaisesRegex(ValueError, "exact requested tool call"):
+            runtime.fixture_response(bad, self.workspace)
+
+    def test_failed_write_result_never_returns_the_success_marker(self):
+        _, _, history = self.approved_parent()
+        body = history[2]["body"]
+        body["messages"][-1]["content"] = "[tool failed]\n" + runtime.TOOL_CONTENT
+        with self.assertRaisesRegex(ValueError, "successful result"):
+            runtime.fixture_response(body, self.workspace)
 
     def test_foreign_noncanonical_or_wrong_origin_turn_cannot_replace_current_candidate(self):
         parent, evidence, history = self.approved_parent()
@@ -255,10 +300,11 @@ class IndependentReviewFixtureTests(unittest.TestCase):
             runtime.fixture_response(self.body, self.workspace)
 
     def test_parent_done_must_follow_report_response_in_actual_status_updates(self):
-        done = b"\x1b[36;1H\x1b[38;2;229;190;111mDone\x1b[0m"
+        done = b"\x1b[31;3H\x1b[38;2;229;190;111mDone\x1b[0m"
         self.assertIsNone(runtime.review_finalization_offset(done + b"report response", 36, len(done)))
         self.assertIsNone(runtime.review_finalization_offset(b"content Done", 36, 0))
         self.assertIsNone(runtime.review_finalization_offset(done, 24, 0))
+        self.assertIsNone(runtime.review_finalization_offset(b"\x1b[36;1HDone", 36, 0))
         raw = b"report response" + done + b"Reviewer Completed Analyze skipped"
         self.assertEqual(runtime.review_finalization_offset(raw, 36, len(b"report response")), raw.index(done))
 

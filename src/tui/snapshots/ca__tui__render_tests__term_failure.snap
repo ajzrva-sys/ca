@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
 
       ┌ Durable terminals ───────────────────────────────────────────────────────────────────┐
       │tmux 3.5a · 2 sessions                                                                │
@@ -27,13 +27,13 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
       │                                                                                      │
       │                                                                                      │
       │Enter attach · Shift+A create · Shift+D detach                                        │
-      │Shift+K kill · r refresh · Esc close                                                  │
-╭─────│tmux command failed (exit 1)                                                          │─────╮
-│› ▌As└──────────────────────────────────────────────────────────────────────────────────────┘     │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
-/ commands
+╭─────│Shift+K kill · r refresh · Esc close                                                  │─────╮
+│› Ask│tmux command failed (exit 1)                                                          │     │
+╰─────└──────────────────────────────────────────────────────────────────────────────────────┘─────╯
+ca · model auto
+/ commands · Ctrl+\ dashboard · ↑ history
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
  ┌ Durable terminals ─────────────────────────────────────┐
  │tmux 3.5a · 2 sessions                                  │
  │>                                                       │
@@ -52,8 +52,8 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
  │                                                        │
  │                                                        │
  │                                                        │
- │Enter attach · ⇧A add · ⇧D detach                       │
-╭│⇧K kill · Esc close                                     │╮
-││tmux command failed (exit 1)                            ││
-╰└────────────────────────────────────────────────────────┘╯
-/ commands
+╭│Enter attach · ⇧A add · ⇧D detach                       │╮
+││⇧K kill · Esc close                                     ││
+╰│tmux command failed (exit 1)                            │╯
+c└────────────────────────────────────────────────────────┘
+/ commands · Ctrl+\ dashboard · ↑ history

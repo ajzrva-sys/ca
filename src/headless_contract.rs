@@ -38,6 +38,19 @@ impl CheckMode {
 #[derive(Debug, Clone)]
 pub struct StructuredOutputContract {
     schema: Value,
+    // Host-only preflight; JSON schemas supplied by users cannot enable it.
+    value_validator: Option<ValueValidator>,
+    // Process-only authority. Loading or supplying identical JSON never grants it.
+    native: Option<NativeOutputSchema>,
+}
+
+type ValueValidator = fn(&Value) -> Result<(), String>;
+
+#[derive(Debug, Clone, Copy)]
+enum NativeOutputSchema {
+    NarrowRepair,
+    CargoDiagnostics { evidence_count: usize },
+    AutomaticTaskMap,
 }
 
 impl StructuredOutputContract {
@@ -96,17 +109,116 @@ impl StructuredOutputContract {
             return Err("output schema root must declare type object".into());
         }
         validate_json_bounds(&schema, MAX_SCHEMA_DEPTH, MAX_SCHEMA_NODES, true)?;
+        // Honor the declared dialect (schemars uses Draft 7). Forcing 2020-12
+        // can silently skip constraints reached through Draft 7 definitions.
         jsonschema::options()
-            .with_draft(jsonschema::Draft::Draft202012)
             .build(&schema)
             .map_err(|error| format!("output schema is invalid: {error}"))?;
-        Ok(Self { schema })
+        Ok(Self {
+            schema,
+            value_validator: None,
+            native: None,
+        })
     }
 
     pub(crate) fn from_value(schema: Value) -> Result<Self, String> {
         let bytes = serde_json::to_vec(&schema)
             .map_err(|error| format!("output schema could not be encoded: {error}"))?;
         Self::from_bytes(&bytes)
+    }
+
+    pub(crate) fn with_value_validator(mut self, validator: ValueValidator) -> Self {
+        self.value_validator = Some(validator);
+        self
+    }
+
+    pub(crate) fn native_narrow_repair() -> Result<Self, String> {
+        let mut contract = Self::from_value(json!({
+            "type":"object", "additionalProperties":false,
+            "required":["status", "replacement", "diagnosis"],
+            "properties":{
+                "status":{"type":"string","enum":["replacement","incomplete"]},
+                "replacement":{"type":"string","maxLength":131072},
+                "diagnosis":{"type":"string","maxLength":8192}
+            }
+        }))?;
+        contract.native = Some(NativeOutputSchema::NarrowRepair);
+        Ok(contract)
+    }
+
+    pub(crate) fn native_automatic_task_map() -> Result<Self, String> {
+        let mut contract = Self::from_value(crate::automatic_tasks::output_schema())?;
+        contract.native = Some(NativeOutputSchema::AutomaticTaskMap);
+        Ok(contract)
+    }
+
+    pub(crate) fn is_native_automatic_task_map(&self) -> bool {
+        matches!(self.native, Some(NativeOutputSchema::AutomaticTaskMap))
+    }
+
+    pub(crate) fn native_cargo_diagnostics(group_ids: &[String]) -> Result<Self, String> {
+        if group_ids.is_empty()
+            || group_ids.len() > 4
+            || group_ids.iter().any(|id| {
+                !id.strip_prefix("group-")
+                    .and_then(|number| number.parse::<usize>().ok())
+                    .is_some_and(|number| {
+                        (1..=8).contains(&number) && *id == format!("group-{number}")
+                    })
+            })
+            || group_ids
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                != group_ids.len()
+        {
+            return Err("Invalid native Cargo diagnostic group identities".into());
+        }
+        let mut contract = Self::from_value(
+            json!({"type":"object","additionalProperties":false,"required":["findings"],"properties":{"findings":{"type":"array","minItems":group_ids.len(),"maxItems":group_ids.len(),"items":{"type":"object","additionalProperties":false,"required":["group_id","cause","evidence_index"],"properties":{"group_id":{"type":"string","enum":group_ids},"cause":{"type":"string","maxLength":2048},"evidence_index":{"type":"integer","minimum":0,"maximum":group_ids.len()-1}}}}}}),
+        )?;
+        contract.native = Some(NativeOutputSchema::CargoDiagnostics {
+            evidence_count: group_ids.len(),
+        });
+        Ok(contract)
+    }
+
+    pub(crate) fn schema(&self) -> &Value {
+        &self.schema
+    }
+
+    pub(crate) fn native_evidence_count(&self) -> Option<usize> {
+        match self.native {
+            Some(NativeOutputSchema::CargoDiagnostics { evidence_count }) => Some(evidence_count),
+            _ => None,
+        }
+    }
+
+    /// Match only the complete admitted native schema, including the actual
+    /// provider lowering. Public words in injected fields grant no authority.
+    pub(crate) fn matches_native_schema(
+        &self,
+        schema: &Value,
+        google: bool,
+    ) -> Result<bool, String> {
+        if self.native.is_none() {
+            return Ok(false);
+        }
+        let parameters = self.tool_definition().function.parameters;
+        let expected = crate::tool_schema::translate(
+            STRUCTURED_OUTPUT_TOOL,
+            &parameters,
+            if google {
+                crate::tool_schema::Profile::Google
+            } else {
+                crate::tool_schema::Profile::Identity
+            },
+            crate::tool_schema::Policy::Compatible,
+        )?;
+        if schema != expected.schema.as_ref() {
+            return Err("Native structured-output schema changed after admission".into());
+        }
+        Ok(true)
     }
 
     pub fn tool_definition(&self) -> ToolDef {
@@ -129,7 +241,38 @@ impl StructuredOutputContract {
         }
     }
 
+    pub(crate) fn matches_tool(&self, tool: &ToolDef) -> bool {
+        let expected = self.tool_definition();
+        tool.def_type == expected.def_type
+            && tool.function.name == expected.function.name
+            && tool.function.description == expected.function.description
+            && tool.function.parameters == expected.function.parameters
+    }
+
     pub fn validate_arguments(&self, arguments: &str) -> Result<Value, String> {
+        let value = Self::parse_arguments(arguments)?;
+        let validator = jsonschema::options()
+            .build(&self.schema)
+            .map_err(|error| format!("output schema is invalid: {error}"))?;
+        validator
+            .validate(&value)
+            .map_err(|error| format!("structured output failed local validation: {error}"))?;
+        if let Some(validate) = self.value_validator {
+            validate(&value)?;
+        }
+        let encoded = serde_json::to_vec(&value)
+            .map_err(|error| format!("structured output could not be encoded: {error}"))?;
+        if encoded.len() > MAX_STRUCTURED_OUTPUT_BYTES {
+            return Err(format!(
+                "structured output exceeds the {MAX_STRUCTURED_OUTPUT_BYTES}-byte limit"
+            ));
+        }
+        Ok(value)
+    }
+
+    /// Validate the wire envelope and resource bounds before local reference
+    /// restoration. Schema and semantic checks still run on the restored value.
+    pub(crate) fn parse_arguments(arguments: &str) -> Result<Value, String> {
         if arguments.len() > MAX_STRUCTURED_OUTPUT_BYTES {
             return Err(format!(
                 "structured output exceeds the {MAX_STRUCTURED_OUTPUT_BYTES}-byte limit"
@@ -145,20 +288,6 @@ impl StructuredOutputContract {
         }
         let value = object.get("value").cloned().unwrap_or(Value::Null);
         validate_json_bounds(&value, MAX_SCHEMA_DEPTH, MAX_SCHEMA_NODES, false)?;
-        let validator = jsonschema::options()
-            .with_draft(jsonschema::Draft::Draft202012)
-            .build(&self.schema)
-            .map_err(|error| format!("output schema is invalid: {error}"))?;
-        validator
-            .validate(&value)
-            .map_err(|error| format!("structured output failed local validation: {error}"))?;
-        let encoded = serde_json::to_vec(&value)
-            .map_err(|error| format!("structured output could not be encoded: {error}"))?;
-        if encoded.len() > MAX_STRUCTURED_OUTPUT_BYTES {
-            return Err(format!(
-                "structured output exceeds the {MAX_STRUCTURED_OUTPUT_BYTES}-byte limit"
-            ));
-        }
         Ok(value)
     }
 

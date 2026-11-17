@@ -563,6 +563,7 @@ pub(crate) mod tests {
                     elapsed_millis: 1,
                 })
                 .collect();
+            state.confirmation_accepted = true;
             state.decide(&plan)
         })
         .unwrap();

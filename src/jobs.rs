@@ -12,6 +12,7 @@ use tokio::sync::{broadcast, Mutex, Notify};
 use uuid::Uuid;
 
 const DEFAULT_BUFFER_BYTES: usize = 64 * 1024;
+const PRIVACY_SHELL_GUIDANCE: &str = "\nPrivacy keeps project sources read-only for shell commands. Use read_file and the native edit_file, apply_patch, or write_file tools for source changes.\n";
 tokio::task_local! {
     /// Supplied by ca's validated automation coordinator, outside tool grants.
     pub(crate) static AUTOMATION_PRIVATE_PATHS: Vec<std::path::PathBuf>;
@@ -24,11 +25,16 @@ pub(crate) fn automation_private_paths() -> Vec<std::path::PathBuf> {
         paths.push(store.context().state_root.clone());
         paths.push(store.context().lease_root.clone());
     }
+    if let Some(binding) = crate::privacy::tasks::remote_binding() {
+        paths.push(binding.directory().to_path_buf());
+    }
+    if let Some(context) = crate::privacy::current().filter(|c| c.enabled()) {
+        paths.push(context.private_metadata_root());
+    }
     paths.sort();
     paths.dedup();
     paths
 }
-#[cfg(test)]
 const EXPERIMENT_PATH: &str = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 
 #[derive(Debug, Clone, Default)]
@@ -40,6 +46,13 @@ enum JobEnvironmentPolicy {
         home: std::path::PathBuf,
         cargo_home: std::path::PathBuf,
         cargo_target_dir: std::path::PathBuf,
+    },
+    /// Applied after ordinary environment preparation. The child receives a
+    /// fresh allowlist and cannot restore ambient credentials through overlays.
+    AdmittedChild {
+        read_scopes: Vec<std::path::PathBuf>,
+        write_scopes: Vec<std::path::PathBuf>,
+        toolchain_reads: Vec<std::path::PathBuf>,
     },
 }
 
@@ -53,6 +66,7 @@ pub struct JobExecutionPolicy {
     authorized_command: Option<String>,
     effective_network_allowed: bool,
     output_bytes: Option<usize>,
+    proxy_port: Option<u16>,
 }
 
 impl fmt::Debug for JobExecutionPolicy {
@@ -65,6 +79,7 @@ impl fmt::Debug for JobExecutionPolicy {
                     JobEnvironmentPolicy::Inherit => "inherit",
                     #[cfg(test)]
                     JobEnvironmentPolicy::ExperimentClean { .. } => "experiment_clean",
+                    JobEnvironmentPolicy::AdmittedChild { .. } => "admitted_child",
                 },
             )
             .field("hide_other_processes", &self.hide_other_processes)
@@ -99,16 +114,59 @@ impl JobExecutionPolicy {
             authorized_command: None,
             effective_network_allowed: false,
             output_bytes: None,
+            proxy_port: None,
         })
     }
 
     pub fn for_authorized_command(&self, command: &str, network_allowed: bool) -> Self {
         let mut policy = self.clone();
-        if matches!(policy.environment, JobEnvironmentPolicy::Inherit) {
+        if matches!(
+            policy.environment,
+            JobEnvironmentPolicy::Inherit | JobEnvironmentPolicy::AdmittedChild { .. }
+        ) {
             policy.authorized_command = Some(command.to_string());
-            policy.effective_network_allowed = network_allowed;
+            policy.effective_network_allowed = network_allowed
+                && !matches!(
+                    policy.environment,
+                    JobEnvironmentPolicy::AdmittedChild { .. }
+                );
         }
         policy
+    }
+
+    pub fn admitted_child(
+        read_scopes: Vec<std::path::PathBuf>,
+        write_scopes: Vec<std::path::PathBuf>,
+        toolchain_reads: Vec<std::path::PathBuf>,
+    ) -> Self {
+        Self {
+            environment: JobEnvironmentPolicy::AdmittedChild {
+                read_scopes,
+                write_scopes,
+                toolchain_reads,
+            },
+            hide_other_processes: true,
+            authorized_command: None,
+            effective_network_allowed: false,
+            output_bytes: None,
+            proxy_port: None,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn with_proxy_port(mut self, port: u16) -> Self {
+        self.proxy_port = Some(port);
+        self
+    }
+
+    pub fn proxy_port(&self) -> Option<u16> {
+        self.proxy_port
+    }
+
+    /// Admitted children do not receive the host Keychain, SSH agent, or VCS
+    /// credential paths. Ordinary inherited jobs still do.
+    pub fn grants_host_credentials(&self) -> bool {
+        !matches!(self.environment, JobEnvironmentPolicy::AdmittedChild { .. })
     }
 
     pub fn with_output_limit(mut self, bytes: usize) -> Self {
@@ -169,6 +227,43 @@ impl JobExecutionPolicy {
                     .env("TZ", "UTC")
                     .env("TMPDIR", temporary_directory);
             }
+            JobEnvironmentPolicy::AdmittedChild { .. } => {
+                self.install_admitted_environment(process, temporary_directory);
+            }
+        }
+    }
+
+    fn install_admitted_environment(
+        &self,
+        process: &mut Command,
+        temporary_directory: &std::path::Path,
+    ) {
+        let home = temporary_directory.join("home");
+        let build = temporary_directory.join("build");
+        let _ = std::fs::create_dir_all(&home);
+        let _ = std::fs::create_dir_all(&build);
+        process
+            .env_clear()
+            .env("PATH", EXPERIMENT_PATH)
+            .env("HOME", &home)
+            .env("TMPDIR", temporary_directory)
+            .env("TMP", temporary_directory)
+            .env("TEMP", temporary_directory)
+            .env("CARGO_TARGET_DIR", &build)
+            .env("CARGO_NET_OFFLINE", "true")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("LC_ALL", "C")
+            .env("LANG", "C")
+            .env("TZ", "UTC");
+    }
+
+    /// Re-apply the admitted environment after ordinary overlays. Overlays must
+    /// not restore HOME, SSH sockets, proxy bypasses, loader variables, or
+    /// compiler wrappers.
+    pub fn seal_after_overlay(&self, process: &mut Command, temporary_directory: &std::path::Path) {
+        if matches!(self.environment, JobEnvironmentPolicy::AdmittedChild { .. }) {
+            self.install_admitted_environment(process, temporary_directory);
         }
     }
 
@@ -203,6 +298,21 @@ impl JobExecutionPolicy {
                             _read_only.push(registry);
                         }
                     }
+                }
+            }
+        }
+        if let JobEnvironmentPolicy::AdmittedChild {
+            read_scopes,
+            write_scopes,
+            toolchain_reads,
+        } = &self.environment
+        {
+            _writable.clear();
+            _read_only.clear();
+            _writable.extend(write_scopes.iter().cloned());
+            for path in read_scopes.iter().chain(toolchain_reads) {
+                if !_read_only.contains(path) {
+                    _read_only.push(path.clone());
                 }
             }
         }
@@ -532,6 +642,7 @@ pub struct JobInfo {
     pub id: JobId,
     pub command: String,
     pub cwd: String,
+    pub protected_sources: bool,
     pub status: JobStatus,
     pub elapsed: Duration,
     pub stdout: String,
@@ -539,6 +650,8 @@ pub struct JobInfo {
     pub stdout_omitted_bytes: usize,
     pub stderr_omitted_bytes: usize,
     pub background: bool,
+    /// Immutable original output, independent of the bounded display buffers.
+    pub log_artifact: Option<crate::inference_artifacts::JobLogArtifact>,
 }
 
 impl JobInfo {
@@ -653,6 +766,7 @@ struct JobState {
     background: bool,
     owner: JobOwner,
     origin: JobOrigin,
+    protected_sources: bool,
     completion_delivery: CompletionDelivery,
     timeout_forced: bool,
     keep_awake_lease: Option<crate::keep_awake::KeepAwakeLease>,
@@ -669,6 +783,8 @@ struct JobRecord {
     readers_notify: Notify,
     temporary_directory: std::path::PathBuf,
     independent_process_group: bool,
+    log_capture: Option<crate::inference_artifacts::JobLogCapture>,
+    log_capture_error: Option<String>,
 }
 
 #[derive(Debug)]
@@ -931,8 +1047,35 @@ impl JobManager {
         execution_policy: JobExecutionPolicy,
         origin: JobOrigin,
     ) -> Result<JobId, String> {
-        let command = command.into();
-        let cwd = cwd.into();
+        let mut command = command.into();
+        // Native job identity remains the admitted invocation; only physical
+        // execution receives the private-copy paths and diagnostic prefix.
+        let admitted_command = command.clone();
+        let mut cwd = cwd.into();
+        let mut roots = roots;
+        if origin == JobOrigin::ModelTool {
+            if let Some(context) =
+                crate::privacy::for_owner(owner).filter(|context| context.filenames_enabled())
+            {
+                let source_command = command.clone();
+                let source_cwd = cwd.clone();
+                let source_roots = roots.clone();
+                let view = tokio::task::spawn_blocking(move || {
+                    context.prepare_command_workspace(&source_command, &source_cwd, &source_roots)
+                })
+                .await
+                .map_err(|_| "Command workspace preparation worker stopped")??;
+                command = view.command;
+                cwd = view.cwd;
+                roots = view.roots;
+                // Source identity is emitted as public diagnostic metadata, not
+                // as a path. Artifacts outlive the managed job's temp folder.
+                command = format!(
+                    "printf '%s\\n' 'command_source_generation: {}' 'command_artifact_directory: {}'\n{}",
+                    view.generation, view.artifact_directory, command
+                );
+            }
+        }
         // The job owns its workspace independently of the provider/UI waiter,
         // including manual shell commands and promoted background commands.
         // The transient registry never creates or changes a profile store.
@@ -946,7 +1089,6 @@ impl JobManager {
         .map_err(|_| "Workspace ownership worker stopped before command dispatch".to_string())?
         .map_err(|error| format!("Workspace ownership refused command dispatch: {error}"))?;
         let temporary_directory = job_temporary_directory(&owner)?;
-        let mut roots = roots;
         let mut read_only_roots = Vec::new();
         execution_policy.extend_sandbox_roots(&mut roots, &mut read_only_roots);
         let cwd_path = std::path::PathBuf::from(&cwd);
@@ -957,13 +1099,51 @@ impl JobManager {
         {
             read_only_roots.push(cwd_path);
         }
-        let backend = crate::sandbox::SandboxBackend::new(
-            crate::automation_runtime::admitted_sandbox_mode(sandbox_mode),
-        );
+        let protected_workspace = (origin == JobOrigin::ModelTool)
+            .then(|| crate::privacy::for_owner(owner))
+            .flatten()
+            .map(|context| context.workspace().to_path_buf())
+            .or_else(|| {
+                (origin == JobOrigin::ModelTool
+                    && crate::privacy::tasks::remote_binding().is_some())
+                .then(|| std::path::PathBuf::from(&cwd))
+            });
+        let mut protected_paths = protected_workspace.iter().cloned().collect::<Vec<_>>();
+        if origin == JobOrigin::ModelTool {
+            let privacy = crate::privacy::for_owner(owner);
+            let remote = crate::privacy::tasks::remote_binding();
+            if privacy.is_some() || remote.is_some() {
+                let folders = tokio::task::spawn_blocking(move || {
+                    let value = if let Some(context) = privacy {
+                        crate::privacy::tasks::call_for(
+                            &context,
+                            "protected_folders",
+                            serde_json::Value::Null,
+                        )
+                    } else {
+                        crate::privacy::tasks::rpc(
+                            &remote.expect("private worker"),
+                            "protected_folders",
+                            serde_json::Value::Null,
+                        )
+                    }?;
+                    serde_json::from_value::<Vec<std::path::PathBuf>>(value)
+                        .map_err(|_| "private folder bindings are invalid".to_string())
+                })
+                .await
+                .map_err(|_| "private folder worker stopped")??;
+                protected_paths.extend(folders);
+            }
+        }
+        let backend = crate::sandbox::SandboxBackend::new(if protected_workspace.is_some() {
+            crate::sandbox::SandboxMode::Required
+        } else {
+            crate::automation_runtime::admitted_sandbox_mode(sandbox_mode)
+        });
         let native_command = ca_automation::runtime::current_run_store().is_some()
             || crate::automation_runtime::current_sandbox_binding().is_some();
         let private_paths = automation_private_paths();
-        let prepared = match backend.prepare_process_with_denied_paths(
+        let prepared = match backend.prepare_process_with_read_only_paths(
             std::path::Path::new("/bin/sh"),
             &["-c".into(), command.clone()],
             &crate::sandbox::SandboxPolicy {
@@ -971,9 +1151,12 @@ impl JobManager {
                 read_only_roots,
                 temporary_directory: temporary_directory.clone(),
                 network_allowed,
+                host_credentials: execution_policy.grants_host_credentials(),
+                proxy_port: execution_policy.proxy_port(),
                 hide_other_processes: execution_policy.hide_other_processes || native_command,
             },
             &private_paths,
+            &protected_paths,
         ) {
             Ok(prepared) => prepared,
             Err(error) => {
@@ -1012,6 +1195,7 @@ impl JobManager {
         if !native_command {
             crate::run_environment::apply_tokio(&mut process);
         }
+        execution_policy.seal_after_overlay(&mut process, &temporary_directory);
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -1019,9 +1203,38 @@ impl JobManager {
                 process.as_std_mut().process_group(0);
             }
         }
+        let id = JobId::new();
+        if origin == JobOrigin::ModelTool {
+            if let Some(context) =
+                crate::privacy::for_owner(owner).filter(|context| context.filenames_enabled())
+            {
+                let binding =
+                    tokio::task::spawn_blocking(move || context.bind_native_id("JOB", id.0))
+                        .await
+                        .map_err(|_| "Job identity worker stopped before command dispatch")?;
+                if let Err(error) = binding {
+                    discard_unused_job_temp(&temporary_directory);
+                    return Err(error);
+                }
+            }
+        }
+        let capture = match crate::inference_artifacts::ArtifactStore::for_owner(owner) {
+            Ok(store) => match execution_policy.retained_output_limit() {
+                Some(limit) => store.begin_capture_limit(limit).await,
+                None => store.begin_capture().await,
+            },
+            Err(error) => Err(error),
+        };
+        let (mut log_capture, log_capture_error) = match capture {
+            Ok(capture) => (Some(capture), None),
+            Err(error) => (None, Some(error)),
+        };
         let mut child = match process.spawn() {
             Ok(child) => child,
             Err(error) => {
+                if let Some(capture) = log_capture.take() {
+                    capture.discard_unstarted().await;
+                }
                 discard_unused_job_temp(&temporary_directory);
                 return Err(format!("Error running command: {error}"));
             }
@@ -1045,10 +1258,9 @@ impl JobManager {
                     // streams and reserve space for omission labels/framing.
                     .min(bytes.saturating_sub(512).saturating_div(6).max(1))
             });
-        let id = JobId::new();
         let record = Arc::new(JobRecord {
             state: Mutex::new(JobState {
-                command,
+                command: admitted_command,
                 cwd,
                 status: JobStatus::Running,
                 started_at: Instant::now(),
@@ -1058,6 +1270,7 @@ impl JobManager {
                 background,
                 owner,
                 origin,
+                protected_sources: protected_workspace.is_some(),
                 completion_delivery: CompletionDelivery::Pending,
                 timeout_forced: false,
                 keep_awake_lease: (origin == JobOrigin::ModelTool)
@@ -1072,6 +1285,8 @@ impl JobManager {
             readers_notify: Notify::new(),
             temporary_directory,
             independent_process_group: !WORKER_CONTAINMENT.load(Ordering::Acquire),
+            log_capture,
+            log_capture_error,
         });
         self.inner.jobs.lock().await.insert(id, record.clone());
         let _ = self.inner.events.send(JobEvent::Started(id));
@@ -1098,10 +1313,22 @@ impl JobManager {
                         }
                         break;
                     }
-                    Err(_) => break,
+                    Err(_) => {
+                        if let Some(capture) = &record.log_capture {
+                            capture.mark_read_error().await;
+                        }
+                        break;
+                    }
                     Ok(count) => count,
                 };
                 let text = String::from_utf8_lossy(&chunk[..count]).into_owned();
+                if let Some(capture) = &record.log_capture {
+                    let stream = match stream {
+                        JobStream::Stdout => crate::inference_artifacts::LogStream::Stdout,
+                        JobStream::Stderr => crate::inference_artifacts::LogStream::Stderr,
+                    };
+                    capture.append(stream, &chunk[..count]).await;
+                }
                 let mut state = record.state.lock().await;
                 match stream {
                     JobStream::Stdout => state.stdout.push(&chunk[..count]),
@@ -1161,6 +1388,9 @@ impl JobManager {
                     }
                     Ok(None) => {}
                     Err(_) => {
+                        if let Some(capture) = &record.log_capture {
+                            capture.mark_read_error().await;
+                        }
                         set_terminal_status(
                             &inner,
                             id,
@@ -1697,6 +1927,7 @@ async fn snapshot_record(id: JobId, record: &JobRecord) -> JobInfo {
         id,
         command: state.command.clone(),
         cwd: state.cwd.clone(),
+        protected_sources: state.protected_sources,
         status: state.status,
         elapsed: state
             .finished_at
@@ -1707,6 +1938,19 @@ async fn snapshot_record(id: JobId, record: &JobRecord) -> JobInfo {
         stdout_omitted_bytes: state.stdout.omitted_bytes(),
         stderr_omitted_bytes: state.stderr.omitted_bytes(),
         background: state.background,
+        log_artifact: match &record.log_capture {
+            Some(capture) => capture.receipt().await,
+            None => record.log_capture_error.as_ref().map(|error| {
+                crate::inference_artifacts::JobLogArtifact {
+                    artifact_id: String::new(),
+                    stdout_bytes: 0,
+                    stderr_bytes: 0,
+                    total_bytes: 0,
+                    complete: false,
+                    error: Some(error.clone()),
+                }
+            }),
+        },
     }
 }
 
@@ -1719,8 +1963,19 @@ async fn ensure_owner(record: &JobRecord, owner: JobOwner) -> Result<(), String>
 }
 
 async fn set_terminal_status(inner: &Inner, id: JobId, record: &JobRecord, status: JobStatus) {
+    if let Some(capture) = &record.log_capture {
+        capture.finish_terminal(status).await;
+    }
     let mut state = record.state.lock().await;
     state.status = status;
+    if state.protected_sources && matches!(status, JobStatus::Failed { .. }) {
+        state.stderr.push(PRIVACY_SHELL_GUIDANCE.as_bytes());
+        let _ = inner.events.send(JobEvent::Output {
+            id,
+            stream: JobStream::Stderr,
+            text: PRIVACY_SHELL_GUIDANCE.to_string(),
+        });
+    }
     state.finished_at = Some(Instant::now());
     state.keep_awake_lease.take();
     state.workspace_activity_lease.take();
@@ -1840,6 +2095,176 @@ impl BoundedText {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn privacy_command_workspace_retains_admitted_invocation_and_terminal_evidence() {
+        let settings = crate::provider_filter::ProviderFilterConfig {
+            enabled: true,
+            hide: crate::provider_filter::FilterHide {
+                filenames: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        crate::provider_filter::with_test_filter(&settings, || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let temporary = tempfile::tempdir().unwrap();
+                    let workspace = temporary.path().join("project");
+                    std::fs::create_dir(&workspace).unwrap();
+                    let workspace = workspace.canonicalize().unwrap();
+                    let source = workspace.join("source.txt");
+                    std::fs::write(&source, "protected-original317\n").unwrap();
+                    let session = Uuid::new_v4();
+                    let context = crate::privacy::Context::open(
+                        temporary.path().join("profile"),
+                        workspace.clone(),
+                        session,
+                        None,
+                    )
+                    .unwrap();
+                    context.allow_ephemeral();
+                    let owner = JobOwner::new(Some(session));
+                    let manager = JobManager::new();
+                    // The relative write belongs to the disposable copy. The
+                    // original project remains protected by the same sandbox.
+                    let admitted = "printf '%s\\n' EXECUTED_BODY317; /bin/cat source.txt; printf changed-copy317 > source.txt; exit 101";
+                    let id = manager
+                        .start_sandboxed_owned_with_policy_and_origin(
+                            admitted,
+                            workspace.to_string_lossy(),
+                            false,
+                            Duration::from_secs(5),
+                            vec![workspace.clone()],
+                            false,
+                            crate::sandbox::SandboxMode::Off,
+                            owner,
+                            JobExecutionPolicy::default(),
+                            JobOrigin::ModelTool,
+                        )
+                        .await
+                        .unwrap();
+                    let job = manager.await_job_owned(id, owner).await.unwrap();
+                    assert_eq!(
+                        job.status,
+                        JobStatus::Failed {
+                            exit_code: Some(101)
+                        }
+                    );
+                    assert!(job.stdout.starts_with("command_source_generation: "));
+                    assert!(job.stdout.contains("command_artifact_directory: __CA_PATH_"));
+                    assert!(job.stdout.contains("EXECUTED_BODY317\nprotected-original317\n"));
+                    assert_ne!(std::path::Path::new(&job.cwd), workspace);
+                    assert_eq!(
+                        std::fs::read_to_string(std::path::Path::new(&job.cwd).join("source.txt"))
+                            .unwrap(),
+                        "changed-copy317"
+                    );
+                    assert_eq!(
+                        std::fs::read_to_string(&source).unwrap(),
+                        "protected-original317\n"
+                    );
+                    assert!(job.log_artifact.as_ref().unwrap().complete);
+                    assert_eq!(job.command, admitted);
+                    manager.shutdown().await;
+                });
+        });
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn privacy_model_shell_is_read_only_despite_off_mode_and_broad_grants() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("project");
+        let output = root.path().join("output");
+        std::fs::create_dir(&workspace).unwrap();
+        std::fs::create_dir(&output).unwrap();
+        let source = workspace.join("source.txt");
+        std::fs::write(&source, "protected-original").unwrap();
+        let session_id = Uuid::new_v4();
+        let context = crate::privacy::Context::open(
+            root.path().join("profile"),
+            workspace.clone(),
+            session_id,
+            None,
+        )
+        .unwrap();
+        context
+            .save_policy(crate::privacy::policy::Policy {
+                enabled: true,
+                ..context.policy()
+            })
+            .unwrap();
+        let owner = JobOwner::new(Some(session_id));
+        let manager = JobManager::new();
+        let roots = vec![root.path().to_path_buf(), workspace.clone(), output];
+        let read = manager
+            .start_sandboxed_owned_with_origin(
+                "cat source.txt",
+                workspace.to_string_lossy(),
+                false,
+                Duration::from_secs(3),
+                roots.clone(),
+                false,
+                crate::sandbox::SandboxMode::Off,
+                owner,
+                JobOrigin::ModelTool,
+            )
+            .await
+            .unwrap();
+        let read = manager.await_job_owned(read, owner).await.unwrap();
+        assert_eq!(read.status, JobStatus::Completed { exit_code: 0 });
+        assert_eq!(read.stdout, "protected-original");
+        let write = manager
+            .start_sandboxed_owned_with_origin(
+                "printf changed > source.txt",
+                workspace.to_string_lossy(),
+                false,
+                Duration::from_secs(3),
+                roots.clone(),
+                false,
+                crate::sandbox::SandboxMode::Off,
+                owner,
+                JobOrigin::ModelTool,
+            )
+            .await
+            .unwrap();
+        let write = manager.await_job_owned(write, owner).await.unwrap();
+        assert!(matches!(write.status, JobStatus::Failed { .. }));
+        assert!(write.stderr.contains("native edit_file"));
+        assert_eq!(
+            std::fs::read_to_string(&source).unwrap(),
+            "protected-original"
+        );
+        // Host verification retains its existing explicit authority.
+        let host = manager
+            .start_sandboxed_owned_with_origin(
+                "printf host > host-authority.txt",
+                workspace.to_string_lossy(),
+                false,
+                Duration::from_secs(3),
+                roots,
+                false,
+                crate::sandbox::SandboxMode::PolicyOnly,
+                owner,
+                JobOrigin::Internal,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            manager.await_job_owned(host, owner).await.unwrap().status,
+            JobStatus::Completed { exit_code: 0 }
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("host-authority.txt")).unwrap(),
+            "host"
+        );
+        assert!(context.enabled());
+    }
 
     #[cfg(unix)]
     #[test]
@@ -1997,7 +2422,6 @@ mod tests {
                     .is_some_and(|name| name.starts_with("credentials") || name == "config.toml")
             }));
         }
-
         let root = tempfile::tempdir().unwrap();
         let mut command = Command::new("/usr/bin/env");
         policy.apply(&mut command, root.path());
@@ -2018,6 +2442,55 @@ mod tests {
                 root.path().join("clang-module-cache").display()
             )
         }));
+    }
+
+    #[tokio::test]
+    async fn admitted_child_environment_drops_credential_overlays() {
+        let root = tempfile::tempdir().unwrap();
+        let readable = root.path().join("src");
+        let writable = root.path().join("out");
+        std::fs::create_dir(&readable).unwrap();
+        std::fs::create_dir(&writable).unwrap();
+        let policy = JobExecutionPolicy::admitted_child(
+            vec![readable.clone()],
+            vec![writable.clone()],
+            vec![std::path::PathBuf::from("/usr/bin")],
+        );
+        let mut writable_roots = vec![std::path::PathBuf::from("/workspace")];
+        let mut read_only = vec![std::path::PathBuf::from("/")];
+        policy.extend_sandbox_roots(&mut writable_roots, &mut read_only);
+        assert_eq!(writable_roots, vec![writable]);
+        assert!(read_only.contains(&readable));
+        assert!(read_only.contains(&std::path::PathBuf::from("/usr/bin")));
+        assert!(!policy.grants_host_credentials());
+        assert_eq!(policy.clone().with_proxy_port(9).proxy_port(), Some(9));
+        assert!(JobExecutionPolicy::default().grants_host_credentials());
+        assert!(!read_only.contains(&std::path::PathBuf::from("/")));
+        assert!(!writable_roots
+            .iter()
+            .any(|path| path == std::path::Path::new("/tmp")));
+
+        let mut command = Command::new("/usr/bin/env");
+        policy.apply(&mut command, root.path());
+        command.env("HOME", "/Users/victim");
+        command.env("SSH_AUTH_SOCK", "/tmp/ssh-agent.sock");
+        command.env("NO_PROXY", "*");
+        command.env("DYLD_INSERT_LIBRARIES", "/tmp/evil.dylib");
+        command.env("LD_PRELOAD", "/tmp/evil.so");
+        command.env("CC", "ccache");
+        command.env("CARGO_HOME", "/Users/victim/.cargo");
+        policy.seal_after_overlay(&mut command, root.path());
+        let output = command.output().await.unwrap();
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(output.status.success(), "{stdout}");
+        assert!(!stdout.contains("victim"));
+        assert!(!stdout.contains("SSH_AUTH_SOCK"));
+        assert!(!stdout.contains("NO_PROXY"));
+        assert!(!stdout.contains("DYLD_INSERT_LIBRARIES"));
+        assert!(!stdout.contains("LD_PRELOAD"));
+        assert!(!stdout.contains("CC="));
+        assert!(!stdout.contains("CARGO_HOME"));
+        assert!(stdout.contains(&format!("HOME={}", root.path().join("home").display())));
     }
 
     #[tokio::test]
@@ -2867,6 +3340,7 @@ mod tests {
             id: JobId::new(),
             command: "large".into(),
             cwd: "/tmp".into(),
+            protected_sources: false,
             status: JobStatus::Failed { exit_code: Some(1) },
             elapsed: Duration::ZERO,
             stdout: format!("OUT-HEAD{}OUT-TAIL", "o".repeat(8_000)),
@@ -2874,6 +3348,7 @@ mod tests {
             stdout_omitted_bytes: 0,
             stderr_omitted_bytes: 0,
             background: false,
+            log_artifact: None,
         };
         let output = info.formatted_output();
         assert!(output.len() <= 4 * 1024);

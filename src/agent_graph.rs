@@ -90,7 +90,7 @@ pub struct AgentArtifactPredicateV1 {
     pub must_change: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AgentClosedCommandPredicateV1 {
     pub argv: Vec<String>,
@@ -434,6 +434,10 @@ impl AgentAutonomyBudget {
     }
 
     pub fn reserve_request(&self) -> Result<(), AgentBudgetLimitKind> {
+        self.reserve_request_for_input(0)
+    }
+
+    pub fn reserve_request_for_input(&self, input_tokens: u64) -> Result<(), AgentBudgetLimitKind> {
         let mut state = self
             .inner
             .lock()
@@ -442,6 +446,15 @@ impl AgentAutonomyBudget {
         ensure_not_blocked(&state)?;
         if state.usage.physical_requests >= state.limits.max_physical_requests {
             return block_budget(&mut state, AgentBudgetLimitKind::PhysicalRequests);
+        }
+        if state.usage.total_tokens >= state.limits.max_total_tokens
+            || input_tokens
+                >= state
+                    .limits
+                    .max_total_tokens
+                    .saturating_sub(state.usage.total_tokens)
+        {
+            return block_budget(&mut state, AgentBudgetLimitKind::TotalTokens);
         }
         state.usage.physical_requests += 1;
         Ok(())
@@ -456,63 +469,77 @@ impl AgentAutonomyBudget {
             .inner
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        ensure_active(&mut state)?;
-        ensure_not_blocked(&state)?;
+        // This is settlement of an already dispatched request, not admission.
+        // Record its actual charge even when it crosses a limit, arrives after
+        // another worker blocked the graph, or outlives the active deadline.
+        let active_limit = ensure_active(&mut state).err();
+        let previous_limit = state.usage.blocked.or(active_limit);
         let Some(usage) = usage else {
-            return block_budget(&mut state, AgentBudgetLimitKind::UnknownUsage);
+            return block_budget(
+                &mut state,
+                previous_limit.unwrap_or(AgentBudgetLimitKind::UnknownUsage),
+            );
         };
-        if usage.completion_tokens > state.limits.max_output_tokens_per_request {
-            return block_budget(&mut state, AgentBudgetLimitKind::OutputTokensPerRequest);
-        }
-        let Some(total_tokens) = state
+        let total_tokens = state
             .usage
             .total_tokens
-            .checked_add(u64::from(usage.total_tokens))
-        else {
-            return block_budget(&mut state, AgentBudgetLimitKind::TotalTokens);
-        };
-        if total_tokens > state.limits.max_total_tokens {
-            return block_budget(&mut state, AgentBudgetLimitKind::TotalTokens);
-        }
-        let Some(output_tokens) = state
+            .checked_add(u64::from(usage.total_tokens));
+        let output_tokens = state
             .usage
             .output_tokens
-            .checked_add(u64::from(usage.completion_tokens))
-        else {
-            return block_budget(&mut state, AgentBudgetLimitKind::TotalTokens);
-        };
+            .checked_add(u64::from(usage.completion_tokens));
+        state.usage.total_tokens = total_tokens.unwrap_or(u64::MAX);
+        state.usage.output_tokens = output_tokens.unwrap_or(u64::MAX);
         let request_cost = match pricing {
             Some(pricing) => {
                 crate::usage::cost_for(pricing, usage).ok_or(AgentBudgetLimitKind::UnknownUsage)
             }
-            None if state.limits.allow_unpriced => {
+            None => {
                 state.usage.unpriced_requests = state.usage.unpriced_requests.saturating_add(1);
-                Ok(crate::usage::DecimalUsd::ZERO)
+                if state.limits.allow_unpriced {
+                    Ok(crate::usage::DecimalUsd::ZERO)
+                } else {
+                    Err(AgentBudgetLimitKind::UnpricedRoute)
+                }
             }
-            None => Err(AgentBudgetLimitKind::UnpricedRoute),
-        };
-        let request_cost = match request_cost {
-            Ok(cost) => cost,
-            Err(limit) => return block_budget(&mut state, limit),
         };
         let current_cost = state
             .usage
             .cost_usd
             .unwrap_or(crate::usage::DecimalUsd::ZERO);
-        let Some(next_cost) = current_cost.checked_add(request_cost) else {
-            return block_budget(&mut state, AgentBudgetLimitKind::Cost);
-        };
-        if state
-            .limits
-            .max_cost_usd
-            .is_some_and(|maximum| next_cost > maximum)
-        {
-            return block_budget(&mut state, AgentBudgetLimitKind::Cost);
+        let next_cost = request_cost.and_then(|cost| {
+            current_cost
+                .checked_add(cost)
+                .ok_or(AgentBudgetLimitKind::Cost)
+        });
+        if let (Some(_), Ok(cost)) = (pricing, &next_cost) {
+            state.usage.cost_usd = Some(*cost);
         }
-        state.usage.total_tokens = total_tokens;
-        state.usage.output_tokens = output_tokens;
-        if pricing.is_some() {
-            state.usage.cost_usd = Some(next_cost);
+        let limit = previous_limit.or_else(|| {
+            if usage.completion_tokens > state.limits.max_output_tokens_per_request {
+                Some(AgentBudgetLimitKind::OutputTokensPerRequest)
+            } else if total_tokens.is_none()
+                || output_tokens.is_none()
+                || state.usage.total_tokens > state.limits.max_total_tokens
+            {
+                Some(AgentBudgetLimitKind::TotalTokens)
+            } else {
+                match next_cost {
+                    Err(limit) => Some(limit),
+                    Ok(cost)
+                        if state
+                            .limits
+                            .max_cost_usd
+                            .is_some_and(|maximum| cost > maximum) =>
+                    {
+                        Some(AgentBudgetLimitKind::Cost)
+                    }
+                    _ => None,
+                }
+            }
+        });
+        if let Some(limit) = limit {
+            return block_budget(&mut state, limit);
         }
         Ok(())
     }
@@ -822,6 +849,9 @@ pub struct AgentTaskAttempt {
     #[serde(default)]
     pub successful_tools: Vec<String>,
     pub summary: Option<String>,
+    /// Unrestored assistant text. Old plans omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_summary: Option<String>,
     #[serde(default)]
     pub terminal_event_sequence: Option<u64>,
     #[serde(default)]
@@ -838,6 +868,61 @@ pub struct AgentTaskAttempt {
     pub budget_usage: AgentGraphBudgetUsageV1,
 }
 
+/// Routes the host may spend on one stronger attempt. Suggestions are not grants.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EconomicRouteV1 {
+    pub provider: String,
+    pub model: String,
+    pub tools: Vec<String>,
+    pub efforts: Vec<String>,
+    pub cost: u64,
+}
+
+/// Process-persisted record of one economic escalation. Absent on older plans.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EconomicEscalationV1 {
+    pub enabled: bool,
+    #[serde(default)]
+    pub stronger_used: bool,
+    pub failure: crate::mechanistic_delegation::AttemptFailure,
+    pub diagnostic: String,
+    pub failed_provider: String,
+    pub failed_model: String,
+    pub failed_cost: u64,
+    pub remaining_budget: u64,
+    pub grant_fingerprint: String,
+    #[serde(default)]
+    pub routes: Vec<EconomicRouteV1>,
+}
+
+impl EconomicEscalationV1 {
+    /// The one stronger admission. `stronger_attempt_used` stays false so this attempt can be admitted once.
+    pub fn retry_packet(&self) -> crate::mechanistic_delegation::TaskPacket {
+        crate::mechanistic_delegation::economic_retry_packet(
+            self.routes
+                .iter()
+                .map(|route| crate::mechanistic_delegation::PacketRoute {
+                    provider: route.provider.clone(),
+                    model: route.model.clone(),
+                    tools: route.tools.clone(),
+                    efforts: route.efforts.clone(),
+                    cost: route.cost,
+                })
+                .collect(),
+            crate::mechanistic_delegation::PriorAttempt {
+                provider: self.failed_provider.clone(),
+                model: self.failed_model.clone(),
+                cost: self.failed_cost,
+                failure: self.failure,
+                diagnostic: self.diagnostic.clone(),
+            },
+            self.remaining_budget,
+            self.grant_fingerprint.clone(),
+            false,
+        )
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentTaskRuntime {
     #[serde(default)]
@@ -845,6 +930,9 @@ pub struct AgentTaskRuntime {
     #[serde(default)]
     pub attempts: Vec<AgentTaskAttempt>,
     pub failure: Option<String>,
+    /// Older plans omit this. Absent means the explicit-retry barrier is unchanged.
+    #[serde(default)]
+    pub economic: Option<EconomicEscalationV1>,
 }
 
 impl Default for AgentTaskRuntime {
@@ -853,6 +941,7 @@ impl Default for AgentTaskRuntime {
             state: AgentTaskState::Pending,
             attempts: Vec::new(),
             failure: None,
+            economic: None,
         }
     }
 }
@@ -1122,8 +1211,8 @@ pub fn parse_configuration(
         if tools.iter().any(|tool| !available_tools.contains(tool)) {
             return Err(AgentGraphError::InvalidPolicy);
         }
-        let paths = normalize_scopes(input.paths)?;
-        let commands = normalize_scopes(input.commands)?;
+        let paths = normalize_scopes(input.paths, true)?;
+        let commands = normalize_scopes(input.commands, false)?;
         if input.max_attempts == 0
             || input.max_attempts > MAX_GRAPH_ATTEMPTS
             || input.evidence.is_empty()
@@ -1314,6 +1403,19 @@ pub fn ready_tasks<'a>(
         .collect()
 }
 
+fn economic_quality_retry(task: &crate::work::PlanTask) -> bool {
+    task.agent_runtime.state == AgentTaskState::Failed
+        && task
+            .agent_runtime
+            .economic
+            .as_ref()
+            .is_some_and(|economic| {
+                economic.enabled
+                    && economic.failure == crate::mechanistic_delegation::AttemptFailure::Quality
+                    && !economic.stronger_used
+            })
+}
+
 pub fn synchronize(tasks: &mut [crate::work::PlanTask], graph: &mut AgentGraphState) {
     let verification_binding = graph.verification_binding();
     let states = tasks
@@ -1383,11 +1485,27 @@ pub fn synchronize(tasks: &mut [crate::work::PlanTask], graph: &mut AgentGraphSt
             "A completed task lacks a current authoritative pass receipt; reconfigure and reapprove"
                 .into(),
         );
+    } else if graph.status == AgentGraphStatus::Running
+        && tasks.iter().any(|task| {
+            task.agent.is_some()
+                && matches!(
+                    task.agent_runtime.state,
+                    AgentTaskState::Ready | AgentTaskState::Running
+                )
+        })
+    {
+        graph.notice = tasks
+            .iter()
+            .any(|task| task.agent_runtime.state == AgentTaskState::Failed)
+            .then(|| {
+                "Independent tasks continue; failed branches need an explicit retry decision".into()
+            });
     } else if tasks
         .iter()
         .filter(|task| task.agent.is_some())
         .any(|task| {
             task.agent_runtime.state == AgentTaskState::Failed
+                && !economic_quality_retry(task)
                 && task.agent.as_ref().is_some_and(|definition| {
                     task.agent_runtime.attempts.len() >= usize::from(definition.max_attempts)
                 })
@@ -1398,12 +1516,58 @@ pub fn synchronize(tasks: &mut [crate::work::PlanTask], graph: &mut AgentGraphSt
     } else if tasks
         .iter()
         .filter(|task| task.agent.is_some())
-        .any(|task| task.agent_runtime.state == AgentTaskState::Failed)
+        .any(|task| {
+            task.agent_runtime.state == AgentTaskState::Failed && !economic_quality_retry(task)
+        })
     {
         graph.status = AgentGraphStatus::Paused;
         graph.notice = Some("A failed task requires an explicit retry decision".into());
     }
+    let failed = tasks
+        .iter()
+        .filter(|task| task.agent.is_some() && task.agent_runtime.state == AgentTaskState::Failed)
+        .count();
+    let retryable = tasks
+        .iter()
+        .filter(|task| economic_quality_retry(task))
+        .count();
+    if graph.status != AgentGraphStatus::Failed && failed > 0 && failed == retryable {
+        for task in tasks.iter_mut().filter(|task| economic_quality_retry(task)) {
+            if let Some(economic) = task.agent_runtime.economic.as_mut() {
+                economic.stronger_used = true;
+            }
+            task.agent_runtime.state = AgentTaskState::Ready;
+        }
+        graph.status = AgentGraphStatus::Running;
+        graph.notice = Some("One stronger attempt is ready".into());
+    }
     graph.updated_at = Some(Utc::now());
+}
+
+/// Route, effort, execution kind, and escalation policy join the digest only when economic policy is on.
+/// A disabled or absent binding returns the existing contract digest unchanged.
+pub fn bound_verification_sha256(
+    task_id: TaskId,
+    definition: &AgentTaskDefinition,
+    economic: Option<(&str, &str, &str, &str, bool)>,
+) -> String {
+    let base = verification_contract_sha256(task_id, definition);
+    let Some((route, effort, execution_kind, escalation_policy, enabled)) = economic else {
+        return base;
+    };
+    if !enabled {
+        return base;
+    }
+    let encoded = serde_json::json!({
+        "base": base,
+        "route": route,
+        "effort": effort,
+        "execution_kind": execution_kind,
+        "escalation_policy": escalation_policy,
+    });
+    let bytes = serde_json::to_vec(&encoded)
+        .expect("economic verification binding contains only serializable values");
+    format!("{:x}", Sha256::digest(bytes))
 }
 
 #[derive(Serialize)]
@@ -2143,6 +2307,157 @@ pub fn task_completion_verified(
         && verification_receipt_valid(binding, task.id, definition, attempt)
 }
 
+/// Explanatory data only: this does not change graph completion or admission.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AgentVerificationExplanationV1 {
+    pub schema: &'static str,
+    pub task_id: TaskId,
+    pub status: &'static str,
+    pub inspected_source_revision_sha256: Option<String>,
+    pub reasons: Vec<AgentVerificationReasonV1>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AgentVerificationReasonV1 {
+    pub condition: &'static str,
+    pub expected: Option<String>,
+    pub observed: Option<String>,
+    pub gate_sha256: Option<String>,
+}
+
+/// `current_workspace` must be freshly captured by the host. Omitting it makes
+/// current-disk freshness explicitly unknown even when a historical receipt passes.
+pub fn explain_task_verification(
+    binding: Option<AgentGraphVerificationBindingV1>,
+    task: &crate::work::PlanTask,
+    current_workspace: Option<&AgentWorkspaceSnapshotV1>,
+) -> AgentVerificationExplanationV1 {
+    let mut explanation = AgentVerificationExplanationV1 {
+        schema: "ca.verification-explanation.v1",
+        task_id: task.id,
+        status: "missing",
+        inspected_source_revision_sha256: current_workspace
+            .map(|snapshot| snapshot.source_revision_sha256.clone()),
+        reasons: Vec::new(),
+    };
+    let mut reason = |condition, expected, observed, gate_sha256| {
+        explanation.reasons.push(AgentVerificationReasonV1 {
+            condition,
+            expected,
+            observed,
+            gate_sha256,
+        });
+    };
+    let Some(attempt) = task.agent_runtime.attempts.last() else {
+        reason(
+            "attempt_missing",
+            Some("completed host-observed attempt".into()),
+            None,
+            None,
+        );
+        return explanation;
+    };
+    let Some(receipt) = attempt.verification_receipt.as_ref() else {
+        reason(
+            "receipt_missing",
+            Some("current verification receipt".into()),
+            None,
+            None,
+        );
+        return explanation;
+    };
+    if let Some(binding) = binding {
+        if receipt.configuration_revision != Some(binding.configuration_revision) {
+            reason(
+                "configuration_revision",
+                Some(binding.configuration_revision.to_string()),
+                receipt
+                    .configuration_revision
+                    .map(|revision| revision.to_string()),
+                None,
+            );
+        }
+        if receipt.approved_revision != Some(binding.approved_revision) {
+            reason(
+                "approval_revision",
+                Some(binding.approved_revision.to_string()),
+                receipt
+                    .approved_revision
+                    .map(|revision| revision.to_string()),
+                None,
+            );
+        }
+        if receipt.plan_id != Some(binding.plan_id) {
+            reason(
+                "plan_identity",
+                Some(binding.plan_id.to_string()),
+                receipt.plan_id.map(|plan| plan.to_string()),
+                None,
+            );
+        }
+    } else {
+        reason(
+            "graph_binding_missing",
+            Some("current plan and approval binding".into()),
+            None,
+            None,
+        );
+    }
+    for check in receipt.checks.iter().filter(|check| !check.satisfied) {
+        reason(
+            "evidence_unsatisfied",
+            Some("satisfied".into()),
+            Some("unsatisfied".into()),
+            Some(check.gate_sha256.clone()),
+        );
+    }
+    if let Some(current) = current_workspace {
+        let recorded = attempt
+            .host_verification
+            .as_ref()
+            .map(|verification| &verification.finished);
+        if recorded.is_none_or(|recorded| {
+            recorded.workspace_identity_sha256 != current.workspace_identity_sha256
+                || recorded.source_revision_sha256 != current.source_revision_sha256
+        }) {
+            reason(
+                "workspace_revision",
+                Some(current.source_revision_sha256.clone()),
+                recorded.map(|recorded| recorded.source_revision_sha256.clone()),
+                None,
+            );
+            explanation.status = "historical";
+        }
+    } else {
+        reason(
+            "current_workspace_uninspected",
+            Some("fresh host workspace snapshot".into()),
+            None,
+            None,
+        );
+        explanation.status = "unknown";
+    }
+    let valid = task.agent.as_ref().is_some_and(|definition| {
+        verification_receipt_valid(binding, task.id, definition, attempt)
+    });
+    if !valid {
+        explanation.reasons.push(AgentVerificationReasonV1 {
+            condition: "receipt_binding_invalid",
+            expected: Some(
+                "receipt bound to this task, attempt, agent, contract and terminal event".into(),
+            ),
+            observed: None,
+            gate_sha256: None,
+        });
+        explanation.status = "invalid";
+    } else if receipt.disposition != AgentVerificationDisposition::Pass {
+        explanation.status = "unsatisfied";
+    } else if explanation.reasons.is_empty() {
+        explanation.status = "verified";
+    }
+    explanation
+}
+
 pub fn bounded_summary(value: &str) -> String {
     let value = crate::terminal_text::sanitize_terminal_text(value);
     if value.len() <= MAX_ATTEMPT_SUMMARY_BYTES {
@@ -2188,7 +2503,10 @@ fn normalize_name(value: &str) -> Result<String, AgentGraphError> {
     Ok(value)
 }
 
-fn normalize_scopes(values: Vec<String>) -> Result<Vec<String>, AgentGraphError> {
+fn normalize_scopes(
+    values: Vec<String>,
+    relative_paths: bool,
+) -> Result<Vec<String>, AgentGraphError> {
     if values.len() > MAX_GRAPH_SCOPES {
         return Err(AgentGraphError::InvalidPolicy);
     }
@@ -2198,7 +2516,7 @@ fn normalize_scopes(values: Vec<String>) -> Result<Vec<String>, AgentGraphError>
         if value.is_empty()
             || value.len() > 512
             || value.chars().any(char::is_control)
-            || std::path::Path::new(&value).is_absolute()
+            || (relative_paths && std::path::Path::new(&value).is_absolute())
         {
             return Err(AgentGraphError::InvalidPolicy);
         }
@@ -2467,6 +2785,90 @@ mod tests {
         }
     }
 
+    #[test]
+    fn hrs317_explanations_distinguish_historical_missing_and_current_evidence() {
+        let task_id = id(1);
+        let definition = parse(&[task_id], vec![input(task_id, &[])])
+            .unwrap()
+            .remove(&task_id)
+            .unwrap();
+        let now = DateTime::from_timestamp(3, 0).unwrap();
+        let mut task = crate::work::PlanTask {
+            id: task_id,
+            title: "task".into(),
+            status: crate::work::TaskStatus::Completed,
+            owner: None,
+            blocked_reason: None,
+            created_at: now,
+            updated_at: now,
+            evidence: vec![],
+            agent: Some(definition.clone()),
+            agent_runtime: AgentTaskRuntime::default(),
+            source_task_id: None,
+        };
+        assert_eq!(
+            explain_task_verification(Some(binding()), &task, None).status,
+            "missing"
+        );
+        let host = stable_host_verification();
+        let agent = Uuid::from_u128(11);
+        let receipt = verify_agent_attempt_with_host(
+            Some(binding()),
+            task_id,
+            &definition,
+            1,
+            agent,
+            AgentAttemptStatus::Completed,
+            Some(7),
+            Some("done"),
+            &["read_file".into()],
+            Some(&host),
+        );
+        task.agent_runtime.attempts.push(AgentTaskAttempt {
+            number: 1,
+            agent_id: Some(agent),
+            status: AgentAttemptStatus::Completed,
+            started_at: now,
+            finished_at: Some(now),
+            successful_tools: vec!["read_file".into()],
+            summary: Some("done".into()),
+            provider_summary: None,
+            terminal_event_sequence: Some(7),
+            verification_receipt: Some(receipt),
+            workspace_snapshot: Some(host.started.clone()),
+            host_verification: Some(host.clone()),
+            handoff_outputs: vec![],
+            handoff_inputs: vec![],
+            budget_usage: AgentGraphBudgetUsageV1::default(),
+        });
+        assert_eq!(
+            explain_task_verification(Some(binding()), &task, None).status,
+            "unknown"
+        );
+        assert_eq!(
+            explain_task_verification(Some(binding()), &task, Some(&host.finished)).status,
+            "verified"
+        );
+        let mut changed = host.finished.clone();
+        changed.source_revision_sha256 = "3".repeat(64);
+        let report = explain_task_verification(Some(binding()), &task, Some(&changed));
+        assert_eq!(report.status, "historical");
+        assert!(report
+            .reasons
+            .iter()
+            .any(|reason| reason.condition == "workspace_revision"
+                && reason.expected == Some("3".repeat(64))
+                && reason.observed == Some("2".repeat(64))));
+        let mut revised = binding();
+        revised.configuration_revision += 1;
+        let report = explain_task_verification(Some(revised), &task, Some(&host.finished));
+        assert_eq!(report.status, "invalid");
+        assert!(report
+            .reasons
+            .iter()
+            .any(|reason| reason.condition == "configuration_revision"));
+    }
+
     fn parse(
         task_ids: &[TaskId],
         inputs: Vec<AgentTaskInput>,
@@ -2522,6 +2924,65 @@ mod tests {
                 },
             ],
         }
+    }
+
+    #[test]
+    fn automatic_map_command_verifier_accepts_absolute_executable_grant() {
+        let one = id(1);
+        let mut task = input(one, &[]);
+        task.commands = vec!["/usr/bin/true".into()];
+        task.evidence = vec![AgentEvidenceInput::ClosedCommand {
+            argv: vec!["/usr/bin/true".into()],
+            cwd: None,
+            timeout_secs: 5,
+        }];
+        assert!(parse(&[one], vec![task.clone()]).is_ok());
+        task.paths = vec!["/outside-workspace".into()];
+        assert_eq!(
+            parse(&[one], vec![task]).unwrap_err(),
+            AgentGraphError::InvalidPolicy
+        );
+    }
+
+    #[test]
+    fn automatic_map_failure_keeps_independent_branch_running() {
+        let mut work = crate::work::WorkState::default();
+        work.apply_model_mutation(crate::work::WorkMutation::Propose {
+            expected_revision: 0,
+            title: "Branches".into(),
+            body: None,
+            tasks: vec!["Fails".into(), "Independent".into(), "Dependent".into()],
+        })
+        .unwrap();
+        let plan = work.plan.as_mut().unwrap();
+        let ids = plan.tasks.iter().map(|task| task.id).collect::<Vec<_>>();
+        let definitions = parse_configuration(
+            plan.id,
+            2,
+            &ids,
+            vec![
+                input(ids[0], &[]),
+                input(ids[1], &[]),
+                input(ids[2], &[ids[0]]),
+            ],
+        )
+        .unwrap();
+        for task in &mut plan.tasks {
+            task.agent = Some(definitions[&task.id].clone());
+        }
+        plan.tasks[0].agent_runtime.state = AgentTaskState::Failed;
+        work.agent_graph.status = AgentGraphStatus::Running;
+        synchronize(&mut plan.tasks, &mut work.agent_graph);
+        assert_eq!(work.agent_graph.status, AgentGraphStatus::Running);
+        assert_eq!(plan.tasks[1].agent_runtime.state, AgentTaskState::Ready);
+        assert_eq!(
+            plan.tasks[2].agent_runtime.state,
+            AgentTaskState::DependencyBlocked
+        );
+        assert_eq!(ready_tasks(&plan.tasks, &work.agent_graph).len(), 1);
+        plan.tasks[1].agent_runtime.state = AgentTaskState::Failed;
+        synchronize(&mut plan.tasks, &mut work.agent_graph);
+        assert_eq!(work.agent_graph.status, AgentGraphStatus::Paused);
     }
 
     #[test]
@@ -2879,6 +3340,69 @@ mod tests {
     }
 
     #[test]
+    fn autonomy_budget_records_over_limit_and_already_dispatched_usage() {
+        let mut limits = budget_limits(3, None, true);
+        limits.max_total_tokens = 100_000;
+        let budget =
+            AgentAutonomyBudget::new(limits.clone(), AgentGraphBudgetUsageV1::default()).unwrap();
+        budget.reserve_request().unwrap();
+        budget.reserve_request().unwrap(); // A concurrent response can arrive after blocking.
+        budget.reserve_request().unwrap();
+        budget
+            .observe_request(Some(&usage(58_874, 0)), None)
+            .unwrap();
+        assert_eq!(
+            budget.observe_request(Some(&usage(48_223, 240)), None),
+            Err(AgentBudgetLimitKind::TotalTokens)
+        );
+        assert_eq!(budget.snapshot().total_tokens, 107_337);
+        assert_eq!(budget.snapshot().output_tokens, 240);
+        assert_eq!(budget.snapshot().unpriced_requests, 2);
+        assert_eq!(
+            budget.observe_request(Some(&usage(11, 3)), None),
+            Err(AgentBudgetLimitKind::TotalTokens)
+        );
+        let saved = budget.snapshot();
+        assert_eq!(saved.total_tokens, 107_351);
+        assert_eq!(saved.output_tokens, 243);
+        let restored = AgentAutonomyBudget::new(limits, saved).unwrap();
+        assert_eq!(
+            restored.reserve_request(),
+            Err(AgentBudgetLimitKind::TotalTokens)
+        );
+        assert_eq!(restored.snapshot().physical_requests, 3);
+    }
+
+    #[test]
+    fn autonomy_budget_token_equality_stops_before_dispatch() {
+        let mut limits = budget_limits(3, None, true);
+        limits.max_total_tokens = 10;
+        let budget = AgentAutonomyBudget::new(limits, AgentGraphBudgetUsageV1::default()).unwrap();
+        budget.reserve_request().unwrap();
+        budget.observe_request(Some(&usage(8, 2)), None).unwrap();
+        assert_eq!(
+            budget.reserve_request(),
+            Err(AgentBudgetLimitKind::TotalTokens)
+        );
+        assert_eq!(budget.snapshot().physical_requests, 1);
+    }
+
+    #[test]
+    fn autonomy_budget_does_not_dispatch_context_that_cannot_fit() {
+        let mut limits = budget_limits(3, None, true);
+        limits.max_total_tokens = 100;
+        let budget = AgentAutonomyBudget::new(limits, AgentGraphBudgetUsageV1::default()).unwrap();
+        budget.reserve_request().unwrap();
+        budget.observe_request(Some(&usage(60, 10)), None).unwrap();
+        assert_eq!(
+            budget.reserve_request_for_input(30),
+            Err(AgentBudgetLimitKind::TotalTokens)
+        );
+        assert_eq!(budget.snapshot().physical_requests, 1);
+        assert_eq!(budget.snapshot().total_tokens, 70);
+    }
+
+    #[test]
     fn autonomy_budget_fails_closed_on_unknown_usage_output_and_unpriced_routes() {
         let budget = AgentAutonomyBudget::new(
             budget_limits(3, None, true),
@@ -2900,6 +3424,8 @@ mod tests {
             output_budget.observe_request(Some(&usage(1, 4)), None),
             Err(AgentBudgetLimitKind::OutputTokensPerRequest)
         );
+        assert_eq!(output_budget.snapshot().total_tokens, 5);
+        assert_eq!(output_budget.snapshot().output_tokens, 4);
 
         let priced_only = AgentAutonomyBudget::new(
             budget_limits(3, Some("1"), false),
@@ -2911,6 +3437,8 @@ mod tests {
             priced_only.observe_request(Some(&usage(1, 0)), None),
             Err(AgentBudgetLimitKind::UnpricedRoute)
         );
+        assert_eq!(priced_only.snapshot().total_tokens, 1);
+        assert_eq!(priced_only.snapshot().unpriced_requests, 1);
     }
 
     #[test]
@@ -2928,6 +3456,20 @@ mod tests {
         assert_eq!(
             budget.observe_request(Some(&usage(1, 0)), Some(&pricing)),
             Err(AgentBudgetLimitKind::Cost)
+        );
+        assert_eq!(budget.snapshot().total_tokens, 1);
+        assert_eq!(
+            budget.snapshot().cost_usd,
+            Some("0.000001".parse().unwrap())
+        );
+        assert_eq!(
+            budget.observe_request(Some(&usage(2, 0)), Some(&pricing)),
+            Err(AgentBudgetLimitKind::Cost)
+        );
+        assert_eq!(budget.snapshot().total_tokens, 3);
+        assert_eq!(
+            budget.snapshot().cost_usd,
+            Some("0.000003".parse().unwrap())
         );
 
         let mut limits = budget_limits(3, None, true);
@@ -3223,6 +3765,7 @@ mod tests {
             finished_at: Some(now),
             successful_tools: vec!["read_file".into()],
             summary: Some(secret.into()),
+            provider_summary: None,
             terminal_event_sequence: Some(9),
             verification_receipt: Some(receipt),
             workspace_snapshot: Some(host.started.clone()),
@@ -3347,6 +3890,7 @@ mod tests {
             finished_at: Some(DateTime::from_timestamp(5, 0).unwrap()),
             successful_tools: vec!["read_file".into()],
             summary: Some("done".into()),
+            provider_summary: None,
             terminal_event_sequence: Some(10),
             verification_receipt: Some(legacy_receipt),
             workspace_snapshot: None,
@@ -3370,5 +3914,143 @@ mod tests {
         assert!(!bounded.contains('\u{1b}'));
         assert!(bounded.contains("bytes omitted"));
         assert!(bounded.is_char_boundary(bounded.len()));
+    }
+
+    fn failed_task(task_id: TaskId) -> crate::work::PlanTask {
+        let definition = parse(&[task_id], vec![input(task_id, &[])])
+            .unwrap()
+            .remove(&task_id)
+            .unwrap();
+        let now = DateTime::from_timestamp(3, 0).unwrap();
+        crate::work::PlanTask {
+            id: task_id,
+            title: "task".into(),
+            status: crate::work::TaskStatus::InProgress,
+            owner: None,
+            blocked_reason: None,
+            created_at: now,
+            updated_at: now,
+            evidence: vec![],
+            agent: Some(definition),
+            agent_runtime: AgentTaskRuntime {
+                state: AgentTaskState::Failed,
+                ..AgentTaskRuntime::default()
+            },
+            source_task_id: None,
+        }
+    }
+
+    #[test]
+    fn economic_policy_off_keeps_the_explicit_retry_and_receipt_barriers() {
+        let task_id = id(1);
+        let mut task = failed_task(task_id);
+        let definition = task.agent.clone().unwrap();
+        let mut graph = AgentGraphState {
+            status: AgentGraphStatus::Running,
+            ..AgentGraphState::default()
+        };
+        synchronize(std::slice::from_mut(&mut task), &mut graph);
+        assert_eq!(graph.status, AgentGraphStatus::Paused);
+        assert_eq!(
+            graph.notice.as_deref(),
+            Some("A failed task requires an explicit retry decision")
+        );
+        assert!(task.agent_runtime.economic.is_none());
+
+        task.agent_runtime.state = AgentTaskState::Completed;
+        task.status = crate::work::TaskStatus::Completed;
+        let mut graph = AgentGraphState::default();
+        synchronize(std::slice::from_mut(&mut task), &mut graph);
+        assert_eq!(graph.status, AgentGraphStatus::Paused);
+        assert_eq!(
+            graph.notice.as_deref(),
+            Some(
+                "A completed task lacks a current authoritative pass receipt; reconfigure and reapprove"
+            )
+        );
+
+        let base = verification_contract_sha256(task_id, &definition);
+        assert_eq!(bound_verification_sha256(task_id, &definition, None), base);
+        assert_eq!(
+            bound_verification_sha256(
+                task_id,
+                &definition,
+                Some(("pinned", "low", "ai", "off", false))
+            ),
+            base
+        );
+        assert_ne!(
+            bound_verification_sha256(
+                task_id,
+                &definition,
+                Some(("capable/large", "low", "ai", "one-stronger", true))
+            ),
+            base
+        );
+    }
+
+    #[test]
+    fn economic_quality_failure_readies_one_stronger_attempt() {
+        let task_id = id(2);
+        let mut task = failed_task(task_id);
+        task.agent_runtime.economic = Some(EconomicEscalationV1 {
+            enabled: true,
+            stronger_used: false,
+            failure: crate::mechanistic_delegation::AttemptFailure::Quality,
+            diagnostic: "host check failed: expected fixed".into(),
+            failed_provider: "cheap".into(),
+            failed_model: "small".into(),
+            failed_cost: 1,
+            remaining_budget: 9,
+            grant_fingerprint: "grant-v1".into(),
+            routes: vec![
+                EconomicRouteV1 {
+                    provider: "cheap".into(),
+                    model: "small".into(),
+                    tools: Vec::new(),
+                    efforts: Vec::new(),
+                    cost: 1,
+                },
+                EconomicRouteV1 {
+                    provider: "capable".into(),
+                    model: "large".into(),
+                    tools: Vec::new(),
+                    efforts: Vec::new(),
+                    cost: 9,
+                },
+            ],
+        });
+        let mut graph = AgentGraphState {
+            status: AgentGraphStatus::Running,
+            ..AgentGraphState::default()
+        };
+        synchronize(std::slice::from_mut(&mut task), &mut graph);
+        assert_eq!(task.agent_runtime.state, AgentTaskState::Ready);
+        assert!(task.agent_runtime.economic.as_ref().unwrap().stronger_used);
+        assert_eq!(graph.status, AgentGraphStatus::Running);
+        assert_eq!(
+            graph.notice.as_deref(),
+            Some("One stronger attempt is ready")
+        );
+        let admission = crate::mechanistic_delegation::admit_typed_task_packet(
+            &task.agent_runtime.economic.as_ref().unwrap().retry_packet(),
+        );
+        assert!(admission.is_stronger_attempt());
+        assert_eq!(admission.selected_provider(), Some("capable"));
+        assert_eq!(admission.grant_fingerprint(), "grant-v1");
+        assert_eq!(admission.diagnostic(), "host check failed: expected fixed");
+
+        task.agent_runtime.state = AgentTaskState::Failed;
+        let mut graph = AgentGraphState {
+            status: AgentGraphStatus::Running,
+            ..AgentGraphState::default()
+        };
+        synchronize(std::slice::from_mut(&mut task), &mut graph);
+        assert_eq!(task.agent_runtime.state, AgentTaskState::Failed);
+        assert_eq!(graph.status, AgentGraphStatus::Paused);
+        assert_eq!(
+            graph.notice.as_deref(),
+            Some("A failed task requires an explicit retry decision")
+        );
     }
 }

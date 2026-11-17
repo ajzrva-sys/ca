@@ -18,6 +18,8 @@ actual results and manual checks.
 
 ## Guardrails
 
+GRD-001 through GRD-009 are review and test obligations already recorded for this repo. This docs pass did not re-run tests to prove each one has a matching assertion. The command table above is the set of gates that exist as scripts. GRD-010 is proposed and has no script.
+
 ### GRD-001 — Hermetic provider protocol test
 
 Trigger: tool/client/orchestration changes.  
@@ -76,6 +78,20 @@ system prompt when appropriate, checkpoint user-quote preservation) rather than
 snapshotting full prompt text. Never read product source inside tests; never
 fake host OS (use real `#[cfg]`); ban change-detector tests that only restate
 implementation names.
+
+### GRD-010 — New ExecPlans carry the root sections
+
+Status: enforced by `python3 scripts/check-exec-plan.py <plan.md>`. A missing Goal, Acceptance Criteria or Validation, or Recovery and Rollback exits non-zero with `active ExecPlan missing required section: <name>`. Related task: `NEXT_STEPS.md` GRD-010.
+
+Invariant: a new file under `docs/exec-plans/active/` contains Goal, Acceptance Criteria or Validation, and Recovery and Rollback, as defined in `.agent/PLANS.md`.
+
+Evidence: ISO-337, FLT-321, and `BUG-provider-timeout-recovery.md` recorded a missing root standard and diverged in headings. LRN-150 and SEC-158 match the restored standard.
+
+Why it matters: agents otherwise invent a second plan shape and rediscover the same files.
+
+Enforcement to add later: a docs check over added plan files. Suggested failure: `active ExecPlan missing required section: Recovery and Rollback`.
+
+Priority: Medium.
 
 ### GRD-009 — Recoverable managed-asset mutation
 

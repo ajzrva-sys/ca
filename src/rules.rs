@@ -508,9 +508,84 @@ pub(crate) fn digest(bytes: &[u8]) -> String {
         .collect()
 }
 
+/// Append a glob rule the first time a read touches a matching file.
+pub fn glob_reminder_for_read(root: &Path, file: &Path) -> Option<String> {
+    let relative = file.strip_prefix(root).ok()?;
+    let relative = relative.to_string_lossy().replace('\\', "/");
+    if relative.is_empty() {
+        return None;
+    }
+    let mut files = Vec::new();
+    collect_markdown(
+        &root.join(".ca/rules"),
+        &root.join(".ca/rules"),
+        &mut files,
+        0,
+    );
+    for path in files {
+        let Ok(rule) = parse_rule(&path, RuleScope::User, Some(root.to_path_buf())) else {
+            continue;
+        };
+        if rule.activation != RuleActivation::Glob || !glob_matches(&rule.globs, &relative) {
+            continue;
+        }
+        let mut seen = REMINDED
+            .get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if !seen.insert(rule.path.clone()) {
+            continue;
+        }
+        let body: String = rule.body.chars().take(2_000).collect();
+        return Some(format!(
+            "Project rule {} applies to {relative}. It was not in the prompt yet.\n{body}",
+            rule.name
+        ));
+    }
+    None
+}
+
+fn glob_matches(globs: &[String], relative: &str) -> bool {
+    let mut builder = GlobSetBuilder::new();
+    for pattern in globs {
+        let Ok(glob) = GlobBuilder::new(pattern)
+            .literal_separator(true)
+            .backslash_escape(false)
+            .build()
+        else {
+            return false;
+        };
+        builder.add(glob);
+    }
+    builder
+        .build()
+        .is_ok_and(|patterns| patterns.is_match(relative))
+}
+
+static REMINDED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<PathBuf>>> =
+    std::sync::OnceLock::new();
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_glob_rule_is_named_after_a_matching_read() {
+        let root = tempfile::tempdir().unwrap();
+        let rules = root.path().join(".ca/rules");
+        std::fs::create_dir_all(&rules).unwrap();
+        std::fs::write(
+            rules.join("api.md"),
+            "---\ndescription: API shape\nactivation: glob\nglobs:\n  - src/**/*.rs\n---\nKeep the public API small.\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.path().join("src")).unwrap();
+        let file = root.path().join("src/lib.rs");
+        std::fs::write(&file, "fn lib() {}\n").unwrap();
+        let reminder = glob_reminder_for_read(root.path(), &file).expect("rule");
+        assert!(reminder.contains("Keep the public API small."));
+        assert!(glob_reminder_for_read(root.path(), &file).is_none());
+    }
 
     fn write_rule(root: &Path, name: &str, content: &str) {
         fs::create_dir_all(root).unwrap();

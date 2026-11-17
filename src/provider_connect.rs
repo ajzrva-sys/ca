@@ -6,6 +6,8 @@ use crate::provider_probe::{ProviderCheckStatus, ProviderProbeRequest};
 pub enum FirstClassProvider {
     Mimo,
     OpenAiCodex,
+    OpenAiChatGpt,
+    XaiOAuth,
     DeepSeek,
     OpenAi,
 }
@@ -15,6 +17,8 @@ impl FirstClassProvider {
         match id {
             "mimo" => Some(Self::Mimo),
             "openai-codex" => Some(Self::OpenAiCodex),
+            "openai-chatgpt" => Some(Self::OpenAiChatGpt),
+            "xai-oauth" => Some(Self::XaiOAuth),
             "deepseek" => Some(Self::DeepSeek),
             "openai" => Some(Self::OpenAi),
             _ => None,
@@ -25,6 +29,8 @@ impl FirstClassProvider {
         match self {
             Self::Mimo => "mimo",
             Self::OpenAiCodex => "openai-codex",
+            Self::OpenAiChatGpt => "openai-chatgpt",
+            Self::XaiOAuth => "xai-oauth",
             Self::DeepSeek => "deepseek",
             Self::OpenAi => "openai",
         }
@@ -34,6 +40,8 @@ impl FirstClassProvider {
         match self {
             Self::Mimo => "Xiaomi MiMo",
             Self::OpenAiCodex => "OpenAI Codex (ChatGPT)",
+            Self::OpenAiChatGpt => "ChatGPT plan",
+            Self::XaiOAuth => "xAI Grok (SuperGrok)",
             Self::DeepSeek => "DeepSeek",
             Self::OpenAi => "OpenAI API",
         }
@@ -43,6 +51,8 @@ impl FirstClassProvider {
         match self {
             Self::Mimo => "mimo-v2.5-pro",
             Self::OpenAiCodex | Self::OpenAi => "gpt-5.6-sol",
+            Self::OpenAiChatGpt => "gpt-6.1-sol",
+            Self::XaiOAuth => "grok-4.7",
             Self::DeepSeek => "deepseek-v4-pro",
         }
     }
@@ -51,14 +61,19 @@ impl FirstClassProvider {
         match self {
             Self::Mimo => "https://api.xiaomimimo.com/v1",
             Self::OpenAiCodex => "https://chatgpt.com/backend-api/codex",
+            Self::OpenAiChatGpt | Self::OpenAi => "https://api.openai.com/v1",
+            Self::XaiOAuth => "https://api.x.ai/v1",
             Self::DeepSeek => "https://api.deepseek.com/v1",
-            Self::OpenAi => "https://api.openai.com/v1",
         }
     }
 
     pub const fn protocol(self) -> ProviderProtocol {
         match self {
-            Self::Mimo | Self::OpenAiCodex | Self::OpenAi => ProviderProtocol::OpenAiResponses,
+            Self::Mimo
+            | Self::OpenAiCodex
+            | Self::OpenAiChatGpt
+            | Self::XaiOAuth
+            | Self::OpenAi => ProviderProtocol::OpenAiResponses,
             Self::DeepSeek => ProviderProtocol::ChatCompletions,
         }
     }
@@ -96,14 +111,94 @@ impl ProviderConnectionOutcome {
 
 pub async fn resolve_runtime_provider(
     provider: &str,
-    mut config: ProviderConfig,
+    config: ProviderConfig,
 ) -> Result<ProviderConfig, String> {
+    if provider == FirstClassProvider::OpenAiChatGpt.id() {
+        let store =
+            crate::chatgpt_plan_auth::ChatGptPlanStore::from_dir(default_chatgpt_plan_dir());
+        return resolve_runtime_provider_with_plan_store(provider, config, &store).await;
+    }
+    let mut config = config;
     if provider == FirstClassProvider::OpenAiCodex.id() && config.api_key.trim().is_empty() {
         config.api_key = crate::codex_auth::resolve_credential()
             .await
             .map_err(|error| error.to_string())?;
     }
+    fill_xai_oauth(provider, &mut config).await?;
     Ok(config)
+}
+
+async fn fill_xai_oauth(provider: &str, config: &mut ProviderConfig) -> Result<(), String> {
+    if provider == FirstClassProvider::XaiOAuth.id() && config.api_key.trim().is_empty() {
+        config.api_key =
+            crate::xai_oauth::resolve_access_token(&crate::xai_oauth::XaiOauthStore::default())
+                .await
+                .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+async fn refreshed_plan_tokens(
+    store: &crate::chatgpt_plan_auth::ChatGptPlanStore,
+    tokens: crate::chatgpt_plan_auth::ChatGptPlanTokens,
+) -> Result<crate::chatgpt_plan_auth::ChatGptPlanTokens, String> {
+    if !crate::chatgpt_plan_auth::access_token_expired(&tokens, chrono::Utc::now().timestamp()) {
+        return Ok(tokens);
+    }
+    match crate::chatgpt_plan_auth::refresh_plan_tokens_at(
+        &crate::chatgpt_plan_auth::token_endpoint(),
+        &tokens,
+    )
+    .await
+    {
+        Ok(fresh) => {
+            store.save(&fresh).map_err(|error| error.to_string())?;
+            Ok(fresh)
+        }
+        Err(error) if error.to_string() == crate::chatgpt_plan_auth::SIGN_IN_AGAIN => {
+            let _ = store.clear();
+            Err(crate::chatgpt_plan_auth::SIGN_IN_AGAIN.to_string())
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+pub async fn resolve_runtime_provider_with_plan_store(
+    provider: &str,
+    mut config: ProviderConfig,
+    store: &crate::chatgpt_plan_auth::ChatGptPlanStore,
+) -> Result<ProviderConfig, String> {
+    if provider == FirstClassProvider::OpenAiChatGpt.id() {
+        if crate::provider_contract::route_family(provider, &config)
+            == Some(crate::provider_contract::FirstPartyProvider::OpenAiChatGpt)
+            && config.api_key.trim().is_empty()
+        {
+            if let Some(tokens) = store.load().map_err(|error| error.to_string())? {
+                let tokens = refreshed_plan_tokens(store, tokens).await?;
+                if crate::chatgpt_plan_auth::plan_use_enabled(&tokens.scopes) {
+                    config.api_key = tokens.access_token;
+                }
+            }
+        }
+        return Ok(config);
+    }
+    if provider == FirstClassProvider::OpenAiCodex.id() && config.api_key.trim().is_empty() {
+        config.api_key = crate::codex_auth::resolve_credential()
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    fill_xai_oauth(provider, &mut config).await?;
+    Ok(config)
+}
+
+fn default_chatgpt_plan_dir() -> std::path::PathBuf {
+    let config_home = std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".config"))
+        })
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    config_home.join("ca")
 }
 
 pub async fn connect_direct(
@@ -131,7 +226,7 @@ pub async fn connect_direct_with_billing(
         let status = probe(provider, &model, config.clone(), request_store).await;
         return Ok(ProviderConnectionOutcome {
             provider,
-            selected: status.working_model().is_some(),
+            selected: probe_allows_selection(&status),
             persisted: false,
             status,
             config,
@@ -176,7 +271,7 @@ pub async fn connect_direct_with_billing(
             billing_repair: false,
         });
     }
-    let selected = status.working_model().is_some();
+    let selected = probe_allows_selection(&status);
     if selected {
         let selection_store = store.clone();
         let selection_provider = provider.id().to_string();
@@ -327,7 +422,7 @@ pub async fn connect_codex(
     if !store.writes_enabled() {
         return Ok(ProviderConnectionOutcome {
             provider,
-            selected: status.working_model().is_some(),
+            selected: probe_allows_selection(&status),
             persisted: false,
             status,
             config,
@@ -358,7 +453,7 @@ pub async fn connect_codex(
             return Err(error);
         }
     };
-    let selected = status.working_model().is_some();
+    let selected = probe_allows_selection(&status);
     if selected {
         let selection_store = store.clone();
         let selection = tokio::task::spawn_blocking(move || {
@@ -383,6 +478,211 @@ pub async fn connect_codex(
         billing: None,
         billing_repair: false,
     })
+}
+
+pub async fn connect_xai_oauth(
+    store: ConfigStore,
+    tokens: crate::xai_oauth::XaiOauthTokens,
+    request_store: crate::request::RequestStore,
+) -> Result<ProviderConnectionOutcome, String> {
+    let provider = FirstClassProvider::XaiOAuth;
+    let model = provider.starter_model().to_string();
+    let config = provider.candidate(tokens.access_token.clone(), None);
+    let status = probe(provider, &model, config.clone(), request_store).await;
+    if authentication_rejected(&status) {
+        return Ok(ProviderConnectionOutcome {
+            provider,
+            status,
+            config,
+            persisted: false,
+            selected: false,
+            billing: None,
+            billing_repair: false,
+        });
+    }
+    if !store.writes_enabled() {
+        return Ok(ProviderConnectionOutcome {
+            provider,
+            selected: probe_allows_selection(&status),
+            persisted: false,
+            status,
+            config,
+            billing: None,
+            billing_repair: false,
+        });
+    }
+    let token_store = crate::xai_oauth::XaiOauthStore::default();
+    let previous_tokens = token_store.load().map_err(|error| error.to_string())?;
+    token_store
+        .save(&tokens)
+        .map_err(|error| error.to_string())?;
+    let persisted_config = provider.candidate(String::new(), None);
+    let stage_store = store.clone();
+    let stage_config = persisted_config.clone();
+    let stage = tokio::task::spawn_blocking(move || {
+        stage_store.stage_authenticated_provider(
+            provider.id(),
+            &stage_config,
+            provider.starter_model(),
+            None,
+        )
+    })
+    .await
+    .map_err(|_| "provider save task failed".to_string())?
+    .map_err(|error| error.to_string());
+    let rollback = match stage {
+        Ok(rollback) => rollback,
+        Err(error) => {
+            restore_xai_tokens(&token_store, previous_tokens.as_ref())?;
+            return Err(error);
+        }
+    };
+    let selected = probe_allows_selection(&status);
+    if selected {
+        let selection_store = store.clone();
+        let selection = tokio::task::spawn_blocking(move || {
+            selection_store.select_model(provider.id(), provider.starter_model())
+        })
+        .await
+        .map_err(|_| "default selection task failed".to_string())?;
+        if let Err(error) = selection {
+            store
+                .rollback_authenticated_provider(rollback)
+                .map_err(|rollback| format!("{error}; config rollback failed: {rollback}"))?;
+            restore_xai_tokens(&token_store, previous_tokens.as_ref())?;
+            return Err(format!("could not select provider: {error}"));
+        }
+    }
+    Ok(ProviderConnectionOutcome {
+        provider,
+        status,
+        config: persisted_config,
+        persisted: true,
+        selected,
+        billing: None,
+        billing_repair: false,
+    })
+}
+
+fn restore_xai_tokens(
+    store: &crate::xai_oauth::XaiOauthStore,
+    previous: Option<&crate::xai_oauth::XaiOauthTokens>,
+) -> Result<(), String> {
+    match previous {
+        Some(tokens) => store.save(tokens),
+        None => store.clear(),
+    }
+    .map_err(|error| format!("xAI sign-in rollback failed: {error}"))
+}
+
+pub async fn connect_chatgpt_plan(
+    store: ConfigStore,
+    tokens: crate::chatgpt_plan_auth::ChatGptPlanTokens,
+    request_store: crate::request::RequestStore,
+) -> Result<ProviderConnectionOutcome, String> {
+    connect_chatgpt_plan_at(store, tokens, request_store, None).await
+}
+
+async fn connect_chatgpt_plan_at(
+    store: ConfigStore,
+    tokens: crate::chatgpt_plan_auth::ChatGptPlanTokens,
+    request_store: crate::request::RequestStore,
+    probe_url: Option<String>,
+) -> Result<ProviderConnectionOutcome, String> {
+    let provider = FirstClassProvider::OpenAiChatGpt;
+    let probe_config = provider.candidate(tokens.access_token.clone(), probe_url);
+    let status = probe(
+        provider,
+        provider.starter_model(),
+        probe_config,
+        request_store,
+    )
+    .await;
+    if authentication_rejected(&status) {
+        return Ok(ProviderConnectionOutcome {
+            provider,
+            status,
+            config: provider.candidate(String::new(), None),
+            persisted: false,
+            selected: false,
+            billing: None,
+            billing_repair: false,
+        });
+    }
+    if !store.writes_enabled() {
+        return Ok(ProviderConnectionOutcome {
+            provider,
+            selected: probe_allows_selection(&status),
+            persisted: false,
+            status,
+            config: provider.candidate(String::new(), None),
+            billing: None,
+            billing_repair: false,
+        });
+    }
+    let plan_store =
+        crate::chatgpt_plan_auth::ChatGptPlanStore::from_dir(default_chatgpt_plan_dir());
+    let previous_tokens = plan_store.load().map_err(|error| error.to_string())?;
+    plan_store
+        .save(&tokens)
+        .map_err(|error| error.to_string())?;
+    let persisted_config = provider.candidate(String::new(), None);
+    let stage_store = store.clone();
+    let stage_config = persisted_config.clone();
+    let stage = tokio::task::spawn_blocking(move || {
+        stage_store.stage_authenticated_provider(
+            provider.id(),
+            &stage_config,
+            provider.starter_model(),
+            None,
+        )
+    })
+    .await
+    .map_err(|_| "provider save task failed".to_string())?
+    .map_err(|error| error.to_string());
+    let rollback = match stage {
+        Ok(rollback) => rollback,
+        Err(error) => {
+            restore_chatgpt_plan_tokens(&plan_store, previous_tokens.as_ref())?;
+            return Err(error);
+        }
+    };
+    let selected = probe_allows_selection(&status);
+    if selected {
+        let selection_store = store.clone();
+        let selection = tokio::task::spawn_blocking(move || {
+            selection_store.select_model(provider.id(), provider.starter_model())
+        })
+        .await
+        .map_err(|_| "default selection task failed".to_string())?;
+        if let Err(error) = selection {
+            store
+                .rollback_authenticated_provider(rollback)
+                .map_err(|rollback| format!("{error}; config rollback failed: {rollback}"))?;
+            restore_chatgpt_plan_tokens(&plan_store, previous_tokens.as_ref())?;
+            return Err(format!("could not select provider: {error}"));
+        }
+    }
+    Ok(ProviderConnectionOutcome {
+        provider,
+        status,
+        config: persisted_config,
+        persisted: true,
+        selected,
+        billing: None,
+        billing_repair: false,
+    })
+}
+
+fn restore_chatgpt_plan_tokens(
+    store: &crate::chatgpt_plan_auth::ChatGptPlanStore,
+    previous: Option<&crate::chatgpt_plan_auth::ChatGptPlanTokens>,
+) -> Result<(), String> {
+    match previous {
+        Some(tokens) => store.save(tokens),
+        None => store.clear(),
+    }
+    .map_err(|error| format!("ChatGPT plan credential rollback failed: {error}"))
 }
 
 fn restore_codex_tokens(previous: Option<&crate::codex_auth::CodexTokens>) -> Result<(), String> {
@@ -415,6 +715,12 @@ fn authentication_rejected(status: &ProviderCheckStatus) -> bool {
         status,
         ProviderCheckStatus::CredentialRejected | ProviderCheckStatus::AccessDenied
     )
+}
+
+/// A local filter or privacy stop is not a rejected credential. The saved
+/// provider can still become current.
+fn probe_allows_selection(status: &ProviderCheckStatus) -> bool {
+    status.working_model().is_some() || matches!(status, ProviderCheckStatus::FilterStopped)
 }
 
 #[cfg(test)]
@@ -484,6 +790,18 @@ mod tests {
     }
 
     #[test]
+    fn a_local_filter_stop_still_selects_the_saved_provider() {
+        assert!(probe_allows_selection(&ProviderCheckStatus::Working {
+            model: "grok-4.7".into()
+        }));
+        assert!(probe_allows_selection(&ProviderCheckStatus::FilterStopped));
+        assert!(!probe_allows_selection(
+            &ProviderCheckStatus::CredentialRejected
+        ));
+        assert!(!probe_allows_selection(&ProviderCheckStatus::AccessDenied));
+    }
+
+    #[test]
     fn first_class_specs_are_exact_and_distinct() {
         assert_eq!(
             FirstClassProvider::for_id("mimo").unwrap().display_name(),
@@ -502,6 +820,166 @@ mod tests {
             ProviderProtocol::OpenAiResponses
         );
         assert!(FirstClassProvider::for_id("openai-api").is_none());
+    }
+
+    #[test]
+    fn chatgpt_plan_first_class_is_not_codex_or_api_key() {
+        assert_eq!(
+            FirstClassProvider::for_id("openai-chatgpt"),
+            Some(FirstClassProvider::OpenAiChatGpt)
+        );
+        let p = FirstClassProvider::OpenAiChatGpt;
+        assert_eq!(p.id(), "openai-chatgpt");
+        assert_eq!(p.display_name(), "ChatGPT plan");
+        assert_eq!(p.default_base_url(), "https://api.openai.com/v1");
+        assert_eq!(
+            p.protocol(),
+            crate::agent::ProviderProtocol::OpenAiResponses
+        );
+        assert_eq!(p.starter_model(), "gpt-6.1-sol");
+        assert_ne!(
+            p.default_base_url(),
+            FirstClassProvider::OpenAiCodex.default_base_url()
+        );
+        assert_ne!(p.id(), FirstClassProvider::OpenAi.id());
+        let cfg = p.candidate(String::new(), None);
+        assert!(cfg.api_key.is_empty());
+        assert_eq!(cfg.base_url, "https://api.openai.com/v1");
+    }
+
+    fn sample_plan_tokens(access: &str) -> crate::chatgpt_plan_auth::ChatGptPlanTokens {
+        crate::chatgpt_plan_auth::ChatGptPlanTokens {
+            client_id: "oaiapp_test".into(),
+            access_token: access.into(),
+            refresh_token: "refresh".into(),
+            id_token: "id".into(),
+            account_sub: "sub_test".into(),
+            scopes: vec!["chatgpt.tokens.use.direct".into()],
+            ext_agent_host_id: "urn:uuid:00000000-0000-0000-0000-000000000001".into(),
+            expires_at: None,
+            email: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn chatgpt_plan_resolve_does_not_use_codex_credential() {
+        let temp = tempfile::tempdir().unwrap();
+        let store =
+            crate::chatgpt_plan_auth::ChatGptPlanStore::from_dir(temp.path().join("chatgpt-plan"));
+        store.save(&sample_plan_tokens("SIWC_SECRET")).unwrap();
+        let cfg = FirstClassProvider::OpenAiChatGpt.candidate(String::new(), None);
+        let resolved =
+            resolve_runtime_provider_with_plan_store("openai-chatgpt", cfg.clone(), &store)
+                .await
+                .unwrap();
+        assert_eq!(resolved.api_key, "SIWC_SECRET");
+
+        let mut wrong_url = cfg.clone();
+        wrong_url.base_url = "https://chatgpt.com/backend-api/codex".into();
+        let skipped = resolve_runtime_provider_with_plan_store("openai-chatgpt", wrong_url, &store)
+            .await
+            .unwrap();
+        assert!(skipped.api_key.is_empty());
+
+        let codex_cfg = FirstClassProvider::OpenAiCodex.candidate(String::new(), None);
+        let left_alone =
+            resolve_runtime_provider_with_plan_store("openai-codex", codex_cfg, &store).await;
+        if let Ok(cfg) = left_alone {
+            assert_ne!(cfg.api_key, "SIWC_SECRET");
+        }
+    }
+
+    fn responses_complete_stream() -> &'static str {
+        concat!(
+            "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"OK\"}\n\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n"
+        )
+    }
+
+    #[tokio::test]
+    async fn chatgpt_plan_expired_token_refreshes_for_openai_chat() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let token_url = format!("http://{address}/oauth/token");
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = vec![0_u8; 8 * 1024];
+            let count = stream.read(&mut request).await.unwrap();
+            let request = String::from_utf8_lossy(&request[..count]).to_string();
+            let body = r#"{"access_token":"new-plan-access","refresh_token":"new-plan-refresh","expires_in":3600,"scope":"chatgpt.tokens.use.direct"}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+            request
+        });
+        let temp = tempfile::tempdir().unwrap();
+        let store =
+            crate::chatgpt_plan_auth::ChatGptPlanStore::from_dir(temp.path().join("chatgpt-plan"));
+        let mut expired = sample_plan_tokens("old-plan-access");
+        expired.expires_at = Some(1);
+        store.save(&expired).unwrap();
+        crate::chatgpt_plan_auth::set_token_url_for_test(Some(token_url));
+        let cfg = FirstClassProvider::OpenAiChatGpt.candidate(String::new(), None);
+        let resolved =
+            resolve_runtime_provider_with_plan_store("openai-chatgpt", cfg, &store).await;
+        crate::chatgpt_plan_auth::set_token_url_for_test(None);
+        let resolved = resolved.unwrap();
+        let refresh = server.await.unwrap();
+        assert_eq!(resolved.api_key, "new-plan-access");
+        assert_eq!(resolved.base_url, "https://api.openai.com/v1");
+        assert!(refresh.contains("grant_type=refresh_token"), "{refresh}");
+        assert!(refresh.contains("client_id=oaiapp_test"), "{refresh}");
+        assert!(
+            refresh.contains("resource=https%3A%2F%2Fapi.openai.com%2Fv1"),
+            "{refresh}"
+        );
+        assert!(!refresh.contains("chatgpt.com"), "{refresh}");
+        assert!(!refresh.contains("dynamic_agent_client"), "{refresh}");
+        let saved = store.load().unwrap().unwrap();
+        assert_eq!(saved.refresh_token, "new-plan-refresh");
+        assert_eq!(saved.access_token, "new-plan-access");
+    }
+
+    #[tokio::test]
+    async fn chatgpt_plan_connect_persists_empty_api_key() {
+        let original = r#"[providers.backup]
+base_url = "https://backup.example/v1"
+api_key = "${BACKUP_API_KEY}"
+models = ["backup-model"]
+
+[defaults]
+provider = "backup"
+model = "backup-model"
+"#;
+        let (_temp, store, secrets) = persisted_store(original);
+        let base_url = one_shot_server("200 OK", responses_complete_stream()).await;
+        let outcome = connect_chatgpt_plan_at(
+            store.clone(),
+            sample_plan_tokens("SIWC_SECRET"),
+            crate::request::RequestStore::default(),
+            Some(base_url),
+        )
+        .await
+        .unwrap();
+        assert!(outcome.persisted);
+        assert!(outcome.config.api_key.is_empty());
+        assert_eq!(outcome.provider, FirstClassProvider::OpenAiChatGpt);
+        assert_eq!(outcome.config.base_url, "https://api.openai.com/v1");
+        assert!(secrets.values.lock().unwrap().is_empty());
+        let loaded = crate::chatgpt_plan_auth::ChatGptPlanStore::from_dir(
+            std::env::var_os("XDG_CONFIG_HOME")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::path::PathBuf::from(".").join(".config"))
+                .join("ca"),
+        )
+        .load()
+        .unwrap()
+        .unwrap();
+        assert_eq!(loaded.access_token, "SIWC_SECRET");
+        assert!(!format!("{outcome:?}").contains("SIWC_SECRET"));
     }
 
     #[tokio::test]

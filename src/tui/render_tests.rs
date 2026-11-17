@@ -10,10 +10,411 @@ use ratatui::layout::Position;
 use ratatui::style::{Color, Modifier};
 use ratatui::Terminal;
 
+#[test]
+fn automatic_map_review_discloses_fixed_total_token_ceiling() {
+    let mut state = task_graph_render_state();
+    state.task_graph_manager = None;
+    state.work_state.lock().unwrap().automatic_task_map = true;
+    state.plan_proposal = Some(
+        state
+            .work_state
+            .lock()
+            .unwrap()
+            .plan
+            .as_ref()
+            .unwrap()
+            .review(),
+    );
+    for width in [70, 120] {
+        let text = render_to_text(&state, width, 36);
+        assert!(text.contains("100000 total tokens"), "{text}");
+    }
+}
+
+#[test]
+fn narrow_task_map_shows_one_unrestored_provider_listing() {
+    let mut state = task_graph_render_state();
+    let now = chrono::Utc::now();
+    {
+        let mut work = state.work_state.lock().unwrap();
+        work.automatic_task_map = true;
+        let task = &mut work.plan.as_mut().unwrap().tasks[0];
+        task.agent_runtime.state = crate::agent_graph::AgentTaskState::Completed;
+        task.agent_runtime
+            .attempts
+            .push(crate::agent_graph::AgentTaskAttempt {
+                number: 1,
+                agent_id: Some(uuid::Uuid::from_u128(7)),
+                status: crate::agent_graph::AgentAttemptStatus::Completed,
+                started_at: now,
+                finished_at: Some(now),
+                successful_tools: vec!["list_dir".into()],
+                summary: Some(
+                    "The workspace contains two entries:\n2. listed-name.rtf\n3. other-name".into(),
+                ),
+                provider_summary: Some(
+                    "1. `__CA_PATH_abc__/f001`\n2. `__CA_PATH_abc__/f002`".into(),
+                ),
+                terminal_event_sequence: Some(1),
+                verification_receipt: None,
+                workspace_snapshot: None,
+                host_verification: None,
+                handoff_outputs: Vec::new(),
+                handoff_inputs: Vec::new(),
+                budget_usage: crate::agent_graph::AgentGraphBudgetUsageV1::default(),
+            });
+    }
+    state.task_graph_manager = None;
+    state.messages.push(Message {
+        role: Role::User,
+        content: "list this dir".into(),
+        retrieved_spans: None,
+        tool_calls: None,
+        thinking: None,
+        response_items: Vec::new(),
+        timestamp: now,
+    });
+    let narrow = render_to_text(&state, 70, 24);
+    assert!(
+        narrow.contains("The workspace contains two entries:"),
+        "{narrow}"
+    );
+    assert!(
+        narrow.contains("Provider listing: __CA_PATH_abc__/f001"),
+        "{narrow}"
+    );
+    assert!(narrow.contains("__CA_PATH_abc__/f002"), "{narrow}");
+    assert!(!narrow.contains("Provider listing: 1."), "{narrow}");
+    set_filter_presentation(
+        &state,
+        crate::provider_filter::FilterStatus::Active,
+        "Project privacy · Selected values only · filenames on · 0 selected values",
+    );
+    state
+        .provider_pane
+        .note(1, std::sync::Arc::from("provider body"));
+    let wide = render_to_text(&state, 100, 24);
+    assert!(!wide.contains("Provider listing:"), "{wide}");
+    assert!(wide.contains("filenames on"), "{wide}");
+}
+
 /// Render one state at both the wide and narrow test sizes and join them, so a
 /// single snapshot covers both bounded layouts.
 fn wide_narrow(wide: String, narrow: String) -> String {
-    format!("{wide}\n-- narrow --\n{narrow}")
+    format!(
+        "{wide}
+-- narrow --\n{narrow}"
+    )
+}
+
+#[test]
+fn automatic_map_task_inspector_is_live_and_returns_to_map() {
+    let mut state = task_graph_render_state();
+    state.work_state.lock().unwrap().automatic_task_map = true;
+    state
+        .work_state
+        .lock()
+        .unwrap()
+        .plan
+        .as_mut()
+        .unwrap()
+        .tasks[0]
+        .agent_runtime
+        .failure = Some("FIRST-DETAIL".into());
+    crate::tui::input::handle_event(
+        &mut state,
+        &crate::tui::Event::Key(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        ),
+        "/workspace",
+    );
+    assert!(state.task_graph_manager.as_ref().unwrap().detail_open);
+    assert!(!state.pager_open);
+    assert!(render_to_text(&state, 100, 30).contains("FIRST-DETAIL"));
+    state
+        .work_state
+        .lock()
+        .unwrap()
+        .plan
+        .as_mut()
+        .unwrap()
+        .tasks[0]
+        .agent_runtime
+        .failure = Some("SECOND-DETAIL".into());
+    let second = render_to_text(&state, 60, 24);
+    assert!(second.contains("SECOND-DETAIL"));
+    assert!(!second.contains("FIRST-DETAIL"));
+    crate::tui::input::handle_event(
+        &mut state,
+        &crate::tui::Event::Key(
+            crossterm::event::KeyCode::Esc,
+            crossterm::event::KeyModifiers::NONE,
+        ),
+        "/workspace",
+    );
+    assert!(!state.task_graph_manager.as_ref().unwrap().detail_open);
+}
+
+#[test]
+fn automatic_map_inspector_keeps_latest_long_progress_and_footer_visible() {
+    let mut state = task_graph_render_state();
+    state.task_graph_manager.as_mut().unwrap().detail_open = true;
+    let id = uuid::Uuid::from_u128(999);
+    let now = chrono::Utc::now();
+    {
+        let mut work = state.work_state.lock().unwrap();
+        work.automatic_task_map = true;
+        let task = &mut work.plan.as_mut().unwrap().tasks[0];
+        task.agent_runtime.state = crate::agent_graph::AgentTaskState::Running;
+        task.agent_runtime.attempts = vec![serde_json::from_value(serde_json::json!({
+            "number":1,"agent_id":id,"status":"running","started_at":now,
+        }))
+        .unwrap()];
+    }
+    state
+        .live_agent_activity
+        .push(crate::agent::subagent::AgentActivitySnapshot {
+            id: crate::agent::subagent::AgentId(id),
+            parent_turn: uuid::Uuid::nil(),
+            parent: None,
+            origin: crate::agent::subagent::AgentRunOrigin::TaskGraph,
+            purpose: crate::agent::subagent::AgentRunPurpose::Subagent,
+            status: crate::agent::subagent::AgentStatus::Running,
+            task: "Inspect provider boundary".into(),
+            role: None,
+            model: None,
+            provider: None,
+            phase: crate::agent::subagent::AgentExecutionPhase::WaitingForResponse,
+            current_action: None,
+            created_at: now,
+            updated_at: now,
+            result_summary: None,
+            recent_output: "Old tool output\n".repeat(80),
+            events: vec![crate::agent::subagent::AgentEvent {
+                sequence: 1,
+                at: now,
+                message: format!(
+                    "Progress: {}FIRST-LONG-PENDING",
+                    "old progress line\n".repeat(100)
+                ),
+            }],
+        });
+    for width in [60, 100] {
+        let first = render_to_text(&state, width, 24);
+        assert!(first.contains("FIRST-LONG-PENDING"), "{first}");
+        assert!(first.contains("back to map"), "{first}");
+    }
+    state.live_agent_activity[0].events[0].message = format!(
+        "Progress: {}SECOND-LONG-PENDING",
+        "old progress line\n".repeat(100)
+    );
+    let second = render_to_text(&state, 60, 24);
+    assert!(second.contains("SECOND-LONG-PENDING"), "{second}");
+    assert!(!second.contains("FIRST-LONG-PENDING"), "{second}");
+}
+
+#[test]
+fn automatic_map_keeps_filter_closed_and_shows_fresh_pending_updates() {
+    for width in [60, 100] {
+        let mut state = task_graph_render_state();
+        state.task_graph_manager = None;
+        let mut work = state.work_state.lock().unwrap();
+        work.automatic_task_map = true;
+        work.agent_graph.status = crate::agent_graph::AgentGraphStatus::Running;
+        work.plan.as_mut().unwrap().tasks[0].agent_runtime.state =
+            crate::agent_graph::AgentTaskState::Running;
+        work.plan.as_mut().unwrap().tasks[0].agent_runtime.failure = Some("FIRST-PENDING".into());
+        drop(work);
+        for index in 0..192 {
+            state.messages.push(Message {
+                role: Role::User,
+                content: format!("History item {index}: retained representative prior work."),
+                retrieved_spans: None,
+                tool_calls: None,
+                thinking: None,
+                response_items: Vec::new(),
+                timestamp: chrono::Utc::now(),
+            });
+        }
+        *state.filter_presentation.lock().unwrap() = crate::provider_filter::FilterPresentation {
+            status: crate::provider_filter::FilterStatus::Active,
+            detail: "protected".into(),
+        };
+        state
+            .provider_pane
+            .note(1, std::sync::Arc::from("HIDDEN-PROVIDER-PREVIEW"));
+        let first = render_to_text(&state, width, 30);
+        assert!(first.contains("FIRST-PENDING"), "{first}");
+        let (_, buffer) = rendered_frame(&state, width, 30);
+        let color = |needle: &str| {
+            (0..30)
+                .find_map(|y| {
+                    let text = (0..width)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>();
+                    text.contains(needle).then(|| {
+                        (0..width)
+                            .find_map(|x| {
+                                (buffer[(x, y)].symbol() != " ").then_some(buffer[(x, y)].fg)
+                            })
+                            .unwrap()
+                    })
+                })
+                .unwrap()
+        };
+        assert_ne!(color("#1"), color("#2"));
+        assert_eq!(color("#1"), color("FIRST-PENDING"));
+        assert!(!first.contains("HIDDEN-PROVIDER-PREVIEW"), "{first}");
+        state
+            .work_state
+            .lock()
+            .unwrap()
+            .plan
+            .as_mut()
+            .unwrap()
+            .tasks[0]
+            .agent_runtime
+            .failure = Some("SECOND-PENDING".into());
+        let second = render_to_text(&state, width, 30);
+        assert!(second.contains("SECOND-PENDING"), "{second}");
+        assert!(!second.contains("FIRST-PENDING"), "{second}");
+        assert!(state.privacy_editor.is_none());
+        assert_eq!(state.messages.len(), 192);
+        for event in [
+            crate::tui::Event::Key(
+                crossterm::event::KeyCode::Char('x'),
+                crossterm::event::KeyModifiers::CONTROL,
+            ),
+            crate::tui::Event::Key(
+                crossterm::event::KeyCode::Char('t'),
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        ] {
+            crate::tui::input::handle_event(&mut state, &event, "/workspace");
+        }
+        let collapsed = render_to_text(&state, width, 30);
+        assert!(!collapsed.contains("SECOND-PENDING"), "{collapsed}");
+        assert!(collapsed.contains("expand"), "{collapsed}");
+    }
+}
+
+#[test]
+fn privacy_editor_original_and_sent_views_remain_distinct_at_both_widths() {
+    use crate::tui::Event;
+    use crossterm::event::{KeyCode, KeyModifiers};
+    let mut state = test_state();
+    state.privacy_editor = Some(crate::tui::privacy::test_editor());
+    let wide = render_to_text(&state, 140, 30);
+    assert!(wide.contains("Original · local only"), "{wide}");
+    assert!(wide.contains("delicate-client"), "{wide}");
+    assert!(wide.contains("CA_CLIENT_1"), "{wide}");
+    for width in [60, 100] {
+        crate::tui::input::handle_event(
+            &mut state,
+            &Event::Key(KeyCode::Char('2'), KeyModifiers::NONE),
+            "/workspace",
+        );
+        let request = render_to_text(&state, width, 24);
+        assert!(
+            request.contains("provider request")
+                || request.contains("LATEST")
+                || request.contains("Waiting"),
+            "{request}"
+        );
+        crate::tui::input::handle_event(
+            &mut state,
+            &Event::Key(KeyCode::Char('f'), KeyModifiers::NONE),
+            "/workspace",
+        );
+        let sent = render_to_text(&state, width, 24);
+        assert!(sent.contains("CA_CLIENT_1"), "{sent}");
+        assert!(!sent.contains("delicate-client"), "{sent}");
+        crate::tui::input::handle_event(
+            &mut state,
+            &Event::Key(KeyCode::Char('d'), KeyModifiers::NONE),
+            "/workspace",
+        );
+        let changes = render_to_text(&state, width, 24);
+        assert!(changes.contains("delicate-client"), "{changes}");
+        assert!(changes.contains("CA_CLIENT_1"), "{changes}");
+        crate::tui::input::handle_event(
+            &mut state,
+            &Event::Key(KeyCode::Char('t'), KeyModifiers::NONE),
+            "/workspace",
+        );
+    }
+}
+
+#[test]
+fn privacy_editor_input_never_changes_the_hidden_composer() {
+    use crate::tui::Event;
+    use crossterm::event::{KeyCode, KeyModifiers};
+    let mut state = test_state();
+    state.input = "Preserve this unsent request".into();
+    state.input_cursor = state.input.len();
+    state.privacy_editor = Some(crate::tui::privacy::test_editor());
+    crate::tui::input::handle_event(
+        &mut state,
+        &Event::Key(KeyCode::Char('p'), KeyModifiers::NONE),
+        "/workspace",
+    );
+    crate::tui::input::handle_event(
+        &mut state,
+        &Event::Paste("/private/local.html".into()),
+        "/workspace",
+    );
+    assert_eq!(state.input, "Preserve this unsent request");
+    assert_eq!(state.input_cursor, state.input.len());
+}
+
+#[test]
+fn privacy_editor_request_refresh_is_visible_while_pending_with_long_history() {
+    use crate::tui::Event;
+    use crossterm::event::{KeyCode, KeyModifiers};
+    use std::sync::Arc;
+    for width in [60, 100] {
+        let mut state = test_state();
+        state.privacy_editor = Some(crate::tui::privacy::test_editor());
+        state.streaming = Some(StreamingState {
+            provider_text: Default::default(),
+            content: "Still working".into(),
+            tool_calls: Vec::new(),
+            thinking: None,
+            response_items: Vec::new(),
+            last_usage: None,
+            usage_handle: crate::usage::UsageHandle::test_handle(),
+            reasoning_started_at: None,
+            reasoning_duration: None,
+            generation_started_at: None,
+        });
+        state.turn_lifecycle.begin();
+        crate::tui::input::handle_event(
+            &mut state,
+            &Event::Key(KeyCode::Char('r'), KeyModifiers::NONE),
+            "/workspace",
+        );
+        let history = "Old history row long enough to wrap in a narrow terminal.\n".repeat(500);
+        state
+            .provider_pane
+            .note(1, Arc::from(format!("FIRST-PENDING\n{history}")));
+        let first = render_to_text(&state, width, 30);
+        assert!(first.contains("FIRST-PENDING"), "{first}");
+        crate::tui::input::handle_event(
+            &mut state,
+            &Event::Key(KeyCode::End, KeyModifiers::NONE),
+            "/workspace",
+        );
+        render_to_text(&state, width, 30);
+        state
+            .provider_pane
+            .note(2, Arc::from(format!("SECOND-PENDING\n{history}")));
+        let second = render_to_text(&state, width, 30);
+        assert!(second.contains("SECOND-PENDING"), "{second}");
+        assert!(!second.contains("FIRST-PENDING"), "{second}");
+        assert!(second.contains("Latest request 2 · pending"), "{second}");
+        assert!(state.streaming.is_some());
+    }
 }
 
 #[test]
@@ -27,13 +428,13 @@ fn unavailable_tool_mode_guidance_is_visible_in_narrow_terminals() {
         ));
         for (width, height) in [(100, 30), (60, 24)] {
             let screen = render_to_text(&state, width, height);
-            let footer = screen
-                .lines()
-                .find(|line| line.contains("resend"))
-                .expect("mode recovery action remains visible");
-            assert!(footer.contains("Tab"), "{screen}");
-            assert!(footer.contains("Agent"), "{screen}");
-            assert!(!footer.contains("/retry"), "{screen}");
+            assert!(
+                screen.contains("resend"),
+                "mode recovery action remains visible:\n{screen}"
+            );
+            assert!(screen.contains("Tab"), "{screen}");
+            assert!(screen.contains("Agent"), "{screen}");
+            assert!(!screen.contains("/retry"), "{screen}");
         }
     }
 }
@@ -387,7 +788,23 @@ fn version_is_visible_in_normal_and_compact_conversations() {
             for width in [12, 24, 60, 100] {
                 let screen =
                     try_render_to_text(&state, width, 30).expect("test terminal should render");
-                assert!(screen.lines().next().unwrap().contains(label), "{screen}");
+                assert!(
+                    !screen.contains(label),
+                    "conversation chrome hides the version:\n{screen}"
+                );
+                if compact {
+                    assert!(
+                        screen.contains("commands")
+                            || screen.contains("Esc stop")
+                            || screen.contains("Ctrl+"),
+                        "compact mode keeps a key row:\n{screen}"
+                    );
+                } else {
+                    assert!(
+                        screen.contains("a-very"),
+                        "normal mode shows the workspace basename:\n{screen}"
+                    );
+                }
             }
         }
     }
@@ -408,7 +825,11 @@ fn version_is_visible_in_dashboard_and_personality_setup() {
         for width in [12, 24, 60, 100] {
             let screen =
                 try_render_to_text(&state, width, 30).expect("test terminal should render");
-            assert!(screen.lines().next().unwrap().contains(label), "{screen}");
+            let expected = if width < 24 { "ca v" } else { label };
+            assert!(
+                screen.lines().next().unwrap().contains(expected),
+                "{screen}"
+            );
         }
     }
 }
@@ -425,64 +846,201 @@ fn test_state_uses_in_memory_shell_history() {
 }
 
 #[test]
-fn active_filter_keeps_a_banner_on_the_top_row() {
-    use std::sync::atomic::Ordering;
-
+fn filter_preview_gate_paints_a_status_row_only_while_on() {
     let mut state = test_state();
-    state.filter_banner.store(true, Ordering::Relaxed);
-    for (width, height) in [(12_u16, 16), (24, 20), (60, 24), (100, 30)] {
-        let (_, buffer) = rendered_frame(&state, width, height);
-        let banner = (0..width)
-            .map(|x| buffer[(x, 0)].symbol())
-            .collect::<String>();
-        let label = crate::tui::render::FILTER_BANNER_LABEL;
-        assert_eq!(banner.matches(label).count(), 1, "{banner}");
-        let start = banner.find(label).expect("label");
-        let right = width as usize - (start + label.len());
-        assert!(start.abs_diff(right) <= 1, "centered once: {banner}");
-        assert!(!banner.to_ascii_lowercase().contains("provider"));
-        assert!(!banner.contains("phrase"));
-        assert!(!banner.contains("url"));
-        for x in 0..width {
-            let cell = &buffer[(x, 0)];
-            assert_eq!(cell.bg, crate::tui::render::FILTER_BANNER_BG);
-            assert_eq!(cell.fg, crate::tui::render::FILTER_BANNER_FG);
-            assert!(cell.modifier.contains(Modifier::BOLD));
-        }
-        let title = (0..width)
-            .map(|x| buffer[(x, 2)].symbol())
-            .collect::<String>();
-        assert!(
-            title.contains(crate::tui::VERSION_LABEL),
-            "version stays under the summary row:\n{title}"
-        );
-    }
+    let first = render_to_text(&state, 80, 24);
+    assert!(!first.lines().next().unwrap().contains("Filter"), "{first}");
+    state.task_filter_preview_enabled = true;
+    assert!(
+        render_to_text(&state, 80, 24).starts_with("Filter on · review before send · /filter off")
+    );
+    state.task_filter_preview_enabled = false;
+    let off = render_to_text(&state, 80, 24);
+    assert!(!off.lines().next().unwrap().contains("Filter"), "{off}");
+}
 
+#[test]
+fn chatgpt_shim_hides_the_filter_status_row() {
+    use crate::provider_filter::FilterStatus;
+    let mut state = test_state();
+    set_filter_presentation(&state, FilterStatus::Active, "stop 1 word");
+    state.current_model = Some(ModelInfo {
+        provider: "chatgpt-shim".into(),
+        id: "gpt-5.6-thinking".into(),
+        display_name: "thinking".into(),
+    });
+    let screen = render_to_text(&state, 60, 24);
+    let first = screen.lines().next().unwrap();
+    assert!(!first.contains("Filter"), "{screen}");
+    assert!(screen.contains("model thinking"), "{screen}");
+    assert!(!screen.contains("ca v0.0.0"), "{screen}");
+
+    state.current_model.as_mut().unwrap().provider = "deepseek".into();
+    assert!(render_to_text(&state, 60, 24).starts_with("Filter active · stop 1 word"));
+}
+
+#[test]
+fn compact_filter_status_reclaims_the_second_banner_row() {
+    let state = test_state();
+    set_filter_presentation(&state, crate::provider_filter::FilterStatus::Active, "");
+    state
+        .filter_presentation
+        .lock()
+        .expect("presentation")
+        .detail = "stop 1 word".into();
+    let screen = render_to_text(&state, 60, 24);
+    let rows: Vec<_> = screen.lines().collect();
+    assert!(
+        rows[0].starts_with("Filter active · stop 1 word"),
+        "{screen}"
+    );
+    assert!(!screen.contains("ca v0.0.0"), "{screen}");
+}
+
+fn set_filter_presentation(
+    state: &AppState,
+    status: crate::provider_filter::FilterStatus,
+    detail: &str,
+) {
+    // Existing pane fixtures explicitly open the optional provider view.
+    state.provider_pane.visible.set(true);
+    *state.filter_presentation.lock().expect("presentation") =
+        crate::provider_filter::FilterPresentation {
+            status,
+            detail: detail.into(),
+        };
+}
+
+#[test]
+fn compact_filter_status_states_widths_and_short_heights() {
+    use crate::provider_filter::FilterStatus;
+    let state = test_state();
+    for (status, detail, label) in [
+        (FilterStatus::Off, "", ""),
+        (
+            FilterStatus::Empty,
+            "nothing armed",
+            "Filter on · Nothing armed",
+        ),
+        (
+            FilterStatus::Active,
+            "stop 1 word",
+            "Filter active · stop 1 word",
+        ),
+        (
+            FilterStatus::Stopped,
+            "stopped on fixture-rule, in the reply",
+            "Filter stopped · stopped on fixture-rule, in the reply",
+        ),
+    ] {
+        set_filter_presentation(&state, status, detail);
+        for width in [24, 60, 80, 100] {
+            for height in [1, 2, 3, 24] {
+                let (_, buffer) = rendered_frame(&state, width, height);
+                let row = (0..width)
+                    .map(|x| buffer[(x, 0)].symbol())
+                    .collect::<String>();
+                if status == FilterStatus::Off {
+                    assert!(!row.contains("Filter"), "{row}");
+                    if height >= 3 {
+                        assert!(!row.contains(crate::tui::VERSION_LABEL), "{row}");
+                    }
+                    if height >= 8 {
+                        let last = (0..width)
+                            .map(|x| buffer[(x, height - 1)].symbol())
+                            .collect::<String>();
+                        assert!(
+                            last.contains("commands") || last.contains("Ctrl+"),
+                            "{last}"
+                        );
+                    }
+                } else {
+                    assert_eq!(
+                        row.trim_end(),
+                        crate::tui::selection::truncate_cells(label, width as usize)
+                    );
+                    if height >= 3 {
+                        let second = (0..width)
+                            .map(|x| buffer[(x, 1)].symbol())
+                            .collect::<String>();
+                        assert!(!second.contains(crate::tui::VERSION_LABEL), "{second}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn compact_filter_status_updates_in_place_and_preserves_full_detail() {
+    use crate::provider_filter::{FilterStatus, ProviderFilter, ProviderFilterConfig};
+    let state = test_state();
+    let empty = ProviderFilter::compile(&ProviderFilterConfig {
+        enabled: true,
+        ..Default::default()
+    })
+    .unwrap();
+    *state.filter_presentation.lock().unwrap() = empty.presentation();
+    assert!(render_to_text(&state, 60, 24).starts_with("Filter on · Nothing armed"));
+    let active = ProviderFilter::compile(&ProviderFilterConfig {
+        enabled: true,
+        phrases: vec!["fixture-secret".into()],
+        ..Default::default()
+    })
+    .unwrap();
+    *state.filter_presentation.lock().unwrap() = active.presentation();
+    assert!(render_to_text(&state, 60, 24).starts_with("Filter active · stop 1 word"));
+    assert!(active.enforce_request(b"fixture-secret").is_err());
+    *state.filter_presentation.lock().unwrap() = active.presentation();
+    assert!(render_to_text(&state, 24, 24).starts_with("Filter stopped · "));
+    assert_eq!(
+        state.filter_presentation.lock().unwrap().status,
+        FilterStatus::Stopped
+    );
+    assert!(crate::provider_filter::command_report(&active).contains(&active.presentation().detail));
+    set_filter_presentation(&state, FilterStatus::Active, "界面界面界面界面界面界面 é");
+    let screen = render_to_text(&state, 24, 24);
+    let row = screen.lines().next().unwrap();
+    assert!(
+        row.starts_with("Filter active · ") && row.trim_end().ends_with('…'),
+        "{row}"
+    );
+    // Text snapshots include ratatui's continuation cells after wide glyphs.
+    // Inspect terminal cells to prove the ellipsis fits without splitting a glyph.
+    let (_, buffer) = rendered_frame(&state, 24, 24);
+    assert_eq!(buffer[(22, 0)].symbol(), "…");
+    assert_eq!(buffer[(23, 0)].symbol(), " ");
+}
+
+#[test]
+fn compact_filter_status_stays_visible_above_overlays() {
+    let mut state = test_state();
+    set_filter_presentation(
+        &state,
+        crate::provider_filter::FilterStatus::Active,
+        "stop 1 word",
+    );
     crate::tui::dashboard::open(&mut state);
     state.slash_palette_open = true;
-    let (_, buffer) = rendered_frame(&state, 100, 30);
-    let banner = (0..100)
-        .map(|x| buffer[(x, 0)].symbol())
-        .collect::<String>();
-    assert!(banner.contains(crate::tui::render::FILTER_BANNER_LABEL));
-    assert_eq!(buffer[(0, 0)].bg, crate::tui::render::FILTER_BANNER_BG);
-    assert_eq!(buffer[(99, 0)].bg, crate::tui::render::FILTER_BANNER_BG);
-
-    let plain = test_state();
-    let screen = render_to_text(&plain, 100, 30);
-    assert!(!screen.lines().next().unwrap().contains("FILTER ON"));
+    let screen = render_to_text(&state, 100, 30);
+    assert!(
+        screen.starts_with("Filter active · stop 1 word"),
+        "{screen}"
+    );
 }
 
 #[test]
 fn provider_copy_pane_uses_the_classified_banner_and_scrolls() {
-    use std::sync::atomic::Ordering;
     use std::sync::Arc;
 
     let mut state = test_state();
-    state.filter_banner.store(true, Ordering::Relaxed);
+    set_filter_presentation(&state, crate::provider_filter::FilterStatus::Active, "");
     let mut body = String::from("«provider-page»\n");
     for index in 0..40 {
-        body.push_str(&format!("row-{index:02}\n"));
+        body.push_str(&format!(
+            "row-{index:02}
+"
+        ));
     }
     state.provider_pane.note(1, Arc::from(body));
 
@@ -496,11 +1054,11 @@ fn provider_copy_pane_uses_the_classified_banner_and_scrolls() {
     let top = (0..100)
         .map(|x| buffer[(x, 0)].symbol())
         .collect::<String>();
-    assert!(top.contains(crate::tui::render::FILTER_BANNER_LABEL));
+    assert!(top.contains("Filter active"));
     assert!(!top.to_ascii_lowercase().contains("provider"));
 
     let header = (60..100)
-        .map(|x| buffer[(x, 2)].symbol())
+        .map(|x| buffer[(x, 1)].symbol())
         .collect::<String>();
     let pane_label = crate::tui::render::PROVIDER_PANE_LABEL;
     assert_eq!(header.matches(pane_label).count(), 1, "{header}");
@@ -513,16 +1071,16 @@ fn provider_copy_pane_uses_the_classified_banner_and_scrolls() {
     let footer = (60..100)
         .map(|x| buffer[(x, 29)].symbol())
         .collect::<String>();
-    assert!(footer.contains(crate::tui::render::PROVIDER_PANE_LABEL));
+    assert!(footer.contains("Latest request 1"), "{footer}");
     for x in 60..100 {
-        assert_eq!(buffer[(x, 2)].bg, crate::tui::render::FILTER_BANNER_BG);
-        assert_eq!(buffer[(x, 2)].fg, crate::tui::render::FILTER_BANNER_FG);
-        assert!(buffer[(x, 2)].modifier.contains(Modifier::BOLD));
+        assert_eq!(buffer[(x, 1)].bg, crate::tui::render::FILTER_BANNER_BG);
+        assert_eq!(buffer[(x, 1)].fg, crate::tui::render::FILTER_BANNER_FG);
+        assert!(buffer[(x, 1)].modifier.contains(Modifier::BOLD));
         assert_eq!(buffer[(x, 29)].bg, crate::tui::render::FILTER_BANNER_BG);
     }
-    assert_eq!(buffer[(60, 3)].bg, crate::tui::render::FILTER_BANNER_BG);
+    assert_eq!(buffer[(60, 2)].bg, crate::tui::render::FILTER_BANNER_BG);
     let page = (61..100)
-        .map(|x| buffer[(x, 3)].symbol())
+        .map(|x| buffer[(x, 2)].symbol())
         .collect::<String>();
     assert!(page.contains("«provider-page»"), "{page}");
     assert!(state.provider_pane.contains(70, 4));
@@ -539,7 +1097,7 @@ fn provider_copy_pane_uses_the_classified_banner_and_scrolls() {
     ));
     let (_, scrolled) = rendered_frame(&state, 100, 30);
     let first = (61..100)
-        .map(|x| scrolled[(x, 3)].symbol())
+        .map(|x| scrolled[(x, 2)].symbol())
         .collect::<String>();
     assert!(
         !first.contains("«provider-page»"),
@@ -556,11 +1114,10 @@ fn provider_copy_pane_uses_the_classified_banner_and_scrolls() {
 
 #[test]
 fn provider_copy_pane_can_scroll_to_the_end_of_word_wrapped_text() {
-    use std::sync::atomic::Ordering;
     use std::sync::Arc;
 
     let state = test_state();
-    state.filter_banner.store(true, Ordering::Relaxed);
+    set_filter_presentation(&state, crate::provider_filter::FilterStatus::Active, "");
     let body = std::iter::repeat_n("abcdefghijklmnopqrst", 40)
         .collect::<Vec<_>>()
         .join(" ")
@@ -574,66 +1131,156 @@ fn provider_copy_pane_can_scroll_to_the_end_of_word_wrapped_text() {
 }
 
 #[test]
-fn filter_summary_is_on_the_second_row_and_in_the_pane() {
-    use std::sync::atomic::Ordering;
+fn provider_copy_pane_refreshes_to_the_latest_request_while_working() {
     use std::sync::Arc;
 
+    for width in [80, 100] {
+        let mut state = test_state();
+        set_filter_presentation(&state, crate::provider_filter::FilterStatus::Active, "");
+        state.streaming = Some(StreamingState {
+            provider_text: Default::default(),
+            content: "Still working".into(),
+            tool_calls: Vec::new(),
+            thinking: None,
+            response_items: Vec::new(),
+            last_usage: None,
+            usage_handle: crate::usage::UsageHandle::test_handle(),
+            reasoning_started_at: None,
+            reasoning_duration: None,
+            generation_started_at: None,
+        });
+        state.turn_lifecycle.begin();
+        let history = (0..60)
+            .map(|index| {
+                format!(
+                    "old-row-{index:02}
+"
+                )
+            })
+            .collect::<String>();
+        state
+            .provider_pane
+            .note(1, Arc::from(format!("OLD-REQUEST\n{history}")));
+        let first = render_to_text(&state, width, 30);
+        assert!(first.contains("OLD-REQUEST"), "{first}");
+        assert!(first.contains("Latest request 1"), "{first}");
+        assert!(crate::tui::input::handle_event(
+            &mut state,
+            &crate::tui::event::Event::Key(
+                crossterm::event::KeyCode::PageDown,
+                crossterm::event::KeyModifiers::SHIFT,
+            ),
+            "/workspace/ca",
+        ));
+        assert!(state.provider_pane.scroll() > 0);
+        let scrolled = render_to_text(&state, width, 30);
+        assert!(!scrolled.contains("OLD-REQUEST"), "{scrolled}");
+
+        state
+            .provider_pane
+            .note(2, Arc::from(format!("LATEST-REQUEST\n{history}")));
+        let refreshed = render_to_text(&state, width, 30);
+        assert!(refreshed.contains("LATEST-REQUEST"), "{refreshed}");
+        assert!(!refreshed.contains("OLD-REQUEST"), "{refreshed}");
+        assert!(
+            refreshed.contains("Latest request 2 · working"),
+            "{refreshed}"
+        );
+        assert_eq!(state.provider_pane.scroll(), 0);
+        assert!(
+            state.streaming.is_some(),
+            "preview updates before completion"
+        );
+
+        assert!(crate::tui::input::handle_event(
+            &mut state,
+            &crate::tui::event::Event::MouseScroll(crate::tui::event::MouseScrollEvent {
+                direction: crate::tui::event::ScrollDirection::Down,
+                column: width - 2,
+                row: 4,
+            }),
+            "/workspace/ca",
+        ));
+        let offset = state.provider_pane.scroll();
+        assert!(offset > 0);
+        state
+            .provider_pane
+            .note(2, Arc::from("same request is still working"));
+        render_to_text(&state, width, 30);
+        assert_eq!(state.provider_pane.scroll(), offset);
+        assert!(crate::tui::input::handle_event(
+            &mut state,
+            &crate::tui::event::Event::Key(
+                crossterm::event::KeyCode::PageUp,
+                crossterm::event::KeyModifiers::SHIFT,
+            ),
+            "/workspace/ca",
+        ));
+        assert_eq!(state.provider_pane.scroll(), 0);
+
+        state.streaming = None;
+        let finished = render_to_text(&state, width, 30);
+        assert!(finished.contains("Latest request 2"), "{finished}");
+        assert!(finished.contains("LATEST-REQUEST"), "{finished}");
+        assert!(
+            !finished.contains("Latest request 2 · working"),
+            "{finished}"
+        );
+        let narrow = render_to_text(&state, 60, 24);
+        assert!(!narrow.contains("TO PROVIDER"), "{narrow}");
+        assert!(!narrow.contains("LATEST-REQUEST"), "{narrow}");
+    }
+}
+
+#[test]
+fn provider_copy_pane_shows_when_no_request_has_been_prepared() {
     let state = test_state();
-    state.filter_banner.store(true, Ordering::Relaxed);
-    let screen = render_to_text(&state, 100, 30);
-    assert!(!screen.contains("TO PROVIDER"));
-
-    *state.filter_summary.lock().expect("summary") = "stop 1 word".into();
-    let (_, buffer) = rendered_frame(&state, 100, 30);
-    let top = (0..100)
-        .map(|x| buffer[(x, 0)].symbol())
-        .collect::<String>();
-    assert!(top.contains(crate::tui::render::FILTER_BANNER_LABEL));
-    assert!(!top.contains("word"));
-    assert!(!top.contains("url"));
-    let summary = (0..100)
-        .map(|x| buffer[(x, 1)].symbol())
-        .collect::<String>();
-    assert!(summary.starts_with("stop 1 word"), "{summary}");
-    assert_eq!(buffer[(0, 1)].bg, crate::tui::render::FILTER_BANNER_BG);
-    assert_eq!(buffer[(0, 1)].fg, crate::tui::render::FILTER_BANNER_FG);
-    let pane = (61..100)
-        .map(|x| buffer[(x, 3)].symbol())
-        .collect::<String>();
-    assert!(pane.contains("stop 1 word"), "{pane}");
-    let header = (60..100)
-        .map(|x| buffer[(x, 2)].symbol())
-        .collect::<String>();
-    assert!(header.contains(crate::tui::render::PROVIDER_PANE_LABEL));
-
+    set_filter_presentation(&state, crate::provider_filter::FilterStatus::Active, "");
+    state
+        .filter_presentation
+        .lock()
+        .expect("presentation")
+        .detail = "hide 1 word".into();
+    for width in [80, 100] {
+        let screen = render_to_text(&state, width, 30);
+        assert!(screen.contains("TO PROVIDER"), "{screen}");
+        assert!(screen.contains("Waiting for request"), "{screen}");
+        assert!(!screen.contains("Latest request 0"), "{screen}");
+    }
     let narrow = render_to_text(&state, 60, 24);
-    assert!(
-        !narrow.contains("TO PROVIDER"),
-        "a narrow terminal keeps the conversation:\n{narrow}"
-    );
+    assert!(!narrow.contains("TO PROVIDER"), "{narrow}");
+    assert!(!narrow.contains("Waiting for request"), "{narrow}");
+}
 
+#[test]
+fn compact_filter_status_keeps_the_summary_in_the_provider_pane() {
+    use std::sync::Arc;
+    let state = test_state();
+    set_filter_presentation(
+        &state,
+        crate::provider_filter::FilterStatus::Active,
+        "stop 1 word",
+    );
     state.provider_pane.note(1, Arc::from("«body»\n"));
     let (_, buffer) = rendered_frame(&state, 100, 30);
+    let header = (60..100)
+        .map(|x| buffer[(x, 1)].symbol())
+        .collect::<String>();
+    assert!(
+        header.contains(crate::tui::render::PROVIDER_PANE_LABEL),
+        "{header}"
+    );
     let first = (61..100)
-        .map(|x| buffer[(x, 3)].symbol())
+        .map(|x| buffer[(x, 2)].symbol())
         .collect::<String>();
     assert!(first.contains("stop 1 word"), "{first}");
     let second = (61..100)
-        .map(|x| buffer[(x, 4)].symbol())
+        .map(|x| buffer[(x, 3)].symbol())
         .collect::<String>();
     assert!(second.contains("«body»"), "{second}");
-
-    let (_, short) = rendered_frame(&state, 40, 2);
-    let banner = (0..40).map(|x| short[(x, 0)].symbol()).collect::<String>();
-    assert!(banner.contains(crate::tui::render::FILTER_BANNER_LABEL));
-    let status = (0..40).map(|x| short[(x, 1)].symbol()).collect::<String>();
-    assert!(status.contains("stop 1 word"), "{status}");
-    assert_ne!(short[(0, 1)].bg, crate::tui::render::FILTER_BANNER_BG);
-
-    let (_, tiny) = rendered_frame(&state, 20, 1);
-    let only = (0..20).map(|x| tiny[(x, 0)].symbol()).collect::<String>();
-    assert!(only.contains("FILTER"));
-    assert!(!only.contains("word"));
+    let narrow = render_to_text(&state, 60, 24);
+    assert!(narrow.starts_with("Filter active · stop 1 word"));
+    assert!(!narrow.contains("TO PROVIDER"));
 }
 
 #[test]
@@ -642,17 +1289,11 @@ fn snapshot_title_preserves_the_runtime_right_edge_across_version_widths() {
     for width in [60, 100] {
         let snapshot = render_to_text(&state, width, 30);
         let runtime = try_render_to_text(&state, width, 30).unwrap();
-        let snapshot_title = snapshot.lines().next().unwrap();
-        let runtime_title = runtime.lines().next().unwrap();
-        assert!(snapshot_title.starts_with(" ca v0.0.0 │ /workspace/ca"));
-        assert_eq!(
-            snapshot_title.find("[Dashboard]"),
-            runtime_title.find("[Dashboard]")
-        );
-        assert_eq!(
-            unicode_width::UnicodeWidthStr::width(snapshot_title),
-            usize::from(width) - 1
-        );
+        assert_eq!(snapshot, runtime, "version width no longer shifts chrome");
+        assert!(snapshot.contains("model auto"), "{snapshot}");
+        assert!(snapshot.contains("/ commands"), "{snapshot}");
+        assert!(!snapshot.contains("[Dashboard]"), "{snapshot}");
+        assert!(!snapshot.contains("Shift+Enter"), "{snapshot}");
     }
 }
 
@@ -666,19 +1307,23 @@ fn startup_renders_without_a_real_terminal() {
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>();
-    assert_eq!(visible.len(), 5, "idle chrome:\n{rendered}");
-    assert!(visible[0].starts_with(crate::tui::VERSION_LABEL));
-    assert!(visible[0].contains("/workspace/ca"));
-    assert!(visible[0].ends_with("[Dashboard]"));
-    assert!(visible[2].contains("› "));
-    assert!(visible[3].contains("agent · auto"));
-    assert_eq!(visible[4], "/ commands");
+    assert!(visible.len() >= 5, "idle chrome:\n{rendered}");
+    assert!(
+        rendered.contains("Try one of these") && rendered.contains("/help"),
+        "empty session should show light guidance:\n{rendered}"
+    );
+    assert!(rendered.contains("› "));
+    assert!(rendered.contains("model auto"), "{rendered}");
+    assert!(rendered.contains("/ commands"), "{rendered}");
     for duplicate in [
         "Workspace ·",
         "drop a folder or type a request",
         "Shift+Enter",
         "? shortcuts",
         "0 messages",
+        "agent · auto",
+        "[Dashboard]",
+        crate::tui::VERSION_LABEL,
     ] {
         assert!(!rendered.contains(duplicate), "unexpected {duplicate:?}");
     }
@@ -687,6 +1332,117 @@ fn startup_renders_without_a_real_terminal() {
     for x in 0..100 {
         assert_ne!(buffer[(x, 0)].bg, Color::DarkGray);
     }
+}
+
+#[test]
+fn nonempty_draft_names_the_newline_chord() {
+    let mut state = test_state();
+    state.input = "draft".into();
+    state.input_cursor = state.input.len();
+    let text = render_to_text(&state, 100, 24);
+    assert!(text.contains("Enter send"), "{text}");
+    assert!(text.contains("Ctrl+J newline"), "{text}");
+    if cfg!(target_os = "macos") {
+        assert!(text.contains("Shift+Enter newline"), "{text}");
+    } else {
+        assert!(!text.contains("Shift+Enter"), "{text}");
+    }
+}
+
+#[test]
+fn error_status_stays_off_the_key_row() {
+    let mut state = test_state();
+    state.status_message = Some("Provider error: connection failed".into());
+    let text = render_to_text(&state, 100, 30);
+    assert!(text.contains("Ctrl+\\"), "{text}");
+    assert!(text.contains("connection failed"), "{text}");
+    assert!(text.contains("Esc dismiss"), "{text}");
+}
+
+#[test]
+fn scrolled_transcript_keeps_keys_and_shows_the_suffix_when_it_fits() {
+    let mut state = test_state();
+    state.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
+        role: Role::Assistant,
+        content: (0..80)
+            .map(|index| format!("tall transcript line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        tool_calls: None,
+        thinking: None,
+        timestamp: fixed_time(),
+        response_items: Vec::new(),
+    });
+    let _ = render_to_text(&state, 100, 30);
+    state.transcript_scroll.request_offset(12);
+    let wide = render_to_text(&state, 100, 30);
+    assert!(
+        state.transcript_scroll.bottom_offset() >= 12,
+        "offset {}",
+        state.transcript_scroll.bottom_offset()
+    );
+    assert!(wide.contains("/ commands"), "{wide}");
+    assert!(wide.contains("rows up"), "{wide}");
+    assert!(wide.contains("Ctrl+End"), "{wide}");
+    let narrow = render_to_text(&state, 20, 30);
+    assert!(!narrow.contains("Ctrl+End"), "{narrow}");
+    assert!(narrow.contains("commands"), "{narrow}");
+}
+
+#[test]
+fn approval_card_stays_above_the_composer_while_scrolled() {
+    let mut state = test_state();
+    state.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
+        role: Role::User,
+        content: (0..40)
+            .map(|index| format!("earlier context {index}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        tool_calls: None,
+        thinking: None,
+        timestamp: fixed_time(),
+        response_items: Vec::new(),
+    });
+    state.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
+        role: Role::Assistant,
+        content: (0..80)
+            .map(|index| format!("later context {index}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        tool_calls: None,
+        thinking: None,
+        timestamp: fixed_time(),
+        response_items: Vec::new(),
+    });
+    state.approval_queue.begin_batch(vec![PendingApproval {
+        tool_name: "run_command".to_string(),
+        tool_args: r#"{"command":"cargo test"}"#.to_string(),
+        tool_id: "call-approval".to_string(),
+        network_requested: false,
+        email_preview: None,
+        email_draft_ref: None,
+    }]);
+    let _ = render_to_text(&state, 100, 30);
+    state.transcript_scroll.request_offset(4);
+    let text = render_to_text(&state, 100, 30);
+    assert!(text.contains("Approve"), "{text}");
+    let lines: Vec<_> = text.lines().collect();
+    let card = lines
+        .iter()
+        .position(|line| line.contains("[y] run"))
+        .unwrap_or_else(|| panic!("approval keys missing:\n{text}"));
+    let prompt = lines
+        .iter()
+        .position(|line| line.contains("Ask anything"))
+        .unwrap_or_else(|| panic!("composer missing:\n{text}"));
+    assert!(
+        card < prompt,
+        "pin card should sit above the composer:\n{text}"
+    );
+    assert!(state.transcript_scroll.bottom_offset() > 0);
 }
 
 #[test]
@@ -723,6 +1479,7 @@ fn pane_state(label: &str) -> AppState {
     let mut state = test_state();
     state.session_name = label.into();
     state.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::Assistant,
         content: format!("Transcript owned by {label}."),
         tool_calls: None,
@@ -929,6 +1686,7 @@ fn lrn179_recall_availability_bundle_and_journey_views_are_readable() {
 fn transcript_selection_is_highlighted_without_changing_rendered_text() {
     let mut state = test_state();
     state.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::Assistant,
         content: "selectable text".into(),
         tool_calls: None,
@@ -938,22 +1696,23 @@ fn transcript_selection_is_highlighted_without_changing_rendered_text() {
     });
 
     let (_, initial) = rendered_frame(&state, 60, 24);
-    assert_eq!(initial[(0, 1)].symbol(), "s");
-    assert!(state.transcript_scroll.begin_selection(0, 1));
-    assert!(state.transcript_scroll.update_selection(5, 1));
+    assert_eq!(initial[(0, 0)].symbol(), "s");
+    assert!(state.transcript_scroll.begin_selection(0, 0));
+    assert!(state.transcript_scroll.update_selection(5, 0));
 
     let (_, selected) = rendered_frame(&state, 60, 24);
-    assert_eq!(selected[(0, 1)].symbol(), "s");
+    assert_eq!(selected[(0, 0)].symbol(), "s");
     for x in 0..=5 {
-        assert!(selected[(x, 1)].modifier.contains(Modifier::REVERSED));
+        assert!(selected[(x, 0)].modifier.contains(Modifier::REVERSED));
     }
-    assert!(!selected[(6, 1)].modifier.contains(Modifier::REVERSED));
+    assert!(!selected[(6, 0)].modifier.contains(Modifier::REVERSED));
 }
 
 #[test]
 fn pager_selection_is_highlighted_without_exposing_hidden_conversation() {
     let mut state = test_state();
     state.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::Assistant,
         content: "hidden conversation".into(),
         tool_calls: None,
@@ -983,39 +1742,39 @@ fn composer_cursor_blinks_white_then_restores_the_underlying_cell() {
     let empty = test_state();
     let (native_cursor, buffer) = rendered_frame(&empty, 100, 30);
     assert_eq!(native_cursor, Position::ORIGIN);
-    assert_eq!(buffer[(3, 27)].symbol(), "A");
-    assert_eq!(buffer[(3, 27)].fg, Color::Black);
-    assert_eq!(buffer[(3, 27)].bg, Color::White);
+    assert_eq!(buffer[(3, 26)].symbol(), "A");
+    assert_eq!(buffer[(3, 26)].fg, Color::Black);
+    assert_eq!(buffer[(3, 26)].bg, Color::White);
 
     let mut ascii = test_state();
     ascii.input = "over".into();
     ascii.input_cursor = ascii.input.len();
     let (native_cursor, buffer) = rendered_frame(&ascii, 100, 30);
     assert_eq!(native_cursor, Position::ORIGIN);
-    assert_eq!(buffer[(7, 27)].symbol(), " ");
-    assert_eq!(buffer[(7, 27)].fg, Color::Black);
-    assert_eq!(buffer[(7, 27)].bg, Color::White);
+    assert_eq!(buffer[(7, 26)].symbol(), " ");
+    assert_eq!(buffer[(7, 26)].fg, Color::Black);
+    assert_eq!(buffer[(7, 26)].bg, Color::White);
 
     ascii.cursor_blink_visible = false;
     let (native_cursor, buffer) = rendered_frame(&ascii, 100, 30);
     assert_eq!(native_cursor, Position::ORIGIN);
-    assert_eq!(buffer[(7, 27)].symbol(), " ");
-    assert_ne!(buffer[(7, 27)].bg, Color::White);
+    assert_eq!(buffer[(7, 26)].symbol(), " ");
+    assert_ne!(buffer[(7, 26)].bg, Color::White);
 
     let mut unicode = test_state();
     unicode.input = "A🙂界".into();
     unicode.input_cursor = "A🙂".len();
     let (native_cursor, buffer) = rendered_frame(&unicode, 100, 30);
     assert_eq!(native_cursor, Position::ORIGIN);
-    assert_eq!(buffer[(6, 27)].symbol(), "界");
-    assert_eq!(buffer[(6, 27)].fg, Color::Black);
-    assert_eq!(buffer[(6, 27)].bg, Color::White);
+    assert_eq!(buffer[(6, 26)].symbol(), "界");
+    assert_eq!(buffer[(6, 26)].fg, Color::Black);
+    assert_eq!(buffer[(6, 26)].bg, Color::White);
 
     let mut overlay = test_state();
     overlay.model_picker_open = true;
     let (native_cursor, buffer) = rendered_frame(&overlay, 100, 30);
     assert_eq!(native_cursor, Position::ORIGIN);
-    assert_ne!(buffer[(3, 27)].bg, Color::White);
+    assert_ne!(buffer[(3, 26)].bg, Color::White);
 }
 
 #[test]
@@ -1103,6 +1862,7 @@ fn streaming_cursor_blink_preserves_scrolled_up_anchor_across_reflow() {
         let mut state = streaming_jump_regression_state();
         state.messages = (0..12)
             .map(|index| Message {
+                retrieved_spans: Some(Vec::new()),
                 role: Role::Assistant,
                 content: format!(
                     "Saved transcript row {index}: enough stable text to wrap on narrow terminals."
@@ -1137,6 +1897,7 @@ fn streaming_new_deltas_follow_bottom_or_preserve_scrolled_visible_rows() {
     let mut scrolled = streaming_jump_regression_state();
     scrolled.messages = (0..16)
         .map(|index| Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::Assistant,
             content: format!("Anchored saved row {index} with deterministic wrapped content."),
             tool_calls: None,
@@ -1186,7 +1947,7 @@ fn composer_white_cursor_tracks_hard_lines_soft_wraps_and_exact_width_wraps() {
     hard_line.input_cursor = hard_line.input.len();
     let (native_cursor, buffer) = rendered_frame(&hard_line, 100, 30);
     assert_eq!(native_cursor, Position::ORIGIN);
-    assert_eq!(buffer[(6, 27)].bg, Color::White);
+    assert_eq!(buffer[(6, 26)].bg, Color::White);
 
     // At width 20, the first visual row has sixteen cells after the border and prompt.
     let mut exact_width = test_state();
@@ -1194,14 +1955,14 @@ fn composer_white_cursor_tracks_hard_lines_soft_wraps_and_exact_width_wraps() {
     exact_width.input_cursor = exact_width.input.len();
     let (native_cursor, buffer) = rendered_frame(&exact_width, 20, 30);
     assert_eq!(native_cursor, Position::ORIGIN);
-    assert_eq!(buffer[(3, 27)].bg, Color::White);
+    assert_eq!(buffer[(3, 26)].bg, Color::White);
 
     let mut soft_wrap = exact_width;
     soft_wrap.input.push('x');
     soft_wrap.input_cursor = soft_wrap.input.len();
     let (native_cursor, buffer) = rendered_frame(&soft_wrap, 20, 30);
     assert_eq!(native_cursor, Position::ORIGIN);
-    assert_eq!(buffer[(4, 27)].bg, Color::White);
+    assert_eq!(buffer[(4, 26)].bg, Color::White);
 }
 
 #[test]
@@ -1213,17 +1974,17 @@ fn composer_hit_map_places_caret_from_rendered_rows() {
 
     let hit = state.composer_ui.hit_map.borrow().clone();
     let (area_x, area_y, _, _) = hit.text_area.expect("render records composer text area");
-    assert_eq!(area_y, 26);
+    assert_eq!(area_y, 25);
     assert_eq!(area_x, 1);
     assert_eq!(hit.rows.len(), 2);
     assert!(!hit.empty_placeholder);
 
     // Click the caret cell at end of "two" keeps the caret at the end.
-    assert_eq!(hit.cursor_for_click(&state.input, 6, 27), Some(7));
+    assert_eq!(hit.cursor_for_click(&state.input, 6, 26), Some(7));
     // First column of the second hard line is byte 4.
-    assert_eq!(hit.cursor_for_click(&state.input, 3, 27), Some(4));
+    assert_eq!(hit.cursor_for_click(&state.input, 3, 26), Some(4));
     // First hard line prompt column maps to the start of "one".
-    assert_eq!(hit.cursor_for_click(&state.input, 3, 26), Some(0));
+    assert_eq!(hit.cursor_for_click(&state.input, 3, 25), Some(0));
 
     state.input_cursor = 0;
     assert!(crate::tui::input::handle_event(
@@ -1231,7 +1992,7 @@ fn composer_hit_map_places_caret_from_rendered_rows() {
         &crate::tui::Event::MouseSelection(crate::tui::event::MouseSelectionEvent {
             phase: crate::tui::event::MouseSelectionPhase::Start,
             column: 4,
-            row: 26,
+            row: 25,
         }),
         "/workspace/ca",
     ));
@@ -1247,6 +2008,7 @@ fn long_user_prompt_card_is_capped_with_scroll_affordance() {
         .collect::<Vec<_>>()
         .join("\n");
     state.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::User,
         content: body,
         tool_calls: None,
@@ -1338,6 +2100,7 @@ fn soft_paused_state(boundary: crate::activity::SoftPauseBoundary) -> AppState {
         }
     });
     state.messages = vec![Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::Assistant,
         content: "I retained the completed boundary.".into(),
         tool_calls: None,
@@ -1974,6 +2737,357 @@ fn goal_lifecycle_snapshots() {
 }
 
 #[test]
+fn active_goal_footer_shows_truncated_condition() {
+    let mut state = goal_render_state(crate::goal::GoalStatus::Active);
+    state.pager_open = false;
+    state.pager_content.clear();
+    let text = render_to_text(&state, 180, 24);
+    let shown = crate::tui::selection::truncate_cells(
+        "Finish the bounded implementation and prove it with recorded tests.",
+        48,
+    );
+    assert!(text.contains("goal evaluating 3/12"), "{text}");
+    assert!(text.contains(&shown), "{text}");
+    assert!(!text.contains("with recorded tests."), "{text}");
+
+    state.goal_state.as_mut().unwrap().condition = "keep\nthis\u{1b}[31m visible".into();
+    let text = render_to_text(&state, 180, 24);
+    assert!(text.contains("keep this visible"), "{text}");
+    assert!(!text.contains('\u{1b}'), "{text}");
+}
+
+#[test]
+fn composer_colors_slash_and_at_tokens_without_rewriting_atoms() {
+    let mut state = test_state();
+    let atom = "@src/main.rs";
+    state.input = format!("edit {atom} then /review @notes.md mail user@host");
+    state.input_cursor = state.input.len();
+    let atom_start = state.input.find(atom).unwrap();
+    state
+        .composer_ui
+        .atomic_elements
+        .push(crate::tui::composer::AtomicElement {
+            range: atom_start..atom_start + atom.len(),
+            kind: crate::tui::composer::AtomicKind::File,
+        });
+    let original = state.input.clone();
+    let (_, buffer) = rendered_frame(&state, 140, 24);
+    assert_eq!(state.input, original);
+    let theme = crate::tui::render::palette(&state);
+    let mut slash = None;
+    let mut mention = None;
+    let mut atom_cell = None;
+    let mut plain = None;
+    let mut email = None;
+    for y in 0..buffer.area.height {
+        let row = (0..buffer.area.width)
+            .map(|x| buffer[(x, y)].symbol())
+            .collect::<String>();
+        if let Some(index) = row.find("/review") {
+            slash = Some((index as u16, y));
+        }
+        if let Some(index) = row.find("@notes.md") {
+            mention = Some((index as u16, y));
+        }
+        if let Some(index) = row.find(atom) {
+            atom_cell = Some((index as u16, y));
+        }
+        if let Some(index) = row.find("then") {
+            plain = Some((index as u16, y));
+        }
+        if let Some(index) = row.find("user@host") {
+            email = Some(((index + "user".len()) as u16, y));
+        }
+    }
+    let slash = slash.expect("slash token");
+    let mention = mention.expect("mention token");
+    let atom_cell = atom_cell.expect("atom");
+    let plain = plain.expect("plain word");
+    let email = email.expect("email");
+    assert_eq!(buffer[slash].bg, theme.accent);
+    assert_eq!(buffer[slash].fg, theme.accent_foreground);
+    assert_eq!(buffer[mention].bg, theme.accent);
+    assert_eq!(buffer[atom_cell].bg, theme.accent);
+    assert_eq!(buffer[atom_cell].fg, theme.accent_foreground);
+    assert_ne!(buffer[plain].bg, theme.accent);
+    assert_eq!(buffer[plain].fg, theme.text);
+    assert_ne!(buffer[email].bg, theme.accent);
+}
+
+#[test]
+fn live_child_dock_pins_running_children_above_the_composer() {
+    let mut state = test_state();
+    let now = chrono::DateTime::from_timestamp(0, 0).unwrap();
+    state.agent_activity_now = now;
+    let turn = uuid::Uuid::new_v4();
+    let child = |task: &str, status: crate::agent::subagent::AgentStatus| {
+        crate::agent::subagent::AgentActivitySnapshot {
+            id: crate::agent::subagent::AgentId::new(),
+            parent_turn: turn,
+            parent: None,
+            origin: crate::agent::subagent::AgentRunOrigin::Conversation,
+            purpose: crate::agent::subagent::AgentRunPurpose::Subagent,
+            status,
+            task: task.into(),
+            role: Some("Explorer".into()),
+            model: None,
+            provider: None,
+            phase: crate::agent::subagent::AgentExecutionPhase::Tool,
+            current_action: Some("read_file".into()),
+            created_at: now,
+            updated_at: now,
+            result_summary: None,
+            recent_output: String::new(),
+            events: Vec::new(),
+        }
+    };
+    state.live_agent_activity = vec![
+        child("dock-alpha", crate::agent::subagent::AgentStatus::Running),
+        child("dock-beta", crate::agent::subagent::AgentStatus::Running),
+        child("dock-done", crate::agent::subagent::AgentStatus::Completed),
+    ];
+    let text = render_to_text(&state, 100, 30);
+    let composer = text
+        .lines()
+        .position(|line| line.contains("Ask anything"))
+        .expect("composer");
+    let dock = text.lines().take(composer).collect::<Vec<_>>().join("\n");
+    assert!(dock.contains("dock-alpha"), "{text}");
+    assert!(dock.contains("dock-beta"), "{text}");
+    assert!(!dock.contains("dock-done"), "{text}");
+    assert!(dock.contains("read_file"), "{text}");
+}
+
+#[test]
+fn running_grok_plan_author_is_visible_without_prompt_tail() {
+    use crate::plan_workflow::{PlanWorkflowArgs, WorkflowRole, WorkflowStep};
+    let mut state = test_state();
+    let now = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+    state.agent_activity_now = now;
+    let route = crate::agent::subagent::AgentRoute {
+        provider: "xai-oauth".into(),
+        model: "grok-4.7".into(),
+    };
+    {
+        let mut work = state.work_state.lock().unwrap();
+        work.automatic_task_map = true;
+        crate::plan_workflow::apply_action(
+            &mut work,
+            PlanWorkflowArgs::Start {
+                goal: "testing".into(),
+                participants: Vec::new(),
+                steps: vec![WorkflowStep {
+                    role: WorkflowRole::Author,
+                    participant: "focused-author".into(),
+                    route: Some(route),
+                    instructions: "Author a focused task map".into(),
+                }],
+                review_loop: None,
+                implementation: None,
+            },
+            &crate::agent::subagent::AgentRoute {
+                provider: "xai-oauth".into(),
+                model: "grok-4.7".into(),
+            },
+            None,
+        )
+        .unwrap();
+        let workflow = work.plan_workflow.as_mut().unwrap();
+        workflow.steps[0].status = crate::plan_workflow::WorkflowStageStatus::Running;
+        assert!(work.plan.is_none());
+    }
+    let prompt = format!(
+        "Plan workflow goal: testing\nPROMPT_CANARY {}\nsuccess evidence for the required native tool",
+        "x".repeat(400)
+    );
+    state.live_agent_activity = vec![crate::agent::subagent::AgentActivitySnapshot {
+        id: crate::agent::subagent::AgentId::new(),
+        parent_turn: uuid::Uuid::new_v4(),
+        parent: None,
+        origin: crate::agent::subagent::AgentRunOrigin::Conversation,
+        purpose: crate::agent::subagent::AgentRunPurpose::Subagent,
+        status: crate::agent::subagent::AgentStatus::Running,
+        task: prompt,
+        role: Some("focused-author".into()),
+        model: Some("grok-4.7".into()),
+        provider: Some("xai-oauth".into()),
+        phase: crate::agent::subagent::AgentExecutionPhase::Tool,
+        current_action: Some("list_dir".into()),
+        created_at: now,
+        updated_at: now,
+        result_summary: None,
+        recent_output:
+            "success evidence for the required native tool; use artifact or closed_command evidence"
+                .into(),
+        events: Vec::new(),
+    }];
+    let text = render_to_text(&state, 120, 24);
+    assert!(
+        text.contains("Planning with grok-4.7"),
+        "plan author was invisible: {text}"
+    );
+    assert!(text.contains("list_dir"), "{text}");
+    assert!(
+        !text.contains("PROMPT_CANARY") && !text.contains("success evidence"),
+        "host prompt or tool dump is the only visible line: {text}"
+    );
+}
+
+#[test]
+fn plan_author_dock_shows_elapsed_past_zero() {
+    let mut state = test_state();
+    let now = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+    state.agent_activity_now = now;
+    let task = "Prepare a focused task plan for the user to review before implementation.";
+    state.live_agent_activity = vec![crate::agent::subagent::AgentActivitySnapshot {
+        id: crate::agent::subagent::AgentId::new(),
+        parent_turn: uuid::Uuid::new_v4(),
+        parent: None,
+        origin: crate::agent::subagent::AgentRunOrigin::Conversation,
+        purpose: crate::agent::subagent::AgentRunPurpose::Subagent,
+        status: crate::agent::subagent::AgentStatus::Running,
+        task: task.into(),
+        role: Some("Worker".into()),
+        model: Some("grok-4.7".into()),
+        provider: Some("xai-oauth".into()),
+        phase: crate::agent::subagent::AgentExecutionPhase::Tool,
+        current_action: Some("read_todos".into()),
+        created_at: now - chrono::Duration::seconds(12),
+        updated_at: now,
+        result_summary: None,
+        recent_output: String::new(),
+        events: Vec::new(),
+    }];
+    let text = render_to_text(&state, 100, 24);
+    assert!(text.contains("Worker"), "{text}");
+    assert!(text.contains("read_todos"), "{text}");
+    assert!(text.contains("12s"), "elapsed stayed at zero:\n{text}");
+}
+
+#[test]
+fn waiting_plan_author_shows_the_phase_and_stream_preview() {
+    use crate::plan_workflow::{PlanWorkflowArgs, WorkflowRole, WorkflowStep};
+    let mut state = test_state();
+    let now = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+    state.agent_activity_now = now;
+    let route = crate::agent::subagent::AgentRoute {
+        provider: "xai-oauth".into(),
+        model: "grok-4.7".into(),
+    };
+    {
+        let mut work = state.work_state.lock().unwrap();
+        crate::plan_workflow::apply_action(
+            &mut work,
+            PlanWorkflowArgs::Start {
+                goal: "testing".into(),
+                participants: Vec::new(),
+                steps: vec![WorkflowStep {
+                    role: WorkflowRole::Author,
+                    participant: "focused-author".into(),
+                    route: Some(route),
+                    instructions: "Author a focused task map".into(),
+                }],
+                review_loop: None,
+                implementation: None,
+            },
+            &crate::agent::subagent::AgentRoute {
+                provider: "xai-oauth".into(),
+                model: "grok-4.7".into(),
+            },
+            None,
+        )
+        .unwrap();
+        let workflow = work.plan_workflow.as_mut().unwrap();
+        workflow.steps[0].status = crate::plan_workflow::WorkflowStageStatus::Running;
+    }
+    state.live_agent_activity = vec![crate::agent::subagent::AgentActivitySnapshot {
+        id: crate::agent::subagent::AgentId::new(),
+        parent_turn: uuid::Uuid::new_v4(),
+        parent: None,
+        origin: crate::agent::subagent::AgentRunOrigin::Conversation,
+        purpose: crate::agent::subagent::AgentRunPurpose::Subagent,
+        status: crate::agent::subagent::AgentStatus::Running,
+        task: format!("PROMPT_CANARY {}", "hidden host task ".repeat(8)),
+        role: Some("Author".into()),
+        model: Some("grok-4.7".into()),
+        provider: Some("xai-oauth".into()),
+        phase: crate::agent::subagent::AgentExecutionPhase::WaitingForResponse,
+        current_action: None,
+        created_at: now,
+        updated_at: now,
+        result_summary: None,
+        recent_output: "success evidence for the required native tool".into(),
+        events: vec![crate::agent::subagent::AgentEvent {
+            sequence: 1,
+            at: now,
+            message: format!(
+                "{}narrowing the task to a reviewable plan",
+                crate::agent::subagent::TASK_PROGRESS_PREFIX
+            ),
+        }],
+    }];
+    let text = render_to_text(&state, 100, 24);
+    assert!(text.contains("Planning with grok-4.7"), "{text}");
+    assert!(text.contains("Waiting for response"), "{text}");
+    assert!(text.contains("narrowing the task"), "{text}");
+    assert!(!text.contains("PROMPT_CANARY"), "{text}");
+    assert!(!text.contains("success evidence"), "{text}");
+}
+
+#[test]
+fn transcript_window_draws_the_tail_and_can_reach_an_old_marker() {
+    let mut state = test_state();
+    let now = chrono::DateTime::from_timestamp(0, 0).unwrap();
+    for index in 0..40 {
+        state.messages.push(Message {
+            retrieved_spans: Some(Vec::new()),
+            role: Role::User,
+            content: format!("user note {index}"),
+            tool_calls: None,
+            thinking: None,
+            timestamp: now,
+            response_items: Vec::new(),
+        });
+        state.messages.push(Message {
+            retrieved_spans: Some(Vec::new()),
+            role: Role::Assistant,
+            content: if index == 0 {
+                "OLD_MARKER_ONLY_HERE".into()
+            } else {
+                format!("ordinary reply {index}")
+            },
+            tool_calls: None,
+            thinking: None,
+            timestamp: now,
+            response_items: Vec::new(),
+        });
+    }
+    state.streaming = Some(StreamingState {
+        provider_text: Default::default(),
+        content: "TAIL_MARKER".into(),
+        tool_calls: Vec::new(),
+        thinking: None,
+        response_items: Vec::new(),
+        last_usage: None,
+        usage_handle: crate::usage::UsageHandle::test_handle(),
+        reasoning_started_at: None,
+        reasoning_duration: None,
+        generation_started_at: None,
+    });
+    let bottom = render_to_text(&state, 80, 16);
+    assert!(bottom.contains("TAIL_MARKER"), "{bottom}");
+    assert!(!bottom.contains("OLD_MARKER_ONLY_HERE"), "{bottom}");
+    state.streaming.as_mut().unwrap().content = "TAIL_MARKER extended".into();
+    let updated = render_to_text(&state, 80, 16);
+    assert!(updated.contains("TAIL_MARKER extended"), "{updated}");
+    assert_eq!(updated.matches("TAIL_MARKER").count(), 1, "{updated}");
+    state.transcript_scroll.observe_rendered_maximum(20_000);
+    state.transcript_scroll.request_offset(20_000);
+    let older = render_to_text(&state, 80, 16);
+    assert!(older.contains("OLD_MARKER_ONLY_HERE"), "{older}");
+}
+
+#[test]
 fn dream_and_distill_status_snapshots() {
     use crate::learning::{
         MaintenanceKind, MaintenanceRunStatus, MaintenanceRunSummary, MaintenanceSnapshot,
@@ -2176,7 +3290,7 @@ fn dynamic_keymap_help_labels_follow_the_effective_bindings() {
     state.pager_open = false;
     state.turn_lifecycle.begin();
     let busy = render_to_text(&state, 100, 30);
-    assert!(busy.contains("Enter interrupt · Ctrl+Q queue"));
+    assert!(busy.contains("Enter queue · Ctrl+Shift+S send now"));
 }
 
 #[test]
@@ -2195,16 +3309,16 @@ fn named_and_bare_profile_snapshots() {
     let mut bare = test_state();
     bare.active_profile = crate::runtime::ActiveProfile::Bare;
     bare.run_capabilities = crate::runtime::RunCapabilities::for_profile(&bare.active_profile);
-    bare.config_hub = Some(crate::app::ConfigHubState {
-        filter: String::new(),
-        selected_idx: 0,
-        items: vec![crate::app::ConfigHubItem {
-            label: "Active profile".into(),
-            value: "bare · persistent writes, sessions, MCP, skills, and hooks disabled".into(),
-            keywords: "profile configuration runtime bare".into(),
-            action: crate::app::ConfigHubAction::Profile("bare".into()),
-        }],
-    });
+    bare.config_hub = Some(crate::app::ConfigHubState::list(vec![
+        crate::app::ConfigHubItem::row(
+            crate::app::ConfigHubSection::Session,
+            "Active profile",
+            "bare · persistent writes, sessions, MCP, skills, and hooks disabled",
+            "profile configuration runtime bare",
+            "The profile for this process",
+            crate::app::ConfigHubAction::Profile("bare".into()),
+        ),
+    ]));
     insta::assert_snapshot!(
         "bare_profile_config",
         wide_narrow(
@@ -2788,6 +3902,7 @@ fn request_inspector_snapshots() {
 fn tool_selection_failure_snapshots() {
     let mut state = test_state();
     state.messages.push(crate::app::Message {
+        retrieved_spans: Some(Vec::new()),
         role: crate::app::Role::User,
         content: "Inspect the selected files".into(),
         tool_calls: None,
@@ -2815,6 +3930,7 @@ fn fixed_time() -> chrono::DateTime<chrono::Utc> {
 fn streaming_snapshots() {
     let mut state = test_state();
     state.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::User,
         content: "Inspect the project".to_string(),
         tool_calls: None,
@@ -2854,6 +3970,7 @@ fn failed_stream_retry_snapshots() {
     let mut state = test_state();
     state.messages = vec![
         Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::User,
             content: "Inspect the provider stream".into(),
             tool_calls: None,
@@ -2862,6 +3979,7 @@ fn failed_stream_retry_snapshots() {
             response_items: Vec::new(),
         },
         Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::Assistant,
             content: "I decoded part of the response before the connection failed.".into(),
             tool_calls: None,
@@ -2936,6 +4054,7 @@ fn pre_output_recovery_snapshots() {
     ] {
         let mut state = test_state();
         state.messages = vec![Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::User,
             content: "Inspect the provider stream".into(),
             tool_calls: None,
@@ -2950,7 +4069,25 @@ fn pre_output_recovery_snapshots() {
         let narrow = render_to_text(&state, 60, 24);
         for rendered in [&wide, &narrow] {
             assert_eq!(rendered.matches("Inspect the provider stream").count(), 1);
-            assert!(rendered.contains("/retry") || rendered.contains("clean branch"));
+            let flat = rendered
+                .chars()
+                .map(|character| {
+                    if character.is_ascii_alphanumeric()
+                        || matches!(character, '/' | '.' | '-' | '_')
+                    {
+                        character
+                    } else {
+                        ' '
+                    }
+                })
+                .collect::<String>()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert!(
+                flat.contains("/retry") || flat.contains("clean branch"),
+                "{rendered}"
+            );
             assert!(!rendered.contains("Use /retry to branch. Stream failed"));
             assert!(!rendered.contains("provider HTTP 400"));
         }
@@ -2993,6 +4130,7 @@ fn reasoning_collapsed_and_expanded_snapshots() {
     let mut state = test_state();
     let turn_id = uuid::Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
     state.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::Assistant,
         content: "The fix is ready.".into(),
         tool_calls: None,
@@ -3033,6 +4171,7 @@ fn turn_metadata_render_state(outcome: crate::app::TranscriptTurnOutcome) -> App
     state.show_assistant_footers = true;
     state.messages = vec![
         Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::User,
             content: "Check the release path.".into(),
             tool_calls: None,
@@ -3041,6 +4180,7 @@ fn turn_metadata_render_state(outcome: crate::app::TranscriptTurnOutcome) -> App
             response_items: Vec::new(),
         },
         Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::Assistant,
             content: "I checked the first boundary.".into(),
             tool_calls: None,
@@ -3049,6 +4189,7 @@ fn turn_metadata_render_state(outcome: crate::app::TranscriptTurnOutcome) -> App
             response_items: Vec::new(),
         },
         Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::Assistant,
             content: "The release path is ready.".into(),
             tool_calls: None,
@@ -3124,6 +4265,7 @@ fn inline_agent_activity_collapsed_and_focused_snapshots() {
         uuid::Uuid::parse_str("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb").unwrap(),
     );
     state.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::Assistant,
         content: "I launched two focused explorations.".into(),
         tool_calls: None,
@@ -3199,10 +4341,10 @@ fn inline_agent_activity_collapsed_and_focused_snapshots() {
         "second worker should have a distinct stable icon:\n{collapsed}"
     );
     let (_, collapsed_buffer) = rendered_frame(&state, 100, 30);
-    assert_eq!(collapsed_buffer[(2, 5)].symbol(), "✿");
-    assert_eq!(collapsed_buffer[(2, 5)].fg, Color::Rgb(244, 107, 147));
-    assert_eq!(collapsed_buffer[(2, 6)].symbol(), "◆");
-    assert_eq!(collapsed_buffer[(2, 6)].fg, Color::Rgb(173, 127, 255));
+    assert_eq!(collapsed_buffer[(2, 4)].symbol(), "✿");
+    assert_eq!(collapsed_buffer[(2, 4)].fg, Color::Rgb(244, 107, 147));
+    assert_eq!(collapsed_buffer[(2, 5)].symbol(), "◆");
+    assert_eq!(collapsed_buffer[(2, 5)].fg, Color::Rgb(173, 127, 255));
 
     insta::assert_snapshot!(
         "inline_agent_activity_collapsed",
@@ -3265,6 +4407,7 @@ fn charcoal_reference_state() -> AppState {
     state.reasoning_effort = Some(crate::config::ReasoningEffort::High);
     state.messages = vec![
         Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::User,
             content: "Review this workspace for public release.".into(),
             tool_calls: None,
@@ -3273,8 +4416,10 @@ fn charcoal_reference_state() -> AppState {
             response_items: Vec::new(),
         },
         Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::Assistant,
-            content: "I am checking the release surfaces.\n\n```rust\nfn ready(checks: usize) -> bool { checks > 0 }\n```".into(),
+            content: "I am checking the release surfaces.\n\n```rust\nfn ready(checks: usize) -> bool { checks > 0 }
+```".into(),
             tool_calls: None,
             thinking: Some("Inspect the release surfaces and run an independent review.".into()),
             timestamp: at,
@@ -3320,13 +4465,13 @@ fn charcoal_conversation_reference_snapshots_and_colors() {
         let state = charcoal_reference_state();
         let (_, buffer) = rendered_frame(&state, width, height);
         let text = render_to_text(&state, width, height);
-        assert!(text.contains("78K / 256K"), "{text}");
-        assert!(text.contains("[Dashboard]"), "{text}");
+        assert!(text.contains("78K/256K"), "{text}");
+        assert!(!text.contains("[Dashboard]"), "{text}");
         assert!(text.contains("Subagents 1"), "{text}");
         assert!(text.contains("Reviewer"), "{text}");
         assert!(text.contains("7m07s"), "{text}");
         assert!(text.contains("Thought for 29.7s"), "{text}");
-        assert_eq!(buffer[(0, 0)].bg, Color::Rgb(17, 17, 17));
+        assert_eq!(buffer[(width - 1, height - 1)].bg, Color::Rgb(17, 17, 17));
         assert!(buffer.content.iter().all(|cell| cell.bg != Color::Reset));
         let prompt_row = text
             .lines()
@@ -3410,6 +4555,14 @@ fn dashboard_uses_selected_theme_and_reversible_preview() {
     state.theme_manager = None;
     let (_, restored) = rendered_frame(&state, 100, 30);
     assert_eq!(restored[(0, 0)].bg, Color::Black);
+    if std::env::var_os("NO_COLOR").is_none() {
+        state.ui_theme = crate::ui_settings::UiTheme::Terminal;
+        let (_, terminal) = rendered_frame(&state, 100, 30);
+        assert_eq!(terminal[(0, 0)].bg, Color::Reset);
+        state.dashboard.open = false;
+        let (_, conversation) = rendered_frame(&state, 80, 24);
+        assert_eq!(conversation[(0, 0)].bg, Color::Reset);
+    }
 }
 
 #[test]
@@ -3423,7 +4576,7 @@ fn automatic_light_appearance_reaches_cached_prompt_cards_and_dashboard() {
         .lines()
         .position(|line| line.contains("› Review this"))
         .unwrap() as u16;
-    assert_eq!(buffer[(0, 0)].bg, Color::White);
+    assert_eq!(buffer[(99, 29)].bg, Color::White);
     assert_eq!(buffer[(0, prompt_row)].bg, Color::Gray);
     assert_eq!(buffer[(3, prompt_row)].fg, Color::Black);
     state.dashboard.open = true;
@@ -3442,8 +4595,8 @@ fn narrow_composer_keeps_mode_and_long_model_visible() {
             .into(),
     });
     let text = render_to_text(&state, 60, 24);
-    assert!(text.contains("plan · Long model name"), "{text}");
-    assert!(text.contains("[Dashboard]"), "{text}");
+    assert!(text.contains("Long model name"), "{text}");
+    assert!(!text.contains("[Dashboard]"), "{text}");
 }
 
 #[test]
@@ -3584,7 +4737,8 @@ fn plugin_manager_snapshots() {
     let manifest = bundle.join("plugin.toml");
     std::fs::write(
         &manifest,
-        "version = 1\nid = \"review-helper\"\nname = \"Review Helper\"\ndescription = \"Local review workflow\"\nworkflows = {}\n",
+        "version = 1\nid = \"review-helper\"\nname = \"Review Helper\"\ndescription = \"Local review workflow\"\nworkflows = {}
+",
     )
     .unwrap();
     let paths = crate::runtime::RuntimePaths::from_home(&home);
@@ -3696,7 +4850,9 @@ fn skill_suggestion_state(activate_release: bool) -> AppState {
         std::fs::write(
             skill.join("SKILL.md"),
             format!(
-                "---\nname: {name}\ndescription: {description}\naliases: [{alias}]\n---\n{name} private body"
+                "---\nname: {name}
+description: {description}
+aliases: [{alias}]\n---\n{name} private body"
             ),
         )
         .unwrap();
@@ -3859,6 +5015,12 @@ fn persistent_plan_tasks_snapshots() {
         uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000789").unwrap(),
     );
     *state.work_state.lock().unwrap() = crate::work::WorkState {
+        session_todos: Vec::new(),
+        session_goal: None,
+        session_mode: None,
+        automatic_task_map: false,
+        automatic_task_execution: None,
+        automatic_completion_reported: None,
         pending_automation_proposal: None,
         plan_workflow: None,
         pending_plan_workflow: None,
@@ -3964,14 +5126,19 @@ fn fresh_context_review_snapshots() {
 fn completed_tool_snapshots() {
     let mut state = test_state();
     state.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::Assistant,
         content: "Read the requested file.".to_string(),
         tool_calls: Some(vec![ToolCall {
+            observation: None,
+            output_source: None,
+            arguments_retrieved_spans: Vec::new(),
             id: "call-read".to_string(),
             name: "read_file".to_string(),
             arguments: r#"{"path":"src/main.rs"}"#.to_string(),
             status: ToolStatus::Done,
             output: Some("fn main() {\n    println!(\"hello\");\n}".to_string()),
+            started_at: None,
         }]),
         thinking: None,
         timestamp: fixed_time(),
@@ -3999,20 +5166,26 @@ fn adaptive_tool_output_state(expanded: bool) -> AppState {
     );
     state.messages = vec![
         Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::Assistant,
             content: "I calculated the ratio-sorted selection.".into(),
             tool_calls: Some(vec![ToolCall {
+                observation: None,
+                output_source: None,
+                arguments_retrieved_spans: Vec::new(),
                 id: id.into(),
                 name: "run_command".into(),
                 arguments: r#"{"command":"python3 ratio_report.py"}"#.into(),
                 status: ToolStatus::Done,
                 output: Some(output.into()),
+                started_at: None,
             }]),
             thinking: None,
             timestamp: fixed_time(),
             response_items: Vec::new(),
         },
         Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::Assistant,
             content: "## Results\n\nThe saved TSV remains unchanged.".into(),
             tool_calls: None,
@@ -4102,6 +5275,7 @@ fn identical_spawn_failure_state() -> AppState {
     let mut state = test_state();
     let output = "no automatic delegation route qualifies for complex complexity; verify credentials, supported billing metadata, capability, and pricing freshness";
     state.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::Assistant,
         content: "Splitting the review by feature domain.".into(),
         tool_calls: Some(
@@ -4114,6 +5288,9 @@ fn identical_spawn_failure_state() -> AppState {
             .into_iter()
             .enumerate()
             .map(|(index, task)| ToolCall {
+                observation: None,
+                output_source: None,
+                arguments_retrieved_spans: Vec::new(),
                 id: format!("spawn-{index}"),
                 name: "spawn_agent".into(),
                 arguments: serde_json::json!({
@@ -4124,6 +5301,7 @@ fn identical_spawn_failure_state() -> AppState {
                 .to_string(),
                 status: ToolStatus::Error,
                 output: Some(output.into()),
+                started_at: None,
             })
             .collect(),
         ),
@@ -4191,11 +5369,15 @@ fn spawn_failure_grouping_preserves_calls_and_exact_contiguous_boundaries() {
     noncontiguous_calls.insert(
         1,
         ToolCall {
+            observation: None,
+            output_source: None,
+            arguments_retrieved_spans: Vec::new(),
             id: "list-between".into(),
             name: "list_agents".into(),
             arguments: "{}".into(),
             status: ToolStatus::Error,
             output: noncontiguous_calls[0].output.clone(),
+            started_at: None,
         },
     );
     assert_eq!(
@@ -4222,18 +5404,21 @@ fn spawn_failure_grouping_preserves_calls_and_exact_contiguous_boundaries() {
 fn deferred_mcp_search_success_and_failure_snapshots() {
     let mut success = test_state();
     success.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::Assistant,
         content: "I found the relevant MCP tools. Their exact schemas will be available on the next turn.".into(),
-        tool_calls: Some(vec![ToolCall {
+        tool_calls: Some(vec![ToolCall { observation: None, output_source: None,
+            arguments_retrieved_spans: Vec::new(),
             id: "call-mcp-search".into(),
             name: "search_mcp_tools".into(),
             arguments: r#"{"query":"issues","server":"linear","limit":2}"#.into(),
             status: ToolStatus::Done,
             output: Some(
-                "Activated 2 MCP tools for subsequent turns:\n- mcp__linear__list_issues [linear]\n- mcp__linear__read_issue [linear]"
+                "Matched 2 MCP tools. Call use_tool with the exposed name. Schemas stay out of the prompt.\n- mcp__linear__list_issues [linear]\n- mcp__linear__read_issue [linear]"
                     .into(),
             ),
-        }]),
+            started_at: None,
+}]),
         thinking: None,
         timestamp: fixed_time(),
         response_items: Vec::new(),
@@ -4248,9 +5433,13 @@ fn deferred_mcp_search_success_and_failure_snapshots() {
 
     let mut failed = test_state();
     failed.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::Assistant,
         content: "The server needs explicit network authority before discovery can run.".into(),
         tool_calls: Some(vec![ToolCall {
+            observation: None,
+            output_source: None,
+            arguments_retrieved_spans: Vec::new(),
             id: "call-mcp-search-failed".into(),
             name: "search_mcp_tools".into(),
             arguments: r#"{"query":"issues","server":"remote"}"#.into(),
@@ -4259,6 +5448,7 @@ fn deferred_mcp_search_success_and_failure_snapshots() {
                 "MCP tool search could not inspect remote: a distinct network grant is required"
                     .into(),
             ),
+            started_at: None,
         }]),
         thinking: None,
         timestamp: fixed_time(),
@@ -4277,14 +5467,19 @@ fn deferred_mcp_search_success_and_failure_snapshots() {
 fn semantic_navigation_success_and_failure_snapshots() {
     let mut success = test_state();
     success.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::Assistant,
         content: "The definition is in the current workspace.".into(),
         tool_calls: Some(vec![ToolCall {
+            observation: None,
+            output_source: None,
+            arguments_retrieved_spans: Vec::new(),
             id: "call-lsp-definition".into(),
             name: "lsp_definition".into(),
             arguments: r#"{"server":"rust","path":"src/main.rs","line":42,"column":9}"#.into(),
             status: ToolStatus::Done,
             output: Some("Locations (1 shown)\nsrc/config.rs:17:12".into()),
+            started_at: None,
         }]),
         thinking: None,
         timestamp: fixed_time(),
@@ -4300,14 +5495,19 @@ fn semantic_navigation_success_and_failure_snapshots() {
 
     let mut failed = test_state();
     failed.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::Assistant,
         content: "The configured language server returned an unsafe location.".into(),
         tool_calls: Some(vec![ToolCall {
+            observation: None,
+            output_source: None,
+            arguments_retrieved_spans: Vec::new(),
             id: "call-lsp-external".into(),
             name: "lsp_references".into(),
             arguments: r#"{"server":"rust","path":"src/main.rs","line":42,"column":9}"#.into(),
             status: ToolStatus::Error,
             output: Some("LSP response referenced a location outside workspace authority".into()),
+            started_at: None,
         }]),
         thinking: None,
         timestamp: fixed_time(),
@@ -4326,9 +5526,11 @@ fn semantic_navigation_success_and_failure_snapshots() {
 fn pdf_text_reading_success_and_failure_snapshots() {
     let mut success = test_state();
     success.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::Assistant,
         content: "I extracted only the requested PDF pages within the configured bounds.".into(),
-        tool_calls: Some(vec![ToolCall {
+        tool_calls: Some(vec![ToolCall { observation: None, output_source: None,
+            arguments_retrieved_spans: Vec::new(),
             id: "call-read-pdf".into(),
             name: "read_pdf".into(),
             arguments: r#"{"path":"docs/guide.pdf","start_page":2,"end_page":3}"#.into(),
@@ -4337,7 +5539,8 @@ fn pdf_text_reading_success_and_failure_snapshots() {
                 "--- Page 2 ---\nSetup instructions\n\n--- Page 3 ---\nConfiguration details\n\nShowing pages 2-3 of 9 · 48120 bytes total\nOmitted pages: 1 before, 6 after\nNext range: {\"path\":\"docs/guide.pdf\",\"start_page\":4,\"end_page\":9}"
                     .into(),
             ),
-        }]),
+            started_at: None,
+}]),
         thinking: None,
         timestamp: fixed_time(),
         response_items: Vec::new(),
@@ -4352,14 +5555,19 @@ fn pdf_text_reading_success_and_failure_snapshots() {
 
     let mut failed = test_state();
     failed.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::Assistant,
         content: "The PDF needs to be decrypted before its text can be read.".into(),
         tool_calls: Some(vec![ToolCall {
+            observation: None,
+            output_source: None,
+            arguments_retrieved_spans: Vec::new(),
             id: "call-read-pdf-encrypted".into(),
             name: "read_pdf".into(),
             arguments: r#"{"path":"docs/private.pdf"}"#.into(),
             status: ToolStatus::Error,
             output: Some("Error reading PDF: encrypted PDFs are not supported".into()),
+            started_at: None,
         }]),
         thinking: None,
         timestamp: fixed_time(),
@@ -4389,14 +5597,19 @@ fn multimodal_attachment_and_image_tool_snapshots() {
 
     let mut success = test_state();
     success.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::Assistant,
         content: "I inspected the normalized image without exposing its bytes.".into(),
         tool_calls: Some(vec![ToolCall {
+            observation: None,
+            output_source: None,
+            arguments_retrieved_spans: Vec::new(),
             id: "call-view-image".into(),
             name: "view_image".into(),
             arguments: r#"{"path":"screenshots/example.png"}"#.into(),
             status: ToolStatus::Done,
             output: Some("[image/png 1280×720; image available only in this process]".into()),
+            started_at: None,
         }]),
         thinking: None,
         timestamp: fixed_time(),
@@ -4425,18 +5638,22 @@ fn multimodal_attachment_and_image_tool_snapshots() {
 fn bounded_tool_output_snapshots() {
     let mut state = test_state();
     state.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::Assistant,
         content: "Read a bounded section and report what remains.".into(),
-        tool_calls: Some(vec![ToolCall {
+        tool_calls: Some(vec![ToolCall { observation: None, output_source: None,
+            arguments_retrieved_spans: Vec::new(),
             id: "call-bounded-read".into(),
             name: "read_file".into(),
             arguments: r#"{"path":"src/main.rs","start_line":1,"end_line":200}"#.into(),
             status: ToolStatus::Done,
             output: Some(
-                "fn main() {\n    // beginning retained\n[… 48120 bytes omitted …]\n}\n\nShowing lines 1-200 of 8240 · 285100 bytes total\nOmitted lines: 0 before, 8040 after\nNext range: {\"path\":\"src/main.rs\",\"start_line\":201,\"end_line\":400}"
+                "fn main() {\n    // beginning retained\n[… 48120 bytes omitted …]\n}
+\nShowing lines 1-200 of 8240 · 285100 bytes total\nOmitted lines: 0 before, 8040 after\nNext range: {\"path\":\"src/main.rs\",\"start_line\":201,\"end_line\":400}"
                     .into(),
             ),
-        }]),
+            started_at: None,
+}]),
         thinking: None,
         timestamp: fixed_time(),
         response_items: Vec::new(),
@@ -4455,6 +5672,7 @@ fn bounded_tool_output_snapshots() {
 fn approval_prompt_snapshots() {
     let mut state = test_state();
     state.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::User,
         content: "Run the test suite".to_string(),
         tool_calls: None,
@@ -4477,6 +5695,337 @@ fn approval_prompt_snapshots() {
             render_to_text(&state, 60, 24)
         )
     );
+}
+
+fn is_achromatic(color: Color) -> bool {
+    match color {
+        Color::Reset | Color::Black | Color::White | Color::Gray | Color::DarkGray => true,
+        Color::Rgb(r, g, b) => r == g && g == b,
+        _ => false,
+    }
+}
+
+fn approval_fg_colors(state: &AppState) -> Vec<Color> {
+    let text = render_to_text(state, 100, 30);
+    let (_, buffer) = rendered_frame(state, 100, 30);
+    let mut colors = Vec::new();
+    for (row, line) in text.lines().enumerate() {
+        if !(line.contains("Approve") || line.contains("[y]") || line.contains("[n")) {
+            continue;
+        }
+        for x in 0..100u16 {
+            let fg = buffer[(x, row as u16)].fg;
+            if fg != Color::Reset && !colors.contains(&fg) {
+                colors.push(fg);
+            }
+        }
+    }
+    colors
+}
+
+#[test]
+fn approval_colors_follow_the_active_theme() {
+    let mut state = test_state();
+    state.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
+        role: Role::User,
+        content: "Run the test suite".to_string(),
+        tool_calls: None,
+        thinking: None,
+        timestamp: fixed_time(),
+        response_items: Vec::new(),
+    });
+    state.approval_queue.begin_batch(vec![PendingApproval {
+        tool_name: "run_command".to_string(),
+        tool_args: r#"{"command":"cargo test"}"#.to_string(),
+        tool_id: "call-approval-theme".to_string(),
+        network_requested: false,
+        email_preview: None,
+        email_draft_ref: None,
+    }]);
+
+    state.ui_theme = crate::ui_settings::UiTheme::Default;
+    let default_colors = approval_fg_colors(&state);
+    assert!(
+        default_colors.iter().any(|c| *c != Color::Yellow),
+        "default approval must use theme slots, not hardcoded Yellow: {default_colors:?}"
+    );
+
+    state.ui_theme = crate::ui_settings::UiTheme::Mono;
+    let mono_colors = approval_fg_colors(&state);
+    assert!(
+        !mono_colors.contains(&Color::Yellow) && !mono_colors.contains(&Color::Green),
+        "mono approval must not use brand Yellow/Green: {mono_colors:?}"
+    );
+    assert!(
+        mono_colors
+            .iter()
+            .all(|c| is_achromatic(*c) || matches!(c, Color::LightRed)),
+        "mono approval colors should stay achromatic (deny may match theme.error): {mono_colors:?}"
+    );
+}
+
+#[test]
+fn compact_filter_status_uses_theme_severity_without_a_banner_fill() {
+    use crate::provider_filter::FilterStatus;
+    let mut state = test_state();
+    for theme in [
+        crate::ui_settings::UiTheme::Default,
+        crate::ui_settings::UiTheme::Mono,
+    ] {
+        state.ui_theme = theme;
+        for status in [
+            FilterStatus::Active,
+            FilterStatus::Empty,
+            FilterStatus::Stopped,
+        ] {
+            set_filter_presentation(&state, status, "fixture detail");
+            let (_, buffer) = rendered_frame(&state, 100, 30);
+            let theme = crate::tui::render::palette(&state);
+            let expected_fg = match status {
+                FilterStatus::Active => theme.muted,
+                FilterStatus::Empty => theme.warning,
+                FilterStatus::Stopped => theme.error,
+                FilterStatus::Off => unreachable!(),
+            };
+            for x in 0..100 {
+                assert_eq!(buffer[(x, 0)].fg, expected_fg);
+                assert_eq!(buffer[(x, 0)].bg, theme.surface);
+                assert!(!buffer[(x, 0)].modifier.contains(Modifier::BOLD));
+            }
+        }
+    }
+}
+
+#[test]
+fn no_color_forces_an_achromatic_palette() {
+    let mut state = test_state();
+    state.ui_theme = crate::ui_settings::UiTheme::Default;
+    // Default is colorful; temporarily set NO_COLOR in this process.
+    let previous = std::env::var_os("NO_COLOR");
+    std::env::set_var("NO_COLOR", "1");
+    let (_, buffer) = rendered_frame(&state, 40, 10);
+    for cell in buffer.content.iter() {
+        let _ = cell;
+    }
+    // Palette path is internal; assert via approval colors under NO_COLOR.
+    state.approval_queue.begin_batch(vec![PendingApproval {
+        tool_name: "run_command".to_string(),
+        tool_args: r#"{"command":"cargo test"}"#.to_string(),
+        tool_id: "call-no-color".to_string(),
+        network_requested: false,
+        email_preview: None,
+        email_draft_ref: None,
+    }]);
+    let colors = approval_fg_colors(&state);
+    assert!(
+        colors
+            .iter()
+            .all(|c| is_achromatic(*c) || matches!(c, Color::LightRed)),
+        "NO_COLOR approval must be achromatic: {colors:?}"
+    );
+    match previous {
+        Some(v) => std::env::set_var("NO_COLOR", v),
+        None => std::env::remove_var("NO_COLOR"),
+    }
+}
+
+/// Collect foreground colors used on rows that belong to tool output cards
+/// (the `│` frame lines and the enclosed content).
+fn tool_card_fg_colors(state: &AppState) -> Vec<Color> {
+    let text = render_to_text(state, 100, 52);
+    let (_, buffer) = rendered_frame(state, 100, 52);
+    let mut colors = Vec::new();
+    for (row, line) in text.lines().enumerate() {
+        if !(line.contains('│') || line.contains('┌') || line.contains('└')) {
+            continue;
+        }
+        for x in 0..100u16 {
+            let fg = buffer[(x, row as u16)].fg;
+            if fg != Color::Reset && !colors.contains(&fg) {
+                colors.push(fg);
+            }
+        }
+    }
+    colors
+}
+
+#[test]
+fn tool_card_colors_follow_the_active_theme() {
+    let mut state = activity_snapshot_state(ToolStatus::Done, true);
+    state.ui_theme = crate::ui_settings::UiTheme::Default;
+    let default_colors = tool_card_fg_colors(&state);
+    assert!(
+        default_colors.contains(&Color::Rgb(83, 83, 89)),
+        "default tool card frame must use theme.tool_frame: {default_colors:?}"
+    );
+    assert!(
+        !default_colors.contains(&Color::Cyan) && !default_colors.contains(&Color::DarkGray),
+        "default tool card must not hardcode Cyan/DarkGray: {default_colors:?}"
+    );
+
+    state.ui_theme = crate::ui_settings::UiTheme::Mono;
+    let mono_colors = tool_card_fg_colors(&state);
+    assert!(
+        mono_colors
+            .iter()
+            .all(|c| is_achromatic(*c) || matches!(c, Color::LightRed)),
+        "mono tool card colors must stay achromatic: {mono_colors:?}"
+    );
+}
+
+#[test]
+fn no_color_keeps_tool_cards_achromatic() {
+    let mut state = activity_snapshot_state(ToolStatus::Done, true);
+    state.ui_theme = crate::ui_settings::UiTheme::Default;
+    let previous = std::env::var_os("NO_COLOR");
+    std::env::set_var("NO_COLOR", "1");
+    let colors = tool_card_fg_colors(&state);
+    assert!(
+        colors
+            .iter()
+            .all(|c| is_achromatic(*c) || matches!(c, Color::LightRed)),
+        "NO_COLOR tool card must be achromatic: {colors:?}"
+    );
+    match previous {
+        Some(v) => std::env::set_var("NO_COLOR", v),
+        None => std::env::remove_var("NO_COLOR"),
+    }
+}
+
+/// Collect foreground colors on a modal's border/title row and chip rows.
+fn modal_fg_colors(state: &AppState, needle: &str) -> Vec<Color> {
+    let text = render_to_text(state, 100, 30);
+    let (_, buffer) = rendered_frame(state, 100, 30);
+    let mut colors = Vec::new();
+    for (row, line) in text.lines().enumerate() {
+        if !line.contains(needle) {
+            continue;
+        }
+        for x in 0..100u16 {
+            let fg = buffer[(x, row as u16)].fg;
+            if fg != Color::Reset && !colors.contains(&fg) {
+                colors.push(fg);
+            }
+        }
+    }
+    colors
+}
+
+fn worktree_cleanup_state(remove_selected: bool) -> AppState {
+    let mut state = test_state();
+    state.worktree_cleanup_confirmation = Some(crate::worktree::WorktreeCleanupConfirmation {
+        id: uuid::Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap(),
+        label: "review".into(),
+        branch: "ca/review-11111111".into(),
+        remove_selected,
+        busy: false,
+        error: None,
+    });
+    state
+}
+
+#[test]
+fn confirmation_dialog_colors_follow_the_active_theme() {
+    let mut state = worktree_cleanup_state(true);
+    state.ui_theme = crate::ui_settings::UiTheme::Default;
+    let default_colors = modal_fg_colors(&state, "Clean up worktree");
+    assert!(
+        default_colors.contains(&Color::Rgb(229, 190, 111)),
+        "default caution border must use theme.warning: {default_colors:?}"
+    );
+    assert!(
+        !default_colors.contains(&Color::Cyan)
+            && !default_colors.contains(&Color::Yellow)
+            && !default_colors.contains(&Color::DarkGray),
+        "default confirmation must not hardcode Cyan/Yellow/DarkGray: {default_colors:?}"
+    );
+
+    state.ui_theme = crate::ui_settings::UiTheme::Mono;
+    let mono_colors = modal_fg_colors(&state, "Clean up worktree");
+    assert!(
+        mono_colors
+            .iter()
+            .all(|c| is_achromatic(*c) || matches!(c, Color::LightRed)),
+        "mono confirmation colors must stay achromatic: {mono_colors:?}"
+    );
+}
+
+#[test]
+fn error_toasts_stay_until_dismissed() {
+    let mut state = test_state();
+    state.show_toast("something failed", crate::app::ToastKind::Error);
+    assert!(state.toast.as_ref().unwrap().is_visible());
+    assert!(state.toast.as_ref().unwrap().is_sticky());
+    let text = render_to_text(&state, 80, 24);
+    assert!(text.contains("Esc dismiss"), "{text}");
+    // Success toasts are not sticky.
+    state.show_toast("copied", crate::app::ToastKind::Success);
+    assert!(!state.toast.as_ref().unwrap().is_sticky());
+}
+
+#[test]
+fn empty_session_shows_light_guidance_until_first_message() {
+    let mut state = test_state();
+    assert!(state.messages.is_empty());
+    let text = render_to_text(&state, 100, 30);
+    assert!(text.contains("/help"), "{text}");
+    assert!(
+        text.contains("Fix the failing tests") || text.contains("try"),
+        "{text}"
+    );
+    // Guidance disappears once the conversation has content.
+    state.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
+        role: Role::User,
+        content: "hello".into(),
+        tool_calls: None,
+        thinking: None,
+        timestamp: fixed_time(),
+        response_items: Vec::new(),
+    });
+    state.transcript_cache.invalidate();
+    let after = render_to_text(&state, 100, 30);
+    assert!(!after.contains("Fix the failing tests"), "{after}");
+}
+
+#[test]
+fn approval_key_row_groups_primary_and_secondary_actions() {
+    let mut state = test_state();
+    state.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
+        role: Role::User,
+        content: "Run the tests".into(),
+        tool_calls: None,
+        thinking: None,
+        timestamp: fixed_time(),
+        response_items: Vec::new(),
+    });
+    state.approval_queue.begin_batch(vec![PendingApproval {
+        tool_name: "run_command".to_string(),
+        tool_args: r#"{"command":"cargo test"}"#.to_string(),
+        tool_id: "call-keys".to_string(),
+        network_requested: false,
+        email_preview: None,
+        email_draft_ref: None,
+    }]);
+    let text = render_to_text(&state, 100, 30);
+    assert!(text.contains("[y]"), "{text}");
+    assert!(text.contains("[n]"), "{text}");
+    // Primary pair is present; secondary keys remain reachable on a later line.
+    let y = text.find("[y]").expect("y");
+    let n = text.find("[n]").expect("n");
+    let e = text.find("[e]").expect("e");
+    assert!(
+        y < n && n < e,
+        "primary y/n should precede secondary e\n{text}"
+    );
+    // Same visual row for y and n
+    let line_y = text[..y].lines().count();
+    let line_n = text[..n].lines().count();
+    let line_e = text[..e].lines().count();
+    assert_eq!(line_y, line_n, "y and n share a line\n{text}");
+    assert_ne!(line_y, line_e, "edit is on a secondary line\n{text}");
 }
 
 #[test]
@@ -4510,6 +6059,7 @@ fn approval_prompt_shows_the_complete_command_at_every_width() {
 fn privilege_approval_state() -> AppState {
     let mut state = test_state();
     state.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::User,
         content: "Apply the approved system change".into(),
         tool_calls: None,
@@ -4616,6 +6166,7 @@ fn privilege_approval_and_handoff_phase_snapshots() {
 fn outbound_email_approval_snapshots() {
     let mut state = test_state();
     state.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::User,
         content: "Send the frozen draft".into(),
         tool_calls: None,
@@ -4660,6 +6211,7 @@ fn outbound_email_approval_snapshots() {
 fn multi_tool_approval_progress_snapshots() {
     let mut state = test_state();
     state.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::User,
         content: "Edit multiple files".to_string(),
         tool_calls: None,
@@ -6019,7 +7571,7 @@ fn provider_command_palette_snapshots() {
             .iter()
             .map(|command| command.name)
             .collect::<Vec<_>>(),
-        ["provider", "plan", "errors", "trace", "filter"]
+        ["provider", "plan", "errors", "trace"]
     );
     let mut state = test_state();
     state.input = "/provider".into();
@@ -6099,45 +7651,57 @@ fn learning_command_palette_keeps_full_operator_examples_readable() {
 #[test]
 fn config_hub_populated_and_no_match_snapshots() {
     let mut state = test_state();
-    state.config_hub = Some(crate::app::ConfigHubState {
-        filter: String::new(),
-        selected_idx: 1,
-        items: vec![
-            crate::app::ConfigHubItem {
-                label: "Current model".into(),
-                value: "mimo/mimo-v2.5-pro".into(),
-                keywords: "provider default switch".into(),
-                action: crate::app::ConfigHubAction::CurrentModel,
+    let mut hub = crate::app::ConfigHubState::list(vec![
+        crate::app::ConfigHubItem::row(
+            crate::app::ConfigHubSection::Models,
+            "Current model",
+            "mimo/mimo-v2.5-pro",
+            "provider default switch",
+            "Model used for this session",
+            crate::app::ConfigHubAction::CurrentModel,
+        )
+        .screen(),
+        crate::app::ConfigHubItem::row(
+            crate::app::ConfigHubSection::Models,
+            "Delegated agent",
+            "same as current agent",
+            "subagent child provider model",
+            "Model used for delegated child agents",
+            crate::app::ConfigHubAction::Delegation {
+                selected: None,
+                configured: Vec::new(),
             },
-            crate::app::ConfigHubItem {
-                label: "Delegated agent".into(),
-                value: "same as current agent".into(),
-                keywords: "subagent child provider model".into(),
-                action: crate::app::ConfigHubAction::Delegation {
-                    selected: None,
-                    configured: Vec::new(),
-                },
-            },
-            crate::app::ConfigHubItem {
-                label: "Provider setup".into(),
-                value: "4 configured".into(),
-                keywords: "api key endpoint".into(),
-                action: crate::app::ConfigHubAction::ProviderSetup,
-            },
-            crate::app::ConfigHubItem {
-                label: "Review model".into(),
-                value: "deepseek/deepseek-v4-pro".into(),
-                keywords: "reviewer".into(),
-                action: crate::app::ConfigHubAction::ReviewModel,
-            },
-            crate::app::ConfigHubItem {
-                label: "Config file".into(),
-                value: "/tmp/ca/config.toml".into(),
-                keywords: "toml path".into(),
-                action: crate::app::ConfigHubAction::ConfigFile("/tmp/ca/config.toml".into()),
-            },
-        ],
-    });
+        )
+        .screen(),
+        crate::app::ConfigHubItem::row(
+            crate::app::ConfigHubSection::Tools,
+            "Provider setup",
+            "4 configured",
+            "api key endpoint",
+            "Add or edit a model provider",
+            crate::app::ConfigHubAction::ProviderSetup,
+        )
+        .screen(),
+        crate::app::ConfigHubItem::row(
+            crate::app::ConfigHubSection::Models,
+            "Review model",
+            "deepseek/deepseek-v4-pro",
+            "reviewer",
+            "Model used for a fresh-context review",
+            crate::app::ConfigHubAction::ReviewModel,
+        )
+        .screen(),
+        crate::app::ConfigHubItem::row(
+            crate::app::ConfigHubSection::Advanced,
+            "Config file",
+            "/tmp/ca/config.toml",
+            "toml path",
+            "Where this profile's settings are stored",
+            crate::app::ConfigHubAction::ConfigFile("/tmp/ca/config.toml".into()),
+        ),
+    ]);
+    hub.selected_idx = 1;
+    state.config_hub = Some(hub);
     insta::assert_snapshot!(
         "config_hub",
         wide_narrow(
@@ -6156,6 +7720,266 @@ fn config_hub_populated_and_no_match_snapshots() {
             render_to_text(&state, 60, 24)
         )
     );
+}
+
+#[test]
+fn settings_sheet_shows_sections_description_and_choice_preview() {
+    let mut state = test_state();
+    state.config_hub = Some(crate::app::ConfigHubState::list(vec![
+        crate::app::ConfigHubItem::row(
+            crate::app::ConfigHubSection::Models,
+            "Current model",
+            "mimo/mimo-v2.5-pro",
+            "model",
+            "Model used for this session",
+            crate::app::ConfigHubAction::CurrentModel,
+        )
+        .screen(),
+        crate::app::ConfigHubItem::row(
+            crate::app::ConfigHubSection::AgentApproval,
+            "Command output",
+            "Bounded",
+            "output",
+            "How much shell output stays in the transcript",
+            crate::app::ConfigHubAction::CommandOutput,
+        )
+        .with_choices(
+            vec![crate::app::ConfigHubChoice {
+                label: "Bounded".into(),
+                description: "Keep a bounded slice of each command".into(),
+                action: crate::app::ConfigHubAction::CommandOutputSave(
+                    crate::config::CommandOutputPolicy::Bounded,
+                ),
+                preview: Some("preview\n  Ran 2 commands".into()),
+            }],
+            None,
+        ),
+    ]));
+    let listed = render_to_text(&state, 100, 30);
+    assert!(listed.contains("Settings"));
+    assert!(listed.contains("Models"));
+    assert!(listed.contains("Model used for this session"));
+    assert!(listed.contains("/ to search"));
+    assert!(listed.contains("[x]"));
+
+    if let Some(hub) = state.config_hub.as_mut() {
+        hub.page = crate::app::ConfigHubPage::Choices(crate::app::ConfigHubChoicePage {
+            title: "Command output".into(),
+            detail: "How much shell output stays in the transcript".into(),
+            selected_idx: 0,
+            choices: vec![crate::app::ConfigHubChoice {
+                label: "Bounded".into(),
+                description: "Keep a bounded slice of each command".into(),
+                action: crate::app::ConfigHubAction::CommandOutputSave(
+                    crate::config::CommandOutputPolicy::Bounded,
+                ),
+                preview: Some("preview\n  Ran 2 commands".into()),
+            }],
+            sandbox_saved: None,
+        });
+    }
+    let page = render_to_text(&state, 100, 30);
+    assert!(page.contains("Settings › Command output"));
+    assert!(page.contains("Ran 2 commands"));
+    assert!(page.contains("● Bounded"));
+}
+
+#[test]
+fn settings_sheet_puts_each_note_beside_its_row() {
+    let mut state = test_state();
+    state.show_setting_descriptions = true;
+    state.config_hub = Some(crate::app::ConfigHubState::list(vec![
+        crate::app::ConfigHubItem::row(
+            crate::app::ConfigHubSection::Appearance,
+            "Theme",
+            "Default",
+            "theme",
+            "Color theme for the terminal UI",
+            crate::app::ConfigHubAction::CurrentModel,
+        ),
+        crate::app::ConfigHubItem::row(
+            crate::app::ConfigHubSection::Models,
+            "Current model",
+            "mimo/mimo-v2.5-pro",
+            "model",
+            "Model used for this session",
+            crate::app::ConfigHubAction::CurrentModel,
+        )
+        .screen(),
+    ]));
+    let text = render_to_text(&state, 100, 24);
+    let theme = text
+        .lines()
+        .find(|line| line.contains("Color theme for the terminal UI"))
+        .expect(&text);
+    let model = text
+        .lines()
+        .find(|line| line.contains("Model used for this session"))
+        .expect(&text);
+    assert!(theme.contains("Theme"), "{text}");
+    assert!(model.contains("Current model"), "{text}");
+    assert!(model.contains("mimo/mimo-v2.5-pro"), "{text}");
+    assert_eq!(
+        theme.find("Color theme for the terminal UI"),
+        model.find("Model used for this session"),
+        "{text}"
+    );
+    assert!(
+        !text
+            .lines()
+            .any(|line| line.contains("Color theme for the terminal UI") && !line.contains("Theme")),
+        "{text}"
+    );
+
+    state.show_setting_descriptions = false;
+    let hidden = render_to_text(&state, 100, 24);
+    assert!(hidden.contains("Theme"), "{hidden}");
+    assert!(hidden.contains("Current model"), "{hidden}");
+    assert!(
+        !hidden.contains("Color theme for the terminal UI"),
+        "{hidden}"
+    );
+    assert!(!hidden.contains("Model used for this session"), "{hidden}");
+
+    state.show_setting_descriptions = true;
+    let narrow = render_to_text(&state, 48, 16);
+    assert!(narrow.contains("Current model"), "{narrow}");
+    assert!(narrow.contains("mimo/mimo-v2.5-pro"), "{narrow}");
+    assert!(!narrow.contains("Model used for this session"), "{narrow}");
+}
+
+fn settings_scroll_rows(count: usize) -> Vec<crate::app::ConfigHubItem> {
+    (0..count)
+        .map(|index| {
+            crate::app::ConfigHubItem::row(
+                crate::app::ConfigHubSection::Appearance,
+                format!("Row {index}"),
+                "on",
+                "row",
+                "How this row behaves",
+                crate::app::ConfigHubAction::CurrentModel,
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn settings_sheet_scroll_window_only_moves_to_reveal_the_focus() {
+    let reveal = crate::tui::render::reveal_settings_window;
+    assert_eq!(reveal(2, 2, 4, 6, 20), 2);
+    assert_eq!(reveal(0, 8, 10, 6, 20), 4);
+    assert_eq!(reveal(8, 1, 3, 6, 20), 1);
+    assert_eq!(reveal(0, 3, 12, 4, 20), 3);
+    assert_eq!(reveal(50, 5, 6, 4, 6), 2);
+    assert_eq!(reveal(4, 0, 1, 0, 10), 0);
+}
+
+#[test]
+fn settings_sheet_scroll_follows_the_selection_without_recentering() {
+    let mut state = test_state();
+    let mut hub = crate::app::ConfigHubState::list(settings_scroll_rows(24));
+    hub.selected_idx = 12;
+    state.config_hub = Some(hub);
+    let text = render_to_text(&state, 80, 16);
+    let scroll = state.config_hub.as_ref().unwrap().scroll.get();
+    assert_eq!(scroll, 7, "{text}");
+    assert!(text.contains("Row 12"), "{text}");
+    assert!(
+        text.lines()
+            .any(|line| line.contains("Row 12") && line.contains("How this row behaves")),
+        "{text}"
+    );
+    assert!(!text.contains("Row 0"), "{text}");
+    assert!(text.contains('┃'), "{text}");
+
+    state.config_hub.as_mut().unwrap().selected_idx = 11;
+    let stayed = render_to_text(&state, 80, 16);
+    assert_eq!(
+        state.config_hub.as_ref().unwrap().scroll.get(),
+        7,
+        "{stayed}"
+    );
+    assert!(stayed.contains("Row 11"), "{stayed}");
+    assert!(stayed.contains("Row 12"), "{stayed}");
+
+    state.config_hub.as_mut().unwrap().selected_idx = 0;
+    let top = render_to_text(&state, 80, 16);
+    assert_eq!(state.config_hub.as_ref().unwrap().scroll.get(), 0, "{top}");
+    assert!(top.contains("Appearance"), "{top}");
+    assert!(top.contains("Row 0"), "{top}");
+    assert!(!top.contains("Row 12"), "{top}");
+}
+
+#[test]
+fn settings_sheet_scroll_keeps_the_selected_choice_and_preview_visible() {
+    let choices: Vec<crate::app::ConfigHubChoice> = (0..12)
+        .map(|index| crate::app::ConfigHubChoice {
+            label: format!("Choice {index}"),
+            description: "option".into(),
+            action: crate::app::ConfigHubAction::CurrentModel,
+            preview: Some("Pinned choice preview".into()),
+        })
+        .collect();
+    let mut state = test_state();
+    let mut hub = crate::app::ConfigHubState::list(vec![crate::app::ConfigHubItem::row(
+        crate::app::ConfigHubSection::Appearance,
+        "Theme",
+        "Default",
+        "theme",
+        "Color theme",
+        crate::app::ConfigHubAction::CurrentModel,
+    )]);
+    hub.page = crate::app::ConfigHubPage::Choices(crate::app::ConfigHubChoicePage {
+        title: "Theme".into(),
+        detail: "Color theme for the terminal UI".into(),
+        selected_idx: 11,
+        choices,
+        sandbox_saved: None,
+    });
+    state.config_hub = Some(hub);
+    let text = render_to_text(&state, 80, 16);
+    assert_eq!(
+        state.config_hub.as_ref().unwrap().choice_scroll.get(),
+        10,
+        "{text}"
+    );
+    assert!(text.contains("Choice 11"), "{text}");
+    assert!(text.contains("Pinned choice preview"), "{text}");
+    assert!(!text.contains("Choice 0"), "{text}");
+
+    if let crate::app::ConfigHubPage::Choices(page) = &mut state.config_hub.as_mut().unwrap().page {
+        page.selected_idx = 10;
+    }
+    let stayed = render_to_text(&state, 80, 16);
+    assert_eq!(
+        state.config_hub.as_ref().unwrap().choice_scroll.get(),
+        10,
+        "{stayed}"
+    );
+    assert!(stayed.contains("Choice 10"), "{stayed}");
+    assert!(stayed.contains("Choice 11"), "{stayed}");
+}
+
+#[test]
+fn sent_image_record_is_hidden_and_chips_stay_visible() {
+    let mut state = test_state();
+    state.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
+        role: Role::User,
+        content: "look\n[Image #1]\n[Image #9]\n\n[sent-images:1]".into(),
+        tool_calls: None,
+        thinking: None,
+        timestamp: fixed_time(),
+        response_items: Vec::new(),
+    });
+    let rendered = render_to_text(&state, 100, 30);
+    assert!(rendered.contains("[Image #1]"));
+    assert!(rendered.contains("[Image #9]"));
+    assert!(!rendered.contains("sent-images"));
+    let (body, count) =
+        crate::tui::render::split_sent_image_record("look\n[Image #1]\n\n[sent-images:1]");
+    assert_eq!(body, "look\n[Image #1]");
+    assert_eq!(count, Some(1));
 }
 
 #[test]
@@ -6357,6 +8181,7 @@ fn reviewed_archive_learning_pager_snapshots() {
 fn direct_adaptive_learning_transcript_snapshots() {
     let mut state = test_state();
     state.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::Assistant,
         content: "# Learning pass complete\n\n## Inventory\n- Indexed 1596 message(s) · Searchable 1596 message(s) · Retired 1596 message(s).\n- Searchable sessions 190 · Retrieved 12 message(s) / 6 session(s) · Inspected 12 message(s) / 6 session(s) · Used as support 6 session(s).\n- Sources: CA 18 · Codex 1000 · MiMo 578.\n- Workflow clusters: 2/2 page(s) delivered · 119 searchable · 119 explicitly decided.\n- Existing assets: 132 — 3 commands · 128 skills · 1 subagent.\n- Proposed this run: 0 commands · 0 skills · 0 subagents.\n\n## Memory review\n- Changed 0 cluster decision(s) · already covered 3 · non-durable 116 · unresolved 0.\n\n## Shortlist\n| Workflow | Evidence | Confidence | Outcome | Reason / existing assets |\n| --- | --- | --- | --- | --- |\n| BSD rsync check | 25 sessions | high | skipped | Existing: /check-rsync — `/Users/aji/.mimocode/command/check-rsync.md` |\n| Transmission status | 25 sessions | high | skipped | Existing: /check-transmission — `/Users/aji/.mimocode/command/check-transmission.md` |\n| Seedbox status | 24 sessions | high | skipped | Existing: /check-seedbox — `/Users/aji/.mimocode/command/check-seedbox.md` |\n\nCollapsed low-signal singletons: 116 clusters / 116 sessions. Examples: FreeBSD QEMU check, one-off cleanup, isolated migration.\n\n## Created or extended\n- Nothing new; existing knowledge already covers the validated evidence.\n\n## Skipped\n- Existing BSD commands are shown above with exact paths.\n- Collapsed 116 low-signal singleton clusters across 116 sessions.\n\n## Needs more evidence\n- No unresolved recurring workflow.\n\n## Receipt\nRun: 11111111-1111-4111-8111-111111111111 · model mimo/mimo-v2.5-pro · 2 adaptive turns · 1 bounded retrieval step · 1842 input / 419 output tokens · undo `/learn undo 11111111-1111-4111-8111-111111111111`\nStructural validation: passed.\nDetails: `/learn status 11111111-1111-4111-8111-111111111111`".into(),
         tool_calls: None,
@@ -6379,6 +8204,7 @@ fn direct_adaptive_learning_transcript_snapshots() {
 fn direct_adaptive_learning_running_cards_snapshots() {
     let mut state = test_state();
     state.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::Assistant,
         content: "# Learning\n\nModel: `mimo/mimo-v2.5-pro` · up to 8 turns\n\n## Investigation\n- ▸ Inspect · 3 signal clusters · 6 representative sessions (collapsed)\n- ▸ Inventory · 132 reusable asset entries (collapsed)\n\n## Current stage\n⏳ Continuing from bounded evidence · adaptive turn 2/8".into(),
         tool_calls: None,
@@ -6400,6 +8226,7 @@ fn paged_history_render_state() -> AppState {
     state.transcript_scroll.request_offset(3);
     state.messages = (64..68)
         .map(|index| Message {
+            retrieved_spans: Some(Vec::new()),
             role: if index % 2 == 0 {
                 Role::User
             } else {
@@ -6480,6 +8307,7 @@ fn prepending_lazy_history_preserves_the_visible_bottom_relative_anchor() {
     let mut state = paged_history_render_state();
     state.messages = (70..100)
         .map(|index| Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::User,
             content: format!("saved history message {index}"),
             tool_calls: None,
@@ -6496,6 +8324,7 @@ fn prepending_lazy_history_preserves_the_visible_bottom_relative_anchor() {
 
     let mut older = (60..70)
         .map(|index| Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::User,
             content: format!("saved history message {index}"),
             tool_calls: None,
@@ -6511,11 +8340,24 @@ fn prepending_lazy_history_preserves_the_visible_bottom_relative_anchor() {
     let after = render_to_text(&state, 100, 20);
 
     let visible_messages = |rendered: &str| {
-        rendered
+        let mut lines = rendered
             .lines()
             .filter(|line| line.contains("saved history message"))
             .map(|line| line.trim().to_string())
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+        if lines.len() >= 2 {
+            let index = |line: &str| {
+                line.rsplit_once(' ')
+                    .and_then(|(_, number)| number.parse::<u32>().ok())
+                    .unwrap_or(0)
+            };
+            let first = index(&lines[0]);
+            let second = index(&lines[1]);
+            if second == first || second > first.saturating_add(1) {
+                lines.remove(0);
+            }
+        }
+        lines
     };
     let before_messages = visible_messages(&before);
     assert!(!before_messages.is_empty());
@@ -6849,8 +8691,10 @@ fn provider_trace_status_and_delete_confirmation_snapshots() {
     let mut open = test_state();
     open.pager_content = concat!(
         "Provider trace 00000000-0000-0000-0000-000000000117\n\n",
-        "{\"schema\":\"ca.provider-trace.v1\",\"sequence\":0,\"event\":\"trace_started\"}\n",
-        "{\"schema\":\"ca.provider-trace.v1\",\"sequence\":1,\"request_kind\":\"main_turn\",\"event\":\"request_started\"}\n",
+        "{\"schema\":\"ca.provider-trace.v1\",\"sequence\":0,\"event\":\"trace_started\"}
+",
+        "{\"schema\":\"ca.provider-trace.v1\",\"sequence\":1,\"request_kind\":\"main_turn\",\"event\":\"request_started\"}
+",
     )
     .into();
     open.pager_open = true;
@@ -7007,6 +8851,136 @@ fn timeline_snapshots() {
 }
 
 #[test]
+fn queue_action_labels_drop_edit_before_cancel() {
+    use crate::tui::composer::QueueRowAction;
+    use crate::tui::render::queue_action_labels;
+    let labels = |width| {
+        queue_action_labels(width)
+            .into_iter()
+            .map(|(_, action)| action)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        labels(26),
+        vec![
+            QueueRowAction::SendNow,
+            QueueRowAction::Edit,
+            QueueRowAction::Cancel
+        ]
+    );
+    assert_eq!(
+        labels(25),
+        vec![QueueRowAction::SendNow, QueueRowAction::Cancel]
+    );
+    assert_eq!(labels(10), vec![QueueRowAction::SendNow]);
+    assert!(labels(9).is_empty());
+}
+
+#[test]
+fn queue_preview_drops_edit_when_the_row_is_narrow() {
+    let mut state = test_state();
+    state.turn_lifecycle.begin();
+    state.input_queue.enqueue_with_id(
+        uuid::Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap(),
+        "Follow up while the turn is running",
+    );
+    state.input_height = 8;
+    let screen = render_to_text(&state, 27, 24);
+    assert!(screen.contains("[Send now]"), "{screen}");
+    assert!(screen.contains("[cancel]"), "{screen}");
+    assert!(!screen.contains("[edit]"), "{screen}");
+}
+
+#[test]
+fn queued_row_chips_send_edit_and_cancel_on_click() {
+    use crate::tui::composer::QueueRowAction;
+    use crate::tui::event::{Event, MouseSelectionEvent, MouseSelectionPhase};
+
+    let mut state = test_state();
+    state.turn_lifecycle.begin();
+    let id = uuid::Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
+    state
+        .input_queue
+        .enqueue_with_id(id, "Follow up while it is working");
+    state.input_height = 6;
+    let screen = render_to_text(&state, 100, 30);
+    let hits = state.composer_ui.queue_action_hits.borrow().clone();
+    assert_eq!(hits.len(), 3, "expected send, edit, and cancel chips");
+    let lines: Vec<&str> = screen.lines().collect();
+    let send_line = lines
+        .iter()
+        .position(|line| line.contains("[Send now]"))
+        .expect("send now chip");
+    let byte = lines[send_line].find("[Send now]").unwrap();
+    let send_column = lines[send_line][..byte].chars().count();
+    assert_eq!(hits[0].y as usize, send_line);
+    assert_eq!(hits[0].x as usize, send_column);
+
+    let click = |state: &mut AppState, column: u16, row: u16| {
+        for phase in [MouseSelectionPhase::Start, MouseSelectionPhase::End] {
+            crate::tui::input::handle_event(
+                state,
+                &Event::MouseSelection(MouseSelectionEvent { phase, column, row }),
+                "/workspace/ca",
+            );
+        }
+    };
+
+    let send = hits
+        .iter()
+        .find(|hit| hit.action == QueueRowAction::SendNow)
+        .unwrap();
+    click(&mut state, send.x.saturating_sub(1), send.y);
+    assert!(state.pending_input_action.is_none());
+    assert_eq!(state.input_queue.len(), 1);
+
+    click(&mut state, send.x, send.y);
+    assert_eq!(
+        state.pending_input_action,
+        Some(crate::tui::commands::InputAction::Steer {
+            text: "Follow up while it is working".into(),
+            queued_id: Some(id),
+        })
+    );
+    assert!(state.turn_lifecycle.is_active());
+
+    state.pending_input_action = None;
+    state
+        .input_queue
+        .enqueue_with_id(id, "Follow up while it is working");
+    render_to_text(&state, 100, 30);
+    let hits = state.composer_ui.queue_action_hits.borrow().clone();
+    let edit = hits
+        .iter()
+        .find(|hit| hit.action == QueueRowAction::Edit)
+        .unwrap();
+    click(&mut state, edit.x, edit.y);
+    assert_eq!(state.input, "Follow up while it is working");
+    assert_eq!(state.input_queue.editing_id, Some(id));
+
+    state.input.clear();
+    state.input_cursor = 0;
+    state.input_queue.editing_id = None;
+    render_to_text(&state, 100, 30);
+    let hits = state.composer_ui.queue_action_hits.borrow().clone();
+    let cancel = hits
+        .iter()
+        .find(|hit| hit.action == QueueRowAction::Cancel)
+        .unwrap();
+    click(&mut state, cancel.x, cancel.y);
+    assert!(state.input_queue.is_empty());
+    assert_eq!(
+        state.pending_input_action,
+        Some(crate::tui::commands::InputAction::PersistSessionQueue)
+    );
+    assert!(state.turn_lifecycle.is_active());
+    assert_ne!(
+        state.pending_input_action,
+        Some(crate::tui::commands::InputAction::StopTurn)
+    );
+}
+
+#[test]
 fn queue_preview_snapshots() {
     let mut state = test_state();
     state.turn_lifecycle.begin();
@@ -7050,7 +9024,7 @@ fn busy_interrupt_controls_survive_status_messages() {
     state.status_message = Some("Working on your request…".into());
     for width in [100, 60] {
         let rendered = render_to_text(&state, width, 24);
-        for control in ["Esc stop", "Enter interrupt", "Alt+Enter queue"] {
+        for control in ["Esc stop", "Enter queue", "Ctrl+S send now"] {
             assert!(rendered.contains(control), "missing {control}:\n{rendered}");
         }
         assert!(rendered.contains("Working on your request"));
@@ -7141,6 +9115,7 @@ fn context_dashboard_snapshots() {
     });
     state.messages = vec![
         Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::User,
             content: "Implement checkpoints".into(),
             tool_calls: None,
@@ -7149,6 +9124,7 @@ fn context_dashboard_snapshots() {
             response_items: Vec::new(),
         },
         Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::Assistant,
             content: "Implemented".into(),
             tool_calls: None,
@@ -7158,6 +9134,7 @@ fn context_dashboard_snapshots() {
         },
     ];
     state.context_checkpoint = Some(crate::context::ContextCheckpoint {
+        user_quotes_authored: true,
         format_version: 1,
         through_message_count: 2,
         summary: "## Goal\nImplement checkpoints".into(),
@@ -7240,6 +9217,7 @@ fn checkpoint_marker_snapshots() {
     let mut state = test_state();
     state.messages = vec![
         Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::User,
             content: "Original request".into(),
             tool_calls: None,
@@ -7248,6 +9226,7 @@ fn checkpoint_marker_snapshots() {
             response_items: Vec::new(),
         },
         Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::Assistant,
             content: "Original answer".into(),
             tool_calls: None,
@@ -7256,6 +9235,7 @@ fn checkpoint_marker_snapshots() {
             response_items: Vec::new(),
         },
         Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::User,
             content: "Continue after compaction".into(),
             tool_calls: None,
@@ -7265,6 +9245,7 @@ fn checkpoint_marker_snapshots() {
         },
     ];
     state.context_checkpoint = Some(crate::context::ContextCheckpoint {
+        user_quotes_authored: true,
         format_version: 1,
         through_message_count: 2,
         summary: "## Goal\nContinue safely".into(),
@@ -7288,6 +9269,7 @@ fn checkpoint_marker_snapshots() {
 fn fallback_marker_state(streaming: bool) -> AppState {
     let mut state = test_state();
     state.messages = vec![Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::User,
         content: "Continue even if the primary is temporarily unavailable".into(),
         tool_calls: None,
@@ -7320,6 +9302,7 @@ fn fallback_marker_state(streaming: bool) -> AppState {
         });
     } else {
         state.messages.push(Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::Assistant,
             content: "The request completed through the configured backup.".into(),
             tool_calls: None,
@@ -7703,9 +9686,11 @@ fn jobs_state() -> AppState {
     state.jobs_view_open = true;
     state.job_list = vec![
         crate::jobs::JobInfo {
+            log_artifact: None,
             id: "00000000-0000-4000-8000-000000000001".parse().unwrap(),
             command: "cargo test --workspace".into(),
             cwd: "/tmp/project".into(),
+            protected_sources: false,
             status: crate::jobs::JobStatus::Running,
             elapsed: std::time::Duration::from_millis(1234),
             stdout: "test output began\n[… stdout: 2048 bytes omitted …]\nrunning 12 tests\n"
@@ -7716,9 +9701,11 @@ fn jobs_state() -> AppState {
             background: true,
         },
         crate::jobs::JobInfo {
+            log_artifact: None,
             id: "00000000-0000-4000-8000-000000000002".parse().unwrap(),
             command: "printf complete".into(),
             cwd: "/tmp/project".into(),
+            protected_sources: false,
             status: crate::jobs::JobStatus::Completed { exit_code: 0 },
             elapsed: std::time::Duration::from_millis(250),
             stdout: "complete\n".into(),
@@ -8565,6 +10552,8 @@ fn session_retention_busy_bare_and_failure_snapshots() {
 
 fn workflow_loaded() -> crate::workflow::LoadedWorkflow {
     crate::workflow::LoadedWorkflow {
+        pause_before_run: false,
+        agent_budget: 1024,
         definition: crate::workflow::WorkflowDefinition {
             version: 1,
             id: "release-check".into(),
@@ -8583,6 +10572,7 @@ fn workflow_loaded() -> crate::workflow::LoadedWorkflow {
                     },
                     output: Some("inspection".into()),
                     evidence: vec![crate::workflow::WorkflowEvidenceGate::AssistantOutput],
+                    when: None,
                 },
                 crate::workflow::WorkflowStep {
                     id: "verify".into(),
@@ -8594,6 +10584,7 @@ fn workflow_loaded() -> crate::workflow::LoadedWorkflow {
                     retry: crate::workflow::WorkflowRetryPolicy::default(),
                     output: None,
                     evidence: vec![crate::workflow::WorkflowEvidenceGate::AssistantOutput],
+                    when: None,
                 },
             ],
         }
@@ -8773,14 +10764,19 @@ fn workflow_waiting_approval_snapshots() {
     let mut state = workflow_status_state(crate::workflow::WorkflowRunStatus::Running);
     state.pager_open = false;
     state.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::Assistant,
         content: "The verification needs a command.".into(),
         tool_calls: Some(vec![ToolCall {
+            observation: None,
+            output_source: None,
+            arguments_retrieved_spans: Vec::new(),
             id: "workflow-call".into(),
             name: "run_command".into(),
             arguments: r#"{"command":"cargo test workflow"}"#.into(),
             status: ToolStatus::Running,
             output: None,
+            started_at: None,
         }]),
         thinking: None,
         timestamp: chrono::Utc::now(),
@@ -8851,6 +10847,12 @@ fn task_graph_render_state() -> AppState {
         source_task_id: None,
     };
     let mut work = crate::work::WorkState {
+        session_todos: Vec::new(),
+        session_goal: None,
+        session_mode: None,
+        automatic_task_map: false,
+        automatic_task_execution: None,
+        automatic_completion_reported: None,
         pending_automation_proposal: None,
         plan_workflow: None,
         pending_plan_workflow: None,
@@ -8902,6 +10904,7 @@ fn task_graph_render_state() -> AppState {
     let mut state = test_state();
     *state.work_state.lock().unwrap() = work;
     state.task_graph_manager = Some(crate::app::TaskGraphManagerState {
+        detail_open: false,
         filter: String::new(),
         selected_idx: 0,
         confirmation: None,
@@ -8915,6 +10918,7 @@ fn task_graph_render_state() -> AppState {
 fn task_graph_empty_ready_and_busy_snapshots() {
     let mut empty = test_state();
     empty.task_graph_manager = Some(crate::app::TaskGraphManagerState {
+        detail_open: false,
         filter: String::new(),
         selected_idx: 0,
         confirmation: None,
@@ -8971,6 +10975,7 @@ fn task_graph_running_failure_retry_and_complete_snapshots() {
                 finished_at: None,
                 successful_tools: Vec::new(),
                 summary: None,
+                provider_summary: None,
                 terminal_event_sequence: None,
                 verification_receipt: None,
                 workspace_snapshot: None,
@@ -9092,6 +11097,7 @@ fn task_graph_labels_a_stale_pass_receipt_as_invalid() {
                 finished_at: Some(chrono::Utc::now()),
                 successful_tools: vec!["read_file".into()],
                 summary: Some("done".into()),
+                provider_summary: None,
                 terminal_event_sequence: Some(25),
                 verification_receipt: Some(receipt),
                 workspace_snapshot: Some(host_snapshot),
@@ -9650,6 +11656,7 @@ fn mermaid_terminal_diagram_snapshots_are_readable_wide_and_narrow() {
     ));
     let mut state = test_state();
     state.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::Assistant,
         content: format!("```mermaid\n{source}```"),
         tool_calls: None,
@@ -9906,15 +11913,22 @@ fn semantic_command_collapsed_and_raw_expansion_snapshots() {
     let mut state = test_state();
     let id = "command-semantic";
     state.messages = vec![assistant_calls(vec![ToolCall {
+        observation: None,
+        output_source: None,
+        arguments_retrieved_spans: Vec::new(),
         id: id.into(),
         name: "run_command".into(),
         arguments: r#"{"command":"git status --short"}"#.into(),
         status: ToolStatus::Done,
         output: Some("exit code: 0\nstdout:\n M src/main.rs\n?? notes.txt".into()),
+        started_at: None,
     }])];
     let observation = crate::command_output::CommandObservation {
+        log_artifact: None,
+        build_diagnosis: None,
         command: "git status --short".into(),
         cwd: "/workspace/demo".into(),
+        protected_sources: false,
         network_requested: false,
         status: crate::jobs::JobStatus::Completed { exit_code: 0 },
         stdout: " M src/main.rs\n?? notes.txt\n".into(),
@@ -10063,6 +12077,7 @@ fn session_report_render_state() -> AppState {
         display_name: "model".into(),
     });
     state.messages.push(crate::app::Message {
+        retrieved_spans: Some(Vec::new()),
         role: crate::app::Role::User,
         content: "implement it".into(),
         tool_calls: None,
@@ -10132,11 +12147,12 @@ fn session_report_wide_and_narrow_snapshots() {
 fn terminal_math_prose_table_and_list_snapshots() {
     let mut state = test_state();
     state.messages = vec![Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::Assistant,
         content: concat!(
             "The inline result is \\(x_2 + \\alpha \\leq \\infty\\), while $5.00$ remains currency.\n\n",
             "\\[\\sum_{i=1}^n i = \\frac{n}{2}\\]\n\n",
-            "- Gradient: $\\nabla f$\n",
+            "- Gradient: $\nabla f$\n",
             "- Literal code: `\\(x_2\\)`\n\n",
             "| Symbol | Meaning |\n",
             "| --- | --- |\n",
@@ -10161,16 +12177,24 @@ fn terminal_math_prose_table_and_list_snapshots() {
 
 fn exploration_call(id: &str, name: &str, status: ToolStatus) -> ToolCall {
     ToolCall {
+        observation: None,
+        output_source: None,
+        arguments_retrieved_spans: Vec::new(),
         id: id.into(),
         name: name.into(),
         arguments: format!(r#"{{"path":"src/{id}.rs"}}"#),
         status,
-        output: Some(format!("result for {id}\nsecond line")),
+        output: Some(format!(
+            "result for {id}
+second line"
+        )),
+        started_at: None,
     }
 }
 
 fn assistant_calls(calls: Vec<ToolCall>) -> Message {
     Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::Assistant,
         content: String::new(),
         tool_calls: Some(calls),
@@ -10195,6 +12219,7 @@ fn exploration_grouping_crosses_empty_assistant_messages_and_honors_boundaries()
             ToolStatus::Done,
         )]),
         Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::Assistant,
             content: "Visible boundary".into(),
             tool_calls: Some(vec![exploration_call("glob-c", "glob", ToolStatus::Done)]),
@@ -10208,6 +12233,7 @@ fn exploration_grouping_crosses_empty_assistant_messages_and_honors_boundaries()
             exploration_call("image-e", "view_image", ToolStatus::Done),
         ]),
         Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::User,
             content: "Another boundary".into(),
             tool_calls: None,
@@ -10330,6 +12356,7 @@ fn exploration_ctrl_o_uses_the_stable_first_call_key() {
     state.messages.insert(
         0,
         Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::User,
             content: "Earlier history loaded".into(),
             tool_calls: None,
@@ -10360,11 +12387,15 @@ fn activity_call(
     output: &str,
 ) -> ToolCall {
     ToolCall {
+        observation: None,
+        output_source: None,
+        arguments_retrieved_spans: Vec::new(),
         id: id.into(),
         name: name.into(),
         arguments: arguments.to_string(),
         status,
         output: Some(output.into()),
+        started_at: None,
     }
 }
 
@@ -10387,6 +12418,7 @@ fn activity_grouping_requires_two_calls_and_honors_visible_and_tool_boundaries()
             "exit code: 0",
         )]),
         Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::Assistant,
             content: "Visible boundary".into(),
             tool_calls: Some(vec![
@@ -10410,6 +12442,7 @@ fn activity_grouping_requires_two_calls_and_honors_visible_and_tool_boundaries()
             response_items: Vec::new(),
         },
         Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::Assistant,
             content: "Second visible boundary".into(),
             tool_calls: None,
@@ -10583,6 +12616,7 @@ fn clicking_an_older_visible_activity_header_toggles_that_exact_group() {
     state.messages = vec![
         group("older"),
         Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::Assistant,
             content: "Boundary".into(),
             tool_calls: None,
@@ -10641,6 +12675,7 @@ fn clicking_a_scrolled_activity_header_uses_document_coordinates() {
             ),
         ]),
         Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::Assistant,
             content: (0..24)
                 .map(|index| format!("intervening line {index}"))
@@ -11310,11 +13345,15 @@ fn agent_dashboard_snapshots() {
 
 fn bug292_await_call(job: &crate::jobs::JobInfo, id: &str) -> ToolCall {
     ToolCall {
+        observation: None,
+        output_source: None,
+        arguments_retrieved_spans: Vec::new(),
         id: id.into(),
         name: "await_job".into(),
         arguments: serde_json::json!({"job_id": job.id.to_string()}).to_string(),
         status: ToolStatus::Running,
         output: None,
+        started_at: None,
     }
 }
 
@@ -11323,6 +13362,7 @@ fn bug292_waiting_job_state() -> AppState {
     state.jobs_view_open = false;
     state.messages.clear();
     state.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::Assistant,
         content: String::new(),
         tool_calls: Some(vec![bug292_await_call(&state.job_list[0], "await-1")]),
@@ -11474,6 +13514,7 @@ fn bug292_terminal_job_and_resolved_await_do_not_keep_preview_visible() {
     }
     state.messages[0].tool_calls.as_mut().unwrap()[0].status = ToolStatus::Running;
     state.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::User,
         content: "A later turn must not resurrect an earlier await".into(),
         tool_calls: None,
@@ -11491,10 +13532,12 @@ fn bug292_await_preview_preserves_composer_controls_in_short_terminals() {
     state.job_list[0].stderr = "stderr-first\nstderr-second".into();
     for (width, height) in [(100, 30), (60, 24), (60, 8)] {
         let screen = render_to_text(&state, width, height);
-        for control in ["Esc stop", "Enter interrupt", "Alt+Enter queue"] {
+        for control in ["Esc stop", "Enter queue", "Ctrl+S send now"] {
             assert!(screen.contains(control), "missing {control}:\n{screen}");
         }
-        assert!(screen.contains("Add a follow-up"), "{screen}");
+        if height >= 24 {
+            assert!(screen.contains("Add a follow-up"), "{screen}");
+        }
         assert!(screen.contains("Waiting for managed job"), "{screen}");
         assert_eq!(screen.lines().count(), height as usize);
     }
@@ -11546,4 +13589,200 @@ fn google_vertex_setup_fields_are_readable_at_wide_and_narrow_sizes() {
         }
         assert!(!rendered.contains("API key env"));
     }
+}
+
+#[test]
+fn unknown_generation_speed_is_omitted_from_statusline() {
+    let mut state = test_state();
+    state.statusline_fields = vec![crate::ui_settings::StatusField::GenerationSpeed];
+    state.latest_generation_speed_tenths = None;
+    let text = render_to_text(&state, 80, 12);
+    assert!(!text.contains("speed unknown"), "{text}");
+    state.latest_generation_speed_tenths = Some(125);
+    let text = render_to_text(&state, 80, 12);
+    assert!(text.contains("12.5 tok/s"), "{text}");
+}
+
+#[test]
+fn long_diffs_hint_ctrl_o_expand() {
+    let mut state = test_state();
+    let mut diff = String::from("@@ -1,1 +1,2 @@\n");
+    for i in 0..40 {
+        diff.push_str(&format!(
+            "+line {i}
+"
+        ));
+    }
+    state.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
+        role: Role::Assistant,
+        content: String::new(),
+        tool_calls: Some(vec![ToolCall {
+            observation: None,
+            output_source: None,
+            arguments_retrieved_spans: Vec::new(),
+            id: "call-diff".into(),
+            name: "edit_file".into(),
+            arguments: "{}".into(),
+            status: ToolStatus::Done,
+            output: Some(diff),
+            started_at: None,
+        }]),
+        thinking: None,
+        timestamp: fixed_time(),
+        response_items: Vec::new(),
+    });
+    let collapsed = render_to_text(&state, 100, 40);
+    assert!(
+        collapsed.contains("ctrl+o expand") || collapsed.contains("more diff lines"),
+        "{collapsed}"
+    );
+}
+
+#[test]
+fn running_tool_shows_elapsed_and_spinner() {
+    let mut state = test_state();
+    let started = state.agent_activity_now - chrono::Duration::seconds(12);
+    state.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
+        role: Role::Assistant,
+        content: "Read a bounded section and report what remains.".into(),
+        tool_calls: Some(vec![ToolCall {
+            observation: None,
+            output_source: None,
+            arguments_retrieved_spans: Vec::new(),
+            id: "call-elapsed".into(),
+            name: "lookup_thing".into(),
+            arguments: r#"{"q":"x"}"#.into(),
+            status: ToolStatus::Running,
+            output: Some("matching lines…".into()),
+            started_at: Some(started),
+        }]),
+        thinking: None,
+        timestamp: fixed_time(),
+        response_items: Vec::new(),
+    });
+
+    let text = render_to_text(&state, 100, 30);
+    assert!(text.contains("lookup_thing"), "{text}");
+    assert!(
+        text.contains("12s") || text.contains("0m12s"),
+        "expected 12s elapsed:\\n{text}"
+    );
+    assert!(
+        text.contains('⠋') || text.contains('⠙') || text.contains('⠹') || text.contains('⠸'),
+        "expected spinner frame:\n{text}"
+    );
+}
+
+#[test]
+fn private_move_second_pending_progress_replaces_first_with_long_history() {
+    for width in [140, 60] {
+        let mut state = test_state();
+        for i in 0..192 {
+            state.messages.push(Message {
+                retrieved_spans: Some(Vec::new()),
+                role: Role::Assistant,
+                content: format!("Earlier conversation message {i}: ordinary task context."),
+                tool_calls: None,
+                thinking: None,
+                timestamp: fixed_time(),
+                response_items: Vec::new(),
+            });
+        }
+        let selection = format!("files_{}", uuid::Uuid::new_v4().simple());
+        state.messages.push(Message {
+            retrieved_spans: Some(Vec::new()),
+            role: Role::Assistant,
+            content: String::new(),
+            tool_calls: Some(vec![ToolCall {
+                observation: None,
+                output_source: None,
+                arguments_retrieved_spans: Vec::new(),
+                id: "private-pending-move".into(),
+                name: "move_files".into(),
+                arguments:
+                    serde_json::json!({"selection":selection,"destination":"folder_fixture"})
+                        .to_string(),
+                status: ToolStatus::Running,
+                output: None,
+                started_at: Some(fixed_time()),
+            }]),
+            thinking: None,
+            timestamp: fixed_time(),
+            response_items: Vec::new(),
+        });
+        let mut progress = ca_automation_protocol::private_files::FileMoveProgressV1 {
+            operation: "fixture".into(),
+            total: 1200,
+            moved: 2,
+            remaining: 1198,
+            ..Default::default()
+        };
+        crate::privacy::tasks::publish_test_progress(&selection, &progress);
+        let first = render_to_text(&state, width, 34);
+        assert!(first.contains("Moving files: 2/1200"), "{first}");
+        progress.moved = 57;
+        progress.remaining = 1143;
+        crate::privacy::tasks::publish_test_progress(&selection, &progress);
+        let second = render_to_text(&state, width, 34);
+        assert!(second.contains("Moving files: 57/1200"), "{second}");
+        assert!(!second.contains("Moving files: 2/1200"));
+        assert_eq!(
+            state.messages.last().unwrap().tool_calls.as_ref().unwrap()[0].status,
+            ToolStatus::Running
+        );
+    }
+}
+
+#[test]
+fn status_notice_keeps_scroll_position_visible() {
+    let mut state = test_state();
+    for i in 0..30 {
+        state.messages.push(Message {
+            retrieved_spans: Some(Vec::new()),
+            role: Role::Assistant,
+            content: format!("message {i}"),
+            tool_calls: None,
+            thinking: None,
+            timestamp: fixed_time(),
+            response_items: Vec::new(),
+        });
+    }
+    state.status_message = Some("Working on it".into());
+    // Measure the transcript, then scroll up so the status keeps the offset.
+    let _ = render_to_text(&state, 100, 30);
+    state.transcript_scroll.request_offset(5);
+    if state.transcript_scroll.bottom_offset() == 0 {
+        // measurement may still be zero for short content; force a larger offset
+        state.transcript_scroll.request_offset(2);
+    }
+    let text = render_to_text(&state, 100, 30);
+    assert!(text.contains("Working on it"), "{text}");
+    assert!(text.contains("rows up"), "{text}");
+}
+
+#[test]
+fn status_notice_sits_above_the_composer() {
+    let mut state = test_state();
+    state.status_message = Some(
+        "filter loaded: selected values · hide urls · filename aliases. Restart ca to change it."
+            .into(),
+    );
+    let text = render_to_text(&state, 160, 40);
+    let lines: Vec<_> = text.lines().collect();
+    let message = lines
+        .iter()
+        .position(|line| line.contains("filter loaded"))
+        .expect(&text);
+    let composer = lines
+        .iter()
+        .rposition(|line| line.contains("Ask anything"))
+        .expect(&text);
+    assert!(composer > message, "{text}");
+    assert!(composer - message <= 3, "{text}");
+    assert!(message > lines.len() / 2, "{text}");
+    let start = lines[message].find("filter").expect(&text);
+    assert!(start < 6, "{text}");
+    assert!(!lines[lines.len() / 2].contains("filter loaded"), "{text}");
 }

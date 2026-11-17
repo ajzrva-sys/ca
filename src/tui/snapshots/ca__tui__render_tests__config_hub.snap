@@ -1,59 +1,60 @@
 ---
 source: src/tui/render_tests.rs
+assertion_line: 7526
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
-
-
-
-            ┌──────────────────────────────────────────────────────────────────────────┐
-            │ Configuration                                                            │
-            │                                                                          │
-            │> type to filter…                                                         │
-            │                                                                          │
-            │  Current model  mimo/mimo-v2.5-pro                                       │
-            │▸ Delegated agent  same as current agent                                  │
-            │  Provider setup  4 configured                                            │
-            │  Review model  deepseek/deepseek-v4-pro                                  │
-            │  Config file  /tmp/ca/config.toml                                        │
-            │                                                                          │
-            │Enter open/edit · Esc close · ↑↓ navigate · type to filter                │
-            │                                                                          │
-            │                                                                          │
-            │                                                                          │
-            │                                                                          │
-            │                                                                          │
-            │                                                                          │
-            │                                                                          │
-            └──────────────────────────────────────────────────────────────────────────┘
-
-╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                                                                   │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
-/ commands
+ ┌────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │Settings                                                                                     [x]│
+ │ / to search                                                                                    │
+ │                                                                                                │
+ │Models ─────────────────────────────────────────────────────────────────────────────────────────│
+ │▶ Current model    Model used for this session                              mimo/mimo-v2.5-pro ›│
+ │▶ Delegated agent  Model used for delegated child agents                 same as current agent ›│
+ │▶ Review model     Model used for a fresh-context review              deepseek/deepseek-v4-pro ›│
+ │                                                                                                │
+ │Tools ──────────────────────────────────────────────────────────────────────────────────────────│
+ │▶ Provider setup   Add or edit a model provider                                   4 configured ›│
+ │                                                                                                │
+ │Advanced ───────────────────────────────────────────────────────────────────────────────────────│
+ │▶ Config file      Where this profile's settings are stored                  /tmp/ca/config.toml│
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+╭│                                                                                                │╮
+││Tip · / searches settings                                                                       ││
+╰│↑↓/j/k nav  g/G top/btm  Enter open  → expand  / search  F2/Esc close                           │╯
+c└────────────────────────────────────────────────────────────────────────────────────────────────┘
+/ commands · Ctrl+\ dashboard · ↑ history
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
 
-  ┌──────────────────────────────────────────────────────┐
-  │ Configuration                                        │
-  │                                                      │
-  │> type to filter…                                     │
-  │                                                      │
-  │  Current model  mimo/mimo-v2.5-pro                   │
-  │▸ Delegated agent  same as current agent              │
-  │  Provider setup  4 configured                        │
-  │  Review model  deepseek/deepseek-v4-pro              │
-  │  Config file  /tmp/ca/config.toml                    │
-  │                                                      │
-  │Enter open/edit · Esc close · ↑↓ navigate · type to fi│
-  │                                                      │
-  │                                                      │
-  │                                                      │
-  │                                                      │
-  │                                                      │
-  │                                                      │
-╭─│                                                      │─╮
-│›└──────────────────────────────────────────────────────┘ │
-╰──────────────────────────────────────────── agent · auto ╯
-/ commands
+ ┌────────────────────────────────────────────────────────┐
+ │Settings                                             [x]│
+ │ / to search                                            │
+ │                                                        │
+ │Models ─────────────────────────────────────────────────│
+ │▶ Current model    Model used for … mimo/mimo-v2.5-pro ›│
+ │▶ Delegated agent  Model used f… same as current agent ›│
+ │▶ Review model     Model use… deepseek/deepseek-v4-pro ›│
+ │                                                        │
+ │Tools ──────────────────────────────────────────────────│
+ │▶ Provider setup   Add or edit a model p… 4 configured ›│
+ │                                                        │
+ │Advanced ───────────────────────────────────────────────│
+ │▶ Config file      Where this profi… /tmp/ca/config.toml│
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+╭│                                                        │╮
+││Tip · / searches settings                               ││
+╰│↑↓/j/k nav  g/G top/btm  Enter open  → expand  / search…│╯
+c└────────────────────────────────────────────────────────┘
+/ commands · Ctrl+\ dashboard · ↑ history

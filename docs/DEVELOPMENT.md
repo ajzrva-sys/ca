@@ -21,11 +21,17 @@
 
 Read [AGENTS.md](../AGENTS.md), [ARCHITECTURE.md](../ARCHITECTURE.md), and
 [the knowledge index](.INDEX.md) before changing behavior. Nested package
-instructions apply to their directories. Historical `.agent/PLANS.md` links
-refer to a file absent from this initial source snapshot; existing ExecPlans
-remain available under `docs/exec-plans/`.
+instructions apply to their directories. Complex root work follows
+[`.agent/PLANS.md`](../.agent/PLANS.md). Active and completed plans live under
+`docs/exec-plans/`. The sentence in older plans that this file was absent
+describes the tree before 2026-11-13.
 
 ## Validation
+
+The reusable unattended entry point is `./scripts/verify.sh`. It runs these gates
+with disposable runtime state, actual release-terminal checks and independent
+evidence evaluation. See [the verification workflow](VERIFICATION.md) for bounded
+repair, baseline comparison, diagnostics and the intentional-defect self-test.
 
 ```sh
 cargo fmt --all -- --check
@@ -60,15 +66,6 @@ of this Git import. Existing parity records describe their evidence boundaries;
 do not claim a fresh oracle comparison from their historical notes.
 
 ## Publication boundary
-
-CA-owned material is licensed under MIT OR Apache-2.0. See
-[licensing scope and unresolved provenance](LICENSING.md),
-[contribution terms](../CONTRIBUTING.md), and the
-[dependency notices](../THIRD_PARTY_NOTICES.md). Before distributing a binary,
-include the applicable license texts and notices and the source-availability
-information for MPL-covered dependencies. Verify each independently packaged
-crate contains both project license texts; dependency metadata alone is not a
-record of the native libraries and assets in a particular binary.
 
 `.gitignore` excludes build output, scratch work, local state, oracle archives,
 Finder files, and credential files. The initial import deliberately retains

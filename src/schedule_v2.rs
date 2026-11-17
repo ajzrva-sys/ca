@@ -933,6 +933,110 @@ impl ScheduleStoreV2 {
         Ok(record)
     }
 
+    pub fn delete(&self, id: &str) -> Result<bool, ScheduleV2Error> {
+        let _lock = OwnerLock::acquire(self.dir.join("schedules-v2.lock"))?;
+        let mut data = self.load()?;
+        let before = data.records.len();
+        data.records.retain(|record| record.definition.id != id);
+        if data.records.len() == before {
+            return Ok(false);
+        }
+        self.save(&mut data)?;
+        Ok(true)
+    }
+
+    pub fn save_interval_prompt(
+        &self,
+        id: &str,
+        workspace: &Path,
+        seconds: u64,
+        prompt: &str,
+        fire_immediately: bool,
+        now: DateTime<Utc>,
+    ) -> Result<ScheduleRecordV2, ScheduleV2Error> {
+        let workspace = workspace
+            .canonicalize()
+            .map_err(|error| ScheduleV2Error::State(error.to_string()))?;
+        let definition = ScheduleDefinitionV2 {
+            version: definition_version(),
+            id: id.to_string(),
+            provider: Some("session".into()),
+            model: Some("prompt".into()),
+            workspace,
+            runtime_secs: default_runtime_secs(),
+            output_bytes: default_output_bytes(),
+            tools: Vec::new(),
+            grants: Vec::new(),
+            allow_network: false,
+            skills: Vec::new(),
+            workspace_policy: WorkspacePolicy::ExistingReadOnly,
+            pinned_revision: None,
+            trigger: ScheduleTriggerV2::Interval {
+                seconds,
+                anchor: Some(now),
+            },
+            missed_run_policy: if fire_immediately {
+                MissedRunPolicy::OneCatchUp
+            } else {
+                MissedRunPolicy::Skip
+            },
+            target: ScheduleTargetV2::Prompt {
+                prompt: prompt.to_string(),
+            },
+            delivery: ScheduleDeliveryV2::None,
+        };
+        let definition = normalize_at_confirmation(definition, now)?;
+        let digest = definition_digest(&definition)?;
+        let _lock = OwnerLock::acquire(self.dir.join("schedules-v2.lock"))?;
+        let mut data = self.load()?;
+        if let Some(record) = data
+            .records
+            .iter_mut()
+            .find(|record| record.definition.id == id)
+        {
+            record.definition = definition;
+            record.definition_digest = digest;
+            self.save(&mut data)?;
+            drop(_lock);
+            return self.enable_interval(id, fire_immediately, now);
+        }
+        drop(_lock);
+        self.add_confirmed(definition, &digest, now)?;
+        self.enable_interval(id, fire_immediately, now)
+    }
+
+    fn enable_interval(
+        &self,
+        id: &str,
+        fire_immediately: bool,
+        now: DateTime<Utc>,
+    ) -> Result<ScheduleRecordV2, ScheduleV2Error> {
+        let _lock = OwnerLock::acquire(self.dir.join("schedules-v2.lock"))?;
+        let mut data = self.load()?;
+        let record = data
+            .records
+            .iter_mut()
+            .find(|record| record.definition.id == id)
+            .ok_or_else(|| ScheduleV2Error::Missing(id.into()))?;
+        if record.active_run_id.is_some() {
+            return Err(ScheduleV2Error::State(
+                "cannot enable a schedule with an active run".into(),
+            ));
+        }
+        record.enabled = true;
+        record.next_occurrence = if fire_immediately {
+            Some(Occurrence {
+                id: occurrence_id(&record.definition.trigger, now),
+                at: now,
+            })
+        } else {
+            next_occurrence(&record.definition.trigger, now)?
+        };
+        let updated = record.clone();
+        self.save(&mut data)?;
+        Ok(updated)
+    }
+
     pub fn update_confirmed(
         &self,
         id: &str,
@@ -997,6 +1101,19 @@ impl ScheduleStoreV2 {
         self.save(&mut data)
     }
 
+    fn admit_occurrence(
+        &self,
+        trigger: &ScheduleTriggerV2,
+        schedule_id: &str,
+        occurrence: &Occurrence,
+    ) -> crate::schedule_journal::ReconcileStatus {
+        let journal_occurrence = crate::schedule_journal::Occurrence {
+            id: format!("{schedule_id}:{}", occurrence.id),
+            one_shot: matches!(trigger, ScheduleTriggerV2::Absolute { .. }),
+        };
+        crate::schedule_journal::gate_fire(&self.dir, &journal_occurrence)
+    }
+
     pub fn claim_due(
         &self,
         profile: &str,
@@ -1047,6 +1164,28 @@ impl ScheduleStoreV2 {
                 self.save(&mut data)?;
                 continue;
             };
+            let status = self.admit_occurrence(
+                &record.definition.trigger,
+                &record.definition.id,
+                &occurrence,
+            );
+            if status != crate::schedule_journal::ReconcileStatus::Allow {
+                if status != crate::schedule_journal::ReconcileStatus::Suppress {
+                    return Err(ScheduleV2Error::State(format!(
+                        "occurrence journal {status:?} this fire"
+                    )));
+                }
+                data.records[index].next_occurrence =
+                    next_occurrence(&record.definition.trigger, occurrence.at)?;
+                if matches!(
+                    record.definition.trigger,
+                    ScheduleTriggerV2::Absolute { .. }
+                ) {
+                    data.records[index].enabled = false;
+                }
+                self.save(&mut data)?;
+                continue;
+            }
             let run_id = stable_run_id(&record.definition_digest, &occurrence.id);
             let claim_revision = data
                 .revision
@@ -1101,6 +1240,12 @@ impl ScheduleStoreV2 {
             id: occurrence_id(&record.definition.trigger, now),
             at: now,
         };
+        let status = self.admit_occurrence(&record.definition.trigger, id, &occurrence);
+        if status != crate::schedule_journal::ReconcileStatus::Allow {
+            return Err(ScheduleV2Error::State(format!(
+                "occurrence journal {status:?} this fire"
+            )));
+        }
         let run_id = Uuid::new_v4();
         let claim_revision = data
             .revision
@@ -1797,6 +1942,8 @@ pub async fn execute_script_only(
                 read_only_roots: vec![executable.clone()],
                 temporary_directory: temporary.path().to_path_buf(),
                 network_allowed: definition.allow_network,
+                host_credentials: true,
+                proxy_port: None,
                 hide_other_processes: false,
             },
             &crate::jobs::automation_private_paths(),
@@ -3287,6 +3434,85 @@ mod tests {
         let record = store.add_confirmed(definition, &digest, now).unwrap();
         assert!(!record.enabled);
         assert!(record.next_occurrence.is_none());
+    }
+
+    #[test]
+    fn claim_immediate_writes_a_receipt_and_suppresses_a_repeat() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let now = "2026-08-13T12:00:00Z".parse().unwrap();
+        let definition =
+            normalize_at_confirmation(absolute_definition(workspace.path()), now).unwrap();
+        let digest = definition_digest(&definition).unwrap();
+        let store = ScheduleStoreV2::new(root.path().join("schedules"));
+        store.add_confirmed(definition, &digest, now).unwrap();
+        let journal = RunJournal::new(root.path().join("journal"));
+        let claim = store
+            .claim_immediate("default", &journal, "nightly", now)
+            .unwrap();
+        let receipt =
+            std::fs::read_to_string(root.path().join("schedules/fire-receipts.json")).unwrap();
+        assert!(receipt.contains(&claim.occurrence.id), "{receipt}");
+        assert!(receipt.contains("nightly"), "{receipt}");
+        store.settle(&claim).unwrap();
+        let error = store
+            .claim_immediate("default", &journal, "nightly", now)
+            .expect_err("same occurrence is suppressed")
+            .to_string();
+        assert!(error.contains("Suppress"), "{error}");
+    }
+
+    #[test]
+    fn claim_immediate_quarantines_a_bad_receipt_and_refuses_extra_one_shots() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let now = "2026-08-13T12:00:00Z".parse().unwrap();
+        let definition =
+            normalize_at_confirmation(absolute_definition(workspace.path()), now).unwrap();
+        let digest = definition_digest(&definition).unwrap();
+        let store_dir = root.path().join("schedules");
+        std::fs::create_dir_all(&store_dir).unwrap();
+        std::fs::write(store_dir.join("fire-receipts.json"), b"not-a-receipt").unwrap();
+        let store = ScheduleStoreV2::new(store_dir);
+        store.add_confirmed(definition, &digest, now).unwrap();
+        let journal = RunJournal::new(root.path().join("journal"));
+        let error = store
+            .claim_immediate("default", &journal, "nightly", now)
+            .expect_err("malformed receipt is quarantined")
+            .to_string();
+        assert!(error.contains("Quarantine"), "{error}");
+
+        let root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let start = "2026-08-13T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let definition =
+            normalize_at_confirmation(absolute_definition(workspace.path()), start).unwrap();
+        let digest = definition_digest(&definition).unwrap();
+        let store = ScheduleStoreV2::new(root.path().join("schedules"));
+        store.add_confirmed(definition, &digest, start).unwrap();
+        let journal = RunJournal::new(root.path().join("journal"));
+        let mut claim = None;
+        for index in 0..crate::schedule_journal::ONE_SHOT_CAP {
+            if let Some(previous) = claim.take() {
+                store.settle(&previous).unwrap();
+            }
+            let at = start + TimeDelta::minutes(i64::try_from(index).unwrap());
+            claim = Some(
+                store
+                    .claim_immediate("default", &journal, "nightly", at)
+                    .unwrap_or_else(|error| panic!("fire {index} should be allowed: {error}")),
+            );
+        }
+        store.settle(claim.as_ref().unwrap()).unwrap();
+        let refused = store
+            .claim_immediate(
+                "default",
+                &journal,
+                "nightly",
+                start + TimeDelta::minutes(30),
+            )
+            .expect_err("one-shot cap");
+        assert!(refused.to_string().contains("Refuse"), "{refused}");
     }
 
     #[test]

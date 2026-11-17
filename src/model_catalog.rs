@@ -29,6 +29,12 @@ struct CodexModelListResponse {
     models: Vec<CodexModelObject>,
 }
 
+#[derive(Deserialize)]
+struct ChatGptPlanModelListResponse {
+    #[serde(default)]
+    models: Vec<CodexModelObject>,
+}
+
 // Deliberately do not deserialize instructions, API eligibility, or capabilities.
 #[derive(Deserialize)]
 struct CodexModelObject {
@@ -70,6 +76,7 @@ impl ModelObject {
 enum CatalogAuthentication {
     Bearer,
     Codex { account_id: Option<String> },
+    ChatGptPlan,
     Anthropic,
     Public,
     Google,
@@ -117,6 +124,10 @@ pub async fn discover_provider_models(
                     Err(_) => return (name, Err("could not resolve catalog account".into())),
                 };
                 CatalogAuthentication::Codex { account_id }
+            } else if crate::provider_contract::route_family(&name, &provider)
+                == Some(crate::provider_contract::FirstPartyProvider::OpenAiChatGpt)
+            {
+                CatalogAuthentication::ChatGptPlan
             } else if provider.protocol == crate::agent::ProviderProtocol::GoogleGenerateContent {
                 if provider.google.as_ref().is_some_and(|settings| settings.mode == crate::google_auth::Mode::Vertex) {
                     return (name, Err("Vertex uses configured model IDs; no authoritative model catalog is available".into()));
@@ -158,7 +169,8 @@ pub(crate) fn documented_chat_models(name: &str, provider: &ProviderConfig) -> V
     match crate::provider_contract::route_family(name, provider) {
         Some(
             crate::provider_contract::FirstPartyProvider::OpenAiDirect
-            | crate::provider_contract::FirstPartyProvider::OpenAiCodex,
+            | crate::provider_contract::FirstPartyProvider::OpenAiCodex
+            | crate::provider_contract::FirstPartyProvider::OpenAiChatGpt,
         ) => vec![
             "gpt-6.1-sol".into(),
             "gpt-5.6-sol".into(),
@@ -175,6 +187,9 @@ pub(crate) fn documented_chat_models(name: &str, provider: &ProviderConfig) -> V
         Some(crate::provider_contract::FirstPartyProvider::DeepSeek) => {
             vec!["deepseek-v4-flash".into(), "deepseek-v4-pro".into()]
         }
+        Some(crate::provider_contract::FirstPartyProvider::Xai) => {
+            vec!["grok-4.7".into(), "grok-4.6".into(), "grok-4.5".into()]
+        }
         None => Vec::new(),
     }
 }
@@ -182,6 +197,13 @@ pub(crate) fn documented_chat_models(name: &str, provider: &ProviderConfig) -> V
 pub(crate) fn native_codex_catalog(name: &str, provider: &ProviderConfig) -> bool {
     crate::provider_contract::route_family(name, provider)
         == Some(crate::provider_contract::FirstPartyProvider::OpenAiCodex)
+}
+
+#[cfg(test)]
+pub(crate) fn chatgpt_plan_models_url(provider: &ProviderConfig) -> Option<&'static str> {
+    crate::provider_contract::route_family("openai-chatgpt", provider)
+        .filter(|family| *family == crate::provider_contract::FirstPartyProvider::OpenAiChatGpt)
+        .map(|_| "https://api.openai.com/v1/models")
 }
 
 fn public_model_catalog(provider: &ProviderConfig) -> bool {
@@ -232,13 +254,18 @@ async fn fetch_provider_models(
         CatalogAuthentication::Bearer if !provider.api_key.is_empty() => {
             request = request.bearer_auth(&provider.api_key);
         }
+        CatalogAuthentication::ChatGptPlan if !provider.api_key.is_empty() => {
+            request = request.bearer_auth(&provider.api_key);
+        }
         CatalogAuthentication::Anthropic => {
             request = request.header("anthropic-version", "2023-06-01");
             if !provider.api_key.is_empty() {
                 request = request.header("x-api-key", &provider.api_key);
             }
         }
-        CatalogAuthentication::Bearer | CatalogAuthentication::Public => {}
+        CatalogAuthentication::Bearer
+        | CatalogAuthentication::Public
+        | CatalogAuthentication::ChatGptPlan => {}
         CatalogAuthentication::Google => unreachable!("handled above"),
     }
     let response = request.send().await.map_err(|error| {
@@ -274,26 +301,39 @@ async fn fetch_provider_models(
         }
         body.extend_from_slice(&chunk);
     }
-    let ids: Vec<String> = if matches!(authentication, CatalogAuthentication::Codex { .. }) {
-        let decoded: CodexModelListResponse = serde_json::from_slice(&body)
-            .map_err(|_| "provider returned an invalid model catalog".to_string())?;
-        decoded
-            .models
-            .into_iter()
-            .filter(|model| model.visibility.as_deref() == Some("list"))
-            .map(|model| model.slug)
-            .collect()
-    } else {
-        let decoded: ModelListResponse = serde_json::from_slice(&body)
-            .map_err(|_| "provider returned an invalid model catalog".to_string())?;
-        decoded
-            .data
-            .into_iter()
-            .filter(|model| {
-                authentication != CatalogAuthentication::Public || model.is_agent_compatible()
-            })
-            .map(|model| model.id)
-            .collect()
+    let ids: Vec<String> = match authentication {
+        CatalogAuthentication::Codex { .. } => {
+            let decoded: CodexModelListResponse = serde_json::from_slice(&body)
+                .map_err(|_| "provider returned an invalid model catalog".to_string())?;
+            decoded
+                .models
+                .into_iter()
+                .filter(|model| model.visibility.as_deref() == Some("list"))
+                .map(|model| model.slug)
+                .collect()
+        }
+        CatalogAuthentication::ChatGptPlan => {
+            let decoded: ChatGptPlanModelListResponse = serde_json::from_slice(&body)
+                .map_err(|_| "provider returned an invalid model catalog".to_string())?;
+            decoded
+                .models
+                .into_iter()
+                .filter(|model| model.visibility.as_deref() == Some("list"))
+                .map(|model| model.slug)
+                .collect()
+        }
+        _ => {
+            let decoded: ModelListResponse = serde_json::from_slice(&body)
+                .map_err(|_| "provider returned an invalid model catalog".to_string())?;
+            decoded
+                .data
+                .into_iter()
+                .filter(|model| {
+                    authentication != CatalogAuthentication::Public || model.is_agent_compatible()
+                })
+                .map(|model| model.id)
+                .collect()
+        }
     };
     let mut models: Vec<String> = ids
         .into_iter()
@@ -636,6 +676,52 @@ mod tests {
         }
     }
 
+    #[test]
+    fn chatgpt_plan_catalog_is_openai_models_not_codex() {
+        let cfg = crate::provider_connect::FirstClassProvider::OpenAiChatGpt
+            .candidate(String::new(), None);
+        assert!(!native_codex_catalog("openai-chatgpt", &cfg));
+        assert_eq!(
+            chatgpt_plan_models_url(&cfg),
+            Some("https://api.openai.com/v1/models")
+        );
+    }
+
+    #[tokio::test]
+    async fn chatgpt_plan_catalog_is_openai_models_not_codex_http() {
+        let (url, request) = one_shot_server(
+            "200 OK",
+            br#"{"models":[{"slug":"gpt-6.1-sol","display_name":"GPT-6.1 Sol","visibility":"list"},{"slug":"hidden","visibility":"hide"}]}"#.to_vec(),
+        )
+        .await;
+        let models = fetch_provider_models(
+            &reqwest::Client::new(),
+            &provider(url, "siwc-token"),
+            CatalogAuthentication::ChatGptPlan,
+        )
+        .await
+        .unwrap();
+        assert_eq!(models, ["gpt-6.1-sol"]);
+        let request = request.await.unwrap().to_ascii_lowercase();
+        assert!(request.starts_with("get /v1/models http/1.1"));
+        assert!(!request.contains("client_version"));
+        assert!(!request.contains("chatgpt-account-id"));
+        assert!(request.contains("authorization: bearer siwc-token"));
+    }
+
+    #[tokio::test]
+    async fn chatgpt_plan_catalog_is_openai_models_not_codex_rejects_data_shape() {
+        let (url, _) = one_shot_server("200 OK", br#"{"data":[{"id":"gpt-4"}]}"#.to_vec()).await;
+        let models = fetch_provider_models(
+            &reqwest::Client::new(),
+            &provider(url, "siwc-token"),
+            CatalogAuthentication::ChatGptPlan,
+        )
+        .await
+        .unwrap();
+        assert!(models.is_empty());
+    }
+
     #[tokio::test]
     async fn native_codex_catalog_timeout_is_sanitized() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -841,6 +927,21 @@ mod tests {
             ),
             ["deepseek-v4-flash", "deepseek-v4-pro"]
         );
+    }
+
+    #[test]
+    fn xai_has_current_documented_chat_models_only_on_responses() {
+        let mut xai = provider("https://api.x.ai/v1".into(), "${XAI_API_KEY}");
+        xai.protocol = crate::agent::ProviderProtocol::OpenAiResponses;
+        assert_eq!(
+            documented_chat_models("xai", &xai),
+            ["grok-4.7", "grok-4.6", "grok-4.5"]
+        );
+        xai.protocol = crate::agent::ProviderProtocol::ChatCompletions;
+        assert!(documented_chat_models("xai", &xai).is_empty());
+        xai.protocol = crate::agent::ProviderProtocol::OpenAiResponses;
+        xai.base_url = "https://api.x.ai.evil/v1".into();
+        assert!(documented_chat_models("xai", &xai).is_empty());
     }
 
     #[test]

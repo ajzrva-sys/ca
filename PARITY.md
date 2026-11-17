@@ -1,4 +1,119 @@
+## FLT-338 — automatic filter preview and execution
+
+User-approved CA terminal extension: every new interactive task receives one
+local editable filter preview. Send authorizes automatic planning and execution
+with the accepted task policy; `/filter` inspects the live task. Existing action
+permissions, explicit Plan review and paused recovery remain. This supersedes
+FLT-333's on-demand-only filtering flow and FLT-321's process-additive task edits.
+No Cursor parity claim is made; oracle/reference evidence is unchanged. See the
+FLT-338 ExecPlan for source, native acceptance and installation evidence.
+
+## FLT-333 — automatic task map extension (superseded flow)
+
+User-requested local extension: ordinary interactive Agent submission proposes a
+reviewable executable task graph; filtering UI is on demand. Numbered task
+colors, live output and independent-branch failure isolation extend the existing
+graph. No Cursor parity or provider-refusal reduction claim is made. Legacy
+direct submission remains explicit through agent.automatic_task_breakdown=false.
+Qualification status is recorded in the FLT-333 ExecPlan.
+
+## FLT-321 — task-first filter guidance
+
+This user-requested terminal flow is a CA-owned extension, with no Cursor parity claim. Prefilled suggestions and explicitly additive process filters are qualified by CA-owned tests, loopback HTTP capture and the signed candidate/installed terminal entry. Oracle and reference files remain unchanged. See [FLT-321](docs/exec-plans/completed/FLT-321-task-filter-guide.md).
+
+## HRS-317 — user-requested CA extensions (2026-11-03)
+
+Bounded repair workers, evidence-aware outgoing context and stored-log inference are CA behavior contracts approved in this chat. The references are cl-harness/Autolith design observations; no Cursor runtime parity or copied oracle implementation is claimed. Acceptance requires native typed checks, source/privacy/replay/fault regressions, normal entry-point proof and the fixed same-route comparative gate. Focused checks pass; full qualification and installation remain pending in the active ExecPlan.
+
 # Parity Contract
+
+## OCX-294 native provider compatibility and memory
+
+OCX-294 implements five user-approved ca extensions informed by read-only
+OpenCodex source and tests: signed Anthropic thinking, process-local provider
+cooldowns, bounded tool-schema loss reporting, native Gemini through AI Studio
+and Vertex AI, and shared cache accounting/reclamation. These are ca behavior
+contracts; no Cursor runtime parity is claimed and no oracle source is copied
+or changed. Signed ca 0.1.38 is installed; the completed OCX-294 ExecPlan records
+source, release and actual installed readback separately.
+
+Anthropic replay follows the [preserved-thinking contract](https://platform.claude.com/docs/en/build-with-claude/preserved-thinking):
+complete ordered signed/opaque content stays private and is replayed only for
+eligible route, credential, model and final outgoing prefix. Prefix invalidation
+changes the request projection rather than canonical history. Cooldowns affect
+existing new-turn fallback admission while active tool loops and explicit routes
+stay pinned. Compatible schema translation reports bounded losses, strict policy
+rejects meaningful loss before sending, and local execution retains validation
+against the original tool schema.
+
+Native Google behavior follows the official [thought-signature contract](https://ai.google.dev/gemini-api/docs/generate-content/thought-signatures)
+and uses the [Rust ADC SDK](https://docs.rs/google-cloud-auth/latest/google_cloud_auth/credentials/struct.Builder.html)
+for Vertex credential discovery and refresh on physical requests. AI Studio and
+Vertex share one GenerateContent adapter; complete model parts retain signatures in their
+original order and placement. Existing OpenAI-compatible Gemini configurations
+retain their configured protocol.
+
+The default 256 MiB shared cache budget covers reproducible transcript layouts,
+Markdown memo entries and completed Mermaid renders. It preserves essential
+history, requests and provider state. Owned-payload estimates and reclamation
+receipts are separate from process peak RSS; the cache budget is not an RSS
+guarantee. CA-owned deterministic tests and actual credentialless loopback/native
+terminal fixtures define local acceptance. These fixtures do not establish real
+AI Studio, Vertex or other paid-account success. Full-gate failures are recorded
+separately from focused feature and native-fixture evidence.
+
+## HRS-293 paper-informed harness improvements
+
+These are user-approved CA extensions informed by the supplied harness-engineering
+survey, not a claim of vendor runtime parity. CA-owned tests and credentialless
+native terminal fixtures establish TUI review finalization, live-folder approval
+compatibility, incremental checkpoint assembly and eager/lazy schema behavior.
+Canonical history, checkpoint/session formats and existing permissions remain the
+acceptance boundaries. Local fixture schema savings do not establish billed-token
+savings or real-provider answer quality. No oracle source is copied or changed;
+remaining VAL-288 baseline failures are recorded separately from feature acceptance.
+
+## BUG-292 password prompts, provider history and job progress
+
+These repairs implement the user's approved CA behavior, including normal sudo
+cache expiry and one live-session folder approval. Earlier SEC-158 forced
+credential invalidation is superseded by this explicit instruction. Screenshots
+are failure/display evidence, not operational instructions. DeepSeek's official
+thinking-mode contract requires reasoning from all previous assistant turns on
+requests carrying tools: https://api-docs.deepseek.com/guides/thinking_mode/.
+The exact screenshot HTTP 400 reason remains unknown. CA-owned credentialless
+fixtures define acceptance; no Cursor parity or paid-provider success is claimed.
+
+## ORC-290 context pruning, formatting and service inbox
+
+These are user-requested CA extensions informed by read-only OpenCode 1.19.0 behavior. CA-owned request provenance/projection, formatter receipts/process checks, native inbox commits and actual loopback/terminal fixtures define acceptance. No oracle implementation is copied or modified and no Cursor runtime parity or paid-provider quality improvement is claimed. Existing VAL-288 gate failures remain separate from focused feature evidence.
+
+## PLN-289 cross-provider plan workflows
+
+This is a user-requested CA extension: plan exchanges across configured providers,
+bounded review/revision, requested implementation, Markdown versions and a native
+TUI graph. Acceptance uses CA-owned controller, schema, session, request, input and
+render checks plus credentialless provider/terminal fixtures. These fixtures do
+not establish paid account inference. No Cursor runtime parity is claimed and no
+oracle implementation is copied or modified.
+The complete PLN-289 v3 gate and evaluator remain failed on the separately
+classified VAL-288 baseline; passing feature checks and release compilation do
+not constitute a full verification or runtime parity pass.
+
+## HRS-265 interactive personality questionnaire
+
+User-requested CA extension with guided quick/full/section flows, choices,
+custom answers, preview and save. The same native terminal interface opens
+inside CA and without a provider. Acceptance uses CA-owned render/state tests
+and actual PTY keyboard/prompt receipts; no oracle behavior is claimed.
+
+## HRS-264 Markdown personality and continuous questionnaire
+
+This is a user-requested CA extension. Forty-eight behavior questions,
+profile-specific Markdown steering, evidence deduplication and continuous local
+investigation priorities have CA-owned acceptance fixtures. No oracle behavior
+or Cursor parity is claimed. Existing coding harness cases do not verify every
+question; missing behavior evidence remains unknown.
 
 ## HRS-252 Apple Container execution backend
 
@@ -180,11 +295,11 @@ Unverified.
 
 ## Target
 
-`ca` targets observable Cursor Agent CLI/TUI behavior in a local Rust implementation. “Parity” is demonstrated by behavior and fixtures, never by copying bundled code or matching internal architecture.
+Matching Cursor Agent CLI/TUI behavior is not the product goal. `ca` is a local agent harness. This file keeps earlier oracle notes. Open it when a task asks for that comparison. Oracle source stays read-only.
 
-## In Scope: Must Match
+## Earlier study notes
 
-For features intentionally implemented by `ca`, preserve the user-observable contract of:
+The list below is historical study scope, not an open requirement:
 
 - startup, prompt entry, streaming, cancellation, and completion states;
 - conversation/tool-call ordering and status transitions;
@@ -195,7 +310,7 @@ For features intentionally implemented by `ca`, preserve the user-observable con
 - layout behavior at representative terminal widths and with Unicode input/output;
 - CLI flags and headless stdout/stderr/exit behavior that the project explicitly adopts.
 
-A feature is not parity-complete until the exact reference behavior, `ca` fixture, and acceptance check are recorded.
+A task that asks for an oracle comparison records the reference behavior, the `ca` fixture, and the acceptance check. That request does not make Cursor matching the product goal.
 
 `ca schedule` is an oracle-informed `ca` extension. No clean Cursor fixture establishes generic scheduled-task management, isolated workers, or signed delivery, so SCH-083 makes no Cursor parity claim.
 
@@ -326,11 +441,13 @@ The completed oracle-informed roadmap does not turn secondary oracle patterns in
 
 - stable version-2 JSON sessions, searchable metadata, non-destructive timeline branching, and checkpoint persistence;
 - explicit inactive-session deletion from `/sessions` (`/resume` alias), including active-session protection and non-cascading branch behavior. Ante documentation informed the workflow idea; no Cursor fixture or Ante runtime behavior is claimed;
-- stable-ID queued drafts with editing/reordering, busy Enter/Ctrl+S interrupt-and-send,
-  explicit Alt+Enter queueing, and Esc/Ctrl+C stopping (TUI-240). Cancellation holds
+- stable-ID queued drafts with editing/reordering, and Esc/Ctrl+C stopping (TUI-240).
+  While a turn is running, Enter queues a follow-up and the selected row offers
+  Send now, Edit, and Cancel. Send now, a later Enter on an empty composer, and
+  Ctrl+S still interrupt and send. Alt+Enter still queues. Cancellation holds
   pending drafts until explicitly sent/requeued, with success-only draining for
-  released drafts. This is a user-requested CA extension, not an exact Codex/MiMo
-  keymap or Cursor parity claim;
+  released drafts. This is a user-requested CA extension informed by Grok's
+  queued-message controls, not an exact Codex/MiMo keymap or Cursor parity claim;
 - Session V4 queued-draft persistence and the `--no-session` run capability. Ante session/workflow documentation informed the product priority; no clean Cursor fixture or Ante runtime observation is claimed;
 - profile-scoped session pinning and Active/Archive organization in `/sessions` (`/resume` alias), including exact one-file transfer, current-session protection, and no branch cascade. Ante session-organization ideas informed the priority; no clean Cursor fixture or Ante runtime observation is claimed;
 - title-first `/sessions` presentation with date groups, updated times, exact saved-session rename, best-effort first-turn generated names, and explicit per-row legacy-name repair. Read-only MiMoCode behavior informed the title-generation and interaction hierarchy; `ca` retains its own Recent/Archived organization, immediate local fallback, stale-result guards, and UUID-checked persistence, and no Cursor parity or copied oracle implementation is claimed;
@@ -415,3 +532,24 @@ Stop and ask for evidence when:
 - a behavior requires online Cursor auth/service access not available to the task;
 - the only path is copying proprietary implementation code;
 - terminal dimensions, version, or interaction sequence are unknown enough to change the outcome.
+## PRV-305 mechanical project privacy
+
+This is the user's approved CA extension, not a Cursor parity claim. Mechanical source projections, local policy selection, durable opaque aliases and safe restoration are qualified against CA-owned synthetic fixtures and actual candidate/installed CLI/TUI request/edit paths. Oracle/reference files remain read-only and no oracle implementation is copied. The [completed PRV-305 ExecPlan](docs/exec-plans/completed/PRV-305-mechanical-project-privacy.md) records passing qualification and the signed 0.1.63 installation. Real-provider reasoning quality remains unverified because no isolated authenticated route was available.
+
+
+## FLT-310 — whole-site source obfuscation
+
+This is a CA-owned extension requested by the user, not a Cursor parity claim.
+The existing filename boundary is combined with HTML/SVG, CSS and JS/TS/JSX/TSX
+structural data masking, exact source spellings, target-preserving copied links
+and mapped new-file creation. Qualification uses synthetic local sites and
+captured physical provider requests through native ca CLI/TUI. Oracle/reference
+files stay read-only; no oracle or external sanitizer implementation is copied.
+## FLT-329 — CA imported-history retry and refusal classification
+
+This repairs CA-owned native-history import and provider integration. Existing manual retry now inherits the exact untrusted imported prefix only for its validated intentional child; exact structured cyber_policy uses the existing refused-response category. No Cursor parity claim or oracle implementation change. CA-owned regression, privacy/isolation and actual local terminal request evidence pass; signed CA 0.1.84 is installed with exact-artifact readback. No upstream refusal-reduction benefit is claimed. See [completed FLT-329](docs/exec-plans/completed/FLT-329-ca-filtered-request-recovery.md).
+
+
+## FLT-330 — real CA original-task evaluation
+
+This CA-owned comparison uses actual installed CA, real tools and providers with the complete recorded ESXi context and ledgered legacy wrappers. It makes no Cursor or historical Desktop wire/runtime parity claim and copies no oracle implementation. Both actual U/F workflows completed with 371 witnesses; no refusal-reduction benefit was established. See [completed FLT-330](docs/exec-plans/completed/FLT-330-real-ca-original-task-comparison.md). Oracle/reference files were not changed.

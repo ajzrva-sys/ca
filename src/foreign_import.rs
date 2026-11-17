@@ -734,6 +734,7 @@ fn push_visible_message(
         return Ok(());
     }
     messages.push(Message {
+        retrieved_spans: Some(crate::retrieved_content::full_span(&content)),
         role,
         content,
         tool_calls: None,

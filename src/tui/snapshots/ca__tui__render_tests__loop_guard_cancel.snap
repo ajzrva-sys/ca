@@ -2,8 +2,8 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&confirm, 100, 30),\nrender_to_text(&confirm, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 I retained the completed boundary.
+
 
 
 
@@ -27,14 +27,14 @@ I retained the completed boundary.
 
 
 
-
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Add a follow-up…                                                                                │
-╰ Esc stop · Enter interrupt · Alt+Enter queue ────────────────────────────────────── agent · auto ╯
-Low-yield loop paused · choose Replan, Continue, or Cancel
+│› Add a follow-up…                                                                                │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto · Paused · 1 messages
+Esc stop · queue · Alt+S · Enter queue · Ctrl+S send now
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
 I retained the completed boundary.
+
 
 
 
@@ -52,8 +52,8 @@ I retained the completed boundary.
  │                                                        │
  └────────────────────────────────────────────────────────┘
 
-
 ╭──────────────────────────────────────────────────────────╮
-│› ▌Add a follow-up…                                        │
-╰ Esc stop · Enter interrupt · Alt+Enter queue ────────────╯
-Low-yield loop paused · choose Replan, Continue, or Cancel
+│› Add a follow-up…                                        │
+╰──────────────────────────────────────────────────────────╯
+ca · model auto · Paused · 1 messages
+Esc stop · queue · Alt+S · Enter queue · Ctrl+S send now

@@ -613,6 +613,16 @@ impl GoalEvidenceSnapshot {
             self.last_response
         )
     }
+
+    fn model_prompt(&self) -> crate::image_content::ModelContent {
+        let prompt = self.prompt();
+        let authored_len =
+            format!("<goal id=\"{}\">{}</goal>\n", self.goal_id, self.condition).len();
+        crate::retrieved_content::model_with_evidence(
+            &prompt[..authored_len],
+            &prompt[authored_len..],
+        )
+    }
 }
 
 fn safe_bounded(text: &str, limit: usize, runtime_secrets: &[&str]) -> String {
@@ -669,7 +679,7 @@ pub async fn run_goal_evaluation<B: ChatBackend + ?Sized>(
         },
         ChatMessage {
             role: "user".into(),
-            content: crate::image_content::ModelContent::text(snapshot.prompt()),
+            content: snapshot.model_prompt(),
             tool_calls: None,
             tool_call_id: None,
             response_items: Vec::new(),
@@ -900,6 +910,35 @@ mod tests {
         let prompt = snapshot.prompt();
         assert!(!prompt.contains("super-secret"));
         assert!(prompt.contains("Command passed"));
+    }
+
+    #[test]
+    fn goal_request_substitutes_work_evidence_and_preserves_condition() {
+        let snapshot = GoalEvidenceSnapshot {
+            goal_id: Uuid::new_v4(),
+            condition: "GOAL_KEEP".into(),
+            workspace_label: "WORKSPACE_DATA".into(),
+            last_response: "RESPONSE_DATA".into(),
+            plan: vec!["PLAN_DATA".into()],
+            work_events: vec!["EVENT_DATA".into()],
+            continuations: 0,
+            combined_provider_tokens: 1,
+            working_seconds: 2,
+        };
+        let filter = crate::provider_filter::ProviderFilter::compile(
+            &crate::provider_filter::ProviderFilterConfig {
+                enabled: true,
+                page_stand_in: crate::provider_filter::PageStandIn::Latin,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let projected = snapshot.model_prompt().project_retrieved(&filter).unwrap();
+        let text = projected.as_str().unwrap();
+        assert!(text.contains("GOAL_KEEP"));
+        for source in ["WORKSPACE_DATA", "RESPONSE_DATA", "PLAN_DATA", "EVENT_DATA"] {
+            assert!(!text.contains(source));
+        }
     }
 
     #[test]

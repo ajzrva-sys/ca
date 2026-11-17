@@ -19,15 +19,27 @@ expected_sha=$(sha "$candidate")
 expected_prior_sha=$(sha "$destination")
 expected_version=$("$candidate" --version)
 expected_mode=$(/usr/bin/stat -f %Lp "$candidate")
+# macOS bash 3.2 does not honor set -e for a failing command inside a function.
+# An explicit exit is what stops a hash or signature mismatch.
 verify_candidate() {
     local artifact=$1
-    [[ -f "$artifact" && ! -L "$artifact" && -x "$artifact" ]]
-    [[ $(/usr/bin/stat -f %u "$artifact") == "$(/usr/bin/id -u)" ]]
-    [[ $(sha "$artifact") == "$expected_sha" ]]
-    [[ $(/usr/bin/stat -f %Lp "$artifact") == "$expected_mode" ]]
-    /usr/bin/codesign --verify --strict --verbose=3 "$artifact"
-    [[ $("$artifact" --version) == "$expected_version" ]]
-    "$artifact" --help >/dev/null
+    [[ -f "$artifact" && ! -L "$artifact" && -x "$artifact" ]] || exit 1
+    [[ $(/usr/bin/stat -f %u "$artifact") == "$(/usr/bin/id -u)" ]] || exit 1
+    [[ $(sha "$artifact") == "$expected_sha" ]] || exit 1
+    [[ $(/usr/bin/stat -f %Lp "$artifact") == "$expected_mode" ]] || exit 1
+    /usr/bin/codesign --verify --strict --verbose=3 "$artifact" || exit 1
+    [[ $("$artifact" --version) == "$expected_version" ]] || exit 1
+    "$artifact" --help >/dev/null || exit 1
+}
+
+# A linker-signed release already verifies. `codesign --force --sign -` replaces
+# that signature and changes the file hash, so the installed bytes would no
+# longer be the validated candidate. Sign only when verification fails.
+sign_if_needed() {
+    local artifact=$1
+    if ! /usr/bin/codesign --verify --strict "$artifact" >/dev/null 2>&1; then
+        /usr/bin/codesign --force --sign - "$artifact" || exit 1
+    fi
 }
 
 # Refuse to overwrite a subsequently installed release or an unexpected path.
@@ -53,7 +65,7 @@ rollback() {
         printf 'Post-install validation failed; restoring %s\n' "$backup" >&2
         if /bin/cp -p "$backup" "$stage/ca-rollback" &&
            /bin/mv -f "$stage/ca-rollback" "$destination" &&
-           /usr/bin/codesign --force --sign - "$destination" &&
+           sign_if_needed "$destination" &&
            /usr/bin/codesign --verify --strict --verbose=3 "$destination" &&
            [[ $(sha "$destination") == "$expected_prior_sha" ]]; then
             printf 'Previous binary restored; recovery/staging retained at %s\n' "$stage" >&2
@@ -70,14 +82,15 @@ trap rollback EXIT
 /bin/cp -p "$destination" "$backup"
 [[ $(sha "$backup") == "$expected_prior_sha" ]]
 /bin/cp -p "$candidate" "$stage/ca"
-[[ $(sha "$stage/ca") == "$expected_sha" ]]
-/usr/bin/codesign --force --sign - "$stage/ca"
+[[ $(sha "$stage/ca") == "$expected_sha" ]] || exit 1
+sign_if_needed "$stage/ca"
 verify_candidate "$stage/ca"
-[[ $(sha "$destination") == "$expected_prior_sha" ]]
+[[ $(sha "$destination") == "$expected_prior_sha" ]] || exit 1
 /bin/mv -f "$stage/ca" "$destination"
 installed=1
-# Required post-copy signing at the actual installed destination.
-/usr/bin/codesign --force --sign - "$destination"
+# Re-sign only if the copy lost a signature. A valid linker signature stays
+# so the installed bytes remain the validated candidate.
+sign_if_needed "$destination"
 verify_candidate "$destination"
 /usr/bin/stat -f 'Installed mode=%Sp owner=%Su size=%z' "$destination"
 printf 'Installed release SHA-256 %s\nRecovery: %s\nRunning sessions were not changed.\n' "$expected_sha" "$backup"

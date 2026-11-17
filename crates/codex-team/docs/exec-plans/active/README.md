@@ -1,5 +1,7 @@
 # Active ExecPlans
 
+Do not start a plan here unless the task names it. The root continuation is [AGT-271](../../../../docs/exec-plans/active/AGT-271-task-first-economic-delegation.md).
+
 Place active complex-work plans here.
 
 Rules:

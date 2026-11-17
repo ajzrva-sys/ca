@@ -1,6 +1,8 @@
+Do not start this plan unless the task names it. The continuation is [AGT-271](AGT-271-task-first-economic-delegation.md).
+
 # LRN-150 — Reviewed Codex Archive Learning
 
-Status: ACTIVE
+Status: HELD
 Owner/session: Codex / current user-requested implementation
 Last updated: 2026-08-23
 

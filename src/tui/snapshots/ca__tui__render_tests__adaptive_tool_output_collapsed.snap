@@ -2,7 +2,6 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&adaptive_tool_output_state(false), 184, 34),\nrender_to_text(&adaptive_tool_output_state(false), 60, 34))"
 ---
- ca v0.0.0 │ /workspace/ca                                                                                                                                                  [Dashboard]
 I calculated the ratio-sorted selection.
 
   ✓ run_command {"command":"python3 ratio_report.py"}
@@ -33,11 +32,11 @@ The saved TSV remains unchanged.
 
 
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                                                                                                                                                       │
-╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
-2 messages · / commands
+│› Ask anything…                                                                                                                                                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto · 2 messages
+/ commands · Ctrl+\ dashboard · ↑ history
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
 I calculated the ratio-sorted selection.
 
   ✓ run_command {"command":"python3 ratio_report.py"}
@@ -68,6 +67,7 @@ The saved TSV remains unchanged.
 
 
 ╭──────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                           │
-╰──────────────────────────────────────────── agent · auto ╯
-2 messages · / commands
+│› Ask anything…                                           │
+╰──────────────────────────────────────────────────────────╯
+ca · model auto · 2 messages
+/ commands · Ctrl+\ dashboard · ↑ history

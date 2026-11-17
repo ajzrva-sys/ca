@@ -101,16 +101,46 @@ execution is separately available through `ca runtime` and `ca local`; it
 requires an explicitly registered runtime and model. A provider entry does not
 install or start an external server.
 
+The installable `xai` template uses `https://api.x.ai/v1`, protocol
+`openai_responses`, and `${XAI_API_KEY}`. Its starter model is `grok-4.7`.
+`grok-4.6` and `grok-4.5` are the other contracted models on that exact host.
+Tool continuations send the prior encrypted reasoning items back, and reasoning
+cannot be turned off. The provider id is `xai`. The `xai-oauth` row signs in with a device code
+for a SuperGrok or X Premium+ subscription and stores a refresh token in
+the ca config directory. It uses the same official route and models.
+
 ## Provider filter
 
+Ordinary interactive tasks now open a local editable preview before their
+first planner/provider request. Private values is the initial preset; the second
+preset adds the displayed phrase and identifier suggestions. Preview generation
+and editing do not contact a provider. Enter sends the selected version once and
+permits ordinary Agent work to plan and run; explicit Plan mode still reviews
+its plan. Escape restores the original draft.
+
+The presets reuse structural source privacy, filename aliases and URL-host
+masking. They preserve explicit saved rules and stop conditions. Coverage is
+limited to the supported source formats and selected values; this is not a
+general secret detector. URL paths and queries remain readable unless another
+rule selects them.
+
+Task choices do not rewrite the startup profile or affect another task's active
+snapshot. Remember for this project stores explicit word/identifier choices in
+the project's private filter-selection store. A new task starts on Private
+values and offers fresh suggestions. Historical aliases remain resolvable after
+resume. `/filter` inspects the current task and live outgoing requests; G opens
+the existing advanced controls. Legacy `/filter guide` additions remain
+process-scoped. Noninteractive commands continue to use their existing settings.
+
 `[provider_filter]` sits on the bytes between ca and every provider. You write
-the lists. The filter does not ask a model to choose words.
+the explicit lists. Interactive presets and suggestions are prepared locally;
+the filter does not ask a model to choose words.
 
 A config file has three jobs. **Stop** ends the session when that text
 appears. **Hide** rewrites outbound text and leaves the session running.
-**Pages** rewrites the words of a fetched page.
+**Pages** rewrites retrieved content before it reaches a provider.
 
-The first enabled snapshot stays for that process. A later reload cannot turn
+For legacy profile settings, the first enabled snapshot stays for that process. A later reload cannot turn
 it off or replace its rules. Restart ca to change it. A trip stays stuck for
 the process. Exit and start a new process to continue. Tools still open the
 real file and fetch the real URL.
@@ -199,38 +229,272 @@ stand_in = "latin"
 images = true
 ```
 
-`pages = "latin"` rewrites words in a `web_fetch` page into a built-in Latin
-list. `pages = ["alpha", "beta"]` uses those words. `off` is the default.
-`images = true` replaces pictures in the outbound copy with `[image]`. The
-picture on screen, the file on disk, and the fetch stay real. A normal
-`https` URL stays.
+`pages = "latin"` rewrites retrieved text into a built-in Latin list: every
+tool result (files, commands, searches, pages and subagents), attachments and
+host-supplied recall/context evidence. `pages = ["alpha", "beta"]` uses those words. `off` is the default.
+`images = true` replaces pictures in the outbound copy with `[image]`.
+When a text stand-in is active, images are always replaced, including when the
+stored image option is false. Local images and files stay original.
 
-The user's own message stays. Tag names stay. A URL inside the page stays.
-The same spelling always becomes the same `«…»` token, and the view puts the
-original word back. A stop phrase in a fetched page is judged on the page
+Authored prompts, system instructions, repository rules, skills and tool
+arguments stay readable, subject to the hide and stop rules. Retrieved text,
+including HTML attributes and numeric path segments, receives stand-ins. The
+same spelling always becomes the same `«…»` token, and the local view restores
+the original word. Configured hide destinations inside retrieved text receive
+substitution too, so an overlapping filename alias is hidden only once.
+Authored instructions and argument text retain readable hide destinations.
+Words restored from stand-ins inside provider-issued argument values keep their
+retrieved origin through delegation, steering, save/resume and checkpoints.
+Only those source ranges receive substitution again; surrounding task guidance
+stays readable. This metadata stays internal and does not become provider fields.
+
+Release 0.1.46 persists those restored argument origins through save/resume. Origins already discarded in older saved tool arguments cannot be reconstructed retrospectively; the durable live qualification covers newly saved provenance. See the completed FLT-300 durable replay plan for compatibility and child-runner limits.
+
+Validated native Responses output replays exactly as issued, including aliased
+filenames, so an overlapping hide replacement does not acquire another prefix.
+The final stop scan still checks those replayed items and all other outgoing content.
+New native saved messages retain source metadata; old saved attachments without
+it stop before sending and require reattachment. A fresh attachment supersedes
+the matching old section in the outgoing copy without rewriting old history.
+The standalone HTML/text preview retains its existing tag/URL formatting; the
+provider pane shows the actual final request. A stop phrase in a fetched page is judged on the page
 itself. The request is judged again after the rewrite.
 
-### What you see
+### Automatic filename aliases
 
-The top row is one centered `FILTER ON` on a cyan bar, and nothing else. It is up whenever the filter is on, including when the lists are empty. The row under it is one line,
-for example `stop 3 words, 1 url · hide 2 · pages latin · images on`, or `nothing armed`. After a
-trip that row becomes `stopped on "secret", in the reply`. The origin is
-`request`, `reply`, or `fetched page`.
+Automatic filename aliases are disabled by default. Enable them explicitly:
 
-`/filter` opens that list. It works during a turn. While the filter is off,
-the list ends with `/filter on turns it on for this process.` `/filter on`
-arms the filter loaded at startup for this process and does not write the
-config file. There is no off switch. A trip stays stuck.
+```toml
+[provider_filter]
+enabled = true
 
-On a wide terminal the side pane shows the same summary, then the provider
-body. Below 80 columns the pane stays hidden and the second row carries the
-summary. Below 3 rows only `FILTER ON` is painted and the summary goes to the
-status line.
+[provider_filter.hide]
+filenames = true
+```
 
-Startup says `filter loaded: stop 2, hide 1. Restart ca to change it.` A
-later edit that would change the armed filter leaves this process on the copy
-from startup and says `filter file changed; this process is still on the copy
-from startup.`
+CA discovers existing workspace names locally and presents session-owned paths
+with opaque directory and filename components to the model. Recognized language
+extensions remain visible. Native file tools resolve these references before
+the usual workspace and approval checks. Local names and file bytes keep their
+original spelling. Assistant text restores references locally; tool-call
+transcript cards can still show the model's anonymous references.
+Filename aliases have their own registry bound;
+they do not consume the 32 explicit hide-pair/URL entries.
+Mappings stay in private session storage and survive resume. A session that
+already contains filename aliases retains that boundary when resumed; use a
+fresh session for the default disabled behavior. Children share mappings and
+forks retain old aliases while allocating new ones independently.
+Headless assistant text and reasoning are emitted after the complete turn has
+been restored locally, so a reference split across response chunks is not
+printed as a pseudonym. Tool calls still use their normal complete-JSON assembly.
+
+Every registered built-in has an explicit privacy contract. Its usual tool
+selection, configuration, permissions and platform prerequisites still apply.
+Native paths and local resource IDs restore before execution; provider-facing
+results and errors are projected again. Custom/MCP execution remains excluded.
+Hashline edits retain source-bound anchors. Alias-bearing filename predicates
+match projected names; alias-bearing content searches use projected source.
+Ordinary patterns keep their usual behavior. Unknown, stale or ambiguous
+references and traversal fail locally. The saved structural setting enables
+the whole-site workflow below without passing `--filter` each time.
+Directory symlinks are not traversed during discovery. Unsupported names, inaccessible discovery or
+unavailable mappings block the request rather than falling back to real names.
+
+Protection covers discovered filenames and their supported textual spellings.
+It does not conceal general source content, semantic clues, arbitrary encodings,
+images, preserved extensions or directory structure, and cannot undo information
+already transmitted. This setting does not enable broader source-content hiding.
+
+Preview a disposable workspace without contacting a provider or saving aliases:
+
+```sh
+ca filter check --filenames --workspace /path/to/synthetic-workspace \
+  --text 'Read src/internal/customer_module.rs'
+```
+
+`--filenames` enables this check only and never writes configuration. An enabled
+filename-alias configuration requires an explicit `--workspace PATH` for previews.
+`--file PATH` may supply a UTF-8 sample instead of `--text`; its contents are read
+only for that preview. The alias registry itself discovers names using metadata.
+
+### Project privacy and the local editor
+
+`/filter` opens the current task preview; **G** opens the advanced privacy
+manager. Launching with `--filter` enables
+structural, selected-value filtering for that process. Unselected code, constants,
+public API names and tool diagnostics remain readable. Saved Hide/Alias rules
+and configured Hide/Stop entries still apply. Selected source values and paths
+are discovered before output is sent, including standard decoded string escapes.
+Code references use stable aliases and native edits restore the original bytes.
+Legacy page-alphabet substitution is suppressed in this mode so it cannot
+re-encode the structural projection. URL and image settings remain in effect.
+
+New interactive tasks select Private values automatically. To configure this
+legacy process mode for entry points without the interactive preview, save:
+
+```toml
+[provider_filter]
+enabled = true
+structural = true
+
+[provider_filter.hide]
+filenames = true
+```
+
+`structural` defaults to false when omitted. The saved `enabled` switch still
+controls filtering; an explicit `--filter` remains a process-only override that
+enables it for that run. Saved changes apply to the next launch, leaving running
+conversations on their existing startup snapshot.
+
+With neither `--filter` nor the saved structural mode, existing projects retain
+their project privacy policy and legacy filter behavior.
+Open Rules to change the project policy and use **Save project rules** to apply
+it at the next request boundary. The header shows the effective mode for this
+process, including startup overrides. Settings has a separate **Save for next
+launch** action for profile defaults. Esc asks before discarding drafts.
+
+With filename aliases enabled, `ca --filter` or the saved structural mode
+supports multi-file website editing without individual path or value selections. Directories and files keep stable
+anonymous references, with web asset extensions visible. Automatic data masking
+covers HTML/SVG, standalone CSS, JavaScript/TypeScript and JSX/TSX, including
+comments, visible text, form values, imports, URLs and script scalar data.
+Styling, executable logic, static DOM selectors and static JSX class/ID values
+remain readable. Filename-only mode keeps source contents readable as before.
+
+Local links in source have references that tools can open directly. Edits to the
+same source preserve their exact relative/root-relative spelling, query and
+fragment. Copying a source reference into a file in another directory rebases
+relative links to the same target. A newly inserted discovered file reference
+becomes a URL relative to the edited source. Native tools retain real-path
+workspace checks, approvals, source drift validation and exact local restoration.
+Binary assets keep their bytes; filename masking does not hide image pixels.
+
+To create a file or directory, append new public path components beneath a
+discovered directory reference in `write_file` or `create_directory`, then
+re-list the parent to discover the new references. Nested directory creation
+creates missing parents through the normal permission boundary. The existing directory stays private;
+the new name is chosen by the model. That already-disclosed leaf stays stable in conversation history;
+private full paths keep anonymous references. A new plain leaf containing an
+existing protected name is rejected before it can reserve a reference.
+Use native write/read/delete tools to rename or relocate files, and update
+incoming links with the replacement file references. Copied outgoing source
+links rebase as described above. Historical link references remain stable after
+the original target is removed, while native reads still require a live target.
+To move files while preserving their hidden filenames, use `select_files` with
+public extensions and `move_files` with the returned selection. These batch
+fields accept discovered directory references or host-issued batch folder
+references. The host resolves them locally through the existing permission and
+journal checks; ordinary read/list tools still use filename references. New or
+rebased JavaScript module links keep an explicit relative `./` where needed.
+Restored web edits are classified before their native previews are published,
+so reading the committed source does not change an earlier filtered preview.
+Unknown/deleted execution aliases and traversal stay blocked. New-file records
+and source-link spellings persist with the existing session alias registry.
+Versioned filename snapshots load earlier mappings and preserve issued aliases.
+Explicitly granted external roots get independent stable references. Saved
+mappings never save grants: restored sessions require fresh folder authority.
+Existing filename snapshots load without manual migration. Sessions that acquire the
+new source-link records require a release that understands those records;
+the prior executable remains usable with its earlier sessions or a fresh session.
+
+HTML page data is masked automatically with `--filter`: page text, comments,
+URLs, form values, data attributes and embedded script data receive reversible
+aliases. Tags, attribute names, classes/IDs, CSS styling, object keys and
+JavaScript logic remain readable. Script scalar literals are treated as data;
+DOM selector arguments remain readable. CSS URLs and generated content are
+masked. Unparseable HTML or embedded regions stay private. Explicit Allow,
+Alias or Hide rules override the automatic selection.
+
+For example, start `ca --filter` and ask `Make @index.html responsive while
+preserving its page data`. No individual value selections are required. Use
+the local Sent preview to inspect the projection before editing. Native file
+edits restore the original data locally. The automatic policy is structural,
+not a semantic guarantee: private values inside retained classes, IDs, object
+keys or executable identifiers still require explicit rules.
+
+The separately enabled strict project mode hides content unless allowed.
+With `--filter`, the manager shows **Selected values only**. Typed requests and
+project instructions remain readable, with already-known private values replaced.
+
+Open **Files**, search by name or path, and press Enter to review a result.
+Use **Path** or Ctrl-P to enter a path directly. The value list shows local
+excerpts with line numbers and their current treatment in the file preview.
+Choose a value and press A (Allow), M (Alias), or H (Hide). Press G to choose
+the rule scope, or F to edit a file pattern. A value defaults to the current
+file version. Changes appear in the draft file preview before you save.
+
+In **Rules**, N opens the Add form and Enter edits the selected rule. Use
+**Apply to draft** to stage it, then **Save project rules** to persist it.
+For rules with advanced selectors, open **Advanced selector** in the form.
+When multiple rules match, the last one wins.
+
+Drag across words in **Original** to select their exact bytes in this file
+version. On narrow terminals, press O from the file review to open Original.
+A (Allow), M (Alias), and H (Hide) work on the highlighted text in either layout.
+Use **Save project rules** to apply the draft at the next request. Drag selection
+uses CA's mouse capture, controlled by **Mouse** in `/config`.
+
+V also accepts a `line:column-line:column` range with one-based character
+positions and an excluded end position. A source change expires either kind
+of range. Choose a structural item to create a reusable rule.
+
+Named regions use balanced `ca-privacy:begin NAME` / `ca-privacy:end NAME`
+markers in ordinary comments or plain text. Select a contained item and its
+Containing group to act on that region. Duplicate, unmatched or crossing markers
+grant nothing. In strict mode, unknown formats and unparsed regions remain opaque even under
+an Allow rule. Selected-value mode leaves unselected bytes readable.
+
+The selector and preview share wide layouts; narrow layouts use tabs. Original,
+Sent, Changes, and Request views show the reviewed source and actual prepared
+provider request, with omissions, rule explanations and size estimates. Full
+views are scrollable; opaque provider protocol blocks are labelled. The latest
+request replaces the previous preview while a response is pending.
+
+Supported source formats are Markdown, plain text, JSON, YAML, TOML, CSV, HTML,
+C/C++, Rust, Python, POSIX/Bash shell and JavaScript/TypeScript including JSX/TSX.
+HTML includes attributes, links, comments and embedded JavaScript/CSS. In strict mode, unknown
+formats and unparsed regions become opaque placeholders. Selection, parsing,
+aliasing and restoration are mechanical and make no extra provider requests.
+
+Aliases are short opaque references backed by private session storage. They
+survive save/resume and are shared with children; forks inherit existing
+references and allocate future ones independently. Project rules and alias
+storage are separate. Allowing a field changes future projections without
+removing historical restoration mappings. Portable exports omit the registry;
+ordinary transcript exports retain their existing behavior and are not
+represented as sanitized.
+
+Read protected files before editing them. Native file tools bind edits to the
+exact projected source and policy, restore references locally, then validate the
+real result through existing approval and drift checks. Stale or unresolved
+references block locally. With filename privacy, guarded model commands run
+in owner-scoped independent project copies, using native APFS file clones where
+available and independent copies elsewhere. Native edits still update the
+actual project. Commands cannot write original protected roots or private
+metadata. Only literal shell arguments and working directories restore path
+references; evaluated or ambiguous references are rejected. Commands reuse the
+same copy until source identity changes, while running jobs retain their original
+generation. Output identifies the source generation tested and publishes its private artifact
+directory reference; list that directory to discover generated file references. Generated files stay
+in these retained workspaces and receive private references usable by native
+reads, previews and installation. Publication requires an explicitly requested
+native mutation; command source changes are never copied back automatically.
+
+A local projection, persistence, or validation error withholds the request and
+explains how to correct it. Retry preserves completed actions. Immutable native
+provider replay that conflicts with new rules requires `/filter continue` at a
+completed turn boundary; local history and completed tool results are retained.
+Legacy emergency trips and stop rules remain sticky. `/filter report` opens the
+legacy report, and `/filter on` arms the startup legacy filter for this process
+without writing configuration.
+
+Protection applies to future transmissions. A readable typed request may expose
+a value before the filter knows it is private; later discovery cannot undo that
+transmission. Withheld facts can limit model reasoning; exact-value work stays
+local. Rules are stored by canonical workspace identity in private profile data.
+
+The top status row is compact and theme-aware. The provider side pane is hidden
+on narrow terminals; the manager remains available at either width.
 
 ### Check and one process
 
@@ -259,10 +523,12 @@ Exit 0 when the file is valid, including when the sample would stop. Exit 1
 when the file is invalid. A validation error quotes the bad value. The
 provider error and the withheld tool string keep the rule id.
 
-`ca --filter` sets `enabled = true` for this process and does not write the
-config file. It works in the TUI and in headless mode, including
-`--profile bare`. `/filter on` does the same thing after the TUI is already
-open. There is no mid-session off switch.
+`ca --filter` enables selected-value structural filtering for this process and
+does not rewrite the configuration or saved project policy. It works in the
+TUI and in headless mode, including `--profile bare`. The saved Hide/Alias
+selections remain active, with unselected content readable. `/filter on` arms
+the startup legacy filter after the TUI is already open. There is no
+mid-session off switch for that legacy gate.
 
 ### URLs, masks, and older files
 
@@ -336,11 +602,78 @@ and source definitions instead of adding guessed keys.
 provider probes. See [Troubleshooting](TROUBLESHOOTING.md) for missing environment
 references and protocol mismatches.
 
+## Context and on-demand knowledge
+
+Ordinary requests carry the current conversation or checkpoint, explicit
+attachments, project instructions and rules, authored global instructions and
+preferences, and active or explicitly requested skills. CA adds compact discovery
+guidance instead of automatically inserting the available skill catalog or native
+and foreign memory bodies. Explicit UI catalogs remain available.
+
+When the run's tool policy permits them:
+
+- `skill_search` requires a nonempty query and returns matching metadata, exact
+  selectors and portable instance pins. It defaults to three results and accepts
+  a limit from one through five. Skill instructions are loaded through
+  `activate_skill`, `skill_view`, an explicit `$skill` invocation or `--skill ID`;
+  discovery does not activate a skill or grant tools.
+  Successful activation adds its authored instructions once to the next provider
+  request in the current turn, including TUI continuations; already frozen
+  recovery requests retain their original instructions.
+- `memory_search` requires relevant task terms. Its default
+  `scope = "current_project"` searches the current canonical project's native CA
+  memory plus query-matched global user lessons. `scope = "global"` searches only
+  those global lessons. Other projects' memory stores are not searched. The
+  default limit is three, the maximum is five, and returned text is bounded to
+  8 KiB. No match returns no memory text.
+- `session_search` defaults to `scope = "current_project"` for search, browse,
+  read and scroll. Accessing another project's history requires explicit
+  `scope = "all_projects"`, including reads by an exact session reference.
+
+For example, a `memory_search` request is:
+
+```json
+{"query":"provider continuation recovery","scope":"current_project","limit":3}
+```
+
+The existing memory settings retain their defaults and storage locations:
+
+```toml
+[memory.user]
+recall = true
+generation = true
+
+[memory.workspace]
+recall = true
+generation = true
+```
+
+`recall` controls whether that scope is available to memory retrieval;
+`generation` controls its existing memory-generation pathways. Enabling recall
+does not preload a memory corpus into ordinary provider requests. Tool policy,
+profiles and workspace-context exclusions still apply.
+
+Each explicit memory search reads fresh stores, so published Dream lessons are
+visible without restarting. Skill search refreshes registered roots and their
+exact enabled-generation state, so newly published Distill skills can be found
+on demand. Disabled, hidden or unavailable skills stay excluded, and activation
+and file viewing retain their exact identity and content checks. Publication
+approvals and existing stored lessons are unchanged. See the
+[learning guidance](USER_GUIDE.md#personality-and-continuous-behavior-learning)
+for project and global intent.
+
 ## Selective context pruning
 
 Pruning is automatic for ordinary coding conversations. It reduces only old, successful text tool results in outbound requests; saved history, exports and session recall retain the original results. The newest two human turns, skill content, errors, private results and media remain protected. Context inspection reports estimated savings. Checkpoint generation and independent evaluation receive complete evidence.
 
 The usable input capacity is the configured compaction threshold, or 80% of a known context window. Pruning protects a recent tool-output budget of 25% of that capacity (up to 40,000 estimated tokens) and requires savings of 10% (up to 20,000). Without a known capacity, those fixed 40,000/20,000 limits apply.
+
+Task-map workers also fit outbound history to the remaining fixed shared
+100,000-token budget. Older successful read/search bodies can be omitted whole;
+the newest complete tool batch, errors, skills, commands and authenticated
+duplicate bases stay protected. Canonical worker history is unchanged. This
+additional reduction uses the same enable setting; no new budget option is added.
+Known actual usage is recorded even when in-flight responses exceed the ceiling.
 
 To disable it:
 
@@ -364,3 +697,14 @@ command = ["/usr/bin/tr", "a-z", "A-Z"]
 ```
 
 Formatter execution also requires an allowed `run_command` policy; saved Ask or Deny rules are respected, and child agents retain their own command limits. An unavailable or unapproved formatter keeps the requested unformatted edit and shows a warning. Formatting uses candidate bytes before final edit approval and publication, so recovery and undo retain one original-to-final receipt. Undo and redo restore bytes without rerunning formatting. Shell and external-tool edits are unaffected.
+
+## Automatic task maps
+
+`[agent] automatic_task_breakdown` defaults to `false`. A normal message is a
+chat turn. Set it to `true` to prepare a read-only plan and start its executable
+task map after the filter preview's Send and run action. Explicit Plan mode
+keeps plan review. This setting does not disable `/plan`, `/tasks`, filtering,
+or the existing approval broker.
+Each new task gets a local filter preview; `/filter` inspects its current policy
+and live outgoing requests. Steering and continuations reuse the accepted policy.
+No settings file is changed by dismissing either view.

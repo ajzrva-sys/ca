@@ -472,13 +472,22 @@ async fn scheduled_event(
 }
 
 fn publish_filter_banner(state: &crate::app::AppState) {
-    state
-        .filter_banner
-        .store(crate::provider_filter::banner_active(), Ordering::Relaxed);
-    if let Ok(mut summary) = state.filter_summary.lock() {
-        *summary = crate::provider_filter::banner_detail();
+    if let Ok(mut presentation) = state.filter_presentation.lock() {
+        *presentation = crate::provider_filter::current().presentation();
     }
-    if let Some((generation, text)) = crate::provider_filter::outbound_view() {
+    if let Some(context) = state
+        .request_store
+        .privacy_context()
+        .filter(|context| context.enabled())
+    {
+        if let Some(snapshot) = context.outbound_snapshot() {
+            state
+                .provider_pane
+                .note_privacy(snapshot.generation, snapshot.pane);
+        } else {
+            state.provider_pane.clear_content();
+        }
+    } else if let Some((generation, text)) = crate::provider_filter::outbound_view() {
         state.provider_pane.note(generation, text);
     }
 }

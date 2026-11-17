@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&empty, 100, 30), render_to_text(&empty, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
 
 
     Sessions                                                                                 Esc
@@ -12,9 +12,8 @@ expression: "wide_narrow(render_to_text(&empty, 100, 30), render_to_text(&empty,
 
       No archived sessions
 
-    Shift+U restore  ·  Ctrl+R rename  ·  Ctrl+G generate name
+    Shift+U restore  ·  Shift+R rename  ·  Ctrl+G generate name
     Shift+D purge  ·  Tab recent  ·  Up/Down move  ·  Esc close
-
 
 
 
@@ -30,10 +29,11 @@ expression: "wide_narrow(render_to_text(&empty, 100, 30), render_to_text(&empty,
 
 ╭─                                                                                                ─╮
 │›                                                                                                 │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
-/ commands
+╰─                                                                                                ─╯
+ca · model auto
+/ commands · Ctrl+\ dashboard · ↑ history
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
 
 
     Sessions                                         Esc
@@ -43,7 +43,7 @@ expression: "wide_narrow(render_to_text(&empty, 100, 30), render_to_text(&empty,
 
       No archived sessions
 
-    Shift+U restore · Ctrl+R rename
+    Shift+U restore · Shift+R rename
     Ctrl+G generate name · Tab recent
     Shift+D purge · Esc close
 
@@ -52,8 +52,8 @@ expression: "wide_narrow(render_to_text(&empty, 100, 30), render_to_text(&empty,
 
 
 
-
 ╭─                                                        ─╮
 │›                                                         │
-╰──────────────────────────────────────────── agent · auto ╯
-/ commands
+╰─                                                        ─╯
+ca · model auto
+/ commands · Ctrl+\ dashboard · ↑ history

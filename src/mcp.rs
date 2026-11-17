@@ -627,6 +627,69 @@ struct ProjectMcpFile {
     servers: HashMap<String, McpServerConfig>,
 }
 
+fn elicitation_refusals() -> &'static std::sync::Mutex<HashMap<String, usize>> {
+    static REFUSALS: std::sync::OnceLock<std::sync::Mutex<HashMap<String, usize>>> =
+        std::sync::OnceLock::new();
+    REFUSALS.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+fn form_from_arguments(arguments: &serde_json::Value) -> Option<crate::mcp_elicit::ElicitForm> {
+    let form = arguments.get("form")?.as_object()?;
+    let title = form.get("title")?.as_str()?.to_string();
+    let fields = form.get("fields")?.as_array()?;
+    let mut names = Vec::new();
+    for field in fields {
+        let name = field
+            .as_str()
+            .or_else(|| field.get("name").and_then(serde_json::Value::as_str))?;
+        names.push(crate::mcp_elicit::ElicitField {
+            name: name.to_string(),
+        });
+    }
+    let schema_bytes = form
+        .get("schema")
+        .map(|schema| {
+            serde_json::to_string(schema)
+                .map(|text| text.len())
+                .unwrap_or(0)
+        })
+        .unwrap_or(0);
+    Some(crate::mcp_elicit::ElicitForm {
+        title,
+        fields: names,
+        schema_bytes,
+    })
+}
+
+/// Bound an elicitation form before `call_tool` reaches the server.
+/// Arguments without a form are unchanged.
+pub(crate) fn gate_tool_form(
+    server_id: &str,
+    arguments: &serde_json::Value,
+) -> Result<(), McpError> {
+    let Some(form) = form_from_arguments(arguments) else {
+        return Ok(());
+    };
+    let mut refusals = elicitation_refusals()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let prior = refusals.get(server_id).copied().unwrap_or(0);
+    match crate::mcp_elicit::decide(server_id, &form, prior) {
+        crate::mcp_elicit::Decision::Allow => Ok(()),
+        crate::mcp_elicit::Decision::Refuse { note } => {
+            *refusals.entry(server_id.to_string()).or_insert(0) += 1;
+            Err(McpError::Protocol {
+                server: server_id.to_string(),
+                detail: note,
+            })
+        }
+        crate::mcp_elicit::Decision::CutOff => Err(McpError::Protocol {
+            server: server_id.to_string(),
+            detail: format!("server {server_id} elicitation is cut off"),
+        }),
+    }
+}
+
 impl McpManager {
     pub(crate) fn with_profile_config_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.profile_config_path = Some(path.into());
@@ -1133,27 +1196,11 @@ impl McpManager {
         let omitted_matches = matches.len().saturating_sub(limit);
         matches.truncate(limit);
 
-        if !matches.is_empty() {
-            let activation = matches
-                .iter()
-                .map(|(name, _)| name.clone())
-                .collect::<BTreeSet<_>>();
-            let mut inner = self.inner.lock().await;
-            let mut proposed = inner.activated_tools.clone();
-            proposed.extend(activation);
-            if build_registry(&inner, Some(&proposed)).is_err() {
-                return ToolExecutionResult::Failure(
-                    "Matching MCP schemas could not be activated safely".into(),
-                );
-            }
-            inner.activated_tools = proposed;
-        }
-
         let mut lines = if matches.is_empty() {
             vec![format!("No MCP tools matched {query:?}.")]
         } else {
             vec![format!(
-                "Activated {} MCP tool{} for subsequent turns:",
+                "Matched {} MCP tool{}. Call use_tool with the exposed name. Schemas stay out of the prompt.",
                 matches.len(),
                 if matches.len() == 1 { "" } else { "s" }
             )]
@@ -1196,6 +1243,7 @@ impl McpManager {
         exposed_name: &str,
         arguments: serde_json::Value,
     ) -> Result<crate::agent::registry::ToolExecutionResult, McpError> {
+        gate_tool_form(exposed_name, &arguments)?;
         let (server_name, kind, timeout, peer, transport, secret_values) = {
             let inner = self.inner.lock().await;
             let found = inner.running.iter().find_map(|(server_name, server)| {
@@ -1528,6 +1576,8 @@ impl McpManager {
                     ],
                     temporary_directory: temporary_directory.path().to_path_buf(),
                     network_allowed,
+                    host_credentials: true,
+                    proxy_port: None,
                     hide_other_processes: false,
                 },
             )
@@ -1706,6 +1756,8 @@ impl McpManager {
                     ],
                     temporary_directory: temporary_directory.path().to_path_buf(),
                     network_allowed: false,
+                    host_credentials: true,
+                    proxy_port: None,
                     hide_other_processes: true,
                 },
             )
@@ -1897,6 +1949,8 @@ impl McpManager {
                     .collect(),
                     temporary_directory: temporary_directory.path().to_path_buf(),
                     network_allowed,
+                    host_credentials: true,
+                    proxy_port: None,
                     hide_other_processes: true,
                 },
             )
@@ -2523,6 +2577,8 @@ impl McpManager {
                         .unwrap_or_else(|_| executable.clone())],
                     temporary_directory: temporary_directory.to_path_buf(),
                     network_allowed: definition.config.network,
+                    host_credentials: true,
+                    proxy_port: None,
                     hide_other_processes: false,
                 },
             )
@@ -3904,6 +3960,46 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["mcp__server__apple", "mcp__server__zebra"]
         );
+    }
+
+    #[tokio::test]
+    async fn call_tool_refuses_an_over_cap_form_and_cuts_off() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = McpManager::load(
+            &CaConfig::default(),
+            WorkspaceContext::from_primary(temp.path().to_path_buf(), temp.path().to_path_buf()),
+            SandboxMode::PolicyOnly,
+            false,
+        )
+        .unwrap();
+        let fields: Vec<_> = (0..crate::mcp_elicit::MAX_ELICIT_FIELDS + 1)
+            .map(|index| serde_json::json!(format!("field-{index}")))
+            .collect();
+        let wide = serde_json::json!({"form": {"title": "Too wide", "fields": fields}});
+        for _ in 0..crate::mcp_elicit::MAX_REFUSAL_NOTES {
+            let error = manager
+                .call_tool("elicit-docs", wide.clone())
+                .await
+                .expect_err("over-cap form");
+            let text = error.to_string();
+            assert!(text.contains("fields"), "{text}");
+            assert!(
+                text.contains(&crate::mcp_elicit::MAX_ELICIT_FIELDS.to_string()),
+                "{text}"
+            );
+        }
+        let cutoff = manager
+            .call_tool("elicit-docs", wide)
+            .await
+            .expect_err("cutoff");
+        assert!(cutoff.to_string().contains("cut off"), "{cutoff}");
+        let small = serde_json::json!({"form": {"title": "Pick a value", "fields": ["a", "b"]}});
+        let allowed = manager.call_tool("elicit-picker", small).await;
+        assert!(matches!(allowed, Err(McpError::UnknownServer(_))));
+        let plain = manager
+            .call_tool("read_file", serde_json::json!({"path": "a.rs"}))
+            .await;
+        assert!(matches!(plain, Err(McpError::UnknownServer(_))));
     }
 
     fn workspace(temp: &TempDir) -> WorkspaceContext {
@@ -5435,6 +5531,7 @@ finally:
         .to_string();
         let messages = vec![
             crate::app::Message {
+                retrieved_spans: Some(Vec::new()),
                 role: crate::app::Role::User,
                 content: format!("arbitrary transcript text: {valid_output}"),
                 tool_calls: None,
@@ -5443,14 +5540,19 @@ finally:
                 timestamp: chrono::Utc::now(),
             },
             crate::app::Message {
+                retrieved_spans: Some(Vec::new()),
                 role: crate::app::Role::Assistant,
                 content: String::new(),
                 tool_calls: Some(vec![crate::app::ToolCall {
+                    observation: None,
+                    output_source: None,
+                    arguments_retrieved_spans: Vec::new(),
                     id: "call-190".into(),
                     name: "delegate_mechanistic".into(),
                     arguments: "{}".into(),
                     status: crate::app::ToolStatus::Done,
                     output: Some(valid_output),
+                    started_at: None,
                 }]),
                 thinking: None,
                 response_items: Vec::new(),

@@ -1,3 +1,5 @@
+Do not start this plan unless the task names it. The continuation is [AGT-271](AGT-271-task-first-economic-delegation.md).
+
 # ORC-258 baseline test exceptions
 
 The unfiltered fresh default workspace run at 2026-10-05 23:01 UTC is **not

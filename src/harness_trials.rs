@@ -40,7 +40,7 @@ impl TrialHarness {
         if (self.candidate_hints != self.baseline_hints
             && (self.candidate_commit.is_some()
                 || self.candidate_instructions != self.baseline_instructions
-                || !crate::harness_hints::single_addition(
+                || !crate::harness_hints::one_hint_delta(
                     &self.baseline_hints,
                     &self.candidate_hints,
                 )))
@@ -176,12 +176,19 @@ pub(crate) fn verify_hint_exposure(vault: &LearningVault, id: &str) -> Result<()
         .difference(&harness.baseline_hints)
         .copied()
         .collect::<Vec<_>>();
-    if added.is_empty() {
+    let removed = harness
+        .baseline_hints
+        .difference(&harness.candidate_hints)
+        .copied()
+        .collect::<Vec<_>>();
+    if added.is_empty() && removed.is_empty() {
         return Ok(());
     }
-    if added.len() != 1 {
+    if added.len() + removed.len() != 1 {
         bail!("hint experiment changes more than one intervention");
     }
+    let removal = !removed.is_empty();
+    let hint = if removal { removed[0] } else { added[0] };
     let (plan, cycle) = load_harness_cycle(vault, id)?;
     let mut observed = 0;
     for trial in &cycle.trials {
@@ -190,7 +197,11 @@ pub(crate) fn verify_hint_exposure(vault: &LearningVault, id: &str) -> Result<()
         }) else {
             continue;
         };
-        if trial.lane != HarnessLane::Candidate {
+        if removal {
+            if !matches!(trial.lane, HarnessLane::Baseline | HarnessLane::Candidate) {
+                continue;
+            }
+        } else if trial.lane != HarnessLane::Candidate {
             continue;
         }
         let expected = Attempt {
@@ -218,10 +229,24 @@ pub(crate) fn verify_hint_exposure(vault: &LearningVault, id: &str) -> Result<()
                     .context("hint trial evidence missing")?,
             )?
             .context("hint verification evidence missing")?;
-        if !artifact.hints_applied.contains(&added[0]) {
-            bail!("added hint was not delivered in every candidate target repetition");
+        let delivered = artifact.hints_applied.contains(&hint);
+        if removal {
+            if trial.lane == HarnessLane::Baseline {
+                if !delivered {
+                    bail!("removed hint was not delivered to the baseline");
+                }
+                observed += 1;
+            } else if delivered {
+                bail!("removed hint was still delivered to the candidate");
+            } else {
+                observed += 1;
+            }
+        } else {
+            if !delivered {
+                bail!("added hint was not delivered in every candidate target repetition");
+            }
+            observed += 1;
         }
-        observed += 1;
     }
     let expected = inputs
         .cases
@@ -229,7 +254,12 @@ pub(crate) fn verify_hint_exposure(vault: &LearningVault, id: &str) -> Result<()
         .filter(|case| case.case.predicted_fix && !case.case.held_out)
         .count()
         * usize::from(plan.repetitions);
-    if observed != expected {
+    let required = if removal {
+        expected.saturating_mul(2)
+    } else {
+        expected
+    };
+    if observed != required {
         bail!("hint experiment has incomplete exposure evidence");
     }
     Ok(())

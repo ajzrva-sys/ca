@@ -1,0 +1,22 @@
+# FLT-332 — focused task breakdown in the filter flow
+
+Status: COMPLETE for the bounded CA task-breakdown change. User clarified that the problem is unrelated legitimate work mixed into one request; no further ESXi experiments or host access.
+
+Normal entry: submit a compound task and use the filter review. Add a visible task-breakdown action that starts one read-only Author using the current route and only the submitted task/attachments/project instructions. Keep the original request and queue ownership until local persistence succeeds. Show the proposed plan before execution.
+
+Observed source defects: a new Author receives an unrelated existing plan; graph children receive the complete rendered plan. Author plans will use explicit shared-purpose/constraints and per-task Markdown sections. Graph requests may select one task section only when every task is unambiguously bound; retain shared constraints/decisions and verified prerequisite handoffs. Unstructured/ambiguous legacy plans keep existing complete context. No wire/session format or permission changes.
+
+- [x] Add strict scoped-plan projection and fresh-Author isolation with behavioral tests.
+- [x] Add filter-review breakdown action, transactional held-task/queue handoff, current-model routing and render coverage.
+- [x] Independent combined review; focused checks, formatting and strict lint; expand gate only for an actual shared-format change.
+- [x] Qualify normal terminal entry in disposable state, build/sign/install one release and verify protected state.
+
+Do not disguise the overall purpose or security-relevant constraints, claim reduced provider refusals without a real comparison, or retry a refusal automatically. The feature is general task scoping for legitimate work. Existing execution approval remains unchanged. Export requested separately is already available at exports/password-theft-control-2026-11-08.zip.
+
+Review corrections: unknown/setext/indented headings fall back to full context; unsupported image/connected/explicit-skill input stays held; fresh parent identity is allocated after commit, not on failed saves. Readback compares canonical messages plus exact metadata excluding only updated_at. Existing full-plan execution remains unchanged; scoped projection applies to graph workers. First compile naming error and empty private-cache failures are preserved in check-change receipts. Final source is 0.1.85.
+
+Completion evidence (2026-11-08): `scratch/check-change/runs/20261108T102523Z-5362/report.json` passes 60 focused all-feature tests, formatting, strict bin lint and the single release build; source digest `ec7fa716be9f4555a831e4d1486a223d5b26a03f8db6cdbf5e89a203d8d046c1`. Independent combined review has no remaining blockers (`scratch/FLT-332/review.json`). Actual candidate and installed terminal walkthroughs each made two loopback-only requests, read a real disposable evidence file, committed the two-task plan without implementation authority, and restored the terminal. Final signed candidate/installed SHA-256 `8042a7a81c31ce2987fbe1abb94f95fa3b7a57f26117a18d38e0adbae6244831`; installed 0.1.85 version/help/signature/mode/owner pass; 0.1.84 recovery copy retained in `.ca-release-stage.y9NVHo`. Signing replaces linker signature bytes; the original build digest remains in the focused report and the initial installer log. Final exact signed hash is independently read back in `scratch/FLT-332/installed-artifacts.json` and passed installed native terminal acceptance. All 4,457 protected CA metadata entries are unchanged. No live ESXi contact or external provider calls.
+
+Known failed additional check: existing `tools/plan_workflow_pty.py` fails identically on installed 0.1.84 baseline and candidate 0.1.85 (`implementation did not receive fresh Agent tools`); the fixture assumes every D-route request is implementation, including read-only structured validation. Both failed receipts remain in `scratch/FLT-332`; no pass is claimed. No full workspace matrix or real-provider cyber-refusal improvement is claimed. Unsupported images/connected attachments/explicit skills remain held; ordinary Execute keeps full-plan context.
+
+Changed source files: `src/task_scope.rs`, `src/main.rs`, `src/plan_workflow.rs`, `src/plan_workflow_runtime.rs`, `src/tui/privacy.rs`, `src/tui/privacy/guide.rs`, `src/tui/privacy/suggestions.rs`; root Cargo manifests bumped to 0.1.85. Durable state/evidence: `scratch/FLT-332/final.json`.

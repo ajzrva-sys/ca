@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&no_match, 100, 30),\nrender_to_text(&no_match, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
 
 
 
@@ -27,13 +27,13 @@ expression: "wide_narrow(render_to_text(&no_match, 100, 30),\nrender_to_text(&no
                   │                                                              │
                   └──────────────────────────────────────────────────────────────┘
 
-
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                                                                   │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
-/ commands
+│› Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto
+/ commands · Ctrl+\ dashboard · ↑ history
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
 
 
  ┌ Theme ─────────────────────────────────────────────────┐
@@ -52,8 +52,8 @@ expression: "wide_narrow(render_to_text(&no_match, 100, 30),\nrender_to_text(&no
  │                                                        │
  │Enter save · Esc restore · ↑↓ navigate · type to filter │
  │                                                        │
- │                                                        │
-╭└────────────────────────────────────────────────────────┘╮
-│› ▌Ask anything…                                           │
-╰──────────────────────────────────────────── agent · auto ╯
-/ commands
+╭│                                                        │╮
+│└────────────────────────────────────────────────────────┘│
+╰──────────────────────────────────────────────────────────╯
+ca · model auto
+/ commands · Ctrl+\ dashboard · ↑ history

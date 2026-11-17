@@ -272,6 +272,12 @@ impl GitChangeService {
         capture_exact_state: bool,
         timeout_secs: Option<u64>,
     ) -> Result<ChangeSet, String> {
+        if crate::git_status::metadata_down(&self.root) {
+            let text = crate::git_status::in_process_status(&self.root)?;
+            let files = text.lines().filter_map(change_from_scan_line).collect();
+            return Ok(ChangeSet { files });
+        }
+        let _status_threads = crate::git_status::thread_cap(crate::git_status::soft_nproc());
         let status_args = ["status", "--porcelain=v1", "-z", "--untracked-files=all"];
         let output = if let Some(timeout_secs) = timeout_secs {
             let args = status_args.iter().map(OsString::from).collect::<Vec<_>>();
@@ -355,6 +361,9 @@ impl GitChangeService {
         file: &ChangeFile,
         timeout_secs: Option<u64>,
     ) -> Result<String, String> {
+        if crate::git_status::metadata_down(&self.root) {
+            return crate::git_status::in_process_diff(&self.root, &file.path);
+        }
         if !file.is_tracked() {
             return Err("Untracked file contents are not opened automatically".into());
         }
@@ -1474,6 +1483,24 @@ fn accumulate_numstat(output: &str, additions: &mut u64, deletions: &mut u64, bi
 
 pub use crate::terminal_text::sanitize_terminal_text;
 
+fn change_from_scan_line(line: &str) -> Option<ChangeFile> {
+    let path = line.strip_prefix("?? ")?;
+    if path.is_empty() {
+        return None;
+    }
+    Some(ChangeFile {
+        path: PathBuf::from(path),
+        old_path: None,
+        kind: ChangeKind::Untracked,
+        conflicted: false,
+        staged: false,
+        unstaged: true,
+        additions: None,
+        deletions: None,
+        state_fingerprint: String::new(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1689,6 +1716,25 @@ mod tests {
         let error = GitChangeService::new(root.path()).load().await.unwrap_err();
         assert!(!error.is_empty());
         assert!(!error.contains('\u{1b}'));
+    }
+
+    #[tokio::test]
+    async fn load_uses_the_in_process_scan_when_git_metadata_is_down() {
+        let root = TempDir::new().unwrap();
+        std::fs::create_dir(root.path().join(".git")).unwrap();
+        std::fs::write(root.path().join("seen.txt"), "hello from scan\n").unwrap();
+        let service = GitChangeService::new(root.path());
+        let changes = service.load().await.expect("in-process status");
+        let seen = changes
+            .files
+            .iter()
+            .find(|file| file.path == Path::new("seen.txt"))
+            .expect("scanned file");
+        assert_eq!(seen.kind, ChangeKind::Untracked);
+        let diff = service.unified_diff(seen).await.expect("in-process diff");
+        assert!(diff.contains("seen.txt"), "{diff}");
+        assert!(diff.contains("hello from scan"), "{diff}");
+        assert!(diff.len() <= 8 * 1024, "{}", diff.len());
     }
 
     #[tokio::test]

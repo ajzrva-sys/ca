@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
 
 
       ┌ Hooks ───────────────────────────────────────────────────────────────────────────────┐
@@ -25,15 +25,15 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
       │                                                                                      │
       │                                                                                      │
       │                                                                                      │
-      │                                                                                      │
-      │                                                                                      │
-      │                                                                                      │
-╭─────└──────────────────────────────────────────────────────────────────────────────────────┘─────╮
-│› ▌Ask anything…                                                                                   │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
-Session-start hook blocked: Hook failed (fail-closed). Run /hooks to repair or disable it
+│ Sess│                                                                                      │Esc
+│ dism│                                                                                      │
+╭─────│                                                                                      │─────╮
+│› Ask└──────────────────────────────────────────────────────────────────────────────────────┘     │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto
+/ commands · Ctrl+\ dashboard · ↑ history
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
  ┌ Hooks ─────────────────────────────────────────────────┐
  │> type to filter…                                       │
  │3 hooks · network denied by OS sandbox                  │
@@ -50,10 +50,10 @@ Session-start hook blocked: Hook failed (fail-closed). Run /hooks to repair or d
  │Run /hooks to repair or disable it                      │
  │                                                        │
  │Space toggle · ⇧T test · ⇧R reload · Esc close          │
- │                                                        │
- │                                                        │
- │                                                        │
+││                                                        │
+││                                                        │
 ╭│                                                        │╮
 ││                                                        ││
-╰└────────────────────────────────────────────────────────┘╯
-Session-start hook blocked: Hook failed (fail-closed). Run …
+╰│                                                        │╯
+c└────────────────────────────────────────────────────────┘
+/ commands · Ctrl+\ dashboard · ↑ history

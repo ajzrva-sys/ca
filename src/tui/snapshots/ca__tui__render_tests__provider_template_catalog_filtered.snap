@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
 
 
 
@@ -10,10 +10,11 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
          │ Provider templates                                                             │
          │ Select a compatible template to review before saving.                          │
          │> openai                                                                        │
-         │  17 ready · 23 need integration                                                │
+         │  18 ready · 23 need integration                                                │
          │                                                                                │
          │  OpenAI Codex · ready · responses                                              │
-         │▸ OpenAI API (direct) · ready · responses                                       │
+         │▸ ChatGPT plan · ready · responses                                              │
+         │  OpenAI API (direct) · ready · responses                                       │
          │  Azure AI Foundry · needs adapter                                              │
          │  Custom Endpoint · ready · chat                                                │
          │                                                                                │
@@ -26,22 +27,22 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
          │                                                                                │
          │                                                                                │
          │                                                                                │
-         │                                                                                │
-         └────────────────────────────────────────────────────────────────────────────────┘
-╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                                                                   │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
-/ commands
+╭────────└────────────────────────────────────────────────────────────────────────────────┘────────╮
+│› Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto
+/ commands · Ctrl+\ dashboard · ↑ history
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
   ┌──────────────────────────────────────────────────────┐
   │ Provider templates                                   │
   │ Select a compatible template to review before saving.│
   │> openai                                              │
-  │  17 ready · 23 need integration                      │
+  │  18 ready · 23 need integration                      │
   │                                                      │
   │  OpenAI Codex · ready · responses                    │
-  │▸ OpenAI API (direct) · ready · responses             │
+  │▸ ChatGPT plan · ready · responses                    │
+  │  OpenAI API (direct) · ready · responses             │
   │  Azure AI Foundry · needs adapter                    │
   │  Custom Endpoint · ready · chat                      │
   │                                                      │
@@ -51,9 +52,8 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
   │                                                      │
   │                                                      │
   │                                                      │
-  │                                                      │
-  │                                                      │
 ╭─│                                                      │─╮
 │›│                                                      │ │
-╰─└──────────────────────────────────────────────────────┘ ╯
-/ commands
+╰─│                                                      │─╯
+ca└──────────────────────────────────────────────────────┘
+/ commands · Ctrl+\ dashboard · ↑ history

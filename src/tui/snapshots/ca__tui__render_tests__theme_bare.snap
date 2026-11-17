@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&bare, 100, 30), render_to_text(&bare, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
 
 
 
@@ -17,7 +17,7 @@ expression: "wide_narrow(render_to_text(&bare, 100, 30), render_to_text(&bare, 6
                   │ Mimocode                                                     │
                   │ Mono                                                         │
                   │ Rose Pine                                                    │
-                  │                                                              │
+                  │ Terminal                                                     │
                   │                                                              │
                   │                                                              │
                   │                                                              │
@@ -27,13 +27,13 @@ expression: "wide_narrow(render_to_text(&bare, 100, 30), render_to_text(&bare, 6
                   │                                                              │
                   └──────────────────────────────────────────────────────────────┘
 
-
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                                                                   │
-╰───────────────────────────────────────────────────────────────────── agent · auto · profile bare ╯
-/ commands
+│› Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto
+/ commands · Ctrl+\ dashboard · ↑ history
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
 
 
  ┌ Theme ─────────────────────────────────────────────────┐
@@ -45,15 +45,15 @@ expression: "wide_narrow(render_to_text(&bare, 100, 30), render_to_text(&bare, 6
  │ Mimocode                                               │
  │ Mono                                                   │
  │ Rose Pine                                              │
- │                                                        │
+ │ Terminal                                               │
  │                                                        │
  │                                                        │
  │                                                        │
  │                                                        │
  │Bare profile · preview only · Esc restore               │
  │Theme preview is available in bare mode, but persistent │
- │                                                        │
-╭└────────────────────────────────────────────────────────┘╮
-│› ▌Ask anything…                                           │
-╰───────────────────────────── agent · auto · profile bare ╯
-/ commands
+╭│                                                        │╮
+│└────────────────────────────────────────────────────────┘│
+╰──────────────────────────────────────────────────────────╯
+ca · model auto
+/ commands · Ctrl+\ dashboard · ↑ history

@@ -1,4 +1,4 @@
-use crate::app::{AgentMode, ModelInfo};
+use crate::app::ModelInfo;
 use crate::tui::event::{Event, MouseSelectionEvent, MouseSelectionPhase};
 use crossterm::event::{KeyCode, KeyModifiers};
 
@@ -30,7 +30,7 @@ mod composer_undo_regressions {
     }
 
     #[test]
-    fn composer_undo_redo_shortcuts_preserve_yank_and_diff_bindings() {
+    fn composer_undo_redo_shortcuts_preserve_yank_and_session_bindings() {
         let mut state = crate::app::AppState::new(crate::context::ShellHistory::in_memory());
         handle_event(
             &mut state,
@@ -47,7 +47,15 @@ mod composer_undo_regressions {
         key(&mut state, KeyCode::Char('y'), KeyModifiers::CONTROL);
         assert_eq!(state.input, "draft 🙂 kept");
         key(&mut state, KeyCode::Char('r'), KeyModifiers::CONTROL);
-        assert!(state.pending_input_action.is_some());
+        assert_eq!(
+            state.pending_input_action,
+            Some(crate::tui::commands::InputAction::Command(
+                crate::tui::commands::CommandAction {
+                    id: crate::tui::commands::CommandId::Resume,
+                    args: String::new(),
+                }
+            ))
+        );
         assert_eq!(state.input, "draft 🙂 kept");
     }
 
@@ -197,6 +205,10 @@ pub fn handle_event(state: &mut crate::app::AppState, event: &Event, cwd: &str) 
 fn handle_event_inner(state: &mut crate::app::AppState, event: &Event, cwd: &str) -> bool {
     // Reset status fade timer on any keypress — new status messages will restart the clock
     state.status_set_at = None;
+    if let Some(editor) = state.privacy_editor.as_mut() {
+        editor.handle(event);
+        return !matches!(event, Event::Tick | Event::Redraw);
+    }
     if let Some(editor) = state.personality_editor.as_mut() {
         let action = editor.handle(event);
         match action {
@@ -222,7 +234,7 @@ fn handle_event_inner(state: &mut crate::app::AppState, event: &Event, cwd: &str
         return !matches!(event, Event::Tick | Event::Redraw);
     }
     if let Event::MouseSelection(selection) = event {
-        return handle_mouse_selection(state, *selection, copy_text_to_clipboard);
+        return handle_mouse_selection(state, *selection, copy_text_to_clipboard_or_osc52);
     }
     if let Event::MouseScroll(scroll) = event {
         let dragging = if state.pager_open {
@@ -303,6 +315,27 @@ fn handle_event_inner(state: &mut crate::app::AppState, event: &Event, cwd: &str
     }
     match event {
         Event::Key(code, mods) => {
+            if (*code == KeyCode::Esc || (*code == KeyCode::Char('x') && mods.is_empty()))
+                && (state
+                    .toast
+                    .as_ref()
+                    .is_some_and(|toast| toast.is_sticky() && toast.is_visible())
+                    || state
+                        .status_message
+                        .as_deref()
+                        .is_some_and(status_notice_is_error))
+            {
+                state.toast = None;
+                if state
+                    .status_message
+                    .as_deref()
+                    .is_some_and(status_notice_is_error)
+                {
+                    state.status_message = None;
+                    state.status_notice_at.set(None);
+                }
+                return true;
+            }
             if state.loop_guard_interaction.is_some() {
                 return handle_loop_guard_interaction(state, *code);
             }
@@ -563,15 +596,7 @@ fn handle_event_inner(state: &mut crate::app::AppState, event: &Event, cwd: &str
                     _ if second.modifiers == KeyModifiers::CONTROL
                         && second.code == KeyCode::Char('r') =>
                     {
-                        let busy = state.turn_lifecycle.is_active() || state.review_in_flight;
-                        queue_command(
-                            state,
-                            crate::tui::commands::CommandAction {
-                                id: crate::tui::commands::CommandId::Diff,
-                                args: String::new(),
-                            },
-                            busy,
-                        );
+                        queue_previous_sessions(state);
                         true
                     }
                     _ => {
@@ -582,15 +607,21 @@ fn handle_event_inner(state: &mut crate::app::AppState, event: &Event, cwd: &str
                 };
             }
             if *mods == KeyModifiers::CONTROL && *code == KeyCode::Char('r') {
-                let busy = state.turn_lifecycle.is_active() || state.review_in_flight;
-                queue_command(
-                    state,
+                queue_previous_sessions(state);
+                return true;
+            }
+            if *mods == KeyModifiers::NONE && *code == KeyCode::F(2) {
+                state.pending_input_action = Some(crate::tui::commands::InputAction::Command(
                     crate::tui::commands::CommandAction {
-                        id: crate::tui::commands::CommandId::Diff,
+                        id: crate::tui::commands::CommandId::Config,
                         args: String::new(),
                     },
-                    busy,
-                );
+                ));
+                return true;
+            }
+            if is_mode_cycle_key(*code, *mods) && state.plan_proposal.is_none() {
+                state.pending_key_chord = None;
+                cycle_session_mode(state);
                 return true;
             }
             let stroke = crate::keymap::KeyStroke::from_event(*code, *mods);
@@ -609,18 +640,40 @@ fn handle_event_inner(state: &mut crate::app::AppState, event: &Event, cwd: &str
                 }
                 crate::keymap::KeyResolution::NoMatch => {}
             }
+            if state.composer_focus == crate::app::ComposerFocus::Scrollback
+                && handle_scrollback_key(state, *code, *mods)
+            {
+                return true;
+            }
+            if composer_enter_inserts_newline(*code, *mods) {
+                insert_char(state, '\n');
+                return true;
+            }
             // Turn controls work in both Vim modes; modal/completion handling
             // above still owns its keys before the composer gets them.
+            if *mods == KeyModifiers::ALT
+                && matches!(*code, KeyCode::Char('s') | KeyCode::Char('S'))
+                && state.turn_lifecycle.is_active()
+            {
+                state.busy_submit_mode = state.busy_submit_mode.cycle();
+                state.status_message =
+                    Some(format!("Submit mode: {}", state.busy_submit_mode.label()));
+                return true;
+            }
             if *mods == KeyModifiers::NONE {
                 if *code == KeyCode::Esc && state.turn_lifecycle.is_active() {
                     state.pending_input_action = Some(crate::tui::commands::InputAction::StopTurn);
                     return true;
                 }
-                if *code == KeyCode::Enter
-                    && (state.input_queue.editing_id.is_some()
-                        || (state.turn_lifecycle.is_active() && !composer_is_command(state)))
-                {
+                if *code == KeyCode::Enter && state.input_queue.editing_id.is_some() {
                     request_interrupt_submission(state);
+                    return true;
+                }
+                if *code == KeyCode::Enter
+                    && state.turn_lifecycle.is_active()
+                    && !composer_is_command(state)
+                {
+                    queue_or_send_follow_up(state);
                     return true;
                 }
             }
@@ -676,10 +729,6 @@ fn handle_event_inner(state: &mut crate::app::AppState, event: &Event, cwd: &str
                             state.input_cursor += text.len();
                         }
                     }
-                    true
-                }
-                (KeyModifiers::SHIFT, KeyCode::Enter) => {
-                    insert_char(state, '\n');
                     true
                 }
                 (KeyModifiers::NONE, KeyCode::Enter) if state.input.starts_with('/') => {
@@ -757,64 +806,11 @@ fn handle_event_inner(state: &mut crate::app::AppState, event: &Event, cwd: &str
                     state.input_cursor = 0;
                     state.composer_ui.clear_for_new_draft();
                     state.composer_attachments.clear();
+                    state.pasted_images.clear();
                     true
                 }
-                (KeyModifiers::CONTROL, KeyCode::Char('v')) => {
-                    if state.image_attachment_busy {
-                        state.status_message = Some("Clipboard image is still processing".into());
-                        return true;
-                    }
-                    // Try to get image from clipboard first
-                    if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                        if let Ok(img) = clipboard.get_image() {
-                            if state.pasted_images.len()
-                                >= crate::image_content::MAX_IMAGES_PER_REQUEST
-                            {
-                                state.status_message = Some(format!(
-                                    "At most {} images can be attached",
-                                    crate::image_content::MAX_IMAGES_PER_REQUEST
-                                ));
-                                return true;
-                            }
-                            match crate::image_content::RawClipboardImage::new(
-                                img.width as u32,
-                                img.height as u32,
-                                img.bytes.into_owned(),
-                            ) {
-                                Ok(image) => {
-                                    state.image_attachment_generation =
-                                        state.image_attachment_generation.wrapping_add(1);
-                                    state.image_attachment_busy = true;
-                                    state.status_message =
-                                        Some("Processing clipboard image…".into());
-                                    state.pending_input_action = Some(
-                                        crate::tui::commands::InputAction::AttachClipboardImage {
-                                            image,
-                                            generation: state.image_attachment_generation,
-                                        },
-                                    );
-                                }
-                                Err(error) => {
-                                    state.status_message =
-                                        Some(format!("Could not attach image: {error}"));
-                                }
-                            }
-                            return true;
-                        }
-                        // Fall back to text paste
-                        if let Ok(text) = clipboard.get_text() {
-                            for ch in text.chars() {
-                                if ch == '\n' || ch == '\r' {
-                                    insert_char(state, '\n');
-                                } else if !ch.is_control() {
-                                    insert_char(state, ch);
-                                } else if ch == '\t' {
-                                    insert_char(state, ' ');
-                                }
-                            }
-                            return true;
-                        }
-                    }
+                (modifiers, KeyCode::Char('v')) if is_clipboard_paste(modifiers) => {
+                    paste_clipboard(state);
                     true
                 }
                 (KeyModifiers::NONE, KeyCode::Up) => composer_move_vertical(state, -1),
@@ -890,6 +886,11 @@ fn handle_event_inner(state: &mut crate::app::AppState, event: &Event, cwd: &str
                     }
                 }
                 (KeyModifiers::NONE, KeyCode::Tab) => {
+                    if state.interaction_parked {
+                        state.interaction_parked = false;
+                        state.composer_focus = crate::app::ComposerFocus::Composer;
+                        return true;
+                    }
                     // Accept ghost text if present
                     if let Some(ref ghost) = state.ghost_text.clone() {
                         state
@@ -920,26 +921,12 @@ fn handle_event_inner(state: &mut crate::app::AppState, event: &Event, cwd: &str
                                 state.status_message = Some("Completed".into());
                             }
                             true
-                        } else {
-                            // Fall back to mode cycling
-                            if state.plan_proposal.is_some() {
-                                crate::plan::dismiss(state);
-                            }
-                            state.mode = match state.mode {
-                                AgentMode::Agent => AgentMode::Plan,
-                                AgentMode::Plan => AgentMode::Ask,
-                                AgentMode::Ask => AgentMode::Debug,
-                                AgentMode::Debug | AgentMode::Custom(_) => AgentMode::Agent,
-                            };
-                            state.status_message = Some(match state.mode {
-                                AgentMode::Plan => {
-                                    "Plan mode · read-only tools · propose before editing".into()
-                                }
-                                AgentMode::Ask => "Ask mode · answer without editing".into(),
-                                AgentMode::Debug => "Debug mode".into(),
-                                AgentMode::Agent | AgentMode::Custom(_) => "Agent mode".into(),
-                            });
+                        } else if scrollback_focus_allowed(state) {
+                            state.composer_focus = crate::app::ComposerFocus::Scrollback;
+                            state.transcript_selection = 0;
                             true
+                        } else {
+                            false
                         }
                     }
                 }
@@ -1137,6 +1124,7 @@ fn handle_event_inner(state: &mut crate::app::AppState, event: &Event, cwd: &str
                 return true;
             }
             if let Some(hub) = state.config_hub.as_mut() {
+                hub.search_focused = true;
                 hub.filter
                     .extend(text.chars().filter(|character| !character.is_control()));
                 hub.selected_idx = 0;
@@ -1246,19 +1234,15 @@ fn handle_event_inner(state: &mut crate::app::AppState, event: &Event, cwd: &str
                 }
                 return true;
             }
+            if let Some(path) = sole_image_path(text, cwd) {
+                begin_image_file(state, path);
+                return true;
+            }
             if text.chars().count() > crate::tui::composer::LARGE_PASTE_THRESHOLD {
                 insert_large_paste(state, text);
             } else {
                 let start = state.input_cursor;
-                for ch in text.chars() {
-                    if ch == '\n' || ch == '\r' {
-                        insert_char(state, '\n');
-                    } else if !ch.is_control() {
-                        insert_char(state, ch);
-                    } else if ch == '\t' {
-                        insert_char(state, ' ');
-                    }
-                }
+                insert_pasted_chars(state, text);
                 register_pasted_path(state, start, state.input_cursor, cwd);
             }
             true
@@ -1288,8 +1272,10 @@ fn shortcut_help(state: &crate::app::AppState) -> String {
     let mut lines = vec![
         "Keyboard shortcuts".to_string(),
         String::new(),
-        "Enter                 send / interrupt and send while working".into(),
-        "Shift+Enter           insert newline".into(),
+        "Enter                 send / queue / steer / interrupt while working".into(),
+        "Alt+S                cycle queue, steer, interrupt while working".into(),
+        "Enter (empty, busy)  send the oldest queued follow-up now".into(),
+        "Shift+Enter / Ctrl+J   insert newline".into(),
         "Up / Down             move visual rows, then browse history".into(),
         "Home / End            current hard-line bounds".into(),
         "Ctrl+A / Ctrl+E       whole draft bounds".into(),
@@ -1299,6 +1285,7 @@ fn shortcut_help(state: &crate::app::AppState) -> String {
         "/ · @ · path          inline completion".into(),
         "Esc                   stop current turn / dismiss active popup".into(),
         "Ctrl+C                stop current turn, even with a popup open".into(),
+        "Shift+Tab             cycle Normal / Plan / Auto-review / Always-approve".into(),
         String::new(),
         "Configured actions".into(),
     ];
@@ -1320,6 +1307,56 @@ fn shortcut_help(state: &crate::app::AppState) -> String {
 pub(crate) fn copy_text_to_clipboard(text: &str) -> Result<(), ()> {
     let mut clipboard = arboard::Clipboard::new().map_err(|_| ())?;
     clipboard.set_text(text.to_owned()).map_err(|_| ())
+}
+
+const MAX_OSC52_CLIPBOARD_BYTES: usize = 256 * 1024;
+
+pub(crate) enum ClipboardCopy {
+    Local,
+    Terminal(String),
+}
+
+pub(crate) fn osc52_clipboard_sequence(text: &str, tmux: bool) -> Result<String, ()> {
+    if text.is_empty() || text.len() > MAX_OSC52_CLIPBOARD_BYTES {
+        return Err(());
+    }
+    use base64::Engine as _;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(text);
+    let osc52 = format!("\u{1b}]52;c;{encoded}\u{7}");
+    Ok(if tmux {
+        format!("\u{1b}Ptmux;\u{1b}{osc52}\u{1b}\\")
+    } else {
+        osc52
+    })
+}
+
+pub(crate) fn clipboard_copy_plan<F>(text: &str, tmux: bool, local: F) -> Result<ClipboardCopy, ()>
+where
+    F: FnOnce(&str) -> Result<(), ()>,
+{
+    if local(text).is_ok() {
+        return Ok(ClipboardCopy::Local);
+    }
+    osc52_clipboard_sequence(text, tmux).map(ClipboardCopy::Terminal)
+}
+
+pub(crate) fn copy_text_to_clipboard_or_osc52(text: &str) -> Result<(), ()> {
+    let tmux = std::env::var_os("TMUX").is_some();
+    match clipboard_copy_plan(text, tmux, copy_text_to_clipboard)? {
+        ClipboardCopy::Local => Ok(()),
+        ClipboardCopy::Terminal(sequence) => write_terminal_clipboard(&sequence),
+    }
+}
+
+fn write_terminal_clipboard(sequence: &str) -> Result<(), ()> {
+    use std::io::IsTerminal;
+    if !std::io::stdout().is_terminal() {
+        return Err(());
+    }
+    use std::io::Write as _;
+    let mut stdout = std::io::stdout().lock();
+    stdout.write_all(sequence.as_bytes()).map_err(|_| ())?;
+    stdout.flush().map_err(|_| ())
 }
 
 fn composer_click_blocked(state: &crate::app::AppState) -> bool {
@@ -1364,6 +1401,15 @@ fn handle_mouse_selection<F>(
 where
     F: FnOnce(&str) -> Result<(), ()>,
 {
+    if state.config_hub.is_some() {
+        if event.phase == MouseSelectionPhase::Start {
+            handle_config_hub_click(state, event.column, event.row);
+        }
+        return true;
+    }
+    if handle_queue_chip_click(state, event) {
+        return true;
+    }
     if state.composer_ui.mouse_capture_active {
         match event.phase {
             MouseSelectionPhase::Start => {}
@@ -1423,6 +1469,169 @@ where
     true
 }
 
+fn status_notice_is_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("error")
+        || lower.contains("failed")
+        || lower.contains("unable")
+        || lower.contains("denied")
+        || lower.contains("invalid")
+        || lower.contains("could not")
+}
+
+fn scrollback_focus_allowed(state: &crate::app::AppState) -> bool {
+    crate::tui::render::composer_has_focus(state)
+        && state.interaction.is_none()
+        && !state.approval_queue.is_active()
+}
+
+pub(crate) fn steer_focused_interaction(
+    state: &mut crate::app::AppState,
+    code: KeyCode,
+    modifiers: KeyModifiers,
+) -> bool {
+    let parks = state
+        .interaction
+        .as_ref()
+        .is_some_and(|interaction| interaction.parks_on_escape());
+    if !parks {
+        return false;
+    }
+    if code == KeyCode::Esc && modifiers.is_empty() {
+        state.interaction_parked = true;
+        state.composer_focus = crate::app::ComposerFocus::Scrollback;
+        return true;
+    }
+    if (code == KeyCode::Tab && modifiers.is_empty()) || code == KeyCode::BackTab {
+        if let Some(interaction) = state.interaction.as_mut() {
+            interaction.step_choice(code == KeyCode::Tab);
+        }
+        return true;
+    }
+    false
+}
+
+fn handle_scrollback_key(
+    state: &mut crate::app::AppState,
+    code: KeyCode,
+    mods: KeyModifiers,
+) -> bool {
+    if state.interaction_parked && code == KeyCode::Tab && mods.is_empty() {
+        state.interaction_parked = false;
+        state.composer_focus = crate::app::ComposerFocus::Composer;
+        return true;
+    }
+    match (mods, code) {
+        (KeyModifiers::NONE, KeyCode::Esc | KeyCode::Tab) => {
+            state.composer_focus = crate::app::ComposerFocus::Composer;
+            true
+        }
+        (KeyModifiers::NONE, KeyCode::Up) => {
+            move_transcript_selection(state, false);
+            true
+        }
+        (KeyModifiers::NONE, KeyCode::Down) => {
+            move_transcript_selection(state, true);
+            true
+        }
+        (KeyModifiers::NONE, KeyCode::Left) => {
+            fold_transcript_selection(state, false);
+            true
+        }
+        (KeyModifiers::NONE, KeyCode::Right) => {
+            fold_transcript_selection(state, true);
+            true
+        }
+        (KeyModifiers::NONE, KeyCode::Enter) => {
+            open_transcript_selection(state);
+            true
+        }
+        (KeyModifiers::NONE, KeyCode::PageUp | KeyCode::PageDown) => false,
+        (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char(character)) => {
+            state.composer_focus = crate::app::ComposerFocus::Composer;
+            insert_char(state, character);
+            true
+        }
+        _ => false,
+    }
+}
+
+fn move_transcript_selection(state: &mut crate::app::AppState, forward: bool) {
+    let blocks = state.transcript_scroll.blocks();
+    if blocks.is_empty() {
+        return;
+    }
+    if forward {
+        state.transcript_selection = (state.transcript_selection + 1).min(blocks.len() - 1);
+    } else {
+        state.transcript_selection = state.transcript_selection.saturating_sub(1);
+    }
+    if let Some(block) = blocks.get(state.transcript_selection) {
+        let rows = state.viewport_height.saturating_sub(8).max(1);
+        state
+            .transcript_scroll
+            .reveal_line(u32::try_from(block.first_line).unwrap_or(u32::MAX), rows);
+    }
+}
+
+fn fold_transcript_selection(state: &mut crate::app::AppState, expand: bool) {
+    let blocks = state.transcript_scroll.blocks();
+    let Some(block) = blocks.get(state.transcript_selection) else {
+        return;
+    };
+    let key = match &block.kind {
+        crate::tui::transcript::SelectableKind::ToolRun(id) => {
+            crate::app::TranscriptBlockKey::tool_calls(id)
+        }
+        crate::tui::transcript::SelectableKind::Thinking(index) => {
+            Some(crate::app::TranscriptBlockKey::Thinking {
+                message_index: *index,
+            })
+        }
+        crate::tui::transcript::SelectableKind::User(_)
+        | crate::tui::transcript::SelectableKind::Assistant(_) => None,
+    };
+    let Some(key) = key else {
+        return;
+    };
+    let expanded = state.expanded_blocks.iter().any(|item| item == &key);
+    if expanded != expand {
+        let label = match &key {
+            crate::app::TranscriptBlockKey::ToolCalls { .. } => "tool run",
+            crate::app::TranscriptBlockKey::Thinking { .. } => "thought",
+        };
+        toggle_expanded_block(state, key, label);
+    }
+}
+
+fn open_transcript_selection(state: &mut crate::app::AppState) {
+    let blocks = state.transcript_scroll.blocks();
+    let Some(block) = blocks.get(state.transcript_selection) else {
+        return;
+    };
+    state.pager_content = block.text.clone();
+    state.pager_scroll = 0;
+    state.pager_open = true;
+}
+
+fn quote_selection(state: &mut crate::app::AppState) {
+    if state.composer_focus != crate::app::ComposerFocus::Scrollback {
+        return;
+    }
+    let blocks = state.transcript_scroll.blocks();
+    let Some(block) = blocks.get(state.transcript_selection) else {
+        return;
+    };
+    let paragraph = block.text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let quoted = format!("> {paragraph}");
+    state.input_cursor = crate::tui::composer::normalize_boundary(&state.input, state.input_cursor);
+    let start = state.input_cursor;
+    state.composer_ui.apply_edit(start..start, quoted.len());
+    state.input.insert_str(start, &quoted);
+    state.input_cursor += quoted.len();
+    state.composer_focus = crate::app::ComposerFocus::Composer;
+}
+
 fn toggle_expanded_block(
     state: &mut crate::app::AppState,
     key: crate::app::TranscriptBlockKey,
@@ -1436,8 +1645,19 @@ fn toggle_expanded_block(
         state.expanded_blocks.remove(position);
         state.status_message = Some(format!("Collapsed {label}"));
     } else {
-        state.expanded_blocks.push(key);
+        state.expanded_blocks.push(key.clone());
         state.status_message = Some(format!("Expanded {label}"));
+    }
+    if let crate::app::TranscriptBlockKey::ToolCalls { first_call_id } = &key {
+        if state
+            .expanded_blocks
+            .iter()
+            .any(|expanded| expanded == &key)
+        {
+            state.transcript_scroll.expand_run(first_call_id);
+        } else {
+            state.transcript_scroll.collapse_run(first_call_id);
+        }
     }
 }
 
@@ -1448,6 +1668,9 @@ fn handle_mouse_scroll(
     cwd: &str,
     rows: u16,
 ) -> bool {
+    if state.config_hub.is_some() {
+        return scroll_settings_sheet(state, direction, rows);
+    }
     if let Some((column, row)) = point {
         if state.provider_pane.contains(column, row) {
             let step = i32::from(rows.max(1));
@@ -2686,7 +2909,26 @@ fn handle_task_graph_manager(
 
     let visible = visible_task_graph_ids(state);
     match code {
-        KeyCode::Esc => state.task_graph_manager = None,
+        KeyCode::Enter => {
+            if let Some(manager) = state.task_graph_manager.as_mut() {
+                manager.detail_open = !manager.detail_open;
+            }
+        }
+        KeyCode::Esc => {
+            if state
+                .task_graph_manager
+                .as_ref()
+                .is_some_and(|manager| manager.detail_open)
+            {
+                state
+                    .task_graph_manager
+                    .as_mut()
+                    .expect("manager")
+                    .detail_open = false;
+            } else {
+                state.task_graph_manager = None;
+            }
+        }
         KeyCode::Up => {
             if let Some(manager) = state.task_graph_manager.as_mut() {
                 manager.selected_idx = manager.selected_idx.saturating_sub(1);
@@ -3196,16 +3438,40 @@ fn composer_is_command(state: &crate::app::AppState) -> bool {
                 .is_some_and(|name| state.prompt_commands.find(name).is_some()))
 }
 
-fn request_interrupt_submission(state: &mut crate::app::AppState) {
-    if state.input.trim().is_empty() || !crate::queue_composer_available(state) {
-        return;
+fn follow_up_refused(state: &mut crate::app::AppState) -> bool {
+    let queue_list_only = state.queue_view_open && !crate::any_overlay_open_except_queue(state);
+    if !queue_list_only && !crate::queue_composer_available(state) {
+        return true;
+    }
+    if queue_list_only
+        && (state.interaction.is_some()
+            || state.plan_proposal.is_some()
+            || state.approval_queue.is_active())
+    {
+        return true;
     }
     if state.hook_blocked {
         state.status_message = Some("Resolve the blocked hook in /hooks before sending".into());
-        return;
+        return true;
     }
     if state.hook_running || state.review_in_flight || state.attachment_resolution_busy {
         state.status_message = Some("Press Esc to stop the current preparation first".into());
+        return true;
+    }
+    false
+}
+
+fn composer_enter_inserts_newline(code: KeyCode, mods: KeyModifiers) -> bool {
+    if code == KeyCode::Enter {
+        let shifted = mods.contains(KeyModifiers::SHIFT)
+            && !mods.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+        return shifted || (mods.is_empty() && crate::tui::modifiers::physical_shift_held());
+    }
+    mods == KeyModifiers::CONTROL && matches!(code, KeyCode::Char('j') | KeyCode::Char('J'))
+}
+
+fn request_interrupt_submission(state: &mut crate::app::AppState) {
+    if state.input.trim().is_empty() || follow_up_refused(state) {
         return;
     }
     let text = state.take_composer_text();
@@ -3215,12 +3481,178 @@ fn request_interrupt_submission(state: &mut crate::app::AppState) {
     });
 }
 
+/// While a turn is running, Enter queues a typed follow-up. A later Enter on
+/// an empty composer sends the oldest queued follow-up now.
+fn queue_or_send_follow_up(state: &mut crate::app::AppState) {
+    if !state.input.trim().is_empty() {
+        if follow_up_refused(state) {
+            return;
+        }
+        match state.busy_submit_mode {
+            crate::app::BusySubmitMode::Interrupt => request_interrupt_submission(state),
+            crate::app::BusySubmitMode::Steer => request_interrupt_submission(state),
+            crate::app::BusySubmitMode::Queue => {
+                if crate::queue_composer_draft(state) {
+                    state.pending_input_action =
+                        Some(crate::tui::commands::InputAction::PersistSessionQueue);
+                }
+            }
+        }
+        return;
+    }
+    if state.input.is_empty() {
+        if let Some(id) = state.input_queue.front().map(|item| item.id) {
+            steer_queued_id(state, id);
+        }
+    }
+}
+
+fn steer_queued_id(state: &mut crate::app::AppState, id: uuid::Uuid) {
+    if follow_up_refused(state) {
+        return;
+    }
+    let Some(text) = state
+        .input_queue
+        .items()
+        .find(|item| item.id == id)
+        .map(|item| item.text.clone())
+    else {
+        return;
+    };
+    if text.trim().is_empty() {
+        return;
+    }
+    state.pending_input_action = Some(crate::tui::commands::InputAction::Steer {
+        text,
+        queued_id: Some(id),
+    });
+}
+
+fn load_queued_edit(state: &mut crate::app::AppState, id: uuid::Uuid) -> bool {
+    if !state.queue_view_open && !state.input.trim().is_empty() {
+        state.status_message = Some("Clear the composer before editing a queued input".into());
+        return false;
+    }
+    if !state.input_queue.select_id(id) {
+        return false;
+    }
+    let Some(text) = state.input_queue.begin_edit_selected() else {
+        return false;
+    };
+    state.input = text;
+    state.input_cursor = state.input.len();
+    state.composer_ui.clear_for_new_draft();
+    state.composer_attachments.clear();
+    state.pasted_images.clear();
+    state.queue_view_open = false;
+    state.status_message = Some(format!(
+        "Editing queued message · Enter sends now · {} saves to queue",
+        state
+            .keymap
+            .display_binding(crate::keymap::KeyAction::QueueInput)
+    ));
+    true
+}
+
+fn cancel_queued_id(state: &mut crate::app::AppState, id: uuid::Uuid) {
+    if !state.input_queue.select_id(id) {
+        return;
+    }
+    if state.input_queue.delete_selected().is_some() {
+        state.pending_input_action = Some(crate::tui::commands::InputAction::PersistSessionQueue);
+    }
+    if state.input_queue.is_empty() {
+        state.queue_view_open = false;
+    }
+}
+
+fn activate_queue_hit(state: &mut crate::app::AppState, hit: crate::tui::composer::QueueActionHit) {
+    use crate::tui::composer::QueueRowAction;
+    match hit.action {
+        QueueRowAction::SendNow => {
+            steer_queued_id(state, hit.id);
+            if matches!(
+                state.pending_input_action,
+                Some(crate::tui::commands::InputAction::Steer { .. })
+            ) {
+                state.queue_view_open = false;
+            }
+        }
+        QueueRowAction::Edit => {
+            load_queued_edit(state, hit.id);
+        }
+        QueueRowAction::Cancel => cancel_queued_id(state, hit.id),
+    }
+}
+
+fn handle_queue_chip_click(state: &mut crate::app::AppState, event: MouseSelectionEvent) -> bool {
+    let hit_at = |state: &crate::app::AppState| {
+        crate::tui::render::queue_action_at(state, event.column, event.row)
+    };
+    match event.phase {
+        MouseSelectionPhase::Start => {
+            if let Some(hit) = hit_at(state) {
+                state.composer_ui.queue_click = Some(hit);
+                state.composer_ui.mouse_capture_active = false;
+                state.transcript_scroll.clear_selection();
+                state.pager_selection.clear_selection();
+                return true;
+            }
+            state.composer_ui.queue_click = None;
+            false
+        }
+        MouseSelectionPhase::Drag => state.composer_ui.queue_click.is_some(),
+        MouseSelectionPhase::End => {
+            let Some(armed) = state.composer_ui.queue_click.take() else {
+                return false;
+            };
+            if hit_at(state).is_some_and(|hit| hit.id == armed.id && hit.action == armed.action) {
+                activate_queue_hit(state, armed);
+            }
+            true
+        }
+    }
+}
+
+fn is_mode_cycle_key(code: KeyCode, mods: KeyModifiers) -> bool {
+    code == KeyCode::BackTab || (code == KeyCode::Tab && mods.contains(KeyModifiers::SHIFT))
+}
+
+fn cycle_session_mode(state: &mut crate::app::AppState) {
+    use crate::app::{AgentMode, ApprovalMode};
+    if matches!(state.mode, AgentMode::Plan) {
+        state.mode = AgentMode::Agent;
+        state.approval = ApprovalMode::AutoReview;
+        state.status_message = Some("Auto-review".into());
+        return;
+    }
+    match state.approval {
+        ApprovalMode::AutoReview => {
+            state.mode = AgentMode::Agent;
+            state.approval = ApprovalMode::RunEverything;
+            state.status_message = Some("Always-approve".into());
+        }
+        ApprovalMode::RunEverything => {
+            state.mode = AgentMode::Agent;
+            state.approval = ApprovalMode::Allowlist;
+            state.status_message = Some("Normal".into());
+        }
+        ApprovalMode::Allowlist => {
+            state.mode = AgentMode::Plan;
+            state.status_message = Some("Plan mode".into());
+        }
+    }
+}
+
 fn dispatch_key_action(state: &mut crate::app::AppState, action: crate::keymap::KeyAction) {
     use crate::keymap::KeyAction;
     match action {
         KeyAction::ComposerUndo => state.undo_composer(),
         KeyAction::ComposerRedo => state.redo_composer(),
         KeyAction::ModelPicker => open_model_picker(state),
+        KeyAction::ToggleTaskMap => {
+            state.task_map_collapsed = !state.task_map_collapsed;
+        }
         KeyAction::OpenEditor => {
             state.pending_input_action = Some(crate::tui::commands::InputAction::OpenEditor)
         }
@@ -3261,8 +3693,15 @@ fn dispatch_key_action(state: &mut crate::app::AppState, action: crate::keymap::
             }
         }
         KeyAction::SaveOrSteer => {
-            if state.turn_lifecycle.is_active() || state.input_queue.editing_id.is_some() {
+            let editing = state.input_queue.editing_id.is_some();
+            let turn = state.turn_lifecycle.is_active();
+            let draft = !state.input.trim().is_empty();
+            if editing || (turn && draft) {
                 request_interrupt_submission(state);
+            } else if turn {
+                if let Some(id) = state.input_queue.selected().map(|item| item.id) {
+                    steer_queued_id(state, id);
+                }
             } else {
                 let busy = state.turn_lifecycle.is_active() || state.review_in_flight;
                 queue_command(
@@ -3301,7 +3740,25 @@ fn dispatch_key_action(state: &mut crate::app::AppState, action: crate::keymap::
         }
         KeyAction::FocusAgentActivity => focus_latest_agent_activity(state),
         KeyAction::RemoveLastAttachment => {
-            if state.pasted_images.pop().is_some() {
+            if let Some(range) = state
+                .composer_ui
+                .atomic_elements
+                .iter()
+                .rev()
+                .find(|element| {
+                    matches!(element.kind, crate::tui::composer::AtomicKind::Image { .. })
+                })
+                .map(|element| element.range.clone())
+            {
+                remove_images_in_range(state, &range);
+                if range.end <= state.input.len() {
+                    state.input.replace_range(range.clone(), "");
+                    state.input_cursor = range.start.min(state.input.len());
+                    state.composer_ui.apply_edit(range, 0);
+                    renumber_image_chips(state);
+                }
+                state.status_message = Some("Removed last image attachment".into());
+            } else if state.pasted_images.pop().is_some() {
                 state.status_message = Some("Removed last image attachment".into());
             } else if let Some(element) = state.composer_ui.atomic_elements.last().cloned() {
                 if element.range.end <= state.input.len() {
@@ -3349,6 +3806,7 @@ fn dispatch_key_action(state: &mut crate::app::AppState, action: crate::keymap::
                 busy,
             );
         }
+        KeyAction::QuoteSelection => quote_selection(state),
         KeyAction::SplitHorizontal => {
             state.pane_request = Some(crate::panes::PaneRequest::Split {
                 axis: crate::panes::SplitAxis::Horizontal,
@@ -3632,7 +4090,16 @@ fn handle_agent_activity_focus(
             KeyCode::Enter => {
                 if snapshot.cancel_confirm_selected {
                     if let Some(id) = snapshot.selected_agent {
-                        queue_inline_agent_action(state, format!("cancel {id}"));
+                        let command = if snapshot.cancel_subtree {
+                            crate::agent::subagent::subtree_ids(&state.live_agent_activity, id)
+                                .into_iter()
+                                .map(|agent_id| format!("cancel {agent_id}"))
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        } else {
+                            format!("cancel {id}")
+                        };
+                        queue_inline_agent_action(state, command);
                     }
                 }
                 if let Some(focus) = state.agent_activity_focus.as_mut() {
@@ -3712,6 +4179,19 @@ fn handle_agent_activity_focus(
             if let Some(focus) = state.agent_activity_focus.as_mut() {
                 focus.cancel_confirmation = true;
                 focus.cancel_confirm_selected = false;
+                focus.cancel_subtree = false;
+            }
+        }
+        (KeyModifiers::SHIFT, KeyCode::Char('x') | KeyCode::Char('X'))
+        | (KeyModifiers::NONE, KeyCode::Char('X'))
+            if selected_row
+                .as_ref()
+                .is_some_and(|row| row.live && !row.status.terminal()) =>
+        {
+            if let Some(focus) = state.agent_activity_focus.as_mut() {
+                focus.cancel_confirmation = true;
+                focus.cancel_confirm_selected = false;
+                focus.cancel_subtree = true;
             }
         }
         _ => {}
@@ -4311,6 +4791,173 @@ fn is_command_modifier(modifiers: KeyModifiers) -> bool {
     modifiers == KeyModifiers::SUPER || modifiers == KeyModifiers::META
 }
 
+pub(crate) fn is_clipboard_paste(modifiers: KeyModifiers) -> bool {
+    modifiers == KeyModifiers::CONTROL
+        || modifiers == KeyModifiers::SUPER
+        || modifiers == KeyModifiers::META
+}
+
+fn paste_clipboard(state: &mut crate::app::AppState) {
+    if state.image_attachment_busy {
+        state.status_message = Some("Clipboard image is still processing".into());
+        return;
+    }
+    if let Ok(mut clipboard) = arboard::Clipboard::new() {
+        if let Ok(img) = clipboard.get_image() {
+            if state.pasted_images.len() >= crate::image_content::MAX_IMAGES_PER_REQUEST {
+                state.status_message = Some(format!(
+                    "At most {} images can be attached",
+                    crate::image_content::MAX_IMAGES_PER_REQUEST
+                ));
+                return;
+            }
+            match crate::image_content::RawClipboardImage::new(
+                img.width as u32,
+                img.height as u32,
+                img.bytes.into_owned(),
+            ) {
+                Ok(image) => {
+                    state.image_attachment_generation =
+                        state.image_attachment_generation.wrapping_add(1);
+                    state.image_attachment_busy = true;
+                    state.status_message = Some("Processing clipboard image…".into());
+                    state.pending_input_action =
+                        Some(crate::tui::commands::InputAction::AttachClipboardImage {
+                            image,
+                            generation: state.image_attachment_generation,
+                        });
+                }
+                Err(error) => {
+                    state.status_message = Some(format!("Could not attach image: {error}"));
+                }
+            }
+            return;
+        }
+        if let Ok(text) = clipboard.get_text() {
+            insert_pasted_chars(state, &text);
+        }
+    }
+}
+
+fn insert_pasted_chars(state: &mut crate::app::AppState, text: &str) {
+    for ch in text.chars() {
+        if ch == '\n' || ch == '\r' {
+            insert_char(state, '\n');
+        } else if !ch.is_control() {
+            insert_char(state, ch);
+        } else if ch == '\t' {
+            insert_char(state, ' ');
+        }
+    }
+}
+
+pub(crate) fn insert_image_chip(
+    state: &mut crate::app::AppState,
+    image: crate::image_content::ModelImage,
+    source: crate::tui::composer::ImageChipSource,
+) {
+    let label = crate::tui::composer::image_chip_label(state.pasted_images.len());
+    state.input_cursor = crate::tui::composer::normalize_boundary(&state.input, state.input_cursor);
+    let start = state.input_cursor;
+    state.composer_ui.apply_edit(start..start, label.len());
+    state.input.insert_str(start, &label);
+    state.input_cursor = start + label.len();
+    state
+        .composer_ui
+        .register_atomic(crate::tui::composer::AtomicElement {
+            range: start..state.input_cursor,
+            kind: crate::tui::composer::AtomicKind::Image { source },
+        });
+    state.pasted_images.push(image);
+}
+
+fn renumber_image_chips(state: &mut crate::app::AppState) {
+    let ranges: Vec<std::ops::Range<usize>> = state
+        .composer_ui
+        .atomic_elements
+        .iter()
+        .filter(|element| matches!(element.kind, crate::tui::composer::AtomicKind::Image { .. }))
+        .map(|element| element.range.clone())
+        .collect();
+    let mut shift: isize = 0;
+    for (index, range) in ranges.iter().enumerate() {
+        let start = shift_signed_cursor(range.start, shift);
+        let end = shift_signed_cursor(range.end, shift);
+        let label = crate::tui::composer::image_chip_label(index);
+        if state.input.get(start..end) == Some(label.as_str()) {
+            continue;
+        }
+        if end > state.input.len()
+            || !state.input.is_char_boundary(start)
+            || !state.input.is_char_boundary(end)
+        {
+            continue;
+        }
+        let old = start..end;
+        state.input.replace_range(old.clone(), &label);
+        state.composer_ui.retarget_element(&old, label.len());
+        let delta = label.len() as isize - old.len() as isize;
+        if state.input_cursor > start {
+            state.input_cursor = shift_signed_cursor(state.input_cursor, delta);
+        }
+        shift += delta;
+    }
+}
+
+fn shift_signed_cursor(offset: usize, delta: isize) -> usize {
+    if delta >= 0 {
+        offset.saturating_add(delta as usize)
+    } else {
+        offset.saturating_sub(delta.unsigned_abs())
+    }
+}
+
+pub(crate) fn sole_image_path(text: &str, cwd: &str) -> Option<std::path::PathBuf> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() || trimmed.contains('\n') || trimmed.contains('\r') {
+        return None;
+    }
+    let decoded = decode_dropped_path(trimmed);
+    let path = std::path::Path::new(&decoded);
+    let resolved = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::path::Path::new(cwd).join(path)
+    };
+    let extension = resolved
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())?;
+    if !matches!(
+        extension.as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tif" | "tiff"
+    ) {
+        return None;
+    }
+    resolved.is_file().then_some(resolved)
+}
+
+fn begin_image_file(state: &mut crate::app::AppState, path: std::path::PathBuf) {
+    if state.image_attachment_busy {
+        state.status_message = Some("Clipboard image is still processing".into());
+        return;
+    }
+    if state.pasted_images.len() >= crate::image_content::MAX_IMAGES_PER_REQUEST {
+        state.status_message = Some(format!(
+            "At most {} images can be attached",
+            crate::image_content::MAX_IMAGES_PER_REQUEST
+        ));
+        return;
+    }
+    state.image_attachment_generation = state.image_attachment_generation.wrapping_add(1);
+    state.image_attachment_busy = true;
+    state.status_message = Some("Processing clipboard image…".into());
+    state.pending_input_action = Some(crate::tui::commands::InputAction::AttachImageFile {
+        path,
+        generation: state.image_attachment_generation,
+    });
+}
+
 fn atomic_motion_target(
     state: &crate::app::AppState,
     target: usize,
@@ -4381,6 +5028,7 @@ fn delete_composer_range(state: &mut crate::app::AppState, range: std::ops::Rang
         state.composer_ui.preferred_column = None;
         return;
     }
+    remove_images_in_range(state, &range);
     let deleted = state.input[range.clone()].to_string();
     state.composer_ui.apply_edit(range.clone(), 0);
     state.input.replace_range(range.clone(), "");
@@ -4391,6 +5039,24 @@ fn delete_composer_range(state: &mut crate::app::AppState, range: std::ops::Rang
     state.kill_ring.insert(0, deleted);
     state.kill_ring.truncate(10);
     state.kill_ring_idx = None;
+    renumber_image_chips(state);
+}
+
+fn remove_images_in_range(state: &mut crate::app::AppState, range: &std::ops::Range<usize>) {
+    let mut ordinal = 0usize;
+    let mut remove = Vec::new();
+    for element in &state.composer_ui.atomic_elements {
+        if !matches!(element.kind, crate::tui::composer::AtomicKind::Image { .. }) {
+            continue;
+        }
+        if element.range.start < range.end && range.start < element.range.end {
+            remove.push(ordinal);
+        }
+        ordinal += 1;
+    }
+    for index in remove.into_iter().rev() {
+        state.pasted_images.remove(index);
+    }
 }
 
 fn delete_previous_word(state: &mut crate::app::AppState) {
@@ -4435,13 +5101,15 @@ fn delete_previous_char(state: &mut crate::app::AppState) {
         .element_adjacent_to_backspace(cursor)
         .unwrap_or_else(|| state.composer_ui.previous_boundary(&state.input, cursor)..cursor);
     if range.start < range.end {
+        remove_images_in_range(state, &range);
         state.input.replace_range(range.clone(), "");
         state.composer_ui.apply_edit(range.clone(), 0);
     }
-    state.input_cursor = range.start;
+    state.input_cursor = range.start.min(state.input.len());
     state
         .composer_attachments
         .retain(|attachment| attachment.is_referenced_by(&state.input));
+    renumber_image_chips(state);
 }
 
 fn delete_current_char(state: &mut crate::app::AppState) {
@@ -4451,13 +5119,15 @@ fn delete_current_char(state: &mut crate::app::AppState) {
         .element_adjacent_to_delete(cursor)
         .unwrap_or_else(|| cursor..state.composer_ui.next_boundary(&state.input, cursor));
     if range.start < range.end {
+        remove_images_in_range(state, &range);
         state.input.replace_range(range.clone(), "");
-        state.composer_ui.apply_edit(range, 0);
+        state.composer_ui.apply_edit(range.clone(), 0);
     }
-    state.input_cursor = cursor;
+    state.input_cursor = range.start.min(state.input.len());
     state
         .composer_attachments
         .retain(|attachment| attachment.is_referenced_by(&state.input));
+    renumber_image_chips(state);
 }
 
 fn insert_char(state: &mut crate::app::AppState, c: char) {
@@ -5866,6 +6536,10 @@ pub(crate) fn begin_provider_auth(
         crate::provider_connect::FirstClassProvider::OpenAiCodex => {
             "Preparing OpenAI authorization…"
         }
+        crate::provider_connect::FirstClassProvider::OpenAiChatGpt => {
+            "Preparing ChatGPT plan authorization…"
+        }
+        crate::provider_connect::FirstClassProvider::XaiOAuth => "Preparing xAI sign-in…",
     };
     let bare = !state.run_capabilities.config_writes;
     state.provider_auth = Some(crate::app::ProviderAuthState {
@@ -5903,10 +6577,17 @@ pub(crate) fn begin_provider_auth(
 }
 
 fn provider_display_rank(provider: &str) -> usize {
-    ["mimo", "openai-codex", "deepseek", "openai"]
-        .iter()
-        .position(|candidate| *candidate == provider)
-        .unwrap_or(usize::MAX)
+    [
+        "mimo",
+        "openai-codex",
+        "openai-chatgpt",
+        "xai-oauth",
+        "deepseek",
+        "openai",
+    ]
+    .iter()
+    .position(|candidate| *candidate == provider)
+    .unwrap_or(usize::MAX)
 }
 
 fn handle_provider_auth(
@@ -6268,6 +6949,9 @@ fn handle_provider_templates(
             }
             Some(template) if !template.is_installable() => {
                 manager.error = Some(template.availability.reason().to_string());
+            }
+            Some(template) if template.id == "xai-oauth" => {
+                begin_provider_auth(state, crate::provider_connect::FirstClassProvider::XaiOAuth);
             }
             Some(template) => {
                 state.pending_input_action =
@@ -7265,28 +7949,24 @@ fn handle_queue_view(
         (_, KeyCode::Up) | (_, KeyCode::Char('k')) => state.input_queue.select_previous(),
         (_, KeyCode::Down) | (_, KeyCode::Char('j')) => state.input_queue.select_next(),
         (_, KeyCode::Delete) | (_, KeyCode::Char('d')) => {
-            if state.input_queue.delete_selected().is_some() {
-                state.pending_input_action =
-                    Some(crate::tui::commands::InputAction::PersistSessionQueue);
+            if let Some(id) = state.input_queue.selected().map(|item| item.id) {
+                cancel_queued_id(state, id);
             }
-            if state.input_queue.is_empty() {
-                state.queue_view_open = false;
+        }
+        (KeyModifiers::CONTROL, KeyCode::Char('s')) | (KeyModifiers::NONE, KeyCode::Char('s')) => {
+            if let Some(id) = state.input_queue.selected().map(|item| item.id) {
+                steer_queued_id(state, id);
+                if matches!(
+                    state.pending_input_action,
+                    Some(crate::tui::commands::InputAction::Steer { .. })
+                ) {
+                    state.queue_view_open = false;
+                }
             }
         }
         (_, KeyCode::Enter) | (_, KeyCode::Char('e')) => {
-            if let Some(text) = state.input_queue.begin_edit_selected() {
-                state.input = text;
-                state.input_cursor = state.input.len();
-                state.composer_ui.clear_for_new_draft();
-                state.composer_attachments.clear();
-                state.pasted_images.clear();
-                state.queue_view_open = false;
-                state.status_message = Some(format!(
-                    "Editing queued message · Enter sends now · {} saves to queue",
-                    state
-                        .keymap
-                        .display_binding(crate::keymap::KeyAction::QueueInput)
-                ));
+            if let Some(id) = state.input_queue.selected().map(|item| item.id) {
+                load_queued_edit(state, id);
             }
         }
         _ => {}
@@ -8162,7 +8842,7 @@ fn handle_copy_picker(
                     .cloned();
                 if let Some(part) = selected {
                     state.copy_picker = None;
-                    if copy_text_to_clipboard(&part.value).is_ok() {
+                    if copy_text_to_clipboard_or_osc52(&part.value).is_ok() {
                         state.status_message = None;
                         state.show_toast(
                             format!("Copied {}", part.label.to_ascii_lowercase()),
@@ -8355,6 +9035,18 @@ fn handle_route_preset_overwrite(state: &mut crate::app::AppState, code: KeyCode
     true
 }
 
+fn queue_previous_sessions(state: &mut crate::app::AppState) {
+    let busy = state.turn_lifecycle.is_active() || state.review_in_flight;
+    queue_command(
+        state,
+        crate::tui::commands::CommandAction {
+            id: crate::tui::commands::CommandId::Resume,
+            args: String::new(),
+        },
+        busy,
+    );
+}
+
 fn queue_command(
     state: &mut crate::app::AppState,
     action: crate::tui::commands::CommandAction,
@@ -8366,7 +9058,11 @@ fn queue_command(
     else {
         return;
     };
+    // Listing previous sessions does not switch the open conversation.
+    let browse_sessions =
+        action.id == crate::tui::commands::CommandId::Resume && action.args.is_empty();
     if busy
+        && !browse_sessions
         && matches!(
             spec.availability,
             crate::tui::commands::CommandAvailability::IdleOnly
@@ -8403,10 +9099,20 @@ pub fn build_model_list_with_catalog(
     });
     let mut models = Vec::new();
     for name in provider_names {
+        let provider = &providers[name];
         let mut model_ids = std::collections::BTreeSet::new();
-        model_ids.extend(providers[name].models.iter().cloned());
+        model_ids.extend(provider.models.iter().cloned());
         if let Some(live) = discovered.get(name) {
             model_ids.extend(live.iter().cloned());
+        }
+        // A first-party route has a closed contract. Catalog and saved ids
+        // outside that contract are not selectable.
+        if crate::provider_contract::route_family(name, provider).is_some() {
+            model_ids
+                .retain(|model| crate::provider_contract::resolve(name, provider, model).is_some());
+            if model_ids.is_empty() {
+                model_ids.extend(crate::model_catalog::documented_chat_models(name, provider));
+            }
         }
         for mid in model_ids {
             models.push(ModelInfo {
@@ -8426,15 +9132,361 @@ pub fn build_model_list_with_catalog(
     models
 }
 
-fn handle_config_hub(state: &mut crate::app::AppState, code: KeyCode) -> bool {
-    let visible_count = state.config_hub.as_ref().map_or(0, |hub| {
-        hub.items
-            .iter()
-            .filter(|item| item.matches(&hub.filter))
-            .count()
+fn personality_file(state: &crate::app::AppState) -> Option<std::path::PathBuf> {
+    let config = std::path::PathBuf::from(state.config_path.as_deref()?);
+    let name = config.file_name().and_then(|name| name.to_str())?;
+    if name == "config.toml" {
+        return Some(config.with_file_name("personality.md"));
+    }
+    let stem = config.file_stem().and_then(|name| name.to_str())?;
+    Some(config.with_file_name(stem).join("personality.md"))
+}
+
+fn open_personality_settings(state: &mut crate::app::AppState) {
+    let Some(target) = personality_file(state) else {
+        state.status_message = Some("Personality file is not available for this profile".into());
+        return;
+    };
+    if state.run_capabilities.config_writes {
+        if let Err(error) = crate::harness_personality::ensure_seeded_at(&target) {
+            state.status_message = Some(format!("Personality could not be prepared: {error}"));
+            return;
+        }
+    }
+    let stored = crate::harness_personality::read_at(&target).ok().flatten();
+    let sections = crate::harness_personality::display_sections(stored.as_deref());
+    if let Some(hub) = state.config_hub.as_mut() {
+        hub.page = crate::app::ConfigHubPage::Personality(crate::app::PersonalitySettingsPage {
+            personality: sections.personality,
+            pre_prompt: sections.pre_prompt,
+            selected: 0,
+            editing: false,
+            cursor: 0,
+            error: None,
+            notice: None,
+        });
+    }
+}
+
+fn handle_personality_settings(state: &mut crate::app::AppState, code: KeyCode) -> bool {
+    let editing = state.config_hub.as_ref().is_some_and(|hub| {
+        matches!(
+            &hub.page,
+            crate::app::ConfigHubPage::Personality(page) if page.editing
+        )
     });
+    if editing {
+        return edit_personality_text(state, code);
+    }
     match code {
-        KeyCode::Esc => state.config_hub = None,
+        KeyCode::F(2) => state.config_hub = None,
+        KeyCode::Esc => {
+            if let Some(hub) = state.config_hub.as_mut() {
+                hub.page = crate::app::ConfigHubPage::List;
+            }
+        }
+        KeyCode::Up | KeyCode::Char('k') => move_personality_selection(state, -1),
+        KeyCode::Down | KeyCode::Char('j') => move_personality_selection(state, 1),
+        KeyCode::Enter => activate_personality_row(state),
+        _ => {}
+    }
+    true
+}
+
+fn move_personality_selection(state: &mut crate::app::AppState, delta: isize) {
+    if let Some(hub) = state.config_hub.as_mut() {
+        if let crate::app::ConfigHubPage::Personality(page) = &mut hub.page {
+            let next = page.selected as isize + delta;
+            page.selected = next.clamp(0, 3) as usize;
+        }
+    }
+}
+
+fn activate_personality_row(state: &mut crate::app::AppState) {
+    let selected = state.config_hub.as_ref().and_then(|hub| match &hub.page {
+        crate::app::ConfigHubPage::Personality(page) => Some(page.selected),
+        _ => None,
+    });
+    match selected {
+        Some(0 | 1) => {
+            if let Some(hub) = state.config_hub.as_mut() {
+                if let crate::app::ConfigHubPage::Personality(page) = &mut hub.page {
+                    page.editing = true;
+                    page.cursor = if page.selected == 0 {
+                        page.personality.len()
+                    } else {
+                        page.pre_prompt.len()
+                    };
+                    page.error = None;
+                }
+            }
+        }
+        Some(2) => {
+            state.config_hub = None;
+            state.pending_input_action = Some(crate::tui::commands::InputAction::Command(
+                crate::tui::commands::CommandAction {
+                    id: crate::tui::commands::CommandId::Personality,
+                    args: String::new(),
+                },
+            ));
+        }
+        Some(3) => save_personality_settings(state),
+        _ => {}
+    }
+}
+
+fn save_personality_settings(state: &mut crate::app::AppState) {
+    if !state.run_capabilities.config_writes {
+        if let Some(hub) = state.config_hub.as_mut() {
+            if let crate::app::ConfigHubPage::Personality(page) = &mut hub.page {
+                page.error = Some("Bare mode cannot save personality".into());
+            }
+        }
+        return;
+    }
+    let Some(target) = personality_file(state) else {
+        return;
+    };
+    let (personality, pre_prompt) = state
+        .config_hub
+        .as_ref()
+        .and_then(|hub| match &hub.page {
+            crate::app::ConfigHubPage::Personality(page) => {
+                Some((page.personality.clone(), page.pre_prompt.clone()))
+            }
+            _ => None,
+        })
+        .unwrap_or_default();
+    match crate::harness_personality::save_sections_at(&target, &personality, &pre_prompt) {
+        Ok(()) => {
+            if let Some(hub) = state.config_hub.as_mut() {
+                if let crate::app::ConfigHubPage::Personality(page) = &mut hub.page {
+                    page.notice = Some("Personality saved".into());
+                    page.error = None;
+                }
+            }
+        }
+        Err(error) => {
+            if let Some(hub) = state.config_hub.as_mut() {
+                if let crate::app::ConfigHubPage::Personality(page) = &mut hub.page {
+                    page.error = Some(error.to_string());
+                }
+            }
+        }
+    }
+}
+
+fn edit_personality_text(state: &mut crate::app::AppState, code: KeyCode) -> bool {
+    let Some(hub) = state.config_hub.as_mut() else {
+        return true;
+    };
+    let crate::app::ConfigHubPage::Personality(page) = &mut hub.page else {
+        return true;
+    };
+    let selected = page.selected;
+    let crate::app::PersonalitySettingsPage {
+        personality,
+        pre_prompt,
+        editing,
+        cursor,
+        ..
+    } = page;
+    let text = if selected == 0 {
+        personality
+    } else {
+        pre_prompt
+    };
+    match code {
+        KeyCode::Esc => *editing = false,
+        KeyCode::Enter => insert_personality_char(text, cursor, '\n'),
+        KeyCode::Backspace => {
+            if *cursor > 0 {
+                let mut end = *cursor - 1;
+                while end > 0 && !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                text.replace_range(end..*cursor, "");
+                *cursor = end;
+            }
+        }
+        KeyCode::Left => {
+            if *cursor > 0 {
+                *cursor -= 1;
+                while *cursor > 0 && !text.is_char_boundary(*cursor) {
+                    *cursor -= 1;
+                }
+            }
+        }
+        KeyCode::Right => {
+            if *cursor < text.len() {
+                *cursor += 1;
+                while *cursor < text.len() && !text.is_char_boundary(*cursor) {
+                    *cursor += 1;
+                }
+            }
+        }
+        KeyCode::Char(ch) => insert_personality_char(text, cursor, ch),
+        _ => {}
+    }
+    true
+}
+
+fn insert_personality_char(text: &mut String, cursor: &mut usize, ch: char) {
+    text.insert(*cursor, ch);
+    *cursor += ch.len_utf8();
+}
+
+fn settings_cursor(state: &crate::app::AppState) -> Option<(usize, usize)> {
+    let hub = state.config_hub.as_ref()?;
+    match &hub.page {
+        crate::app::ConfigHubPage::List => {
+            let count = hub.visible_items().len();
+            Some((hub.selected_idx.min(count.saturating_sub(1)), count))
+        }
+        crate::app::ConfigHubPage::Choices(page) => {
+            let count = page.choices.len();
+            Some((page.selected_idx.min(count.saturating_sub(1)), count))
+        }
+        crate::app::ConfigHubPage::Personality(page) => Some((page.selected.min(3), 4)),
+    }
+}
+
+fn set_settings_cursor(state: &mut crate::app::AppState, index: usize) {
+    let Some(hub) = state.config_hub.as_mut() else {
+        return;
+    };
+    match &mut hub.page {
+        crate::app::ConfigHubPage::List => hub.selected_idx = index,
+        crate::app::ConfigHubPage::Choices(page) => {
+            let last = page.choices.len().saturating_sub(1);
+            page.selected_idx = index.min(last);
+        }
+        crate::app::ConfigHubPage::Personality(page) => page.selected = index.min(3),
+    }
+}
+
+fn shift_index(index: usize, delta: isize, count: usize) -> usize {
+    if count == 0 {
+        return 0;
+    }
+    if delta < 0 {
+        index.saturating_sub(delta.unsigned_abs())
+    } else {
+        index.saturating_add(delta as usize).min(count - 1)
+    }
+}
+
+fn move_settings_cursor(state: &mut crate::app::AppState, delta: isize) {
+    let Some((index, count)) = settings_cursor(state) else {
+        return;
+    };
+    set_settings_cursor(state, shift_index(index, delta, count));
+}
+
+fn page_settings(state: &mut crate::app::AppState, forward: bool) {
+    let (height, lines) = {
+        let Some(hub) = state.config_hub.as_ref() else {
+            return;
+        };
+        (
+            usize::from(hub.viewport_rows.get()),
+            hub.row_lines.borrow().clone(),
+        )
+    };
+    let Some((index, count)) = settings_cursor(state) else {
+        return;
+    };
+    let next = if height > 1 && lines.len() == count && count > 0 {
+        let current = lines.get(index).copied().unwrap_or(0);
+        let span = height.saturating_sub(1).max(1);
+        let goal = if forward {
+            current.saturating_add(span)
+        } else {
+            current.saturating_sub(span)
+        };
+        let mut landed = if forward {
+            lines
+                .iter()
+                .rposition(|line| *line <= goal)
+                .unwrap_or(index)
+        } else {
+            lines.iter().position(|line| *line >= goal).unwrap_or(0)
+        };
+        if forward && landed <= index {
+            landed = (index + 1).min(count - 1);
+        }
+        if !forward && landed >= index {
+            landed = index.saturating_sub(1);
+        }
+        landed
+    } else {
+        let step = if forward { 6 } else { -6 };
+        shift_index(index, step, count)
+    };
+    set_settings_cursor(state, next);
+}
+
+fn scroll_settings_sheet(
+    state: &mut crate::app::AppState,
+    direction: crate::tui::event::ScrollDirection,
+    rows: u16,
+) -> bool {
+    let editing = state.config_hub.as_ref().is_some_and(|hub| {
+        matches!(
+            &hub.page,
+            crate::app::ConfigHubPage::Personality(page) if page.editing
+        )
+    });
+    if !editing {
+        let step = isize::try_from(rows.max(1)).unwrap_or(isize::MAX);
+        let delta = match direction {
+            crate::tui::event::ScrollDirection::Up => -step,
+            crate::tui::event::ScrollDirection::Down => step,
+        };
+        move_settings_cursor(state, delta);
+    }
+    true
+}
+
+fn handle_config_hub(state: &mut crate::app::AppState, code: KeyCode) -> bool {
+    if matches!(
+        state.config_hub.as_ref().map(|hub| &hub.page),
+        Some(crate::app::ConfigHubPage::Personality(_))
+    ) {
+        return handle_personality_settings(state, code);
+    }
+    if matches!(
+        state.config_hub.as_ref().map(|hub| &hub.page),
+        Some(crate::app::ConfigHubPage::Choices(_))
+    ) {
+        return handle_config_choice_page(state, code);
+    }
+    let visible_count = state
+        .config_hub
+        .as_ref()
+        .map_or(0, |hub| hub.visible_items().len());
+    let search_focused = state
+        .config_hub
+        .as_ref()
+        .is_some_and(|hub| hub.search_focused);
+    match code {
+        KeyCode::F(2) => state.config_hub = None,
+        KeyCode::Esc => {
+            let clear = state
+                .config_hub
+                .as_ref()
+                .is_some_and(|hub| hub.search_focused || !hub.filter.is_empty());
+            if clear {
+                if let Some(hub) = state.config_hub.as_mut() {
+                    hub.filter.clear();
+                    hub.search_focused = false;
+                    hub.selected_idx = 0;
+                    hub.click_row = None;
+                }
+            } else {
+                state.config_hub = None;
+            }
+        }
         KeyCode::Up => {
             if let Some(hub) = state.config_hub.as_mut() {
                 hub.selected_idx = hub.selected_idx.saturating_sub(1);
@@ -8457,163 +9509,206 @@ fn handle_config_hub(state: &mut crate::app::AppState, code: KeyCode) -> bool {
                 hub.selected_idx = visible_count.saturating_sub(1);
             }
         }
-        KeyCode::PageUp => {
-            if let Some(hub) = state.config_hub.as_mut() {
-                hub.selected_idx = hub.selected_idx.saturating_sub(6);
-            }
-        }
-        KeyCode::PageDown => {
-            if let Some(hub) = state.config_hub.as_mut() {
-                hub.selected_idx = hub
-                    .selected_idx
-                    .saturating_add(6)
-                    .min(visible_count.saturating_sub(1));
-            }
-        }
+        KeyCode::PageUp => page_settings(state, false),
+        KeyCode::PageDown => page_settings(state, true),
         KeyCode::Backspace => {
+            if search_focused {
+                if let Some(hub) = state.config_hub.as_mut() {
+                    hub.filter.pop();
+                    hub.selected_idx = 0;
+                }
+            }
+        }
+        KeyCode::Char('/') if !search_focused => {
             if let Some(hub) = state.config_hub.as_mut() {
-                hub.filter.pop();
+                hub.search_focused = true;
+            }
+        }
+        KeyCode::Char('g') if !search_focused => {
+            if let Some(hub) = state.config_hub.as_mut() {
                 hub.selected_idx = 0;
             }
         }
-        KeyCode::Enter => {
-            let action = state.config_hub.as_ref().and_then(|hub| {
-                hub.items
-                    .iter()
-                    .filter(|item| item.matches(&hub.filter))
-                    .nth(hub.selected_idx)
-                    .map(|item| item.action.clone())
-            });
-            state.config_hub = None;
-            match action {
-                Some(crate::app::ConfigHubAction::Profile(profile)) => {
-                    state.status_message = Some(format!("Active profile: {profile}"))
-                }
-                Some(crate::app::ConfigHubAction::CurrentModel) => open_model_picker(state),
-                Some(crate::app::ConfigHubAction::Delegation {
-                    selected,
-                    configured,
-                }) => open_delegation_model_picker(state, selected.as_ref(), &configured),
-                Some(crate::app::ConfigHubAction::DelegationMode(mode)) => {
-                    state.pending_input_action =
-                        Some(crate::tui::commands::InputAction::SaveDelegationMode(mode));
-                }
-                Some(crate::app::ConfigHubAction::ReviewModel) => {
-                    open_review_model_picker(state, None)
-                }
-                Some(crate::app::ConfigHubAction::ProviderSetup) => {
-                    state.pending_input_action = Some(crate::tui::commands::InputAction::Command(
-                        crate::tui::commands::CommandAction {
-                            id: crate::tui::commands::CommandId::Provider,
-                            args: "setup".into(),
-                        },
-                    ));
-                }
-                Some(crate::app::ConfigHubAction::Reasoning) => {
-                    state.pending_input_action =
-                        Some(crate::tui::commands::InputAction::CycleReasoning);
-                }
-                Some(crate::app::ConfigHubAction::Mcp) => {
-                    state.pending_input_action = Some(crate::tui::commands::InputAction::Command(
-                        crate::tui::commands::CommandAction {
-                            id: crate::tui::commands::CommandId::Mcp,
-                            args: String::new(),
-                        },
-                    ));
-                }
-                Some(crate::app::ConfigHubAction::SelfImprovement) => {
-                    state.pending_input_action = Some(crate::tui::commands::InputAction::Command(
-                        crate::tui::commands::CommandAction {
-                            id: crate::tui::commands::CommandId::SelfImprove,
-                            args: String::new(),
-                        },
-                    ));
-                }
-                Some(crate::app::ConfigHubAction::Skills) => {
-                    state.pending_input_action = Some(crate::tui::commands::InputAction::Command(
-                        crate::tui::commands::CommandAction {
-                            id: crate::tui::commands::CommandId::Skills,
-                            args: String::new(),
-                        },
-                    ));
-                }
-                Some(crate::app::ConfigHubAction::Hooks) => {
-                    state.pending_input_action = Some(crate::tui::commands::InputAction::Command(
-                        crate::tui::commands::CommandAction {
-                            id: crate::tui::commands::CommandId::Hooks,
-                            args: String::new(),
-                        },
-                    ));
-                }
-                Some(crate::app::ConfigHubAction::Sandbox) => {
-                    state.pending_input_action = Some(crate::tui::commands::InputAction::Command(
-                        crate::tui::commands::CommandAction {
-                            id: crate::tui::commands::CommandId::Sandbox,
-                            args: String::new(),
-                        },
-                    ));
-                }
-                Some(crate::app::ConfigHubAction::ContextLimits) => {
-                    state.pending_input_action = Some(crate::tui::commands::InputAction::Command(
-                        crate::tui::commands::CommandAction {
-                            id: crate::tui::commands::CommandId::ContextLimit,
-                            args: String::new(),
-                        },
-                    ));
-                }
-                Some(crate::app::ConfigHubAction::SessionRetention) => {
-                    state.pending_input_action = Some(crate::tui::commands::InputAction::Command(
-                        crate::tui::commands::CommandAction {
-                            id: crate::tui::commands::CommandId::Retention,
-                            args: String::new(),
-                        },
-                    ));
-                }
-                Some(crate::app::ConfigHubAction::Notification) => {
-                    let saved = state.notification_style;
-                    let selected_idx = crate::ui_settings::NotificationStyle::ALL
-                        .iter()
-                        .position(|style| *style == saved)
-                        .unwrap_or(0);
-                    state.notification_picker = Some(crate::app::NotificationPickerState {
-                        saved,
-                        selected_idx,
-                        busy: false,
-                        error: None,
-                    });
-                }
-                Some(crate::app::ConfigHubAction::Mouse) => {
-                    if state.run_capabilities.config_writes {
-                        state.pending_input_action =
-                            Some(crate::tui::commands::InputAction::SaveMouse(
-                                state.mouse_mode.toggled(),
-                            ));
-                        state.status_message = Some("Saving trackpad scrolling preference…".into());
-                    } else {
-                        state.status_message =
-                            Some("Bare mode cannot save trackpad scrolling preferences".into());
-                    }
-                }
-                Some(crate::app::ConfigHubAction::CommandOutput) => {
-                    let saved = state.command_output_policy;
-                    let selected_idx = crate::config::CommandOutputPolicy::ALL
-                        .iter()
-                        .position(|policy| *policy == saved)
-                        .unwrap_or(0);
-                    state.command_output_picker = Some(crate::app::CommandOutputPickerState {
-                        saved,
-                        selected_idx,
-                        busy: false,
-                        error: None,
-                    });
-                }
-                Some(crate::app::ConfigHubAction::ConfigFile(path)) => {
-                    state.status_message = Some(path)
-                }
-                None => state.status_message = Some("No matching settings".into()),
+        KeyCode::Char('G') if !search_focused => {
+            if let Some(hub) = state.config_hub.as_mut() {
+                hub.selected_idx = visible_count.saturating_sub(1);
             }
         }
-        KeyCode::Char(character) if !character.is_control() => {
+        KeyCode::Char('k') if !search_focused => {
+            if let Some(hub) = state.config_hub.as_mut() {
+                hub.selected_idx = hub.selected_idx.saturating_sub(1);
+            }
+        }
+        KeyCode::Char('j') if !search_focused => {
+            if let Some(hub) = state.config_hub.as_mut() {
+                if hub.selected_idx + 1 < visible_count {
+                    hub.selected_idx += 1;
+                }
+            }
+        }
+        KeyCode::Char('d') if !search_focused => reset_selected_config_row(state),
+        KeyCode::Char(' ') if !search_focused => cycle_selected_config_row(state),
+        KeyCode::Enter | KeyCode::Right => {
+            if selected_config_item(state).is_some_and(|item| {
+                matches!(item.action, crate::app::ConfigHubAction::PersonalityMenu)
+            }) {
+                open_personality_settings(state);
+                return true;
+            }
+            if selected_config_item(state).is_some_and(|item| item.choices.is_some()) {
+                open_selected_choice_page(state);
+            } else {
+                let action = selected_config_item(state).map(|item| item.action);
+                state.config_hub = None;
+                match action {
+                    Some(crate::app::ConfigHubAction::Profile(profile)) => {
+                        state.status_message = Some(format!("Active profile: {profile}"))
+                    }
+                    Some(crate::app::ConfigHubAction::CurrentModel) => open_model_picker(state),
+                    Some(crate::app::ConfigHubAction::Delegation {
+                        selected,
+                        configured,
+                    }) => open_delegation_model_picker(state, selected.as_ref(), &configured),
+                    Some(crate::app::ConfigHubAction::DelegationMode(mode)) => {
+                        state.pending_input_action =
+                            Some(crate::tui::commands::InputAction::SaveDelegationMode(mode));
+                    }
+                    Some(crate::app::ConfigHubAction::ReviewModel) => {
+                        open_review_model_picker(state, None)
+                    }
+                    Some(crate::app::ConfigHubAction::ProviderSetup) => {
+                        state.pending_input_action =
+                            Some(crate::tui::commands::InputAction::Command(
+                                crate::tui::commands::CommandAction {
+                                    id: crate::tui::commands::CommandId::Provider,
+                                    args: "setup".into(),
+                                },
+                            ));
+                    }
+                    Some(crate::app::ConfigHubAction::Reasoning) => {
+                        state.pending_input_action =
+                            Some(crate::tui::commands::InputAction::OpenReasoningPicker);
+                    }
+                    Some(crate::app::ConfigHubAction::Mcp) => {
+                        state.pending_input_action =
+                            Some(crate::tui::commands::InputAction::Command(
+                                crate::tui::commands::CommandAction {
+                                    id: crate::tui::commands::CommandId::Mcp,
+                                    args: String::new(),
+                                },
+                            ));
+                    }
+                    Some(crate::app::ConfigHubAction::SelfImprovement) => {
+                        state.pending_input_action =
+                            Some(crate::tui::commands::InputAction::Command(
+                                crate::tui::commands::CommandAction {
+                                    id: crate::tui::commands::CommandId::SelfImprove,
+                                    args: String::new(),
+                                },
+                            ));
+                    }
+                    Some(crate::app::ConfigHubAction::Skills) => {
+                        state.pending_input_action =
+                            Some(crate::tui::commands::InputAction::Command(
+                                crate::tui::commands::CommandAction {
+                                    id: crate::tui::commands::CommandId::Skills,
+                                    args: String::new(),
+                                },
+                            ));
+                    }
+                    Some(crate::app::ConfigHubAction::Hooks) => {
+                        state.pending_input_action =
+                            Some(crate::tui::commands::InputAction::Command(
+                                crate::tui::commands::CommandAction {
+                                    id: crate::tui::commands::CommandId::Hooks,
+                                    args: String::new(),
+                                },
+                            ));
+                    }
+                    Some(crate::app::ConfigHubAction::Sandbox) => {
+                        state.pending_input_action =
+                            Some(crate::tui::commands::InputAction::Command(
+                                crate::tui::commands::CommandAction {
+                                    id: crate::tui::commands::CommandId::Sandbox,
+                                    args: String::new(),
+                                },
+                            ));
+                    }
+                    Some(crate::app::ConfigHubAction::ContextLimits) => {
+                        state.pending_input_action =
+                            Some(crate::tui::commands::InputAction::Command(
+                                crate::tui::commands::CommandAction {
+                                    id: crate::tui::commands::CommandId::ContextLimit,
+                                    args: String::new(),
+                                },
+                            ));
+                    }
+                    Some(crate::app::ConfigHubAction::SessionRetention) => {
+                        state.pending_input_action =
+                            Some(crate::tui::commands::InputAction::Command(
+                                crate::tui::commands::CommandAction {
+                                    id: crate::tui::commands::CommandId::Retention,
+                                    args: String::new(),
+                                },
+                            ));
+                    }
+                    Some(crate::app::ConfigHubAction::Notification) => {
+                        let saved = state.notification_style;
+                        let selected_idx = crate::ui_settings::NotificationStyle::ALL
+                            .iter()
+                            .position(|style| *style == saved)
+                            .unwrap_or(0);
+                        state.notification_picker = Some(crate::app::NotificationPickerState {
+                            saved,
+                            selected_idx,
+                            busy: false,
+                            error: None,
+                        });
+                    }
+                    Some(crate::app::ConfigHubAction::Mouse) => {
+                        if state.run_capabilities.config_writes {
+                            state.pending_input_action =
+                                Some(crate::tui::commands::InputAction::SaveMouse(
+                                    state.mouse_mode.toggled(),
+                                ));
+                            state.status_message =
+                                Some("Saving trackpad scrolling preference…".into());
+                        } else {
+                            state.status_message =
+                                Some("Bare mode cannot save trackpad scrolling preferences".into());
+                        }
+                    }
+                    Some(crate::app::ConfigHubAction::CommandOutput) => {
+                        let saved = state.command_output_policy;
+                        let selected_idx = crate::config::CommandOutputPolicy::ALL
+                            .iter()
+                            .position(|policy| *policy == saved)
+                            .unwrap_or(0);
+                        state.command_output_picker = Some(crate::app::CommandOutputPickerState {
+                            saved,
+                            selected_idx,
+                            busy: false,
+                            error: None,
+                        });
+                    }
+                    Some(crate::app::ConfigHubAction::ConfigFile(path)) => {
+                        state.status_message = Some(path)
+                    }
+                    Some(crate::app::ConfigHubAction::Statusline) => {
+                        queue_settings_command(state, crate::tui::commands::CommandId::Statusline)
+                    }
+                    Some(crate::app::ConfigHubAction::Keymap) => {
+                        queue_settings_command(state, crate::tui::commands::CommandId::Keymap)
+                    }
+                    Some(crate::app::ConfigHubAction::Permissions) => {
+                        queue_settings_command(state, crate::tui::commands::CommandId::Permissions)
+                    }
+                    Some(action) => apply_config_save(state, action, None),
+                    None => state.status_message = Some("No matching settings".into()),
+                }
+            }
+        }
+        KeyCode::Char(character) if search_focused && !character.is_control() => {
             if let Some(hub) = state.config_hub.as_mut() {
                 hub.filter.push(character);
                 hub.selected_idx = 0;
@@ -8622,6 +9717,511 @@ fn handle_config_hub(state: &mut crate::app::AppState, code: KeyCode) -> bool {
         _ => {}
     }
     true
+}
+
+fn selected_config_item(state: &crate::app::AppState) -> Option<crate::app::ConfigHubItem> {
+    state.config_hub.as_ref().and_then(|hub| {
+        hub.visible_items()
+            .into_iter()
+            .nth(hub.selected_idx)
+            .cloned()
+    })
+}
+
+fn queue_settings_command(state: &mut crate::app::AppState, id: crate::tui::commands::CommandId) {
+    state.pending_input_action = Some(crate::tui::commands::InputAction::Command(
+        crate::tui::commands::CommandAction {
+            id,
+            args: String::new(),
+        },
+    ));
+}
+
+fn open_selected_choice_page(state: &mut crate::app::AppState) {
+    let Some(item) = selected_config_item(state) else {
+        return;
+    };
+    let Some(choices) = item.choices.clone() else {
+        return;
+    };
+    let selected_idx = choices
+        .iter()
+        .position(|choice| choice.label == item.value)
+        .unwrap_or(0);
+    if let Some(hub) = state.config_hub.as_mut() {
+        hub.click_row = None;
+        hub.choice_scroll.set(0);
+        hub.viewport_rows.set(0);
+        hub.row_lines.borrow_mut().clear();
+        hub.page = crate::app::ConfigHubPage::Choices(crate::app::ConfigHubChoicePage {
+            title: item.label,
+            detail: item.description,
+            selected_idx,
+            choices,
+            sandbox_saved: item.sandbox_saved,
+        });
+    }
+}
+
+fn config_save_allowed(
+    state: &mut crate::app::AppState,
+    action: &crate::app::ConfigHubAction,
+) -> bool {
+    let saving = matches!(
+        action,
+        crate::app::ConfigHubAction::NotificationSave(_)
+            | crate::app::ConfigHubAction::MouseSave(_)
+            | crate::app::ConfigHubAction::CommandOutputSave(_)
+            | crate::app::ConfigHubAction::SandboxSave(_)
+            | crate::app::ConfigHubAction::DelegationMode(_)
+            | crate::app::ConfigHubAction::ThemeSave(_)
+            | crate::app::ConfigHubAction::CompactSave(_)
+            | crate::app::ConfigHubAction::StatusIndicatorsSave(_)
+            | crate::app::ConfigHubAction::FilterPreviewSave(_)
+            | crate::app::ConfigHubAction::ToggleSave { .. }
+            | crate::app::ConfigHubAction::ToolDiscoverySave(_)
+            | crate::app::ConfigHubAction::BulletSave(_)
+            | crate::app::ConfigHubAction::AutoThemeSave { .. }
+    );
+    if saving && !state.run_capabilities.config_writes {
+        state.status_message = Some("Bare mode cannot save this setting".into());
+        return false;
+    }
+    true
+}
+
+fn cycle_selected_config_row(state: &mut crate::app::AppState) {
+    let Some(item) = selected_config_item(state) else {
+        return;
+    };
+    let Some(choices) = item.choices.clone() else {
+        return;
+    };
+    if choices.is_empty() {
+        return;
+    }
+    let current = choices
+        .iter()
+        .position(|choice| choice.label == item.value)
+        .unwrap_or(0);
+    let choice = choices[(current + 1) % choices.len()].clone();
+    if !config_save_allowed(state, &choice.action) {
+        return;
+    }
+    if let Some(hub) = state.config_hub.as_mut() {
+        if let Some(row) = hub
+            .items
+            .iter_mut()
+            .find(|row| row.label == item.label && row.section == item.section)
+        {
+            row.value = choice.label.clone();
+        }
+    }
+    apply_config_save(state, choice.action, item.sandbox_saved);
+}
+
+fn reset_selected_config_row(state: &mut crate::app::AppState) {
+    let Some(item) = selected_config_item(state) else {
+        return;
+    };
+    let Some(reset) = item.reset.clone() else {
+        return;
+    };
+    if !config_save_allowed(state, &reset) {
+        return;
+    }
+    if let Some(choice) = item
+        .choices
+        .as_ref()
+        .and_then(|choices| choices.iter().find(|choice| choice.action == reset))
+    {
+        let label = choice.label.clone();
+        if let Some(hub) = state.config_hub.as_mut() {
+            if let Some(row) = hub.items.iter_mut().find(|row| row.label == item.label) {
+                row.value = label;
+            }
+        }
+    }
+    apply_config_save(state, reset, item.sandbox_saved);
+}
+
+fn apply_config_save(
+    state: &mut crate::app::AppState,
+    action: crate::app::ConfigHubAction,
+    sandbox_saved: Option<crate::sandbox::SandboxMode>,
+) {
+    match action {
+        crate::app::ConfigHubAction::NotificationSave(style) => {
+            state.pending_input_action =
+                Some(crate::tui::commands::InputAction::SaveNotification(style));
+        }
+        crate::app::ConfigHubAction::MouseSave(mode) => {
+            state.pending_input_action = Some(crate::tui::commands::InputAction::SaveMouse(mode));
+        }
+        crate::app::ConfigHubAction::CommandOutputSave(policy) => {
+            state.pending_input_action =
+                Some(crate::tui::commands::InputAction::SaveCommandOutput(policy));
+        }
+        crate::app::ConfigHubAction::DelegationMode(mode) => {
+            state.pending_input_action =
+                Some(crate::tui::commands::InputAction::SaveDelegationMode(mode));
+        }
+        crate::app::ConfigHubAction::SandboxSave(mode) => {
+            if sandbox_saved.is_some_and(|saved| mode.is_weaker_than(saved)) {
+                open_sandbox_downgrade(state, sandbox_saved.expect("saved mode"), mode);
+                state.config_hub = None;
+                return;
+            }
+            state.pending_input_action =
+                Some(crate::tui::commands::InputAction::SaveSandboxMode(mode));
+        }
+        crate::app::ConfigHubAction::ThemeSave(theme) => {
+            state.pending_input_action = Some(crate::tui::commands::InputAction::SaveTheme(theme));
+        }
+        crate::app::ConfigHubAction::CompactSave(enabled) => {
+            state.pending_input_action =
+                Some(crate::tui::commands::InputAction::SaveCompactMode(enabled));
+        }
+        crate::app::ConfigHubAction::StatusIndicatorsSave(enabled) => {
+            state.pending_input_action = Some(
+                crate::tui::commands::InputAction::SaveStatusIndicators(enabled),
+            );
+        }
+        crate::app::ConfigHubAction::FilterPreviewSave(enabled) => {
+            state.pending_input_action = Some(
+                crate::tui::commands::InputAction::SaveFilterPreview(enabled),
+            );
+        }
+        crate::app::ConfigHubAction::ToggleSave { toggle, enabled } => {
+            if toggle == crate::app::SettingsToggle::SettingDescriptions {
+                state.show_setting_descriptions = enabled;
+            }
+            state.pending_input_action = Some(crate::tui::commands::InputAction::SaveSetting(
+                crate::app::SettingWrite::Toggle { toggle, enabled },
+            ));
+        }
+        crate::app::ConfigHubAction::ToolDiscoverySave(mode) => {
+            state.pending_input_action = Some(crate::tui::commands::InputAction::SaveSetting(
+                crate::app::SettingWrite::ToolDiscovery(mode),
+            ));
+        }
+        crate::app::ConfigHubAction::BulletSave(style) => {
+            state.pending_input_action = Some(crate::tui::commands::InputAction::SaveSetting(
+                crate::app::SettingWrite::Bullet(style),
+            ));
+        }
+        crate::app::ConfigHubAction::AutoThemeSave { light, theme } => {
+            state.pending_input_action = Some(crate::tui::commands::InputAction::SaveSetting(
+                crate::app::SettingWrite::AutoTheme { light, theme },
+            ));
+        }
+        crate::app::ConfigHubAction::ApprovalSave(auto_review) => {
+            if state.run_capabilities.config_writes {
+                state.pending_input_action = Some(crate::tui::commands::InputAction::SaveSetting(
+                    crate::app::SettingWrite::Approval(auto_review),
+                ));
+            } else {
+                state.approval = if auto_review {
+                    crate::app::ApprovalMode::AutoReview
+                } else {
+                    crate::app::ApprovalMode::Allowlist
+                };
+                state.status_message = Some(if auto_review {
+                    "Auto-review on for this bare run".into()
+                } else {
+                    "Ask for this bare run".into()
+                });
+            }
+        }
+        crate::app::ConfigHubAction::ToolSchemaSave(coding) => {
+            state.schema_posture_override = Some(coding);
+            state.status_message = Some(if coding {
+                "Tool schema: coding for this session".into()
+            } else {
+                "Tool schema: full for this session".into()
+            });
+        }
+        crate::app::ConfigHubAction::ReasoningSave(effort) => {
+            state.reasoning_effort = Some(effort);
+            state.status_message = Some(format!("Reasoning: {effort}"));
+        }
+        crate::app::ConfigHubAction::OpenCommand { id, args } => {
+            state.pending_input_action = Some(crate::tui::commands::InputAction::Command(
+                crate::tui::commands::CommandAction {
+                    id,
+                    args: (*args).to_string(),
+                },
+            ));
+        }
+        crate::app::ConfigHubAction::Statusline => {
+            queue_settings_command(state, crate::tui::commands::CommandId::Statusline)
+        }
+        crate::app::ConfigHubAction::Keymap => {
+            queue_settings_command(state, crate::tui::commands::CommandId::Keymap)
+        }
+        crate::app::ConfigHubAction::Permissions => {
+            queue_settings_command(state, crate::tui::commands::CommandId::Permissions)
+        }
+        _ => state.status_message = Some("That setting does not change from this row".into()),
+    }
+}
+
+fn open_sandbox_downgrade(
+    state: &mut crate::app::AppState,
+    saved: crate::sandbox::SandboxMode,
+    target: crate::sandbox::SandboxMode,
+) {
+    let selected_idx = crate::app::SandboxHubState::MODES
+        .iter()
+        .position(|mode| *mode == target)
+        .unwrap_or(0);
+    state.sandbox_hub = Some(crate::app::SandboxHubState {
+        saved_mode: saved,
+        effective_mode: state.effective_sandbox_mode,
+        backend_available: crate::sandbox::SandboxBackend::new(state.effective_sandbox_mode)
+            .is_available(),
+        writable_roots: state
+            .workspace
+            .roots()
+            .iter()
+            .filter(|root| !root.read_only)
+            .map(|root| root.path.display().to_string())
+            .collect(),
+        selected_idx,
+        confirmation: Some(crate::app::SandboxConfirmationState {
+            target,
+            confirm_selected: false,
+        }),
+        busy: false,
+        writes_enabled: state.run_capabilities.config_writes,
+        notice: None,
+        error: None,
+    });
+}
+
+fn handle_config_choice_page(state: &mut crate::app::AppState, code: KeyCode) -> bool {
+    let len = state
+        .config_hub
+        .as_ref()
+        .and_then(|hub| match &hub.page {
+            crate::app::ConfigHubPage::Choices(page) => Some(page.choices.len()),
+            crate::app::ConfigHubPage::List | crate::app::ConfigHubPage::Personality(_) => None,
+        })
+        .unwrap_or(0);
+    match code {
+        KeyCode::F(2) => state.config_hub = None,
+        KeyCode::Esc => {
+            if let Some(hub) = state.config_hub.as_mut() {
+                hub.page = crate::app::ConfigHubPage::List;
+                hub.click_row = None;
+                hub.viewport_rows.set(0);
+                hub.row_lines.borrow_mut().clear();
+            }
+        }
+        KeyCode::PageUp => page_settings(state, false),
+        KeyCode::PageDown => page_settings(state, true),
+        KeyCode::Up | KeyCode::Char('k') => {
+            if let Some(hub) = state.config_hub.as_mut() {
+                if let crate::app::ConfigHubPage::Choices(page) = &mut hub.page {
+                    page.selected_idx = page.selected_idx.saturating_sub(1);
+                }
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if let Some(hub) = state.config_hub.as_mut() {
+                if let crate::app::ConfigHubPage::Choices(page) = &mut hub.page {
+                    if page.selected_idx + 1 < len {
+                        page.selected_idx += 1;
+                    }
+                }
+            }
+        }
+        KeyCode::Home | KeyCode::Char('g') => {
+            if let Some(hub) = state.config_hub.as_mut() {
+                if let crate::app::ConfigHubPage::Choices(page) = &mut hub.page {
+                    page.selected_idx = 0;
+                }
+            }
+        }
+        KeyCode::End | KeyCode::Char('G') => {
+            if let Some(hub) = state.config_hub.as_mut() {
+                if let crate::app::ConfigHubPage::Choices(page) = &mut hub.page {
+                    page.selected_idx = len.saturating_sub(1);
+                }
+            }
+        }
+        KeyCode::Enter => confirm_selected_choice(state),
+        _ => {}
+    }
+    true
+}
+
+fn confirm_selected_choice(state: &mut crate::app::AppState) {
+    let choice = state.config_hub.as_ref().and_then(|hub| match &hub.page {
+        crate::app::ConfigHubPage::Choices(page) => Some((
+            page.choices.get(page.selected_idx)?.action.clone(),
+            page.sandbox_saved,
+        )),
+        crate::app::ConfigHubPage::List | crate::app::ConfigHubPage::Personality(_) => None,
+    });
+    let Some((action, sandbox_saved)) = choice else {
+        return;
+    };
+    if !config_save_allowed(state, &action) {
+        return;
+    }
+    state.config_hub = None;
+    apply_config_save(state, action, sandbox_saved);
+}
+
+pub(crate) fn handle_config_hub_click(
+    state: &mut crate::app::AppState,
+    column: u16,
+    row: u16,
+) -> bool {
+    let Some(hub) = state.config_hub.as_ref() else {
+        return false;
+    };
+    let hit = hub
+        .hits
+        .borrow()
+        .iter()
+        .find(|(y, _)| *y == row)
+        .map(|(_, hit)| *hit);
+    let Some(hit) = hit else {
+        let _ = column;
+        return true;
+    };
+    let repeat = hub.click_row == Some(row);
+    match hit {
+        crate::app::ConfigHubHit::Close => state.config_hub = None,
+        crate::app::ConfigHubHit::Item(index) => {
+            if let Some(hub) = state.config_hub.as_mut() {
+                hub.selected_idx = index;
+                hub.click_row = Some(row);
+            }
+            if repeat {
+                if selected_config_item(state).is_some_and(|item| item.choices.is_some()) {
+                    open_selected_choice_page(state);
+                } else if selected_config_item(state).is_some_and(|item| {
+                    matches!(item.action, crate::app::ConfigHubAction::PersonalityMenu)
+                }) {
+                    open_personality_settings(state);
+                } else if let Some(action) = selected_config_item(state).map(|item| item.action) {
+                    state.config_hub = None;
+                    apply_opened_config_action(state, action);
+                }
+            }
+        }
+        crate::app::ConfigHubHit::Choice(index) => {
+            if let Some(hub) = state.config_hub.as_mut() {
+                if let crate::app::ConfigHubPage::Choices(page) = &mut hub.page {
+                    page.selected_idx = index;
+                }
+                hub.click_row = Some(row);
+            }
+            if repeat {
+                confirm_selected_choice(state);
+            }
+        }
+    }
+    true
+}
+
+fn apply_opened_config_action(
+    state: &mut crate::app::AppState,
+    action: crate::app::ConfigHubAction,
+) {
+    match action {
+        crate::app::ConfigHubAction::Profile(profile) => {
+            state.status_message = Some(format!("Active profile: {profile}"));
+        }
+        crate::app::ConfigHubAction::CurrentModel => open_model_picker(state),
+        crate::app::ConfigHubAction::Delegation {
+            selected,
+            configured,
+        } => open_delegation_model_picker(state, selected.as_ref(), &configured),
+        crate::app::ConfigHubAction::ReviewModel => open_review_model_picker(state, None),
+        crate::app::ConfigHubAction::ProviderSetup => {
+            state.pending_input_action = Some(crate::tui::commands::InputAction::Command(
+                crate::tui::commands::CommandAction {
+                    id: crate::tui::commands::CommandId::Provider,
+                    args: "setup".into(),
+                },
+            ));
+        }
+        crate::app::ConfigHubAction::Reasoning => {
+            state.pending_input_action =
+                Some(crate::tui::commands::InputAction::OpenReasoningPicker);
+        }
+        crate::app::ConfigHubAction::Mcp => {
+            state.pending_input_action = Some(crate::tui::commands::InputAction::Command(
+                crate::tui::commands::CommandAction {
+                    id: crate::tui::commands::CommandId::Mcp,
+                    args: String::new(),
+                },
+            ));
+        }
+        crate::app::ConfigHubAction::SelfImprovement => {
+            state.pending_input_action = Some(crate::tui::commands::InputAction::Command(
+                crate::tui::commands::CommandAction {
+                    id: crate::tui::commands::CommandId::SelfImprove,
+                    args: String::new(),
+                },
+            ));
+        }
+        crate::app::ConfigHubAction::Skills => {
+            state.pending_input_action = Some(crate::tui::commands::InputAction::Command(
+                crate::tui::commands::CommandAction {
+                    id: crate::tui::commands::CommandId::Skills,
+                    args: String::new(),
+                },
+            ));
+        }
+        crate::app::ConfigHubAction::Hooks => {
+            state.pending_input_action = Some(crate::tui::commands::InputAction::Command(
+                crate::tui::commands::CommandAction {
+                    id: crate::tui::commands::CommandId::Hooks,
+                    args: String::new(),
+                },
+            ));
+        }
+        crate::app::ConfigHubAction::Sandbox => {
+            state.pending_input_action = Some(crate::tui::commands::InputAction::Command(
+                crate::tui::commands::CommandAction {
+                    id: crate::tui::commands::CommandId::Sandbox,
+                    args: String::new(),
+                },
+            ));
+        }
+        crate::app::ConfigHubAction::ContextLimits => {
+            state.pending_input_action = Some(crate::tui::commands::InputAction::Command(
+                crate::tui::commands::CommandAction {
+                    id: crate::tui::commands::CommandId::ContextLimit,
+                    args: String::new(),
+                },
+            ));
+        }
+        crate::app::ConfigHubAction::SessionRetention => {
+            state.pending_input_action = Some(crate::tui::commands::InputAction::Command(
+                crate::tui::commands::CommandAction {
+                    id: crate::tui::commands::CommandId::Retention,
+                    args: String::new(),
+                },
+            ));
+        }
+        crate::app::ConfigHubAction::ConfigFile(path) => state.status_message = Some(path),
+        crate::app::ConfigHubAction::Statusline => {
+            queue_settings_command(state, crate::tui::commands::CommandId::Statusline)
+        }
+        crate::app::ConfigHubAction::Keymap => {
+            queue_settings_command(state, crate::tui::commands::CommandId::Keymap)
+        }
+        crate::app::ConfigHubAction::Permissions => {
+            queue_settings_command(state, crate::tui::commands::CommandId::Permissions)
+        }
+        other => apply_config_save(state, other, None),
+    }
 }
 
 fn visible_hook_indices(manager: &crate::app::HookManagerState) -> Vec<usize> {
@@ -9720,9 +11320,11 @@ fn handle_session_picker(
                 }
             }
         }
-        KeyCode::Char('R') | KeyCode::Char('r')
-            if modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::SHIFT) =>
-        {
+        KeyCode::Char('r') | KeyCode::Char('R') if modifiers.contains(KeyModifiers::CONTROL) => {
+            state.session_picker_open = false;
+            state.session_picker_error = None;
+        }
+        KeyCode::Char('R') | KeyCode::Char('r') if modifiers.contains(KeyModifiers::SHIFT) => {
             if let Some(summary) = selected_session_summary(state) {
                 let title = if summary.title.trim().is_empty() {
                     "Untitled session".to_string()
@@ -10000,7 +11602,7 @@ fn handle_pager(state: &mut crate::app::AppState, code: KeyCode) -> bool {
                     state.status_message = Some(error);
                 }
             }
-            KeyCode::Char('c' | 'C') => copy_pager_content(state, copy_text_to_clipboard),
+            KeyCode::Char('c' | 'C') => copy_pager_content(state, copy_text_to_clipboard_or_osc52),
             KeyCode::Char('j') | KeyCode::Down => {
                 state.pager_scroll = state.pager_scroll.saturating_add(1).min(maximum)
             }
@@ -10049,7 +11651,7 @@ fn handle_pager(state: &mut crate::app::AppState, code: KeyCode) -> bool {
             true
         }
         KeyCode::Char('c') | KeyCode::Char('C') => {
-            copy_pager_content(state, copy_text_to_clipboard);
+            copy_pager_content(state, copy_text_to_clipboard_or_osc52);
             true
         }
         KeyCode::Char('j') | KeyCode::Down => {
@@ -11001,7 +12603,7 @@ mod session_picker_tests {
 
         handle_event(
             &mut state,
-            &Event::Key(KeyCode::Char('r'), KeyModifiers::CONTROL),
+            &Event::Key(KeyCode::Char('R'), KeyModifiers::SHIFT),
             "/workspace/ca",
         );
         assert_eq!(
@@ -11074,7 +12676,7 @@ mod session_picker_tests {
 
         handle_event(
             &mut state,
-            &Event::Key(KeyCode::Char('r'), KeyModifiers::CONTROL),
+            &Event::Key(KeyCode::Char('R'), KeyModifiers::SHIFT),
             "/workspace/ca",
         );
         handle_event(
@@ -11102,6 +12704,23 @@ mod session_picker_tests {
             "/workspace/ca",
         );
         assert!(state.session_rename.is_none());
+    }
+
+    #[test]
+    fn ctrl_r_closes_the_open_session_list() {
+        let mut state = picker_state();
+        let id = Uuid::new_v4();
+        state.session_list = vec![summary("saved", id, "Saved")];
+
+        handle_event(
+            &mut state,
+            &Event::Key(KeyCode::Char('r'), KeyModifiers::CONTROL),
+            "/workspace/ca",
+        );
+
+        assert!(!state.session_picker_open);
+        assert!(state.session_rename.is_none());
+        assert!(state.pending_input_action.is_none());
     }
 }
 
@@ -12930,6 +14549,7 @@ mod task_graph_input_tests {
         let mut state = crate::app::AppState {
             input: "composer stays".into(),
             task_graph_manager: Some(crate::app::TaskGraphManagerState {
+                detail_open: false,
                 filter: String::new(),
                 selected_idx: 0,
                 confirmation: None,
@@ -13047,6 +14667,8 @@ mod workflow_input_tests {
 
     fn loaded() -> crate::workflow::LoadedWorkflow {
         crate::workflow::LoadedWorkflow {
+            pause_before_run: false,
+            agent_budget: 1024,
             definition: crate::workflow::WorkflowDefinition {
                 version: 1,
                 id: "daily-check".into(),
@@ -13061,6 +14683,7 @@ mod workflow_input_tests {
                     retry: crate::workflow::WorkflowRetryPolicy::default(),
                     output: None,
                     evidence: vec![crate::workflow::WorkflowEvidenceGate::AssistantOutput],
+                    when: None,
                 }],
             }
             .validate()
@@ -14016,5 +15639,97 @@ mod copy_picker_input_tests {
             "/workspace/ca",
         );
         assert!(state.copy_picker.is_none());
+    }
+}
+
+#[cfg(test)]
+mod busy_submit_and_osc52_tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    fn press(state: &mut crate::app::AppState, code: KeyCode, modifiers: KeyModifiers) {
+        handle_event(state, &Event::Key(code, modifiers), "/workspace/ca");
+    }
+
+    #[test]
+    fn alt_s_cycles_submit_mode_while_a_turn_is_running() {
+        let mut state = crate::app::AppState::new(crate::context::ShellHistory::in_memory());
+        state.input = "draft".into();
+        state.input_cursor = state.input.len();
+        press(&mut state, KeyCode::Char('s'), KeyModifiers::ALT);
+        assert_eq!(state.busy_submit_mode, crate::app::BusySubmitMode::Steer);
+        assert_eq!(state.input, "draft");
+        state.turn_lifecycle.begin();
+        press(&mut state, KeyCode::Char('s'), KeyModifiers::ALT);
+        assert_eq!(
+            state.busy_submit_mode,
+            crate::app::BusySubmitMode::Interrupt
+        );
+        press(&mut state, KeyCode::Char('S'), KeyModifiers::ALT);
+        assert_eq!(state.busy_submit_mode, crate::app::BusySubmitMode::Queue);
+        press(&mut state, KeyCode::Char('s'), KeyModifiers::ALT);
+        assert_eq!(state.busy_submit_mode, crate::app::BusySubmitMode::Steer);
+        assert_eq!(state.input, "draft");
+    }
+
+    #[test]
+    fn steer_enter_queues_and_interrupt_enter_stops_the_turn() {
+        let mut state = crate::app::AppState::new(crate::context::ShellHistory::in_memory());
+        state.turn_lifecycle.begin();
+        state.busy_submit_mode = crate::app::BusySubmitMode::Steer;
+        state.input = "look at the next file".into();
+        state.input_cursor = state.input.len();
+        press(&mut state, KeyCode::Enter, KeyModifiers::NONE);
+        match state.pending_input_action.clone() {
+            Some(crate::tui::commands::InputAction::Steer { text, .. }) => {
+                assert_eq!(text, "look at the next file");
+            }
+            other => panic!("expected a live steer, got {other:?}"),
+        }
+        assert!(state.input.is_empty());
+        state.pending_input_action = None;
+
+        state.busy_submit_mode = crate::app::BusySubmitMode::Interrupt;
+        state.input = "stop and do this".into();
+        state.input_cursor = state.input.len();
+        press(&mut state, KeyCode::Enter, KeyModifiers::NONE);
+        match state.pending_input_action {
+            Some(crate::tui::commands::InputAction::Steer { text, .. }) => {
+                assert_eq!(text, "stop and do this");
+            }
+            other => panic!("expected interrupt steer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn osc52_fallback_encodes_newlines_when_the_local_clipboard_fails() {
+        use base64::Engine as _;
+        let text = "line one\nline two";
+        let ClipboardCopy::Terminal(sequence) =
+            clipboard_copy_plan(text, false, |_| Err(())).unwrap()
+        else {
+            panic!("expected a terminal sequence");
+        };
+        let encoded = sequence
+            .strip_prefix("\u{1b}]52;c;")
+            .and_then(|value| value.strip_suffix('\u{7}'))
+            .unwrap();
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .unwrap(),
+            text.as_bytes()
+        );
+        let ClipboardCopy::Terminal(wrapped) =
+            clipboard_copy_plan(text, true, |_| Err(())).unwrap()
+        else {
+            panic!("expected a tmux sequence");
+        };
+        assert_eq!(wrapped, format!("\u{1b}Ptmux;\u{1b}{sequence}\u{1b}\\"));
+        assert!(osc52_clipboard_sequence(&"x".repeat(256 * 1024 + 1), false).is_err());
+        assert!(matches!(
+            clipboard_copy_plan(text, false, |_| Ok(())).unwrap(),
+            ClipboardCopy::Local
+        ));
     }
 }

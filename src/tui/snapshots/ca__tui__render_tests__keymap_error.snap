@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&failed, 100, 30), render_to_text(&failed, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
 
 
         ┌ Keymap ──────────────────────────────────────────────────────────────────────────┐
@@ -18,22 +18,22 @@ expression: "wide_narrow(render_to_text(&failed, 100, 30), render_to_text(&faile
         │   Queue message / save queued edit Alt+Enter                                     │
         │   Interrupt and send / save session when idle Ctrl+S                             │
         │   Expand latest response    Ctrl+O                                               │
+        │   Expand or collapse task map Ctrl+X T                                           │
         │   Search input history      Ctrl+X Ctrl+R                                        │
         │   Stash composer draft      Ctrl+X S                                             │
-        │   Undo composer edit        Ctrl+X U                                             │
         │                                                                                  │
-        │  Fixed: Ctrl+R Diff · Ctrl+C cancel/quit · Enter/Esc and modal decisions         │
+        │  Fixed: Ctrl+R Sessions · Ctrl+C cancel/quit · Enter/Esc and modal decisions     │
         │Enter capture · ⇧R reset selected · Esc close · ↑↓ navigate                       │
         │Error: Could not save keymap: simulated filesystem failure                        │
         │                                                                                  │
         │                                                                                  │
-        └──────────────────────────────────────────────────────────────────────────────────┘
-╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                                                                   │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
-/ commands
+╭───────└──────────────────────────────────────────────────────────────────────────────────┘───────╮
+│› Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto
+/ commands · Ctrl+\ dashboard · ↑ history
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
  ┌ Keymap ────────────────────────────────────────────────┐
  │ Keyboard shortcuts                                     │
  │ > type to filter…                                      │
@@ -47,13 +47,13 @@ expression: "wide_narrow(render_to_text(&failed, 100, 30), render_to_text(&faile
  │   Queue message / save queued edit · Alt+Enter         │
  │   Interrupt and send / save session when idle · Ctrl+S │
  │   Expand latest response · Ctrl+O                      │
+ │   Expand or collapse task map · Ctrl+X T               │
  │   Search input history · Ctrl+X Ctrl+R                 │
- │   Stash composer draft · Ctrl+X S                      │
  │                                                        │
- │  Fixed: Ctrl+R Diff · Ctrl+C cancel/quit               │
+ │  Fixed: Ctrl+R Sessions · Ctrl+C cancel/quit           │
  │  Enter/Esc and modal decisions are fixed               │
- │Enter capture · ⇧R reset · Esc close · ↑↓ move          │
-╭│Error: Could not save keymap: simulated filesystem failu│╮
-││                                                        ││
-╰└────────────────────────────────────────────────────────┘╯
-/ commands
+╭│Enter capture · ⇧R reset · Esc close · ↑↓ move          │╮
+││Error: Could not save keymap: simulated filesystem failu││
+╰│                                                        │╯
+c└────────────────────────────────────────────────────────┘
+/ commands · Ctrl+\ dashboard · ↑ history

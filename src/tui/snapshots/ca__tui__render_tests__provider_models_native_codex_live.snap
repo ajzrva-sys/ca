@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
 
 
 
@@ -26,14 +26,14 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
             │⇧S settings · ⇧R refresh · ⇧D delete provider · Esc providers             │
             │                                                                          │
             │                                                                          │
-            │                                                                          │
-            └──────────────────────────────────────────────────────────────────────────┘
-╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                                                                   │
-╰───────────────────────────────────────────────────────────────────────────── agent · gpt-5.6-sol ╯
-openai-codex: live · 7 models
+│ openai-cod│                                                                          │
+╭───────────└──────────────────────────────────────────────────────────────────────────┘───────────╮
+│› Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model gpt-5.6-sol
+/ commands · Ctrl+\ dashboard · ↑ history
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
   ┌──────────────────────────────────────────────────────┐
   │ Provider: openai-codex                               │
   │ Endpoint: https://chatgpt.com/backend-api/codex      │
@@ -51,9 +51,9 @@ openai-codex: live · 7 models
   │▸ z-configured-only · configured only                 │
   │                                                      │
   │Enter select · ⇧A add model · ⇧E edit/add · ⇧C cache  │
-  │⇧S settings · ⇧R refresh · ⇧D delete provider · Esc pr│
-  │                                                      │
+│ │⇧S settings · ⇧R refresh · ⇧D delete provider · Esc pr│
 ╭─│                                                      │─╮
 │›│                                                      │ │
-╰─└──────────────────────────────────────────────────────┘ ╯
-openai-codex: live · 7 models
+╰─│                                                      │─╯
+ca└──────────────────────────────────────────────────────┘
+/ commands · Ctrl+\ dashboard · ↑ history

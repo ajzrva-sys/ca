@@ -584,6 +584,56 @@ fn prepare_execution(
             "The task graph is running. Pause it in /tasks before using the current agent.".into(),
         );
     }
+    if before.automatic_task_map {
+        let mut approved = before.clone();
+        let automatic_send = approved.automatic_task_execution_matches(review);
+        if plan.status != PlanStatus::Approved {
+            if automatic_send {
+                approved.approve_automatic_task_execution(review)
+            } else {
+                approved.user_decide(review.revision, true)
+            }
+            .map_err(|error| error.to_string())?;
+        }
+        approved
+            .user_start_agent_graph()
+            .map_err(|error| error.to_string())?;
+        let previous_session = state.current_session.clone();
+        let previous_session_id = state.job_owner.session_id;
+        *state.work_state.lock().unwrap_or_else(|p| p.into_inner()) = approved;
+        crate::ensure_session_identity(state);
+        let expected = crate::current_session_snapshot(state);
+        if let Err(error) = crate::save_current_session(state, sessions) {
+            let committed = sessions
+                .load(&expected.id.to_string())
+                .ok()
+                .filter(|actual| crate::automatic_tasks::same_saved_state(actual, &expected));
+            if let Some(actual) = committed {
+                state.current_session = Some(actual);
+            } else {
+                *state.work_state.lock().unwrap_or_else(|p| p.into_inner()) = before;
+                state.current_session = previous_session;
+                state.job_owner.session_id = previous_session_id;
+                if let Some(hub) = &state.provider_trace {
+                    hub.set_session_id(previous_session_id);
+                }
+                return Err(format!("Task map save failed: {error}. No tasks started."));
+            }
+        }
+        if let Some(manager) = &state.agents {
+            manager.begin_parent_task(&state.outcome_tracker);
+        }
+        state.plan_proposal = None;
+        close_reader(state);
+        state.plan_workflow_graph = None;
+        state.mode = AgentMode::Agent;
+        state.status_message = Some(if automatic_send {
+            "Task setup complete; starting ready tasks.".into()
+        } else {
+            "Task map approved; starting ready tasks.".into()
+        });
+        return Ok(());
+    }
     let (provider, model) = if let Some(route) = state.plan_execute_route.as_ref() {
         let provider = config.providers.get(&route.provider).ok_or_else(|| {
             format!(
@@ -679,6 +729,7 @@ fn prepare_execution(
     }
     state.mode = AgentMode::Agent;
     state.messages.push(Message {
+        retrieved_spans: Some(Vec::new()),
         role: Role::User,
         content: "Execute the approved plan.".into(),
         tool_calls: None,
@@ -719,8 +770,22 @@ pub fn start_requested(
         return;
     }
     match prepare_execution(state, review, config, sessions) {
-        Ok(()) => crate::start_llm_turn(state, config, tx, handle),
+        Ok(()) => {
+            let automatic = state
+                .work_state
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .automatic_task_map;
+            if !automatic {
+                crate::start_llm_turn(state, config, tx, handle);
+            }
+        }
         Err(error) => {
+            state
+                .work_state
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .cancel_automatic_task_execution();
             state.plan_execute_route = None;
             crate::plan_workflow_runtime::finish_implementation(state, false, &error);
             state.status_message = Some(error);
@@ -1019,6 +1084,77 @@ mod tests {
                 .status,
             PlanStatus::Proposed
         );
+    }
+
+    fn automatic_send_state() -> AppState {
+        let mut state = AppState::new(crate::context::ShellHistory::in_memory());
+        state.mode = AgentMode::Agent;
+        let mut work = crate::automatic_tasks::reviewed_execution_fixture();
+        state.plan_execute_requested = work.ready_automatic_task_execution();
+        *state.work_state.lock().unwrap() = work;
+        state
+    }
+
+    #[test]
+    fn automatic_task_send_save_failure_keeps_graph_stopped() {
+        let temp = tempfile::tempdir().unwrap();
+        let blocked = temp.path().join("not-a-directory");
+        std::fs::write(&blocked, "block session storage").unwrap();
+        let sessions = crate::session::SessionStore::new(blocked);
+        let mut state = automatic_send_state();
+        let before = state.work_state.lock().unwrap().clone();
+        let review = state.plan_execute_requested.take().unwrap();
+        let error = prepare_execution(
+            &mut state,
+            review,
+            &crate::CaConfig::default_config(),
+            &sessions,
+        )
+        .unwrap_err();
+        assert!(error.contains("Task map save failed"), "{error}");
+        assert_eq!(*state.work_state.lock().unwrap(), before);
+        assert!(state.current_session.is_none());
+        assert!(state.job_owner.session_id.is_none());
+        assert!(state.active_turn_prompt.is_none());
+    }
+
+    #[test]
+    fn automatic_task_send_persists_distinct_authority_before_graph_runs() {
+        let temp = tempfile::tempdir().unwrap();
+        let sessions = crate::session::SessionStore::new(temp.path().join("sessions"));
+        let mut state = automatic_send_state();
+        let review = state.plan_execute_requested.take().unwrap();
+        prepare_execution(
+            &mut state,
+            review,
+            &crate::CaConfig::default_config(),
+            &sessions,
+        )
+        .unwrap();
+        let id = state.current_session.as_ref().unwrap().id.to_string();
+        let stored = sessions.load(&id).unwrap();
+        assert_eq!(
+            stored
+                .work_state
+                .plan
+                .as_ref()
+                .unwrap()
+                .approved_by
+                .as_deref(),
+            Some("automatic_task_send")
+        );
+        assert!(!stored.work_state.automatic_task_execution_authorized());
+        assert_eq!(
+            state.work_state.lock().unwrap().agent_graph.status,
+            crate::agent_graph::AgentGraphStatus::Running
+        );
+        assert!(prepare_execution(
+            &mut state,
+            review,
+            &crate::CaConfig::default_config(),
+            &sessions
+        )
+        .is_err());
     }
 
     #[test]

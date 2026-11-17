@@ -326,6 +326,35 @@ impl WorkspaceContext {
         })
     }
 
+    /// A move acts on a directory entry, including a symlink, rather than its
+    /// target. Resolve parents and authorize every frozen member using native
+    /// path bytes; a nested read-only root always takes precedence.
+    pub(crate) fn authorize_private_move_path(&self, path: &Path) -> Result<(), WorkspaceError> {
+        let parent = path
+            .parent()
+            .ok_or_else(|| WorkspaceError::Traversal("private entry".into()))?;
+        let leaf = path
+            .file_name()
+            .ok_or_else(|| WorkspaceError::Traversal("private entry".into()))?;
+        let resolved = canonical_creation(parent)?.join(leaf);
+        if let Some(root) = self
+            .roots
+            .iter()
+            .find(|r| r.read_only && resolved.starts_with(&r.path))
+        {
+            return Err(WorkspaceError::ReadOnly(root.path.display().to_string()));
+        }
+        if !self
+            .roots
+            .iter()
+            .any(|r| !r.read_only && resolved.starts_with(&r.path))
+            && !self.has_session_write(&resolved)
+        {
+            return Err(WorkspaceError::OutsideRoots(resolved.display().to_string()));
+        }
+        Ok(())
+    }
+
     pub fn persisted_additional_roots(&self) -> Vec<String> {
         self.roots
             .iter()
@@ -349,6 +378,18 @@ pub fn prepare_tool_invocation(
     arguments: &Value,
     origin: crate::agent::registry::ToolOrigin,
 ) -> Result<PreparedToolInvocation, WorkspaceError> {
+    let mut private_workspace;
+    let workspace = if let Some(context) =
+        crate::privacy::current().filter(|context| context.filenames_enabled())
+    {
+        private_workspace = workspace.clone();
+        for root in context.command_artifact_roots() {
+            private_workspace.add_root(root, false)?;
+        }
+        &private_workspace
+    } else {
+        workspace
+    };
     use crate::agent::registry::{ResourceKind, ToolHandler};
     let registry = crate::agent::registry::ToolRegistry::builtins();
     let spec = registry
@@ -357,6 +398,14 @@ pub fn prepare_tool_invocation(
     registry
         .validate(name, arguments)
         .map_err(|error| WorkspaceError::InvalidArguments(error.to_string()))?;
+    if matches!(name, "select_files" | "move_files") {
+        return Ok(PreparedToolInvocation {
+            name: name.into(),
+            arguments: crate::privacy::tasks::prepare_invocation(workspace, name, arguments)?,
+            origin,
+            network_requested: false,
+        });
+    }
     if spec.handler == ToolHandler::Task {
         let subagent_name = arguments
             .get("subagent_name")
@@ -386,6 +435,7 @@ pub fn prepare_tool_invocation(
                 ) => PathOperation::Create,
                 (
                     ToolHandler::EditFile
+                    | ToolHandler::SearchReplace
                     | ToolHandler::HashlineEdit
                     | ToolHandler::ApplyPatch
                     | ToolHandler::DeleteFile
@@ -417,7 +467,38 @@ pub fn prepare_tool_invocation(
         let Some(raw) = raw else {
             continue;
         };
+        if spec.handler == ToolHandler::GenerateImage
+            && resource.field == "image_url"
+            && url::Url::parse(&raw).is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
+        {
+            continue;
+        }
+        let private_context = crate::privacy::current().is_some_and(|c| c.enabled())
+            || crate::privacy::tasks::remote_binding().is_some();
+        let raw = if private_context && crate::privacy::tasks::is_resource_reference(&raw) {
+            crate::privacy::tasks::call("folder", serde_json::json!({"reference":raw}))
+                .map_err(WorkspaceError::InvalidArguments)?["path"]
+                .as_str()
+                .ok_or_else(|| {
+                    WorkspaceError::InvalidArguments("private folder is unavailable".into())
+                })?
+                .to_string()
+        } else {
+            raw
+        };
         let resolved = workspace.resolve(&raw, operation)?;
+        if crate::privacy::current().is_some_and(|c| c.enabled())
+            || crate::privacy::tasks::remote_binding().is_some()
+        {
+            let managed =
+                crate::privacy::tasks::call("managed_path", serde_json::json!({"path":resolved}))
+                    .map_err(WorkspaceError::InvalidArguments)?;
+            if managed == Value::Bool(true) {
+                return Err(WorkspaceError::InvalidArguments(
+                    "Host-owned private task metadata cannot be accessed by a model tool".into(),
+                ));
+            }
+        }
         object.insert(
             resource.field.into(),
             Value::String(resolved.to_string_lossy().into_owned()),
@@ -1501,6 +1582,39 @@ fn git_top_level(cwd: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ordinary_reference_prefix_filenames_remain_literal_without_privacy() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let workspace = WorkspaceContext::from_primary(root.clone(), root.clone());
+        for name in [
+            "file_report.txt",
+            "folder_notes.txt",
+            "file_00000000000000000000000000000000",
+        ] {
+            std::fs::write(root.join(name), b"ordinary contents").unwrap();
+            let prepared = prepare_tool_invocation(
+                &workspace,
+                "read_file",
+                &serde_json::json!({"path":name}),
+                crate::agent::registry::ToolOrigin::BuiltIn,
+            )
+            .unwrap();
+            assert_eq!(
+                prepared.arguments["path"],
+                root.join(name).to_str().unwrap()
+            );
+        }
+        std::fs::create_dir(root.join("folder_reports")).unwrap();
+        assert!(prepare_tool_invocation(
+            &workspace,
+            "list_dir",
+            &serde_json::json!({"path":"folder_reports"}),
+            crate::agent::registry::ToolOrigin::BuiltIn
+        )
+        .is_ok());
+    }
 
     #[test]
     fn typed_reads_may_leave_workspace_but_writes_and_traversal_remain_confined() {

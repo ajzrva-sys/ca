@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&proposal, 100, 30),\nrender_to_text(&proposal, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
 
    ┌ Memory ────────────────────────────────────────────────────────────────────────────────────┐
    │[Proposals]  Tab switch scope                                                               │
@@ -27,13 +27,13 @@ expression: "wide_narrow(render_to_text(&proposal, 100, 30),\nrender_to_text(&pr
    │                                                                                            │
    │                                                                                            │
    │                                                                                            │
-   │                                                                                            │
-╭──└────────────────────────────────────────────────────────────────────────────────────────────┘──╮
-│› ▌Ask anything…                                                                                   │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
-/ commands
+╭──│                                                                                            │──╮
+│› └────────────────────────────────────────────────────────────────────────────────────────────┘  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto
+/ commands · Ctrl+\ dashboard · ↑ history
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
  ┌ Memory ────────────────────────────────────────────────┐
  │[Proposals]  Tab switch scope                           │
  │> type to filter…                                       │
@@ -52,8 +52,8 @@ expression: "wide_narrow(render_to_text(&proposal, 100, 30),\nrender_to_text(&pr
  │                                                        │
  │                                                        │
  │                                                        │
- │                                                        │
 ╭│                                                        │╮
 ││                                                        ││
-╰└────────────────────────────────────────────────────────┘╯
-/ commands
+╰│                                                        │╯
+c└────────────────────────────────────────────────────────┘
+/ commands · Ctrl+\ dashboard · ↑ history

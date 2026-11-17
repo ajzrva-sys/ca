@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
 
 
 
@@ -27,13 +27,13 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
   │  /goal [status|pause|resume|clear|<condition> [--iterations N] [--tokens N] [--minutes N]]   │
   │    Set or manage a finite evidence-evaluated goal session                                    │
   │  /new                           Start a new session; keep the previous one                   │
-  └ ↑↓ select · Tab complete · Enter choose · Esc dismiss ───────────────────────────────────────┘
-╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› /session▌                                                                                       │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
+╭─└ ↑↓ select · Tab complete · Enter choose · Esc dismiss ───────────────────────────────────────┘─╮
+│› /session                                                                                        │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto
 ↑↓ select · Tab complete · Enter choose · Esc dismiss
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
 
 
 
@@ -52,8 +52,8 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
   │    List or manage named workspaces and session roots │
   │  /load-workspace <name>                              │
   │    Load a named workspace into the current session   │
-  └ ↑↓ select · Tab complete · Enter choose · Esc dismiss┘
-╭──────────────────────────────────────────────────────────╮
-│› /session▌                                               │
-╰──────────────────────────────────────────── agent · auto ╯
+╭─└ ↑↓ select · Tab complete · Enter choose · Esc dismiss┘─╮
+│› /session                                                │
+╰──────────────────────────────────────────────────────────╯
+ca · model auto
 ↑↓ select · Tab complete · Enter choose · Esc dismiss

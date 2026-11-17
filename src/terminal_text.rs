@@ -9,18 +9,25 @@ enum EscapeState {
 
 pub fn sanitize_terminal_text(input: &str) -> String {
     let mut output = String::with_capacity(input.len());
+    output.extend(sanitized_char_indices(input).map(|(_, character)| character));
+    output
+}
+
+/// Retain source offsets so selectable views can address the original bytes.
+pub(crate) fn sanitized_char_indices(input: &str) -> impl Iterator<Item = (usize, char)> + '_ {
     let mut state = EscapeState::Ground;
-    for character in input.chars() {
+    input.char_indices().filter_map(move |(offset, character)| {
+        let mut visible = false;
         state = match state {
             EscapeState::Ground => match character {
                 '\u{1b}' => EscapeState::Escape,
                 '\n' | '\t' => {
-                    output.push(character);
+                    visible = true;
                     EscapeState::Ground
                 }
                 value if value.is_control() => EscapeState::Ground,
-                value => {
-                    output.push(value);
+                _ => {
+                    visible = true;
                     EscapeState::Ground
                 }
             },
@@ -29,9 +36,7 @@ pub fn sanitize_terminal_text(input: &str) -> String {
                 ']' | 'P' | '_' | '^' => EscapeState::String,
                 '\u{1b}' => EscapeState::Escape,
                 value => {
-                    if !value.is_control() || value == '\n' || value == '\t' {
-                        output.push(value);
-                    }
+                    visible = !value.is_control() || value == '\n' || value == '\t';
                     EscapeState::Ground
                 }
             },
@@ -41,7 +46,7 @@ pub fn sanitize_terminal_text(input: &str) -> String {
                 } else if character == '\u{1b}' {
                     EscapeState::Escape
                 } else if character == '\n' {
-                    output.push('\n');
+                    visible = true;
                     EscapeState::Ground
                 } else {
                     EscapeState::Csi
@@ -62,8 +67,8 @@ pub fn sanitize_terminal_text(input: &str) -> String {
                 }
             }
         };
-    }
-    output
+        visible.then_some((offset, character))
+    })
 }
 
 #[cfg(test)]

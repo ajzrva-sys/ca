@@ -1,3 +1,5 @@
+Root continuation is AGT-271 in `../../NEXT_STEPS.md`. A task in this crate runs only when the task names it.
+
 # Repository Agent Instructions
 
 ## Purpose

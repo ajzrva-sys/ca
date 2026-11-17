@@ -6,12 +6,13 @@ use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub const STATE_SCHEMA: &str = "codex-team.self_improvement_state.v1";
@@ -2320,8 +2321,62 @@ fn run_bounded_json_command<T: for<'de> Deserialize<'de>>(
     serde_json::from_slice(&output.stdout).with_context(|| format!("parse {label} receipt"))
 }
 
-fn file_sha256(path: &Path) -> Result<String> {
-    inspect_executable(path)?;
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ExecutableIdentity {
+    device: u64,
+    inode: u64,
+    size: u64,
+    modified: SystemTime,
+    changed: (i64, i64),
+    mode: u32,
+}
+
+fn executable_identity(metadata: &fs::Metadata) -> ExecutableIdentity {
+    ExecutableIdentity {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+        size: metadata.len(),
+        modified: metadata.modified().unwrap_or(UNIX_EPOCH),
+        changed: (metadata.ctime(), metadata.ctime_nsec()),
+        mode: metadata.mode(),
+    }
+}
+
+struct CachedExecutableDigest {
+    identity: ExecutableIdentity,
+    digest: String,
+}
+
+fn executable_digest_cache() -> &'static Mutex<HashMap<PathBuf, CachedExecutableDigest>> {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, CachedExecutableDigest>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn cached_executable_digest(path: &Path, identity: ExecutableIdentity) -> Option<String> {
+    let cache = executable_digest_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache
+        .get(path)
+        .and_then(|cached| (cached.identity == identity).then(|| cached.digest.clone()))
+}
+
+fn store_executable_digest(path: &Path, identity: ExecutableIdentity, digest: String) {
+    let mut cache = executable_digest_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache.insert(
+        path.to_path_buf(),
+        CachedExecutableDigest { identity, digest },
+    );
+}
+
+#[cfg(test)]
+thread_local! {
+    static EXECUTABLE_HASH_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+fn hash_executable_bytes(path: &Path) -> Result<String> {
     let mut file = File::open(path)?;
     let mut hasher = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
@@ -2330,9 +2385,32 @@ fn file_sha256(path: &Path) -> Result<String> {
         if read == 0 {
             break;
         }
+        #[cfg(test)]
+        EXECUTABLE_HASH_BYTES.with(|bytes| bytes.set(bytes.get().saturating_add(read as u64)));
         hasher.update(&buffer[..read]);
     }
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// SHA-256 of a regular executable.
+///
+/// `doctor` repeats this check every 30 seconds for the life of the login
+/// agent. Unchanged files are served from a metadata cache so that tick does
+/// not re-read the slot binaries. A rewrite or replace changes the device,
+/// inode, size, mtime, ctime, or mode, and is hashed again. The digest is
+/// stored only when that identity is the same before and after the read.
+fn file_sha256(path: &Path) -> Result<String> {
+    inspect_executable(path)?;
+    let identity = executable_identity(&fs::symlink_metadata(path)?);
+    if let Some(digest) = cached_executable_digest(path, identity) {
+        return Ok(digest);
+    }
+    let digest = hash_executable_bytes(path)?;
+    let after = executable_identity(&fs::symlink_metadata(path)?);
+    if after == identity {
+        store_executable_digest(path, identity, digest.clone());
+    }
+    Ok(digest)
 }
 
 fn copy_private_executable(source: &Path, destination: &Path) -> Result<()> {
@@ -2847,6 +2925,35 @@ mod tests {
         };
         fs::write(path, body)?;
         fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+        Ok(())
+    }
+
+    #[test]
+    fn repeated_hash_of_unchanged_executable_does_not_reread_it() -> Result<()> {
+        let root = temp_root("hash-cache");
+        let path = root.join("ca");
+        fake_executable(&path, "ca")?;
+        let size = fs::metadata(&path)?.len();
+        super::EXECUTABLE_HASH_BYTES.with(|bytes| bytes.set(0));
+        let first = super::file_sha256(&path)?;
+        let read_once = super::EXECUTABLE_HASH_BYTES.with(|bytes| bytes.get());
+        assert_eq!(read_once, size);
+        assert_eq!(super::file_sha256(&path)?, first);
+        assert_eq!(
+            super::EXECUTABLE_HASH_BYTES.with(|bytes| bytes.get()),
+            read_once
+        );
+
+        fs::write(&path, "#!/bin/sh\nprintf '%s\\n' 'replaced'\n")?;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700))?;
+        let replaced_size = fs::metadata(&path)?.len();
+        let replaced = super::file_sha256(&path)?;
+        assert_ne!(replaced, first);
+        assert_eq!(
+            super::EXECUTABLE_HASH_BYTES.with(|bytes| bytes.get()),
+            read_once + replaced_size
+        );
+        fs::remove_dir_all(root)?;
         Ok(())
     }
 

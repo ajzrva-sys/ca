@@ -348,6 +348,8 @@ async fn execute_step(record: &WorktreeRecord, step: &SetupStep) -> Result<(), S
                 read_only_roots: vec![record.git_common_dir.clone()],
                 temporary_directory: temporary.path().to_path_buf(),
                 network_allowed: step.network,
+                host_credentials: true,
+                proxy_port: None,
                 hide_other_processes: true,
             },
         )

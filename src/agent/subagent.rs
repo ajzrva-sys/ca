@@ -126,6 +126,8 @@ pub struct AgentSpawnRequest {
     pub parent_turn: Uuid,
     pub task_id: Option<crate::work::TaskId>,
     pub task: String,
+    pub task_retrieved_spans: Vec<crate::retrieved_content::RetrievedSpan>,
+    pub(crate) host_task: Option<crate::host_instructions::Text>,
     pub context_mode: AgentContextMode,
     pub context_summary: String,
     pub grants: AgentGrant,
@@ -137,9 +139,13 @@ pub struct AgentSpawnRequest {
     pub purpose: AgentRunPurpose,
     /// Optional bounded JSON Schema for the child's final value.
     pub output_contract: Option<crate::headless_contract::StructuredOutputContract>,
+    /// Explicit single-target repair; its source is frozen by managed admission.
+    pub(crate) repair_contract: Option<crate::narrow_worker::RepairContract>,
     /// Shared workspace is the compatibility default; worktree isolation is
     /// created by the manager before child admission.
     pub isolation: AgentIsolation,
+    /// Host admission result. Model arguments never populate this field.
+    pub admitted: Option<std::sync::Arc<crate::execution_grant::AdmittedExecutionGrant>>,
 }
 
 #[derive(
@@ -206,6 +212,7 @@ struct AgentRouteSpec {
     request_store: crate::request::RequestStore,
     images_supported: bool,
     prompt_cache_contract: Option<crate::provider_contract::ResolvedPromptCacheContract>,
+    request_options: crate::agent::client::ChatRequestOptions,
 }
 
 #[async_trait]
@@ -280,6 +287,7 @@ impl AgentRouteClients {
                                 request_store,
                                 images_supported,
                                 prompt_cache_contract: None,
+                                request_options: Default::default(),
                             },
                         )
                     })
@@ -314,6 +322,7 @@ impl AgentRouteClients {
                                     request_store,
                                     images_supported,
                                     prompt_cache_contract: Some(contract),
+                                    request_options: Default::default(),
                                 },
                             )
                         },
@@ -342,6 +351,27 @@ impl AgentRouteClients {
         route_clients
     }
 
+    pub(crate) fn set_request_options(
+        &self,
+        options: impl IntoIterator<Item = (AgentRoute, crate::agent::client::ChatRequestOptions)>,
+    ) {
+        let mut clients = self.clients.write().unwrap_or_else(|p| p.into_inner());
+        for (route, options) in options {
+            if let Some(entry) = clients.get_mut(&route) {
+                entry.request_options = options;
+            }
+        }
+    }
+
+    fn request_options(&self, route: &AgentRoute) -> crate::agent::client::ChatRequestOptions {
+        self.clients
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(route)
+            .map(|entry| entry.request_options.clone())
+            .unwrap_or_default()
+    }
+
     async fn resolve(
         &self,
         route: &AgentRoute,
@@ -355,7 +385,12 @@ impl AgentRouteClients {
         let Some(entry) = entry else {
             return Ok(None);
         };
-        let provider = if route.provider == "openai-codex" {
+        // Codex, ChatGPT plan, and SuperGrok keep an empty config key and a
+        // separate token. Other providers already store the key on the route.
+        let provider = if matches!(
+            route.provider.as_str(),
+            "openai-codex" | "openai-chatgpt" | "xai-oauth"
+        ) {
             let _guard = self.resolution_gate.lock().await;
             self.runtime_resolver
                 .resolve(&route.provider, entry.provider)
@@ -402,6 +437,8 @@ impl Default for AgentRouteClients {
         Self::new(std::iter::empty())
     }
 }
+
+pub(crate) const TASK_PROGRESS_PREFIX: &str = "Progress: ";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentEvent {
@@ -463,8 +500,11 @@ pub struct AgentSnapshot {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub result_summary: Option<String>,
+    /// Unrestored assistant text. Absent for attempts recorded before FLT-342.
+    pub provider_summary: Option<String>,
     pub result_sha256: Option<String>,
     pub structured_result: Option<serde_json::Value>,
+    pub narrow_repair: Option<crate::narrow_worker::NarrowRepairResult>,
     pub structured_repair_attempted: bool,
     pub spill: Option<AgentSpillReceipt>,
     pub worktree: Option<AgentWorktreeReceipt>,
@@ -538,9 +578,29 @@ pub struct AgentActivitySnapshot {
     pub events: Vec<AgentEvent>,
 }
 
+pub fn subtree_ids(agents: &[AgentActivitySnapshot], root: AgentId) -> Vec<AgentId> {
+    let mut ids = vec![root];
+    let mut index = 0;
+    while index < ids.len() {
+        let parent = ids[index];
+        for agent in agents {
+            if agent.parent == Some(parent) && !ids.contains(&agent.id) {
+                ids.push(agent.id);
+            }
+        }
+        index += 1;
+    }
+    ids
+}
+
 #[derive(Debug)]
 pub enum AgentCommand {
-    Message { id: Uuid, text: String },
+    Message {
+        id: Uuid,
+        text: String,
+        retrieved_spans: Vec<crate::retrieved_content::RetrievedSpan>,
+        front: bool,
+    },
     Approval(bool),
 }
 
@@ -552,6 +612,9 @@ pub enum RunnerEvent {
         batch: crate::undo::FileMutationBatchReceipt,
         started_at: Option<DateTime<Utc>>,
     },
+    NarrowRepairVerified(crate::narrow_worker::NarrowRepairResult),
+    NarrowRepairApplied(crate::narrow_worker::NarrowRepairResult),
+    NarrowRepairUsage(crate::narrow_worker::RepairUsage),
     HarnessPrepared {
         snapshot: crate::harness_registry::ComponentSnapshot,
         model: String,
@@ -566,7 +629,14 @@ pub enum RunnerEvent {
         output: String,
     },
     Activity(String),
+    /// Latest visible answer text, separate from tool-result output.
+    Progress {
+        text: String,
+        replace: bool,
+    },
     Output(String),
+    /// Assistant text before local filename restoration. Not a tool excerpt.
+    ProviderSummary(String),
     ToolStarted {
         name: String,
     },
@@ -585,7 +655,7 @@ pub struct AgentRunContext {
     pub request: AgentSpawnRequest,
     pub limits: AgentLimits,
     pub commands: mpsc::Receiver<AgentCommand>,
-    pending_steers: VecDeque<(Uuid, String)>,
+    pending_steers: VecDeque<(Uuid, String, Vec<crate::retrieved_content::RetrievedSpan>)>,
     pub cancelled: watch::Receiver<bool>,
     pub events: mpsc::UnboundedSender<RunnerEvent>,
     pub job_owner: crate::jobs::JobOwner,
@@ -618,6 +688,12 @@ pub trait AgentRunner: Send + Sync {
     async fn run(&self, context: AgentRunContext) -> Result<String, String>;
 
     fn replace_route_clients(&self, _clients: AgentRouteClients) {}
+
+    fn replace_request_options(
+        &self,
+        _options: Vec<(AgentRoute, crate::agent::client::ChatRequestOptions)>,
+    ) {
+    }
 
     /// Configured route identities only; listing never resolves credentials.
     fn available_routes(&self) -> Vec<AgentRoute> {
@@ -663,6 +739,8 @@ impl AgentRunner for ProviderAgentRunner {
     }
 
     async fn run(&self, mut context: AgentRunContext) -> Result<String, String> {
+        let privacy_context = self.client.privacy_context();
+        crate::privacy::scope(privacy_context.clone(), async move {
         use crate::agent::client::{ChatMessage, FunctionCall, ToolCallMsg};
         let (client, images_supported) = if let Some(route) = context.request.route.as_ref() {
             let (client, images_supported) =
@@ -676,6 +754,14 @@ impl AgentRunner for ProviderAgentRunner {
         } else {
             (self.client.clone(), self.images_supported)
         };
+        let client = client.with_privacy_context(privacy_context);
+        let request_options = self.route_clients.request_options(&AgentRoute {
+            provider: client.provider_id().into(),
+            model: client.model_id().into(),
+        });
+        if let Some(privacy)=client.privacy_context().filter(|c|c.enabled()) {
+            if let Some(result)=crate::privacy::tasks::contained_planner(privacy,&mut context,client.provider_id(),client.model_id(),request_options.reasoning_effort).await {return result;}
+        }
         let client = if context.graph_budget.is_some() {
             client.with_one_attempt_policy()
         } else {
@@ -701,6 +787,14 @@ impl AgentRunner for ProviderAgentRunner {
                     .reroute(usage_kind, &route.provider, &route.model)
             },
         );
+        crate::inference::bind_owner(context.job_owner, client.clone(), usage_recorder.reroute(crate::usage::UsageKind::Inference, client.provider_id(), client.model_id()));
+        crate::inference::bind_graph_budget_with_pricing(context.job_owner, context.graph_budget.clone(), self.pricing.get(&format!("{}/{}", client.provider_id(), client.model_id())).cloned());
+        let mut repair = context.request.repair_contract.clone().map(crate::narrow_worker::RepairState::new).transpose()?;
+        let output_contract = if repair.is_some() {
+            Some(crate::narrow_worker::RepairContract::output_contract()?)
+        } else {
+            context.request.output_contract.clone()
+        };
         let registry = crate::agent::registry::ToolRegistry::builtins();
         let workspace = context.request.workspace.clone();
         let granted: std::collections::HashSet<_> = context
@@ -731,55 +825,38 @@ impl AgentRunner for ProviderAgentRunner {
                 memory_generation_enabled: false,
                 automation_proposals_enabled: false,
                 email_enabled: false,
+                browser_enabled: false,
+                coding_schema: crate::git_status::head_readable(workspace.cwd()),
                 allowed_names: Some(granted.clone()),
             },
         )
         .map_err(|error| format!("tool selection failed: {error}"))?
         .into_definitions();
         let discovery = crate::tool_discovery::ToolDiscoverySession::default();
-        let active_skills = self
+        let active_skills = if repair.is_some() { String::new() } else { self
             .skills
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
-            .active_prompt();
-        let task_skills = self
+            .active_prompt() };
+        let task_skills = if repair.is_some() { String::new() } else { self
             .task_skill_snapshot
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
-            .clone();
-        let structured_instruction = context.request.output_contract.as_ref().map_or(
-            String::new(),
-            |_| {
-                "\nA structured result is required. Finish by calling report_structured_output exactly once as the sole final tool call.".into()
-            },
-        );
-        let mut messages = vec![
-            ChatMessage {
-                role: "system".into(),
-                content: crate::image_content::ModelContent::text(format!(
-                    "You are a bounded child coding agent. Use only granted tools. Never widen workspace roots or network authority.{}\n\nState summary:\n{}{}{}",
-                    structured_instruction,
-                    context.request.context_summary,
-                    active_skills,
-                    task_skills
-                )),
-                tool_calls: None,
-                tool_call_id: None,
-                response_items: Vec::new(),
-            },
-            ChatMessage {
-                role: "user".into(),
-                content: crate::image_content::ModelContent::text(context.request.task.clone()),
-                tool_calls: None,
-                tool_call_id: None,
-                response_items: Vec::new(),
-            },
-        ];
+            .clone() };
+        let mut messages = initial_child_messages(
+            &context.request,
+            context.graph_budget.as_ref().map(|budget| (budget.limits().max_total_tokens, budget.snapshot().total_tokens)),
+            &active_skills,
+            &task_skills,
+            repair.as_ref(),
+            output_contract.is_some(),
+        )?;
         let owner = context.job_owner;
         let mut structured_repair_attempted = false;
+        let mut repair_usage = crate::narrow_worker::RepairUsage::default();
         for turn in 0..context.limits.max_turns {
-            let mut tools = discovery.advertise(authorized_tools.clone(), &self.tool_policy);
-            if let Some(contract) = &context.request.output_contract {
+            let mut tools = if repair.is_some() { Vec::new() } else { discovery.advertise(authorized_tools.clone(), &self.tool_policy) };
+            if let Some(contract) = &output_contract {
                 tools.push(contract.tool_definition());
             }
             let advertised_tool_names = tools
@@ -791,19 +868,15 @@ impl AgentRunner for ProviderAgentRunner {
                 .events
                 .send(RunnerEvent::Activity(format!("provider turn {}", turn + 1)));
             let mut usage_span = usage_recorder.begin();
-            if let Some(budget) = &context.graph_budget {
-                budget
-                    .reserve_request()
-                    .map_err(|limit| format!("agent graph autonomy budget exhausted: {limit:?}"))?;
-            }
-            let prepared = crate::request::PreparedModelRequest::new(
+            let mut prepared = crate::request::PreparedModelRequest::new(
                 request_kind,
                 client.provider_id(),
                 client.model_id(),
                 messages.clone(),
                 tools.clone(),
-                crate::agent::client::ChatRequestOptions::default(),
+                request_options.clone(),
             )
+            .with_structured_output(output_contract.as_ref())
             .with_prompt_cache(
                 crate::request::PromptCacheScope::agent(context.id.0),
                 messages
@@ -811,6 +884,23 @@ impl AgentRunner for ProviderAgentRunner {
                     .take_while(|message| matches!(message.role.as_str(), "system" | "developer"))
                     .count(),
             );
+            if let Some(budget) = &context.graph_budget {
+                let limits = budget.limits();
+                let used = budget.snapshot();
+                let stats = crate::context_pruning::project_graph_worker(
+                    &messages,
+                    &mut prepared.messages,
+                    &prepared.tools,
+                    limits.max_total_tokens.saturating_sub(used.total_tokens),
+                    limits.max_physical_requests.saturating_sub(used.physical_requests),
+                );
+                prepared.pruning.results += stats.results;
+                prepared.pruning.saved_tokens += stats.saved_tokens;
+                prepared.pruning.added_tokens += stats.added_tokens;
+                budget
+                    .reserve_request_for_input(crate::context_pruning::estimate_worker_request(&prepared.messages, &prepared.tools))
+                    .map_err(|limit| format!("agent graph autonomy budget exhausted: {limit:?}"))?;
+            }
             let prepared = client.prepare_harness_request(prepared).await;
             if let Ok(source) = client.route_identity() {
                 let _ = context.events.send(RunnerEvent::HarnessPrepared {
@@ -835,14 +925,32 @@ impl AgentRunner for ProviderAgentRunner {
                     return Err(error);
                 }
             };
+            let mut first_progress = true;
             let assembled_result = tokio::select! {
                 _ = wait_cancelled(context.cancelled.clone()) => return Err("cancelled".into()),
                 result = crate::agent::stream::consume_stream(&mut stream, |event| {
-                    if matches!(event, crate::agent::stream::ProviderEvent::Reasoning(_)) {
-                        let _ = context.events.send(RunnerEvent::Phase(AgentExecutionPhase::Thinking));
-                    }
-                    if let crate::agent::stream::ProviderEvent::Usage(usage) = event {
-                        usage_span.observe(usage);
+                    match event {
+                        crate::agent::stream::ProviderEvent::Reasoning(delta) => {
+                            let _ = context
+                                .events
+                                .send(RunnerEvent::Phase(AgentExecutionPhase::Thinking));
+                            let _ = context.events.send(RunnerEvent::Progress {
+                                text: delta.clone(),
+                                replace: first_progress,
+                            });
+                            first_progress = false;
+                        }
+                        crate::agent::stream::ProviderEvent::Text(delta) => {
+                            let _ = context.events.send(RunnerEvent::Progress {
+                                text: delta.clone(),
+                                replace: first_progress,
+                            });
+                            first_progress = false;
+                        }
+                        crate::agent::stream::ProviderEvent::Usage(usage) => {
+                            usage_span.observe(usage);
+                        }
+                        _ => {}
                     }
                 }) => result.map_err(|error| error.to_string()),
             };
@@ -856,6 +964,10 @@ impl AgentRunner for ProviderAgentRunner {
                     return Err(error);
                 }
             };
+            repair_usage.observe(assembled.usage.as_ref());
+            if repair.is_some() {
+                let _ = context.events.send(RunnerEvent::NarrowRepairUsage(repair_usage.clone()));
+            }
             if let Some(budget) = &context.graph_budget {
                 let pricing =
                     self.pricing
@@ -881,20 +993,29 @@ impl AgentRunner for ProviderAgentRunner {
             let calls: Vec<_> = assembled
                 .tool_calls
                 .into_iter()
-                .map(|call| (call.id, call.name, call.arguments))
+                .map(|call| {
+                    (
+                        call.id,
+                        call.name,
+                        call.arguments,
+                        call.arguments_retrieved_spans,
+                    )
+                })
                 .collect();
             messages.push(ChatMessage {
                 role: "assistant".into(),
-                content: crate::image_content::ModelContent::text(assembled.content.clone()),
+                content: crate::image_content::ModelContent::text(assembled.content.clone())
+                    .with_retrieved_spans(assembled.retrieved_spans),
                 tool_calls: (!calls.is_empty()).then(|| {
                     calls
                         .iter()
-                        .map(|(id, name, arguments)| ToolCallMsg {
+                        .map(|(id, name, arguments, spans)| ToolCallMsg {
                             id: id.clone(),
                             call_type: "function".into(),
                             function: FunctionCall {
                                 name: name.clone(),
                                 arguments: arguments.clone(),
+                                arguments_retrieved_spans: spans.clone(),
                             },
                         })
                         .collect()
@@ -903,8 +1024,11 @@ impl AgentRunner for ProviderAgentRunner {
                 response_items: assembled.response_items,
             });
             if calls.is_empty() {
-                if context.request.output_contract.is_none() {
+                if output_contract.is_none() {
                     cleanup_owned_jobs(owner).await;
+                    let _ = context
+                        .events
+                        .send(RunnerEvent::ProviderSummary(assembled.provider_content));
                     return Ok(assembled.content);
                 }
                 let error = "structured output response did not call report_structured_output";
@@ -920,20 +1044,17 @@ impl AgentRunner for ProviderAgentRunner {
                 ));
                 messages.push(ChatMessage {
                     role: "system".into(),
-                    content: crate::image_content::ModelContent::text(format!(
-                        "The final structured result was rejected: {}. Correct it now by calling report_structured_output exactly once as the sole final tool call. This is the only repair turn.",
-                        crate::terminal_text::sanitize_terminal_text(error)
-                    )),
+                    content: structured_repair_content(error),
                     tool_calls: None,
                     tool_call_id: None,
                     response_items: Vec::new(),
                 });
                 continue;
             }
-            if let Some(contract) = &context.request.output_contract {
+            if let Some(contract) = &output_contract {
                 if !calls
                     .iter()
-                    .any(|(_, name, _)| name == crate::headless_contract::STRUCTURED_OUTPUT_TOOL)
+                    .any(|(_, name, _, _)| name == crate::headless_contract::STRUCTURED_OUTPUT_TOOL)
                 {
                     // Ordinary tool work may continue before the final structured call.
                 } else {
@@ -941,11 +1062,40 @@ impl AgentRunner for ProviderAgentRunner {
                         || calls[0].1 != crate::headless_contract::STRUCTURED_OUTPUT_TOOL
                     {
                         Err("report_structured_output must be the sole final tool call".into())
-                    } else {
+                    } else if repair.is_some() {
+                        // Replacement bytes keep their source references until
+                        // the existing source-bound edit preparation step.
                         contract.validate_arguments(&calls[0].2)
+                    } else {
+                        validate_structured_output_arguments(
+                            contract,
+                            &calls[0].2,
+                            client.privacy_context().as_deref(),
+                        )
                     };
                     match validation {
                         Ok(value) => {
+                            if let Some(repair) = &mut repair {
+                                match apply_narrow_replacement(self, &mut context, repair, &value, turn as u64, &repair_usage).await? {
+                                    NarrowOutcome::Complete(receipt) => {
+                                        let summary = serde_json::to_string(&receipt).map_err(|error| error.to_string())?;
+                                        let _ = context.events.send(RunnerEvent::NarrowRepairVerified(*receipt));
+                                        cleanup_owned_jobs(owner).await;
+                                        return Ok(summary);
+                                    }
+                                    NarrowOutcome::Retry(diagnostic) => {
+                                        let feedback = format!("Host verification failed for the current target. This supersedes earlier verification.\n{diagnostic}\n{}", repair.prompt());
+                                        messages.push(ChatMessage {
+                                            role: "tool".into(),
+                                            content: crate::image_content::ModelContent::text(feedback.clone()).with_retrieved_spans(crate::retrieved_content::full_span(&feedback)),
+                                            tool_calls: None,
+                                            tool_call_id: Some(calls[0].0.clone()),
+                                            response_items: Vec::new(),
+                                        });
+                                        continue;
+                                    }
+                                }
+                            }
                             cleanup_owned_jobs(owner).await;
                             return serde_json::to_string(&value).map_err(|error| {
                                 format!("structured output encoding failed: {error}")
@@ -960,7 +1110,7 @@ impl AgentRunner for ProviderAgentRunner {
                         }
                         Err(error) => {
                             structured_repair_attempted = true;
-                            for (call_id, _, _) in &calls {
+                            for (call_id, _, _, _) in &calls {
                                 messages.push(ChatMessage {
                                     role: "tool".into(),
                                     content: crate::image_content::ModelContent::text(format!(
@@ -976,15 +1126,12 @@ impl AgentRunner for ProviderAgentRunner {
                                 "structured output repair turn 1 of 1".into(),
                             ));
                             messages.push(ChatMessage {
-                            role: "system".into(),
-                            content: crate::image_content::ModelContent::text(format!(
-                                "The final structured result was rejected: {}. Correct it now by calling report_structured_output exactly once as the sole final tool call. This is the only repair turn.",
-                                crate::terminal_text::sanitize_terminal_text(&error)
-                            )),
-                            tool_calls: None,
-                            tool_call_id: None,
-                            response_items: Vec::new(),
-                        });
+                                role: "system".into(),
+                                content: structured_repair_content(&error),
+                                tool_calls: None,
+                                tool_call_id: None,
+                                response_items: Vec::new(),
+                            });
                             continue;
                         }
                     }
@@ -994,7 +1141,9 @@ impl AgentRunner for ProviderAgentRunner {
             let execution_grants = context.request.grants.clone();
             let frozen_policy = context.frozen_policy.clone();
             let mut prefetched_reads = std::collections::HashMap::new();
-            for (call_index, (call_id, name, raw_arguments)) in calls.iter().cloned().enumerate() {
+            for (call_index, (call_id, name, raw_arguments, argument_spans)) in
+                calls.iter().cloned().enumerate()
+            {
                 if let Some(budget) = context
                     .graph_budget
                     .as_ref()
@@ -1029,11 +1178,13 @@ impl AgentRunner for ProviderAgentRunner {
                     Ok(crate::approval::BrokerDecision::ExplicitPrompt)
                         | Ok(crate::approval::BrokerDecision::NetworkPrompt)
                 );
+                let admitted_grant = context.request.admitted.clone();
                 let native_context = ChildToolContext {
                     runner: self,
                     id: context.id,
                     owner,
                     grant: &execution_grants,
+                    admitted: admitted_grant.as_deref(),
                     workspace: &workspace,
                     policy_approved: false,
                     frozen_policy: frozen_policy.as_deref(),
@@ -1041,6 +1192,9 @@ impl AgentRunner for ProviderAgentRunner {
                 let result = if let Some(result) = prefetched_reads.remove(&call_index) {
                     result
                 } else if granted.contains(&name)
+                    && !client
+                        .privacy_context()
+                        .is_some_and(|context| context.filenames_enabled())
                     && !policy_prompt
                     && registry
                         .supports_native_read(&name, crate::agent::registry::ToolProfile::Subagent)
@@ -1052,7 +1206,7 @@ impl AgentRunner for ProviderAgentRunner {
                                 name: name.clone(),
                                 args: prepared.arguments,
                             }];
-                            for (_, next_name, raw) in calls
+                            for (_, next_name, raw, _) in calls
                                 .iter()
                                 .skip(call_index + 1)
                                 .take(crate::agent::tools::MAX_NATIVE_READ_CONCURRENCY - 1)
@@ -1110,7 +1264,14 @@ impl AgentRunner for ProviderAgentRunner {
                         }
                     }
                 } else if name == "spawn_agent" && granted.contains(&name) && !policy_prompt {
-                    execute_child_nested_spawn(&context, &native_context, &parsed).await
+                    execute_child_nested_spawn_with_provenance(
+                        &context,
+                        &native_context,
+                        &parsed,
+                        &raw_arguments,
+                        &argument_spans,
+                    )
+                    .await
                 } else if name == "request_graph_clarification" {
                     if context.graph_budget.is_none() {
                         crate::agent::registry::ToolExecutionResult::Failure(
@@ -1163,7 +1324,14 @@ impl AgentRunner for ProviderAgentRunner {
                             policy_approved: true,
                             ..native_context
                         };
-                        execute_child_nested_spawn(&context, &approved_context, &parsed).await
+                        execute_child_nested_spawn_with_provenance(
+                            &context,
+                            &approved_context,
+                            &parsed,
+                            &raw_arguments,
+                            &argument_spans,
+                        )
+                        .await
                     } else {
                         execute_child_tool(
                             ChildToolContext {
@@ -1171,6 +1339,7 @@ impl AgentRunner for ProviderAgentRunner {
                                 id: context.id,
                                 owner,
                                 grant: &context.request.grants,
+                                admitted: context.request.admitted.as_deref(),
                                 workspace: &workspace,
                                 policy_approved: true,
                                 frozen_policy: frozen_policy.as_deref(),
@@ -1189,6 +1358,7 @@ impl AgentRunner for ProviderAgentRunner {
                             id: context.id,
                             owner,
                             grant: &context.request.grants,
+                            admitted: context.request.admitted.as_deref(),
                             workspace: &workspace,
                             policy_approved: false,
                             frozen_policy: frozen_policy.as_deref(),
@@ -1202,6 +1372,20 @@ impl AgentRunner for ProviderAgentRunner {
                 if let Some(mutation) = result.mutation_batch() {
                     let _ = context.events.send(RunnerEvent::Mutation(mutation.clone()));
                 }
+                let provider_output = match client
+                    .privacy_context()
+                    .filter(|context| context.filenames_enabled() && result.is_success())
+                    .and_then(|context| {
+                        matches!(name.as_str(), "list_dir" | "glob").then(|| {
+                            context.project_tool_output(&name, &raw_arguments, result.model_text())
+                        })
+                    })
+                    .transpose()
+                {
+                    Ok(Some(projected)) => projected,
+                    Ok(None) => result.model_text().to_string(),
+                    Err(_) => "[listing withheld]".into(),
+                };
                 let _ = context.events.send(RunnerEvent::ToolEvidence {
                     turn: turn as u64,
                     call_id: call_id.clone(),
@@ -1211,7 +1395,7 @@ impl AgentRunner for ProviderAgentRunner {
                         &result,
                         crate::agent::registry::ToolExecutionResult::Denied(_)
                     ),
-                    output: crate::learning::sanitized_learning_text(result.persistent_text())
+                    output: crate::learning::sanitized_learning_text(&provider_output)
                         .unwrap_or_else(|| "[private evidence omitted]".into())
                         .chars()
                         .take(1024)
@@ -1239,7 +1423,14 @@ impl AgentRunner for ProviderAgentRunner {
                 });
                 messages.push(ChatMessage {
                     role: "tool".into(),
-                    content: crate::image_content::ModelContent::text(result.model_text())
+                    content: crate::image_content::ModelContent::text(&provider_output)
+                        .with_retrieved_spans(crate::retrieved_content::full_span(
+                            &provider_output,
+                        ))
+                        .with_source_receipt(result.source_for(result.model_text()))
+                        .with_context_observation(crate::context_observation::bind_native_result(
+                            &name, &raw_arguments, result.model_text(),
+                        ))
                         .with_prunable_tool_result(crate::context_pruning::qualified_result(
                             &name,
                             &raw_arguments,
@@ -1270,10 +1461,18 @@ impl AgentRunner for ProviderAgentRunner {
             "subagent exceeded maximum {} turns",
             context.limits.max_turns
         ))
+        }).await
     }
 
     fn replace_route_clients(&self, clients: AgentRouteClients) {
         self.route_clients.replace(clients);
+    }
+
+    fn replace_request_options(
+        &self,
+        options: Vec<(AgentRoute, crate::agent::client::ChatRequestOptions)>,
+    ) {
+        self.route_clients.set_request_options(options);
     }
 
     fn skill_constraint_ids(&self) -> (Option<Vec<String>>, Option<Vec<String>>) {
@@ -1286,6 +1485,273 @@ impl AgentRunner for ProviderAgentRunner {
             Some(registry.viewable_instance_ids()),
         )
     }
+}
+
+enum NarrowOutcome {
+    Complete(Box<crate::narrow_worker::NarrowRepairResult>),
+    Retry(String),
+}
+
+async fn freeze_repair_contract(request: &mut AgentSpawnRequest) -> Result<(), String> {
+    if let Some(contract) = request.repair_contract.take() {
+        let workspace = request.workspace.clone();
+        let grants = request.grants.clone();
+        request.repair_contract = Some(
+            tokio::task::spawn_blocking(move || contract.freeze(&workspace, &grants))
+                .await
+                .map_err(|_| "repair admission worker stopped".to_string())??,
+        );
+    }
+    Ok(())
+}
+
+async fn narrow_host_tool(
+    runner: &ProviderAgentRunner,
+    context: &mut AgentRunContext,
+    name: &str,
+    arguments: &serde_json::Value,
+    timeout_secs: u64,
+    turn: u64,
+) -> Result<crate::agent::registry::ToolExecutionResult, String> {
+    let decision = child_permission_decision(
+        runner,
+        context.frozen_policy.as_deref(),
+        &context.request.workspace,
+        context.id,
+        name,
+        arguments,
+    )?;
+    if decision == crate::approval::BrokerDecision::DeniedByRule {
+        return Err(format!("narrow repair {name} denied by permission policy"));
+    }
+    let policy_prompt = matches!(
+        decision,
+        crate::approval::BrokerDecision::ExplicitPrompt
+            | crate::approval::BrokerDecision::NetworkPrompt
+    );
+    if policy_prompt {
+        if runner
+            .manager_link
+            .get()
+            .and_then(std::sync::Weak::upgrade)
+            .is_some_and(|manager| {
+                manager
+                    .headless_noninteractive
+                    .load(std::sync::atomic::Ordering::Acquire)
+            })
+        {
+            return Err(format!(
+                "headless narrow repair {name} requires interactive approval"
+            ));
+        }
+        if !await_child_approval(
+            context,
+            format!("permission policy requires approval for narrow repair {name}"),
+        )
+        .await?
+        {
+            return Err(format!("narrow repair {name} denied by parent approval"));
+        }
+    }
+    if let Some(budget) = &context.graph_budget {
+        budget
+            .reserve_tool_call()
+            .map_err(|limit| format!("agent graph autonomy budget exhausted: {limit:?}"))?;
+    }
+    let _ = context
+        .events
+        .send(RunnerEvent::ToolStarted { name: name.into() });
+    let mut bounded_runner = runner.clone();
+    bounded_runner.command_timeout_secs = timeout_secs.min(runner.command_timeout_secs).max(1);
+    let native_context = ChildToolContext {
+        runner: &bounded_runner,
+        id: context.id,
+        owner: context.job_owner,
+        grant: &context.request.grants,
+        admitted: context.request.admitted.as_deref(),
+        workspace: &context.request.workspace,
+        policy_approved: policy_prompt,
+        frozen_policy: context.frozen_policy.as_deref(),
+    };
+    let arguments = if let Some(privacy) = crate::privacy::for_owner(context.job_owner) {
+        // These arguments were assembled by the frozen host contract, rather
+        // than authored by the provider. Check their native authority before
+        // adapting only the typed path to the ordinary privacy/ticket boundary.
+        let mut native = match prepare_child_tool(&native_context, name, arguments) {
+            Ok(prepared) => prepared.arguments,
+            Err(result) => return Ok(*result),
+        };
+        let field = match name {
+            "edit_file" => "path",
+            "run_command" => "cwd",
+            _ => return Err("unsupported narrow host tool".into()),
+        };
+        let workspace = context.request.workspace.clone();
+        match tokio::task::spawn_blocking(move || -> Result<serde_json::Value, String> {
+            privacy.authorize_tool_roots(&workspace)?;
+            let path = native[field]
+                .as_str()
+                .ok_or("narrow host invocation has no prepared path")?;
+            if field == "path" {
+                let source = native["old_string"]
+                    .as_str()
+                    .ok_or("narrow host edit has no frozen source")?;
+                let path = std::path::Path::new(path);
+                let relative = path
+                    .strip_prefix(privacy.workspace())
+                    .unwrap_or(path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                // The worker received this host-owned frozen/current source.
+                // Bind that view, never a newer disk read. Ordinary ticket
+                // preparation and consumption still reject digest/policy drift.
+                privacy.project_source(&relative, source)?;
+            }
+            if privacy.filenames_enabled() {
+                let reference = privacy.project_filename_path(std::path::Path::new(path))?;
+                native[field] = serde_json::Value::String(reference);
+            }
+            // Preserve command and source strings for the existing literal /
+            // source-spelling restoration and final native authority checks.
+            Ok(native)
+        })
+        .await
+        {
+            Ok(Ok(arguments)) => arguments,
+            Ok(Err(error)) => {
+                return Ok(crate::agent::registry::ToolExecutionResult::Failure(error));
+            }
+            Err(_) => {
+                return Err("narrow host filename preparation worker stopped".into());
+            }
+        }
+    } else {
+        arguments.clone()
+    };
+    let result = tokio::select! {
+        _ = wait_cancelled(context.cancelled.clone()) => return Err("cancelled".into()),
+        result = async {
+            if name == "edit_file" {
+                execute_child_exact_range_edit(native_context, &arguments).await
+            } else {
+                execute_child_tool(native_context, name, &arguments).await
+            }
+        } => result,
+    };
+    if let Some(mutation) = result.mutation_batch() {
+        let _ = context.events.send(RunnerEvent::Mutation(mutation.clone()));
+    }
+    let _ = context.events.send(RunnerEvent::ToolEvidence {
+        turn,
+        call_id: format!("host-repair-{turn}-{name}"),
+        name: name.into(),
+        succeeded: result.is_success(),
+        denied: matches!(
+            &result,
+            crate::agent::registry::ToolExecutionResult::Denied(_)
+        ),
+        output: crate::learning::sanitized_learning_text(result.persistent_text())
+            .unwrap_or_else(|| "[private evidence omitted]".into())
+            .chars()
+            .take(1024)
+            .collect(),
+    });
+    let _ = context.events.send(RunnerEvent::ToolCompleted {
+        name: name.into(),
+        succeeded: result.is_success(),
+    });
+    if let Some(budget) = &context.graph_budget {
+        budget
+            .retain_output(result.model_text().len())
+            .map_err(|limit| format!("agent graph autonomy budget exhausted: {limit:?}"))?;
+        if !result.is_success() {
+            budget
+                .observe_tool_failure()
+                .map_err(|limit| format!("agent graph autonomy budget exhausted: {limit:?}"))?;
+        }
+    }
+    Ok(result)
+}
+
+async fn apply_narrow_replacement(
+    runner: &ProviderAgentRunner,
+    context: &mut AgentRunContext,
+    repair: &mut crate::narrow_worker::RepairState,
+    value: &serde_json::Value,
+    turn: u64,
+    usage: &crate::narrow_worker::RepairUsage,
+) -> Result<NarrowOutcome, String> {
+    repair.validate_current()?;
+    let arguments = repair.edit_arguments(value)?;
+    let result = narrow_host_tool(
+        runner,
+        context,
+        "edit_file",
+        &arguments,
+        runner.command_timeout_secs,
+        turn,
+    )
+    .await?;
+    if !result.is_success() {
+        return Err(format!(
+            "narrow repair edit did not complete: {}",
+            result.model_text()
+        ));
+    }
+    repair.accept_mutation(&result)?;
+    let _ = context.events.send(RunnerEvent::NarrowRepairApplied(
+        repair.applied_result(usage.clone())?,
+    ));
+    let mut receipts = Vec::new();
+    let mut diagnostic = None;
+    for check in repair.contract.checks.clone() {
+        repair.validate_current()?;
+        let arguments = serde_json::json!({"command":crate::narrow_worker::render_command(&check.argv), "cwd":check.cwd.as_deref().unwrap_or("."), "background":false});
+        let result = narrow_host_tool(
+            runner,
+            context,
+            "run_command",
+            &arguments,
+            check.timeout_secs,
+            turn,
+        )
+        .await?;
+        let Some(observation) = result.command_observation() else {
+            return Err(format!(
+                "pinned repair check has no terminal execution evidence: {}",
+                result.model_text()
+            ));
+        };
+        let exit_code = match observation.status {
+            crate::jobs::JobStatus::Completed { exit_code }
+            | crate::jobs::JobStatus::Failed {
+                exit_code: Some(exit_code),
+            } => exit_code,
+            status => return Err(format!("pinned repair check did not complete: {status:?}")),
+        };
+        receipts.push(crate::narrow_worker::RepairCheckEvidence::observed(
+            &observation.command,
+            exit_code,
+        ));
+        repair.validate_current()?;
+        if exit_code != 0 {
+            diagnostic = Some(result.model_text().chars().take(8192).collect::<String>());
+            break;
+        }
+    }
+    if let Some(diagnostic) = diagnostic {
+        if repair.attempts >= repair.contract.max_attempts {
+            return Err(format!(
+                "narrow repair exhausted {} attempts; current verification failed:\n{diagnostic}",
+                repair.contract.max_attempts
+            ));
+        }
+        return Ok(NarrowOutcome::Retry(diagnostic));
+    }
+    cleanup_owned_jobs(context.job_owner).await;
+    Ok(NarrowOutcome::Complete(Box::new(
+        repair.receipt(receipts, usage.clone())?,
+    )))
 }
 
 fn resolve_policy_prompt(
@@ -1422,17 +1888,59 @@ fn child_permission_decision(
         .map(|(_, decision)| decision)
 }
 
+#[cfg(test)]
 async fn execute_child_nested_spawn(
     context: &AgentRunContext,
     tool_context: &ChildToolContext<'_>,
     arguments: &serde_json::Value,
 ) -> crate::agent::registry::ToolExecutionResult {
+    execute_child_nested_spawn_with_provenance(
+        context,
+        tool_context,
+        arguments,
+        &arguments.to_string(),
+        &[],
+    )
+    .await
+}
+
+async fn execute_child_nested_spawn_with_provenance(
+    context: &AgentRunContext,
+    tool_context: &ChildToolContext<'_>,
+    arguments: &serde_json::Value,
+    original_arguments: &str,
+    argument_spans: &[crate::retrieved_content::RetrievedSpan],
+) -> crate::agent::registry::ToolExecutionResult {
+    if let Some(grant) = tool_context.admitted {
+        if let Err(error) = crate::child_mediation::require_current_generation(grant) {
+            return crate::agent::registry::ToolExecutionResult::Denied(error);
+        }
+    } else {
+        let mut scratch = None;
+        if let Ok(grant) = child_admitted(tool_context, &mut scratch) {
+            if !crate::child_mediation::nested_spawn_allowed(grant.policy_generation) {
+                return crate::agent::registry::ToolExecutionResult::Denied(
+                    "old grant is blocked until cleanup is confirmed".into(),
+                );
+            }
+        }
+    }
     match prepare_child_tool(tool_context, "spawn_agent", arguments) {
         Ok(prepared) => {
-            execute_nested_spawn(
+            let task_spans = match manager_argument_spans(
+                &prepared.arguments,
+                original_arguments,
+                argument_spans,
+                "/task",
+            ) {
+                Ok(spans) => spans,
+                Err(error) => return crate::agent::registry::ToolExecutionResult::Failure(error),
+            };
+            execute_nested_spawn_with_provenance(
                 context,
                 &prepared.arguments,
                 &tool_context.runner.manager_link,
+                task_spans,
             )
             .await
         }
@@ -1440,10 +1948,20 @@ async fn execute_child_nested_spawn(
     }
 }
 
+#[cfg(test)]
 async fn execute_nested_spawn(
     context: &AgentRunContext,
     arguments: &serde_json::Value,
     manager_link: &std::sync::OnceLock<std::sync::Weak<AgentManager>>,
+) -> crate::agent::registry::ToolExecutionResult {
+    execute_nested_spawn_with_provenance(context, arguments, manager_link, Vec::new()).await
+}
+
+async fn execute_nested_spawn_with_provenance(
+    context: &AgentRunContext,
+    arguments: &serde_json::Value,
+    manager_link: &std::sync::OnceLock<std::sync::Weak<AgentManager>>,
+    task_retrieved_spans: Vec<crate::retrieved_content::RetrievedSpan>,
 ) -> crate::agent::registry::ToolExecutionResult {
     let Some(manager) = manager_link.get().and_then(std::sync::Weak::upgrade) else {
         return crate::agent::registry::ToolExecutionResult::Failure(
@@ -1510,6 +2028,8 @@ async fn execute_nested_spawn(
         parent_turn: context.request.parent_turn,
         task_id: None,
         task: task.to_string(),
+        task_retrieved_spans,
+        host_task: None,
         context_mode: AgentContextMode::Summary,
         context_summary: context.request.context_summary.clone(),
         grants: AgentGrant {
@@ -1524,7 +2044,13 @@ async fn execute_nested_spawn(
         route: route.clone(),
         purpose: context.request.purpose,
         output_contract,
+        repair_contract: match crate::narrow_worker::parse(arguments) {
+            Ok(contract) => contract,
+            Err(error) => return crate::agent::registry::ToolExecutionResult::Failure(error),
+        },
         isolation,
+
+        admitted: None,
     };
     let origin = if context.graph_budget.is_some() {
         AgentRunOrigin::TaskGraph
@@ -1535,10 +2061,13 @@ async fn execute_nested_spawn(
         .spawn_with_inherited_policy(request, origin, context.frozen_policy.clone())
         .await
     {
-        Ok(id) => crate::agent::registry::ToolExecutionResult::Success(format!(
-            "Spawned nested agent {id}{}",
-            child_route_suffix(route.as_ref(), selection.as_ref())
-        )),
+        Ok(id) => {
+            let text = format!(
+                "Spawned nested agent {id}{}",
+                child_route_suffix(route.as_ref(), selection.as_ref())
+            );
+            manager_spawn_success(&manager, id, text).await
+        }
         Err(error) => crate::agent::registry::ToolExecutionResult::Failure(error.to_string()),
     }
 }
@@ -1553,8 +2082,12 @@ async fn await_child_approval(
             _ = wait_cancelled(context.cancelled.clone()) => return Err("cancelled".into()),
             command = context.commands.recv() => match command {
                 Some(AgentCommand::Approval(approved)) => return Ok(approved),
-                Some(AgentCommand::Message { id, text }) => {
-                    context.pending_steers.push_back((id, text));
+                Some(AgentCommand::Message { id, text, retrieved_spans, front }) => {
+                    if front {
+                        context.pending_steers.push_front((id, text, retrieved_spans));
+                    } else {
+                        context.pending_steers.push_back((id, text, retrieved_spans));
+                    }
                     let _ = context.events.send(RunnerEvent::Activity(
                         "steering retained for the next provider boundary".into(),
                     ));
@@ -1603,7 +2136,7 @@ async fn await_graph_clarification(
             ToolExecutionResult::Failure("clarification cancelled".into())
         }
         command = context.commands.recv() => match command {
-            Some(AgentCommand::Message { id, text }) => {
+            Some(AgentCommand::Message { id, text, .. }) => {
                 let _ = context.events.send(RunnerEvent::SteerDelivered { id });
                 if !text.is_empty()
                     && (text.len() > MAX_CLARIFICATION_ANSWER_CHARS
@@ -1626,19 +2159,134 @@ async fn await_graph_clarification(
     }
 }
 
+fn initial_child_messages(
+    request: &AgentSpawnRequest,
+    budget: Option<(u64, u64)>,
+    active_skills: &str,
+    task_skills: &str,
+    repair: Option<&crate::narrow_worker::RepairState>,
+    structured: bool,
+) -> Result<Vec<crate::agent::client::ChatMessage>, String> {
+    use crate::agent::client::ChatMessage;
+    use crate::host_instructions::{Instruction, Text};
+    let mut system = Text::default();
+    system.instruction(Instruction::Child);
+    if crate::privacy::current().is_some_and(|context| context.filenames_enabled()) {
+        system.instruction(Instruction::FilenamesAliased);
+    }
+    if structured {
+        system.instruction(Instruction::StructuredResult);
+    }
+    system.instruction(Instruction::Summary);
+    if let Some((maximum, used)) = budget {
+        system.instruction(Instruction::Budget { maximum, used });
+    }
+    let start = system.as_str().len();
+    system.data(&request.context_summary);
+    let mut spans = crate::retrieved_content::full_span(&request.context_summary);
+    for span in &mut spans {
+        span.start += start;
+        span.end += start;
+    }
+    system.data(active_skills);
+    system.data(task_skills);
+    if let Some(repair) = repair {
+        system.instruction(Instruction::Repair);
+        let start = system.as_str().len();
+        let prompt = repair.prompt();
+        for mut span in crate::retrieved_content::full_span(&prompt) {
+            span.start += start;
+            span.end += start;
+            spans.push(span);
+        }
+        system.data(&prompt);
+    }
+    let task = if let Some(host) = &request.host_task {
+        if !host.matches(&request.task) {
+            return Err("Host planning instructions changed before dispatch".into());
+        }
+        crate::image_content::ModelContent::host(host.clone())
+    } else {
+        crate::image_content::ModelContent::text(&request.task)
+    };
+    Ok(vec![
+        ChatMessage {
+            role: "system".into(),
+            content: crate::image_content::ModelContent::host(system).with_retrieved_spans(spans),
+            tool_calls: None,
+            tool_call_id: None,
+            response_items: Vec::new(),
+        },
+        ChatMessage {
+            role: "user".into(),
+            content: task.with_retrieved_spans(request.task_retrieved_spans.clone()),
+            tool_calls: None,
+            tool_call_id: None,
+            response_items: Vec::new(),
+        },
+    ])
+}
+
+fn validate_structured_output_arguments(
+    contract: &crate::headless_contract::StructuredOutputContract,
+    arguments: &str,
+    privacy: Option<&crate::privacy::Context>,
+) -> Result<serde_json::Value, String> {
+    let Some(privacy) = privacy.filter(|context| context.enabled()) else {
+        return contract.validate_arguments(arguments);
+    };
+    // Streaming keeps private references provider-spelled until local tool
+    // preparation. Structured output is terminal host data, so restore its
+    // values here before schema and task-map grant/evidence validation.
+    let value = crate::headless_contract::StructuredOutputContract::parse_arguments(arguments)?;
+    let mut restored = privacy.restore_arguments(&value)?;
+    if contract.is_native_automatic_task_map() {
+        crate::automatic_tasks::restore_graph_paths(privacy, &value, &mut restored)?;
+    }
+    contract.validate_value(&restored)?;
+    Ok(restored)
+}
+
+fn structured_repair_content(error: &str) -> crate::image_content::ModelContent {
+    let mut content = "The final structured result was rejected: ".to_string();
+    let mut spans = Vec::new();
+    crate::retrieved_content::append(
+        &mut content,
+        &mut spans,
+        &crate::terminal_text::sanitize_terminal_text(error),
+    );
+    content.push_str(". Correct it now by calling report_structured_output exactly once as the sole final tool call. This is the only repair turn.");
+    crate::image_content::ModelContent::text(content).with_retrieved_spans(spans)
+}
+
 fn drain_child_steering(
     context: &mut AgentRunContext,
     messages: &mut Vec<crate::agent::client::ChatMessage>,
 ) {
     while let Ok(command) = context.commands.try_recv() {
-        if let AgentCommand::Message { id, text } = command {
-            context.pending_steers.push_back((id, text));
+        if let AgentCommand::Message {
+            id,
+            text,
+            retrieved_spans,
+            front,
+        } = command
+        {
+            if front {
+                context
+                    .pending_steers
+                    .push_front((id, text, retrieved_spans));
+            } else {
+                context
+                    .pending_steers
+                    .push_back((id, text, retrieved_spans));
+            }
         }
     }
-    while let Some((id, text)) = context.pending_steers.pop_front() {
+    while let Some((id, text, retrieved_spans)) = context.pending_steers.pop_front() {
         messages.push(crate::agent::client::ChatMessage {
             role: "user".into(),
-            content: crate::image_content::ModelContent::text(text),
+            content: crate::image_content::ModelContent::text(text)
+                .with_retrieved_spans(retrieved_spans),
             tool_calls: None,
             tool_call_id: None,
             response_items: Vec::new(),
@@ -1652,6 +2300,7 @@ struct ChildToolContext<'a> {
     id: AgentId,
     owner: crate::jobs::JobOwner,
     grant: &'a AgentGrant,
+    admitted: Option<&'a crate::execution_grant::AdmittedExecutionGrant>,
     workspace: &'a crate::workspace::WorkspaceContext,
     policy_approved: bool,
     frozen_policy: Option<&'a FrozenChildPolicy>,
@@ -1709,9 +2358,23 @@ fn prepare_child_tool(
     };
     if decision == crate::approval::BrokerDecision::DeniedByRule {
         return Err(Box::new(
-            crate::agent::registry::ToolExecutionResult::Denied(
-                "Denied by persistent approval rule".into(),
-            ),
+            crate::agent::registry::ToolExecutionResult::Denied({
+                let mut detail = "Denied by persistent approval rule".to_string();
+                if let Some(note) =
+                    crate::parity_backend::denial_grant_note(arguments, context.workspace.cwd())
+                {
+                    detail.push(' ');
+                    detail.push_str(&note);
+                }
+                if let Some(command) = arguments.get("command").and_then(|value| value.as_str()) {
+                    let risks = crate::parity_backend::command_risk_note(command);
+                    if !risks.is_empty() {
+                        detail.push(' ');
+                        detail.push_str(&risks);
+                    }
+                }
+                detail
+            }),
         ));
     }
     if matches!(
@@ -1739,49 +2402,193 @@ fn prepare_child_tool(
         else {
             continue;
         };
-        let typed_read = spec.mutation == crate::agent::registry::ToolMutation::ReadOnly
-            && !spec.capabilities.iter().any(|capability| {
-                matches!(
-                    capability,
-                    crate::agent::registry::ToolCapability::Process
-                        | crate::agent::registry::ToolCapability::Git
-                )
-            });
-        let within_scope = match resource.kind {
-            crate::agent::registry::ResourceKind::Path
-            | crate::agent::registry::ResourceKind::WorkingDirectory => {
-                typed_read
-                    || context
-                        .grant
-                        .path_scopes
-                        .iter()
-                        .any(|scope| std::path::Path::new(value).starts_with(scope))
-            }
-            crate::agent::registry::ResourceKind::Command => context
-                .grant
-                .command_scopes
-                .iter()
-                .any(|scope| scope == value),
-            crate::agent::registry::ResourceKind::Url => context.grant.network,
-            crate::agent::registry::ResourceKind::JobId => true,
-        };
-        if !within_scope {
+        let write = spec.mutation != crate::agent::registry::ToolMutation::ReadOnly;
+        if let Err(error) = authorize_child_resource(context, resource.kind, value, write) {
             return Err(Box::new(
                 crate::agent::registry::ToolExecutionResult::Denied(format!(
-                    "Child resource is outside inherited scope: {}",
-                    resource.field
+                    "Child resource is outside inherited scope: {error}"
                 )),
             ));
         }
     }
-    if prepared.network_requested && !context.grant.network {
+    let extra_paths = if crate::privacy::for_owner(context.owner)
+        .is_some_and(|privacy| privacy.filenames_enabled())
+    {
+        crate::privacy::tool_contract::additional_write_paths(
+            name,
+            &prepared.arguments,
+            context.workspace.cwd(),
+        )
+        .map_err(|error| Box::new(crate::agent::registry::ToolExecutionResult::Failure(error)))?
+    } else {
+        Vec::new()
+    };
+    for path in extra_paths {
+        let mut authority = context.workspace.clone();
+        if let Some(privacy) = crate::privacy::for_owner(context.owner) {
+            for root in privacy.command_artifact_roots() {
+                authority.add_root(root, false).map_err(|error| {
+                    Box::new(crate::agent::registry::ToolExecutionResult::Denied(
+                        error.to_string(),
+                    ))
+                })?;
+            }
+        }
+        let path = authority
+            .resolve(
+                &path.to_string_lossy(),
+                crate::workspace::PathOperation::Create,
+            )
+            .map_err(|error| {
+                Box::new(crate::agent::registry::ToolExecutionResult::Denied(
+                    error.to_string(),
+                ))
+            })?;
+        if let Err(error) = authorize_child_resource(
+            context,
+            crate::agent::registry::ResourceKind::Path,
+            path.to_str().unwrap_or(""),
+            true,
+        ) {
+            return Err(Box::new(
+                crate::agent::registry::ToolExecutionResult::Denied(format!(
+                    "Child write resource is outside inherited scope: {error}"
+                )),
+            ));
+        }
+    }
+    if (child_invocation_uses_network(&prepared)
+        || (prepared.network_requested && !context.grant.network))
+        && child_network_denied(context)
+    {
         return Err(Box::new(
             crate::agent::registry::ToolExecutionResult::Denied(
-                "Child network access requires an explicit inherited grant".into(),
+                "Child network access requires an admitted destination reference".into(),
             ),
         ));
     }
     Ok(prepared)
+}
+
+fn child_admitted<'a>(
+    context: &'a ChildToolContext<'a>,
+    scratch: &'a mut Option<crate::execution_grant::AdmittedExecutionGrant>,
+) -> Result<&'a crate::execution_grant::AdmittedExecutionGrant, crate::execution_grant::GrantError>
+{
+    if let Some(admitted) = context.admitted {
+        return Ok(admitted);
+    }
+    let inherited_scopes;
+    let path_scopes = if context.grant.path_scopes.is_empty() {
+        inherited_scopes = context
+            .workspace
+            .execution_roots()
+            .iter()
+            .map(|root| root.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        inherited_scopes.as_slice()
+    } else {
+        context.grant.path_scopes.as_slice()
+    };
+    *scratch = Some(crate::execution_grant::AdmittedExecutionGrant::from_legacy(
+        crate::execution_grant::LegacyGrantView {
+            tools: &context.grant.tools,
+            path_scopes,
+            command_scopes: &context.grant.command_scopes,
+        },
+        context.owner.run_id,
+        0,
+        Vec::new(),
+    )?);
+    Ok(scratch.as_ref().expect("grant stored"))
+}
+
+fn authorize_child_resource(
+    context: &ChildToolContext<'_>,
+    kind: crate::agent::registry::ResourceKind,
+    value: &str,
+    write: bool,
+) -> Result<(), String> {
+    let mut scratch = None;
+    let admitted = child_admitted(context, &mut scratch).map_err(|error| error.to_string())?;
+    match kind {
+        crate::agent::registry::ResourceKind::Path
+        | crate::agent::registry::ResourceKind::WorkingDirectory => {
+            let raw = std::path::Path::new(value);
+            let path = if raw.is_absolute() {
+                raw.to_path_buf()
+            } else {
+                context
+                    .workspace
+                    .resolve(
+                        value,
+                        if write {
+                            crate::workspace::PathOperation::Create
+                        } else {
+                            crate::workspace::PathOperation::Read
+                        },
+                    )
+                    .unwrap_or_else(|_| context.workspace.cwd().join(raw))
+            };
+            let access = if !write || kind == crate::agent::registry::ResourceKind::WorkingDirectory
+            {
+                crate::execution_grant::PathAccess::Read
+            } else {
+                crate::execution_grant::PathAccess::Write
+            };
+            if context.admitted.is_some() {
+                if let Some(live) = context
+                    .runner
+                    .manager_link
+                    .get()
+                    .and_then(std::sync::Weak::upgrade)
+                {
+                    admitted
+                        .ensure_current(live.policy_generation())
+                        .map_err(|error| error.to_string())?;
+                }
+            }
+            admitted
+                .authorize_path(&path, access)
+                .map_err(|error| error.to_string())
+        }
+        crate::agent::registry::ResourceKind::Command => admitted
+            .authorize_command(value)
+            .map_err(|error| error.to_string()),
+        crate::agent::registry::ResourceKind::Url => admitted
+            .authorize_network()
+            .map_err(|error| error.to_string()),
+        crate::agent::registry::ResourceKind::JobId => Ok(()),
+    }
+}
+
+fn child_invocation_uses_network(prepared: &crate::workspace::PreparedToolInvocation) -> bool {
+    if prepared
+        .arguments
+        .get("network")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    for field in ["url", "image_url"] {
+        if prepared
+            .arguments
+            .get(field)
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| value.contains("://") && !value.starts_with("file:"))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn child_network_denied(context: &ChildToolContext<'_>) -> bool {
+    let mut scratch = None;
+    child_admitted(context, &mut scratch)
+        .map(|grant| grant.authorize_network().is_err())
+        .unwrap_or(true)
 }
 
 async fn execute_child_tool(
@@ -1789,33 +2596,161 @@ async fn execute_child_tool(
     name: &str,
     arguments: &serde_json::Value,
 ) -> crate::agent::registry::ToolExecutionResult {
-    let mut prepared = match prepare_child_tool(&context, name, arguments) {
+    execute_child_tool_with_formatting(context, name, arguments, true).await
+}
+
+/// A narrow contract owns exact replacement bytes. Applying a whole-file
+/// formatter here could publish changes outside its frozen range.
+async fn execute_child_exact_range_edit(
+    context: ChildToolContext<'_>,
+    arguments: &serde_json::Value,
+) -> crate::agent::registry::ToolExecutionResult {
+    execute_child_tool_with_formatting(context, "edit_file", arguments, false).await
+}
+
+async fn execute_child_tool_with_formatting(
+    context: ChildToolContext<'_>,
+    name: &str,
+    arguments: &serde_json::Value,
+    configured_formatting: bool,
+) -> crate::agent::registry::ToolExecutionResult {
+    if matches!(name, "http_request" | "git_operation" | "ssh_operation") {
+        let mut scratch = None;
+        let grant = match child_admitted(&context, &mut scratch) {
+            Ok(grant) => grant,
+            Err(error) => {
+                return crate::agent::registry::ToolExecutionResult::Failure(error.to_string())
+            }
+        };
+        return crate::child_mediation::execute_mediated(
+            grant,
+            &context.owner.run_id.to_string(),
+            name,
+            arguments,
+        )
+        .await;
+    }
+    let arguments = if let Some(privacy) = crate::privacy::for_owner(context.owner) {
+        let name = name.to_string();
+        let args = arguments.clone();
+        let workspace = context.workspace.clone();
+        match tokio::task::spawn_blocking(move || {
+            privacy.authorize_tool_roots(&workspace)?;
+            privacy.prepare_edit_ticket(&name, &args)
+        })
+        .await
+        {
+            Ok(Ok(args)) => args,
+            Ok(Err(error)) => return crate::agent::registry::ToolExecutionResult::Failure(error),
+            Err(_) => {
+                return crate::agent::registry::ToolExecutionResult::Failure(
+                    "Protected child tool preparation worker stopped".into(),
+                )
+            }
+        }
+    } else {
+        arguments.clone()
+    };
+    let mut prepared = match prepare_child_tool(&context, name, &arguments) {
         Ok(prepared) => prepared,
         Err(result) => return *result,
     };
-    if let Err(error) = crate::formatting::prepare_with_authority(
-        name,
-        &mut prepared.arguments,
-        context.workspace,
-        context.runner.sandbox_mode,
-        |invocation| prepare_child_tool(&context, "run_command", invocation).is_ok(),
-    )
-    .await
-    {
-        return crate::agent::registry::ToolExecutionResult::Failure(error);
+    if configured_formatting {
+        if let Err(error) = crate::formatting::prepare_with_authority(
+            name,
+            &mut prepared.arguments,
+            context.workspace,
+            context.runner.sandbox_mode,
+            |invocation| prepare_child_tool(&context, "run_command", invocation).is_ok(),
+        )
+        .await
+        {
+            return crate::agent::registry::ToolExecutionResult::Failure(error);
+        }
+    }
+    if name == "run_command" && crate::isolated_worker::commands_are_confined() {
+        let command = prepared
+            .arguments
+            .get("command")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let mut scratch = None;
+        let spec = match child_admitted(&context, &mut scratch) {
+            Ok(grant) => crate::isolated_worker::spec_for_grant(
+                &grant.digest,
+                &grant.id.to_string(),
+                &context.owner.run_id.to_string(),
+                grant.policy_generation,
+            ),
+            Err(error) => {
+                return crate::agent::registry::ToolExecutionResult::Failure(error.to_string())
+            }
+        };
+        let joined = tokio::task::spawn_blocking(move || {
+            crate::isolated_worker::execute_confined_model_command(&spec, &command)
+        })
+        .await;
+        return match joined {
+            Ok(Ok(output)) => crate::agent::registry::ToolExecutionResult::Success(
+                String::from_utf8_lossy(&output).into_owned(),
+            ),
+            Ok(Err(error)) => crate::agent::registry::ToolExecutionResult::Failure(error),
+            Err(_) => crate::agent::registry::ToolExecutionResult::Failure(
+                "isolated worker stopped before the command and does not fall back in-process"
+                    .into(),
+            ),
+        };
     }
     let runner = context.runner;
-    crate::agent::tools::execute_prepared_tool_in_workspace_policy_owned_with_skills(
+    let policy = child_job_policy(&context);
+    let network_allowed = (child_invocation_uses_network(&prepared)
+        || (prepared.network_requested && !context.grant.network))
+        && !child_network_denied(&context);
+    crate::agent::tools::execute_prepared_tool_in_workspace_policy_owned_with_skills_and_policy(
         name,
         &prepared.arguments,
         context.workspace,
         runner.command_timeout_secs,
         runner.sandbox_mode,
-        context.grant.network && prepared.network_requested,
+        network_allowed,
         context.owner,
         &runner.skills,
+        policy,
     )
     .await
+}
+
+fn child_job_policy(context: &ChildToolContext<'_>) -> crate::jobs::JobExecutionPolicy {
+    let mut scratch = None;
+    let policy = match child_admitted(context, &mut scratch) {
+        Ok(grant) => {
+            let reads = grant
+                .read_scopes
+                .iter()
+                .map(|scope| scope.path.clone())
+                .collect();
+            let writes = grant
+                .write_scopes
+                .iter()
+                .filter(|scope| scope.kind == crate::execution_grant::ScopeKind::DirectoryTree)
+                .map(|scope| scope.path.clone())
+                .chain(grant.output_directories.iter().cloned())
+                .collect();
+            crate::jobs::JobExecutionPolicy::admitted_child(
+                reads,
+                writes,
+                grant.runtime_read_scopes.clone(),
+            )
+        }
+        Err(_) => {
+            crate::jobs::JobExecutionPolicy::admitted_child(Vec::new(), Vec::new(), Vec::new())
+        }
+    };
+    match crate::child_mediation::live_proxy_port() {
+        Some(port) => policy.with_proxy_port(port),
+        None => policy,
+    }
 }
 
 fn child_path_scopes(
@@ -1869,9 +2804,144 @@ async fn cleanup_owned_jobs(owner: crate::jobs::JobOwner) {
     }
 }
 
+#[cfg(test)]
 pub async fn execute_manager_tool(
     name: &str,
     arguments: &serde_json::Value,
+    manager: &Arc<AgentManager>,
+    work_state: &Arc<std::sync::Mutex<crate::work::WorkState>>,
+    workspace: &crate::workspace::WorkspaceContext,
+) -> Option<crate::agent::registry::ToolExecutionResult> {
+    execute_manager_tool_with_provenance(
+        name,
+        arguments,
+        &arguments.to_string(),
+        &[],
+        manager,
+        work_state,
+        workspace,
+    )
+    .await
+}
+
+fn manager_argument_spans(
+    arguments: &serde_json::Value,
+    original_arguments: &str,
+    spans: &[crate::retrieved_content::RetrievedSpan],
+    pointer: &str,
+) -> Result<Vec<crate::retrieved_content::RetrievedSpan>, String> {
+    let ranges = crate::retrieved_content::json_string_spans(original_arguments, spans, pointer)
+        .map_err(|error| error.to_string())?;
+    if !ranges.is_empty() {
+        let original: serde_json::Value =
+            serde_json::from_str(original_arguments).map_err(|error| error.to_string())?;
+        if original.pointer(pointer) != arguments.pointer(pointer) {
+            return Err(
+                "retrieved task argument changed without provenance; request withheld".into(),
+            );
+        }
+    }
+    Ok(ranges)
+}
+
+fn native_agent_control(
+    snapshot: &AgentSnapshot,
+) -> crate::privacy::native_control::NativeAgentControl {
+    use crate::privacy::native_control::{NativeAgentControl, NativeAgentStatus};
+    NativeAgentControl {
+        id: snapshot.id.0,
+        status: match &snapshot.status {
+            AgentStatus::Queued => NativeAgentStatus::Queued,
+            AgentStatus::Running => NativeAgentStatus::Running,
+            AgentStatus::WaitingApproval => NativeAgentStatus::WaitingApproval,
+            AgentStatus::Completed => NativeAgentStatus::Completed,
+            AgentStatus::Failed => NativeAgentStatus::Failed,
+            AgentStatus::Cancelled => NativeAgentStatus::Cancelled,
+            AgentStatus::TimedOut => NativeAgentStatus::TimedOut,
+            AgentStatus::Interrupted => NativeAgentStatus::Interrupted,
+        },
+        narrow_repair: snapshot
+            .narrow_repair
+            .as_ref()
+            .map(|receipt| receipt.native_control(snapshot.status == AgentStatus::Completed)),
+    }
+}
+
+fn native_batch_control(
+    snapshot: &AgentBatchSnapshot,
+) -> crate::privacy::native_control::TypedNativeControl {
+    use crate::privacy::native_control::{
+        NativeAgentControl, NativeAgentStatus, TypedNativeControl,
+    };
+    TypedNativeControl {
+        agents: snapshot.agents.iter().map(native_agent_control).collect(),
+        batch: Some(NativeAgentControl {
+            id: snapshot.id.0,
+            status: if snapshot.terminal {
+                NativeAgentStatus::Completed
+            } else {
+                NativeAgentStatus::Running
+            },
+            narrow_repair: None,
+        }),
+    }
+}
+
+fn successful_control_error(
+    text: String,
+    error: impl std::fmt::Display,
+) -> crate::agent::registry::ToolExecutionResult {
+    crate::agent::registry::ToolExecutionResult::Success(format!("{text}\nPrivacy coordination metadata could not be recorded: {error}. This action succeeded; do not repeat spawning. Inspect the existing agents with list_agents."))
+}
+
+async fn manager_control_success(
+    text: String,
+    control: crate::privacy::native_control::TypedNativeControl,
+) -> crate::agent::registry::ToolExecutionResult {
+    use crate::agent::registry::ToolExecutionResult;
+    let Some(context) = crate::privacy::current().filter(|context| context.enabled()) else {
+        return ToolExecutionResult::Success(text);
+    };
+    let original = text.clone();
+    match tokio::task::spawn_blocking(move || context.record_native_control(&original, control))
+        .await
+    {
+        Ok(Ok(source)) => ToolExecutionResult::SourceSuccess { text, source },
+        Ok(Err(error)) => successful_control_error(text, error),
+        Err(_) => successful_control_error(text, "local metadata worker stopped"),
+    }
+}
+
+async fn manager_spawn_success(
+    manager: &AgentManager,
+    id: AgentId,
+    text: String,
+) -> crate::agent::registry::ToolExecutionResult {
+    use crate::privacy::native_control::TypedNativeControl;
+    if crate::privacy::current().is_none_or(|context| !context.enabled()) {
+        return crate::agent::registry::ToolExecutionResult::Success(text);
+    }
+    match manager.snapshot(id).await {
+        Ok(snapshot) => {
+            manager_control_success(
+                text,
+                TypedNativeControl {
+                    agents: vec![native_agent_control(&snapshot)],
+                    batch: None,
+                },
+            )
+            .await
+        }
+        Err(error) => successful_control_error(text, error),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn execute_manager_tool_with_provenance(
+    name: &str,
+    arguments: &serde_json::Value,
+    original_arguments: &str,
+    arguments_retrieved_spans: &[crate::retrieved_content::RetrievedSpan],
     manager: &Arc<AgentManager>,
     work_state: &Arc<std::sync::Mutex<crate::work::WorkState>>,
     workspace: &crate::workspace::WorkspaceContext,
@@ -1881,6 +2951,15 @@ pub async fn execute_manager_tool(
     let result = match name {
         "spawn_agent" => {
             let task = arguments.get("task")?.as_str()?.to_string();
+            let task_retrieved_spans = match manager_argument_spans(
+                arguments,
+                original_arguments,
+                arguments_retrieved_spans,
+                "/task",
+            ) {
+                Ok(spans) => spans,
+                Err(error) => return Some(ToolExecutionResult::Failure(error)),
+            };
             let requested: Vec<String> = arguments
                 .get("tools")?
                 .as_array()?
@@ -1895,7 +2974,11 @@ pub async fn execute_manager_tool(
                         .collect(),
                     Err(error) => return Some(failure(error)),
                 };
-            if requested.is_empty() || requested.iter().any(|tool| !available.contains(tool)) {
+            // An explicit [] grants no tools and is useful for contained
+            // planning/review. Invalid or unavailable grants still fail closed.
+            if requested.len() != arguments.get("tools")?.as_array()?.len()
+                || requested.iter().any(|tool| !available.contains(tool))
+            {
                 return Some(ToolExecutionResult::Failure(
                     "spawn_agent requires explicit valid non-agent tool grants".into(),
                 ));
@@ -1946,6 +3029,8 @@ pub async fn execute_manager_tool(
                 parent_turn: manager.parent_turn(),
                 task_id,
                 task,
+                task_retrieved_spans,
+                host_task: None,
                 context_mode: AgentContextMode::Summary,
                 context_summary,
                 grants: AgentGrant {
@@ -1984,6 +3069,10 @@ pub async fn execute_manager_tool(
                         }
                     }
                 },
+                repair_contract: match crate::narrow_worker::parse(arguments) {
+                    Ok(contract) => contract,
+                    Err(error) => return Some(ToolExecutionResult::Failure(error)),
+                },
                 isolation: match arguments
                     .get("isolation")
                     .and_then(serde_json::Value::as_str)
@@ -1996,12 +3085,21 @@ pub async fn execute_manager_tool(
                         ))
                     }
                 },
+
+                admitted: None,
             };
             match manager.spawn(request).await {
-                Ok(id) => ToolExecutionResult::Success(format!(
-                    "Spawned agent {id}{}",
-                    child_route_suffix(route.as_ref(), selection.as_ref())
-                )),
+                Ok(id) => {
+                    manager_spawn_success(
+                        manager,
+                        id,
+                        format!(
+                            "Spawned agent {id}{}",
+                            child_route_suffix(route.as_ref(), selection.as_ref())
+                        ),
+                    )
+                    .await
+                }
                 Err(error) => failure(error),
             }
         }
@@ -2009,9 +3107,18 @@ pub async fn execute_manager_tool(
             let tasks = arguments.get("tasks")?.as_array()?;
             let mut requests = Vec::with_capacity(tasks.len());
             let mut route_details = Vec::with_capacity(tasks.len());
-            for task in tasks {
+            for (index, task) in tasks.iter().enumerate() {
                 match build_spawn_request(task, manager, work_state, workspace) {
-                    Ok((request, selection)) => {
+                    Ok((mut request, selection)) => {
+                        request.task_retrieved_spans = match manager_argument_spans(
+                            arguments,
+                            original_arguments,
+                            arguments_retrieved_spans,
+                            &format!("/tasks/{index}/task"),
+                        ) {
+                            Ok(spans) => spans,
+                            Err(error) => return Some(ToolExecutionResult::Failure(error)),
+                        };
                         route_details.push(child_route_suffix(
                             request.route.as_ref(),
                             selection.as_ref(),
@@ -2032,10 +3139,17 @@ pub async fn execute_manager_tool(
                         .enumerate()
                         .map(|(index, (id, details))| format!("{}. {id}{details}", index + 1))
                         .collect::<Vec<_>>();
-                    ToolExecutionResult::Success(format!(
-                        "Spawned batch {batch_id}\n{}",
-                        rows.join("\n")
-                    ))
+                    let text = format!("Spawned batch {batch_id}\n{}", rows.join("\n"));
+                    if crate::privacy::current().is_none_or(|context| !context.enabled()) {
+                        ToolExecutionResult::Success(text)
+                    } else {
+                        match manager.await_batch_bounded(batch_id, Some(0)).await {
+                            Ok(snapshot) => {
+                                manager_control_success(text, native_batch_control(&snapshot)).await
+                            }
+                            Err(error) => successful_control_error(text, error),
+                        }
+                    }
                 }
                 Err(error) => failure(error),
             }
@@ -2054,7 +3168,16 @@ pub async fn execute_manager_tool(
                 },
             };
             match manager.await_agent_bounded(id, timeout_secs).await {
-                Ok(snapshot) => ToolExecutionResult::Success(format_agent_snapshot(&snapshot)),
+                Ok(snapshot) => {
+                    manager_control_success(
+                        format_agent_snapshot(&snapshot),
+                        crate::privacy::native_control::TypedNativeControl {
+                            agents: vec![native_agent_control(&snapshot)],
+                            batch: None,
+                        },
+                    )
+                    .await
+                }
                 Err(error) => failure(error),
             }
         }
@@ -2076,16 +3199,56 @@ pub async fn execute_manager_tool(
                 },
             };
             match manager.await_batch_bounded(id, timeout_secs).await {
-                Ok(snapshot) => ToolExecutionResult::Success(format_agent_batch(&snapshot)),
+                Ok(snapshot) => {
+                    manager_control_success(
+                        format_agent_batch(&snapshot),
+                        native_batch_control(&snapshot),
+                    )
+                    .await
+                }
                 Err(error) => failure(error),
             }
         }
         "send_agent_message" => {
             let id = parse_agent_id(arguments)?;
             let message = arguments.get("message")?.as_str()?.to_string();
-            match manager.send_message(id, message).await {
+            let delivery = match arguments.get("delivery").and_then(|value| value.as_str()) {
+                None => crate::parity_backend::SteerDelivery::Steer,
+                Some(value) => match crate::parity_backend::SteerDelivery::parse(value) {
+                    Some(delivery) => delivery,
+                    None => {
+                        return Some(ToolExecutionResult::Failure(
+                            "delivery must be steer, queue, or interject".into(),
+                        ))
+                    }
+                },
+            };
+            let message_spans = match manager_argument_spans(
+                arguments,
+                original_arguments,
+                arguments_retrieved_spans,
+                "/message",
+            ) {
+                Ok(spans) => spans,
+                Err(error) => return Some(ToolExecutionResult::Failure(error)),
+            };
+            match manager
+                .send_delivered(
+                    id,
+                    message,
+                    message_spans,
+                    delivery,
+                    crate::parity_backend::MAX_IN_FLIGHT_STEERS,
+                )
+                .await
+            {
                 Ok(steer_id) => {
-                    ToolExecutionResult::Success(format!("Steering {steer_id} queued for {id}"))
+                    let how = match delivery {
+                        crate::parity_backend::SteerDelivery::Interject => "interjected",
+                        crate::parity_backend::SteerDelivery::Queue => "queued",
+                        crate::parity_backend::SteerDelivery::Steer => "steered",
+                    };
+                    ToolExecutionResult::Success(format!("Message {steer_id} {how} for {id}"))
                 }
                 Err(error) => failure(error),
             }
@@ -2126,7 +3289,7 @@ pub async fn execute_manager_tool(
         ),
         "list_agents" => {
             let snapshots = manager.list().await;
-            ToolExecutionResult::Success(if snapshots.is_empty() {
+            let text = if snapshots.is_empty() {
                 "No child agents".into()
             } else {
                 snapshots
@@ -2134,11 +3297,28 @@ pub async fn execute_manager_tool(
                     .map(format_agent_snapshot)
                     .collect::<Vec<_>>()
                     .join("\n")
-            })
+            };
+            manager_control_success(
+                text,
+                crate::privacy::native_control::TypedNativeControl {
+                    agents: snapshots.iter().map(native_agent_control).collect(),
+                    batch: None,
+                },
+            )
+            .await
         }
         "task" => {
             let name = arguments.get("subagent_name")?.as_str()?;
             let task = arguments.get("prompt")?.as_str()?.to_string();
+            let task_retrieved_spans = match manager_argument_spans(
+                arguments,
+                original_arguments,
+                arguments_retrieved_spans,
+                "/prompt",
+            ) {
+                Ok(spans) => spans,
+                Err(error) => return Some(ToolExecutionResult::Failure(error)),
+            };
             let definition = builtin_subagents()
                 .into_iter()
                 .find(|agent| agent.name == name);
@@ -2164,6 +3344,40 @@ pub async fn execute_manager_tool(
             } else {
                 definition.tools
             };
+            requested.retain(|tool| {
+                if definition.permission_mode == "plan"
+                    && matches!(
+                        tool.as_str(),
+                        "write_file" | "edit_file" | "run_command" | "delete_file"
+                    )
+                {
+                    return false;
+                }
+                if definition.completion_tool.as_deref() == Some(tool.as_str()) {
+                    return true;
+                }
+                if definition.bash_timeout_secs.is_some() && tool == "run_command" {
+                    return true;
+                }
+                !definition
+                    .disallowed_tools
+                    .iter()
+                    .any(|denied| denied == tool)
+            });
+            if name == "explore"
+                && manager
+                    .headless_noninteractive
+                    .load(std::sync::atomic::Ordering::Acquire)
+            {
+                // Legacy foreground exploration implicitly grants local reads.
+                // Ordinary spawn_agent keeps its explicit selected grants.
+                requested.retain(|tool| {
+                    matches!(
+                        tool.as_str(),
+                        "read_file" | "search_files" | "glob" | "list_dir" | "read_todos"
+                    )
+                });
+            }
             let available = match manager.available_subagent_tools() {
                 Ok(tools) => tools
                     .into_iter()
@@ -2202,6 +3416,8 @@ pub async fn execute_manager_tool(
                 parent_turn: manager.parent_turn(),
                 task_id: None,
                 task,
+                task_retrieved_spans,
+                host_task: None,
                 context_mode: AgentContextMode::Summary,
                 context_summary,
                 grants: AgentGrant {
@@ -2224,7 +3440,10 @@ pub async fn execute_manager_tool(
                 route: route.clone(),
                 purpose: AgentRunPurpose::Subagent,
                 output_contract: None,
+                repair_contract: None,
                 isolation: AgentIsolation::Shared,
+
+                admitted: None,
             };
             match manager.spawn(request).await {
                 Ok(id) => {
@@ -2375,6 +3594,8 @@ fn build_spawn_request(
             parent_turn: manager.parent_turn(),
             task_id,
             task,
+            task_retrieved_spans: Vec::new(),
+            host_task: None,
             context_mode: AgentContextMode::Summary,
             context_summary,
             grants: AgentGrant {
@@ -2393,7 +3614,10 @@ fn build_spawn_request(
             route,
             purpose: AgentRunPurpose::Subagent,
             output_contract,
+            repair_contract: crate::narrow_worker::parse(arguments)?,
             isolation,
+
+            admitted: None,
         },
         selection,
     ))
@@ -2585,6 +3809,7 @@ struct AgentRecord {
     notify: Arc<Notify>,
     pending_steers: Vec<(Uuid, String)>,
     output_contract: Option<crate::headless_contract::StructuredOutputContract>,
+    repair_contract: Option<crate::narrow_worker::RepairContract>,
     full_output: String,
     spill_truncated: bool,
     lifecycle_stop_claimed: bool,
@@ -2635,6 +3860,12 @@ pub struct AgentManager {
     activity_tx: watch::Sender<Vec<AgentActivitySnapshot>>,
     graph_budget:
         std::sync::Mutex<Option<(crate::work::PlanId, crate::agent_graph::AgentAutonomyBudget)>>,
+    policy_generation: std::sync::atomic::AtomicU64,
+    child_execution_block: std::sync::RwLock<Option<String>>,
+    economic_packets:
+        std::sync::Mutex<HashMap<crate::work::TaskId, crate::mechanistic_delegation::TaskPacket>>,
+    last_economic_admission:
+        std::sync::Mutex<Option<crate::mechanistic_delegation::TypedPacketAdmission>>,
 }
 
 impl std::fmt::Debug for AgentManager {
@@ -2682,6 +3913,8 @@ pub enum AgentManagerError {
     GraphBudgetUnavailable,
     #[error("agent graph autonomy budget exhausted: {0:?}")]
     GraphBudget(crate::agent_graph::AgentBudgetLimitKind),
+    #[error("{0}")]
+    Admission(String),
 }
 
 impl AgentManager {
@@ -2737,7 +3970,86 @@ impl AgentManager {
             recovery_contexts: std::sync::RwLock::new(HashMap::new()),
             activity_tx,
             graph_budget: std::sync::Mutex::new(None),
+            policy_generation: std::sync::atomic::AtomicU64::new(1),
+            child_execution_block: std::sync::RwLock::new(None),
+            economic_packets: std::sync::Mutex::new(HashMap::new()),
+            last_economic_admission: std::sync::Mutex::new(None),
         })
+    }
+
+    /// One staged stronger attempt for a graph task. The next spawn of that task consumes it.
+    pub fn stage_economic_packet(
+        &self,
+        task_id: crate::work::TaskId,
+        packet: crate::mechanistic_delegation::TaskPacket,
+    ) {
+        self.economic_packets
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .insert(task_id, packet);
+    }
+
+    fn take_economic_packet(
+        &self,
+        task_id: crate::work::TaskId,
+    ) -> Option<crate::mechanistic_delegation::TaskPacket> {
+        self.economic_packets
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .remove(&task_id)
+    }
+
+    pub fn last_economic_admission(
+        &self,
+    ) -> Option<crate::mechanistic_delegation::TypedPacketAdmission> {
+        self.last_economic_admission
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
+    }
+
+    pub fn policy_generation(&self) -> u64 {
+        self.policy_generation
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    pub async fn advance_policy_generation(
+        &self,
+        jobs: &crate::jobs::JobManager,
+        owner: crate::jobs::JobOwner,
+    ) -> crate::child_mediation::RevocationReport {
+        let report = crate::child_mediation::revoke_owned(jobs, owner).await;
+        self.policy_generation.store(
+            report.generation.saturating_add(1),
+            std::sync::atomic::Ordering::Release,
+        );
+        report
+    }
+
+    pub fn set_child_execution(
+        &self,
+        mode: Option<crate::execution_grant::ChildExecutionMode>,
+    ) -> Result<(), String> {
+        match crate::execution_grant::resolve_child_execution(mode) {
+            Ok(resolved) => {
+                crate::isolated_worker::set_commands_confined(matches!(
+                    resolved,
+                    crate::execution_grant::ResolvedChildExecution::Isolated
+                ));
+                *self
+                    .child_execution_block
+                    .write()
+                    .unwrap_or_else(|poison| poison.into_inner()) = None;
+                Ok(())
+            }
+            Err(error) => {
+                *self
+                    .child_execution_block
+                    .write()
+                    .unwrap_or_else(|poison| poison.into_inner()) = Some(error.to_string());
+                Err(error.to_string())
+            }
+        }
     }
 
     /// Bind only interactive lifecycle events to the exact parent request owner.
@@ -2977,6 +4289,13 @@ impl AgentManager {
 
     pub fn replace_route_clients(&self, clients: AgentRouteClients) {
         self.runner.replace_route_clients(clients);
+    }
+
+    pub(crate) fn replace_request_options(
+        &self,
+        options: Vec<(AgentRoute, crate::agent::client::ChatRequestOptions)>,
+    ) {
+        self.runner.replace_request_options(options);
     }
 
     pub fn verification_sandbox_mode(&self) -> Option<crate::sandbox::SandboxMode> {
@@ -3382,12 +4701,56 @@ impl AgentManager {
         self.current_parent_turn()
     }
 
+    #[inline(never)]
+    #[allow(clippy::type_complexity)]
+    fn heap_spawn_with_origin<'a>(
+        manager: &'a Arc<Self>,
+        request: AgentSpawnRequest,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<AgentId, AgentManagerError>> + Send + 'a>,
+    > {
+        Box::pin(manager.spawn_with_origin(request, AgentRunOrigin::Conversation))
+    }
+
+    #[inline(never)]
+    #[allow(clippy::type_complexity)]
+    fn heap_spawn_with_inherited_policy<'a>(
+        manager: &'a Arc<Self>,
+        request: AgentSpawnRequest,
+        origin: AgentRunOrigin,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<AgentId, AgentManagerError>> + Send + 'a>,
+    > {
+        Box::pin(manager.spawn_with_inherited_policy(request, origin, None))
+    }
+
+    #[inline(never)]
+    #[allow(clippy::type_complexity)]
+    fn heap_worktree_isolation<'a>(
+        manager: &'a Self,
+        id: AgentId,
+        request: AgentSpawnRequest,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        (AgentSpawnRequest, Option<AgentWorktreeReceipt>),
+                        AgentManagerError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(manager.prepare_worktree_isolation(id, request))
+    }
+
     pub async fn spawn(
         self: &Arc<Self>,
         request: AgentSpawnRequest,
     ) -> Result<AgentId, AgentManagerError> {
-        self.spawn_with_origin(request, AgentRunOrigin::Conversation)
-            .await
+        // The origin future is large. Construct it outside this poll frame so
+        // a child spawn does not keep that copy on the default test stack.
+        Self::heap_spawn_with_origin(self, request).await
     }
 
     pub async fn spawn_with_origin(
@@ -3395,8 +4758,7 @@ impl AgentManager {
         request: AgentSpawnRequest,
         origin: AgentRunOrigin,
     ) -> Result<AgentId, AgentManagerError> {
-        self.spawn_with_inherited_policy(request, origin, None)
-            .await
+        Self::heap_spawn_with_inherited_policy(self, request, origin).await
     }
 
     async fn spawn_with_inherited_policy(
@@ -3407,6 +4769,101 @@ impl AgentManager {
     ) -> Result<AgentId, AgentManagerError> {
         if self.spawns_paused() {
             return Err(AgentManagerError::SpawnsPaused);
+        }
+        if let Some(blocked) = self
+            .child_execution_block
+            .read()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
+        {
+            return Err(AgentManagerError::Admission(blocked));
+        }
+        if let Some(packet) = crate::mechanistic_delegation::packet_for_spawn_task(
+            &request.task,
+            &request.context_summary,
+        ) {
+            let admission = crate::mechanistic_delegation::admit_typed_task_packet(&packet);
+            if !admission.is_mechanical() || admission.provider_requests() != 0 {
+                return Err(AgentManagerError::Admission(
+                    admission
+                        .denial()
+                        .unwrap_or("mechanical admission rejected")
+                        .into(),
+                ));
+            }
+            let operation = packet.operation.clone().ok_or_else(|| {
+                AgentManagerError::Admission("mechanical packet has no operation".into())
+            })?;
+            let executed = crate::mechanistic_delegation::dispatch_admitted_mechanical(
+                &request.workspace,
+                &admission,
+                operation,
+            )
+            .await;
+            let id = AgentId::new();
+            let job_owner = crate::jobs::JobOwner::new(None);
+            let (command_tx, _command_rx) = mpsc::channel(1);
+            let (cancel_tx, _cancel_rx) = watch::channel(false);
+            let notify = Arc::new(Notify::new());
+            let summary = format!("provider_requests=0\n{}", executed.model_text());
+            let status = if executed.is_success() {
+                AgentStatus::Completed
+            } else {
+                AgentStatus::Failed
+            };
+            {
+                let mut inner = self.inner.lock().await;
+                insert_agent_record(
+                    &mut inner, id, origin, &request, None, job_owner, command_tx, cancel_tx,
+                    notify, None, None,
+                );
+                if let Some(record) = inner.records.get_mut(&id) {
+                    record.snapshot.status = status;
+                    record.snapshot.phase = AgentExecutionPhase::Finished;
+                    record.snapshot.provider = Some(admission.executor().to_string());
+                    record.snapshot.result_summary = Some(summary.clone());
+                    record.full_output = summary;
+                }
+                publish_activity(&inner, &self.activity_tx);
+            }
+            return Ok(id);
+        }
+        if let Some(task_id) = request.task_id {
+            if let Some(packet) = self.take_economic_packet(task_id) {
+                let admission = crate::mechanistic_delegation::admit_typed_task_packet(&packet);
+                *self
+                    .last_economic_admission
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner()) = Some(admission.clone());
+                if admission.is_denied() || !admission.is_stronger_attempt() {
+                    return Err(AgentManagerError::Admission(
+                        admission
+                            .denial()
+                            .unwrap_or("stronger attempt was not admitted")
+                            .into(),
+                    ));
+                }
+                request.route = Some(AgentRoute {
+                    provider: admission.selected_provider().unwrap_or("").to_string(),
+                    model: admission.selected_model().unwrap_or("").to_string(),
+                });
+                let diagnostic = admission.diagnostic();
+                if !diagnostic.is_empty() {
+                    request.context_summary.push_str("\n\nFailed check:\n");
+                    request.context_summary.push_str(diagnostic);
+                }
+            }
+        }
+        // The model loop stays on the host. Model-selected commands below
+        // run in the confined worker and do not fall back to an in-process job.
+        if let Some(contract) = &request.repair_contract {
+            if request.output_contract.is_some() {
+                return Err(AgentManagerError::InvalidBatch(
+                    "repair_contract cannot also specify output_schema".into(),
+                ));
+            }
+            request.context_summary =
+                format!("Relevant repair context (data):\n{}", contract.context);
         }
         if let Some(constraints) = self
             .parent_constraints
@@ -3438,7 +4895,15 @@ impl AgentManager {
         };
         let outcome_parent = self.outcome_parent_for(request.parent_turn);
         let id = AgentId::new();
-        let (request, worktree) = self.prepare_isolation(id, request).await?;
+        let (mut request, worktree) = self.prepare_isolation(id, request).await?;
+        if let Err(error) = freeze_repair_contract(&mut request).await {
+            self.rollback_prepared_worktree(worktree.as_ref()).await;
+            return Err(AgentManagerError::InvalidBatch(error));
+        }
+        if let Err(error) = self.admit_request(&mut request) {
+            self.rollback_prepared_worktree(worktree.as_ref()).await;
+            return Err(error);
+        }
         let job_owner = crate::jobs::JobOwner::new(None);
         let (command_tx, command_rx) = mpsc::channel(32);
         let (cancel_tx, cancel_rx) = watch::channel(false);
@@ -3525,6 +4990,14 @@ impl AgentManager {
         if self.spawns_paused() {
             return Err(AgentManagerError::SpawnsPaused);
         }
+        if let Some(blocked) = self
+            .child_execution_block
+            .read()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
+        {
+            return Err(AgentManagerError::Admission(blocked));
+        }
         if requests.len() < 2 || requests.len() > MAX_BATCH_SIZE {
             return Err(AgentManagerError::InvalidBatch(format!(
                 "batch size must be from 2 to {MAX_BATCH_SIZE}"
@@ -3540,6 +5013,15 @@ impl AgentManager {
             ));
         }
         for request in &mut requests {
+            if let Some(contract) = &request.repair_contract {
+                if request.output_contract.is_some() {
+                    return Err(AgentManagerError::InvalidBatch(
+                        "repair_contract cannot also specify output_schema".into(),
+                    ));
+                }
+                request.context_summary =
+                    format!("Relevant repair context (data):\n{}", contract.context);
+            }
             if let Some(constraints) = self
                 .parent_constraints
                 .read()
@@ -3572,11 +5054,28 @@ impl AgentManager {
             None
         };
         let outcome_parent = self.outcome_parent_for(parent_turn);
-        let mut prepared = Vec::with_capacity(requests.len());
+        let mut prepared: Vec<(AgentId, AgentSpawnRequest, Option<AgentWorktreeReceipt>)> =
+            Vec::with_capacity(requests.len());
         for request in requests {
             let id = AgentId::new();
             match self.prepare_isolation(id, request).await {
-                Ok((request, worktree)) => prepared.push((id, request, worktree)),
+                Ok((mut request, worktree)) => {
+                    if let Err(error) = freeze_repair_contract(&mut request).await {
+                        self.rollback_prepared_worktree(worktree.as_ref()).await;
+                        for (_, _, worktree) in &prepared {
+                            self.rollback_prepared_worktree(worktree.as_ref()).await;
+                        }
+                        return Err(AgentManagerError::InvalidBatch(error));
+                    }
+                    if let Err(error) = self.admit_request(&mut request) {
+                        self.rollback_prepared_worktree(worktree.as_ref()).await;
+                        for (_, _, worktree) in &prepared {
+                            self.rollback_prepared_worktree(worktree.as_ref()).await;
+                        }
+                        return Err(error);
+                    }
+                    prepared.push((id, request, worktree));
+                }
                 Err(error) => {
                     for (_, _, worktree) in &prepared {
                         self.rollback_prepared_worktree(worktree.as_ref()).await;
@@ -3757,13 +5256,53 @@ impl AgentManager {
         Ok(())
     }
 
+    fn admit_request(&self, request: &mut AgentSpawnRequest) -> Result<(), AgentManagerError> {
+        if request.grants.path_scopes.is_empty() {
+            request.grants.path_scopes = request
+                .workspace
+                .execution_roots()
+                .iter()
+                .map(|root| root.to_string_lossy().into_owned())
+                .collect();
+        }
+        let grant = crate::execution_grant::AdmittedExecutionGrant::from_legacy(
+            crate::execution_grant::LegacyGrantView {
+                tools: &request.grants.tools,
+                path_scopes: &request.grants.path_scopes,
+                command_scopes: &request.grants.command_scopes,
+            },
+            Uuid::nil(),
+            self.policy_generation(),
+            Vec::new(),
+        )
+        .map_err(|error| AgentManagerError::Admission(error.to_string()))?;
+        request.admitted = Some(Arc::new(grant));
+        Ok(())
+    }
+
     async fn prepare_isolation(
+        &self,
+        id: AgentId,
+        request: AgentSpawnRequest,
+    ) -> Result<(AgentSpawnRequest, Option<AgentWorktreeReceipt>), AgentManagerError> {
+        if request.isolation == AgentIsolation::Shared {
+            return Ok((request, None));
+        }
+        // Worktree admission is a separate state machine. A shared spawn must
+        // not reserve it on the stack; the default test thread is only 2 MiB.
+        Self::heap_worktree_isolation(self, id, request).await
+    }
+
+    #[inline(never)]
+    async fn prepare_worktree_isolation(
         &self,
         id: AgentId,
         mut request: AgentSpawnRequest,
     ) -> Result<(AgentSpawnRequest, Option<AgentWorktreeReceipt>), AgentManagerError> {
-        if request.isolation == AgentIsolation::Shared {
-            return Ok((request, None));
+        if let Some(contract) = &mut request.repair_contract {
+            contract
+                .make_worktree_relative(&request.workspace, &request.grants)
+                .map_err(AgentManagerError::Worktree)?;
         }
         let store = self
             .worktree_store
@@ -3789,18 +5328,26 @@ impl AgentManager {
             .attach_context(&record.id.to_string())
             .await
             .map_err(|error| AgentManagerError::Worktree(error.to_string()))?;
+        if request.grants.path_scopes.is_empty() {
+            request.grants.path_scopes = request
+                .workspace
+                .execution_roots()
+                .iter()
+                .map(|root| root.to_string_lossy().into_owned())
+                .collect();
+        }
+        request.grants.path_scopes = crate::execution_grant::rebase_scope_strings(
+            &request.grants.path_scopes,
+            &source,
+            &record.path,
+        )
+        .map_err(|error| AgentManagerError::Worktree(error.to_string()))?;
         request.workspace = workspace;
         request.grants.workspace_root_ids = request
             .workspace
             .roots()
             .iter()
             .map(|root| root.id.to_string())
-            .collect();
-        request.grants.path_scopes = request
-            .workspace
-            .roots()
-            .iter()
-            .map(|root| root.path.to_string_lossy().into_owned())
             .collect();
         Ok((
             request,
@@ -4185,7 +5732,35 @@ impl AgentManager {
         };
         match event {
             RunnerEvent::Mutation(_) | RunnerEvent::AggregateMutation { .. } => unreachable!(),
+            RunnerEvent::NarrowRepairVerified(receipt) => {
+                if record
+                    .repair_contract
+                    .as_ref()
+                    .is_some_and(|contract| receipt.matches_contract(contract))
+                {
+                    record.snapshot.narrow_repair = Some(receipt);
+                }
+            }
+            RunnerEvent::NarrowRepairApplied(receipt) => {
+                if record
+                    .repair_contract
+                    .as_ref()
+                    .is_some_and(|contract| receipt.matches_admission(contract))
+                {
+                    record.snapshot.narrow_repair = Some(receipt);
+                }
+            }
+            RunnerEvent::NarrowRepairUsage(usage) => {
+                if let Some(receipt) = &mut record.snapshot.narrow_repair {
+                    receipt.observe_usage(usage);
+                }
+            }
             RunnerEvent::Phase(phase) => record.snapshot.phase = phase,
+            RunnerEvent::ProviderSummary(text) => {
+                let mut text = crate::terminal_text::sanitize_terminal_text(&text);
+                trim_tail(&mut text, 16 * 1024);
+                record.snapshot.provider_summary = (!text.is_empty()).then_some(text);
+            }
             RunnerEvent::HarnessPrepared {
                 snapshot,
                 model,
@@ -4219,6 +5794,27 @@ impl AgentManager {
                 }
             }
             RunnerEvent::Activity(message) => push_event(record, message),
+            RunnerEvent::Progress { text, replace } => {
+                let mut progress = if replace {
+                    String::new()
+                } else {
+                    record
+                        .snapshot
+                        .events
+                        .iter()
+                        .rev()
+                        .find_map(|event| event.message.strip_prefix(TASK_PROGRESS_PREFIX))
+                        .unwrap_or_default()
+                        .to_owned()
+                };
+                progress.push_str(&text);
+                trim_tail(&mut progress, 2048);
+                record
+                    .snapshot
+                    .events
+                    .retain(|event| !event.message.starts_with(TASK_PROGRESS_PREFIX));
+                push_event(record, format!("{TASK_PROGRESS_PREFIX}{progress}"));
+            }
             RunnerEvent::Output(output) => {
                 push_event(record, output.clone());
                 if record.full_output.len() < MAX_SPILL_BYTES {
@@ -4383,6 +5979,11 @@ impl AgentManager {
             .as_ref()
             .map(|worktree| worktree.id);
         record.snapshot.status = status;
+        if record.snapshot.status != AgentStatus::Completed {
+            if let Some(receipt) = &mut record.snapshot.narrow_repair {
+                receipt.mark_unverified();
+            }
+        }
         record.snapshot.phase = AgentExecutionPhase::Finished;
         record.snapshot.result_summary = (!full_summary.is_empty()).then(|| {
             let mut value = full_summary;
@@ -4629,6 +6230,36 @@ impl AgentManager {
         id: AgentId,
         message: String,
     ) -> Result<Uuid, AgentManagerError> {
+        self.send_message_with_provenance(id, message, Vec::new())
+            .await
+    }
+
+    pub async fn send_message_with_provenance(
+        &self,
+        id: AgentId,
+        message: String,
+        retrieved_spans: Vec<crate::retrieved_content::RetrievedSpan>,
+    ) -> Result<Uuid, AgentManagerError> {
+        self.send_delivered(
+            id,
+            message,
+            retrieved_spans,
+            crate::parity_backend::SteerDelivery::Steer,
+            MAX_PENDING_STEERS,
+        )
+        .await
+    }
+
+    pub async fn send_delivered(
+        &self,
+        id: AgentId,
+        message: String,
+        retrieved_spans: Vec<crate::retrieved_content::RetrievedSpan>,
+        delivery: crate::parity_backend::SteerDelivery,
+        cap: usize,
+    ) -> Result<Uuid, AgentManagerError> {
+        crate::retrieved_content::validate_spans(&message, &retrieved_spans)
+            .map_err(|error| AgentManagerError::InvalidSteer(error.to_string()))?;
         if message.trim().is_empty() {
             return Err(AgentManagerError::InvalidSteer(
                 "message must not be empty".into(),
@@ -4652,7 +6283,7 @@ impl AgentManager {
             .iter()
             .map(|(_, text)| text.len())
             .sum::<usize>();
-        if record.pending_steers.len() >= MAX_PENDING_STEERS
+        if record.pending_steers.len() >= cap.min(MAX_PENDING_STEERS)
             || pending_bytes.saturating_add(message.len()) > MAX_PENDING_STEER_BYTES
         {
             return Err(AgentManagerError::SteerQueueFull);
@@ -4663,6 +6294,8 @@ impl AgentManager {
             .try_send(AgentCommand::Message {
                 id: steer_id,
                 text: message.clone(),
+                retrieved_spans,
+                front: delivery.jumps_ahead(),
             })
             .map_err(|error| match error {
                 mpsc::error::TrySendError::Full(_) => AgentManagerError::SteerQueueFull,
@@ -4869,8 +6502,13 @@ fn insert_agent_record(
                 created_at: now,
                 updated_at: now,
                 result_summary: None,
+                provider_summary: None,
                 result_sha256: None,
                 structured_result: None,
+                narrow_repair: request
+                    .repair_contract
+                    .as_ref()
+                    .and_then(|contract| contract.unverified_result().ok()),
                 structured_repair_attempted: false,
                 spill: None,
                 worktree,
@@ -4888,6 +6526,7 @@ fn insert_agent_record(
             notify,
             pending_steers: Vec::new(),
             output_contract: request.output_contract.clone(),
+            repair_contract: request.repair_contract.clone(),
             full_output: String::new(),
             spill_truncated: false,
             lifecycle_stop_claimed: false,
@@ -5089,6 +6728,10 @@ pub struct SubagentDef {
     pub tools: Vec<String>,    // tool names, empty = all
     pub model: Option<String>, // model override
     pub system_prompt: String,
+    pub permission_mode: String,
+    pub disallowed_tools: Vec<String>,
+    pub bash_timeout_secs: Option<u64>,
+    pub completion_tool: Option<String>,
 }
 
 /// Guidance is constructed from the exact advertised catalog, so excluded
@@ -5156,6 +6799,10 @@ pub fn builtin_subagents() -> Vec<SubagentDef> {
             system_prompt: "You are Explore, a fast codebase exploration agent. You have read-only access. \
                             Search files, read code, find patterns. Be thorough but concise. Return a \
                             summary of your findings. Do NOT make any file changes.".into(),
+            permission_mode: "plan".into(),
+            disallowed_tools: vec!["write_file".into(), "edit_file".into(), "run_command".into()],
+            bash_timeout_secs: None,
+            completion_tool: None,
         },
         SubagentDef {
             name: "plan".into(),
@@ -5168,6 +6815,10 @@ pub fn builtin_subagents() -> Vec<SubagentDef> {
             system_prompt: "You are Plan, a research agent. Gather context about the codebase to help \
                             plan implementation. Read relevant files, understand patterns, return a \
                             structured summary. Do NOT make any file changes.".into(),
+            permission_mode: "plan".into(),
+            disallowed_tools: vec!["write_file".into(), "edit_file".into(), "run_command".into()],
+            bash_timeout_secs: None,
+            completion_tool: None,
         },
         SubagentDef {
             name: "general".into(),
@@ -5177,6 +6828,10 @@ pub fn builtin_subagents() -> Vec<SubagentDef> {
             system_prompt: "You are a general-purpose coding agent. Complete the delegated task thoroughly. \
                             You have full tool access. Be concise in your final answer — summarize what \
                             you did and what the user should know.".into(),
+            permission_mode: "default".into(),
+            disallowed_tools: Vec::new(),
+            bash_timeout_secs: None,
+            completion_tool: None,
         },
     ]
 }
@@ -5231,9 +6886,13 @@ fn parse_subagent_md(content: &str) -> Option<SubagentDef> {
     let mut description = String::new();
     let mut tools = Vec::new();
     let mut model = None;
+    let mut contract = crate::parity_backend::AgentContract::default();
 
     for line in frontmatter.lines() {
         let line = line.trim();
+        if crate::parity_backend::parse_agent_contract_line(line, &mut contract) {
+            continue;
+        }
         if let Some(val) = line.strip_prefix("name:") {
             name = val.trim().to_string();
         } else if let Some(val) = line.strip_prefix("description:") {
@@ -5255,12 +6914,35 @@ fn parse_subagent_md(content: &str) -> Option<SubagentDef> {
     if name.is_empty() {
         return None;
     }
+    let mut system_prompt = body.to_string();
+    if contract.prompt_mode != "full" {
+        system_prompt = format!("Follow the parent agent instructions.\n\n{system_prompt}");
+    }
+    contract.disallowed_tools = contract
+        .disallowed_tools
+        .iter()
+        .map(|tool| {
+            crate::parity_backend::canonical_tool_name(tool, &contract.tool_aliases).to_string()
+        })
+        .collect();
+    if let Some(tool) = &contract.completion_tool {
+        system_prompt.push_str(&format!("\n\nBefore you finish, call `{tool}`."));
+    }
+    if let Some(timeout) = contract.bash_timeout_secs {
+        system_prompt.push_str(&format!(
+            "\n\nShell commands time out after {timeout} seconds."
+        ));
+    }
     Some(SubagentDef {
         name,
         description,
         tools,
         model,
-        system_prompt: body.to_string(),
+        system_prompt,
+        permission_mode: contract.permission_mode,
+        disallowed_tools: contract.disallowed_tools,
+        bash_timeout_secs: contract.bash_timeout_secs,
+        completion_tool: contract.completion_tool,
     })
 }
 
@@ -5313,10 +6995,18 @@ pub async fn run_subagent(
         };
         let content = turn.content;
         let response_items = turn.response_items;
-        let tool_calls: Vec<(usize, String, String, String)> = turn
+        let tool_calls: Vec<_> = turn
             .tool_calls
             .into_iter()
-            .map(|call| (call.index, call.id, call.name, call.arguments))
+            .map(|call| {
+                (
+                    call.index,
+                    call.id,
+                    call.name,
+                    call.arguments,
+                    call.arguments_retrieved_spans,
+                )
+            })
             .collect();
 
         // Build assistant message
@@ -5328,13 +7018,15 @@ pub async fn run_subagent(
                 function: crate::agent::client::FunctionCall {
                     name: tc.2.clone(),
                     arguments: tc.3.clone(),
+                    arguments_retrieved_spans: tc.4.clone(),
                 },
             })
             .collect();
 
         messages.push(ChatMessage {
             role: "assistant".into(),
-            content: crate::image_content::ModelContent::text(content.clone()),
+            content: crate::image_content::ModelContent::text(content.clone())
+                .with_retrieved_spans(turn.retrieved_spans),
             tool_calls: if tc_msgs.is_empty() {
                 None
             } else {
@@ -5345,7 +7037,38 @@ pub async fn run_subagent(
         });
 
         if tool_calls.is_empty() {
-            return content; // Final answer
+            if let Some(tool) = system_prompt
+                .split("Before you finish, call `")
+                .nth(1)
+                .and_then(|rest| rest.split('`').next())
+            {
+                let called = messages.iter().any(|message| {
+                    message
+                        .tool_calls
+                        .as_ref()
+                        .is_some_and(|calls| calls.iter().any(|call| call.function.name == tool))
+                });
+                if !called
+                    && !messages.iter().any(|message| {
+                        message
+                            .content
+                            .as_str()
+                            .is_some_and(|text| text.contains("Call the completion tool"))
+                    })
+                {
+                    messages.push(ChatMessage {
+                        role: "user".into(),
+                        content: crate::image_content::ModelContent::text(format!(
+                            "Call the completion tool `{tool}` before you finish."
+                        )),
+                        tool_calls: None,
+                        tool_call_id: None,
+                        response_items: Vec::new(),
+                    });
+                    continue;
+                }
+            }
+            return content;
         }
 
         // Execute tools
@@ -5354,7 +7077,8 @@ pub async fn run_subagent(
             let output = crate::agent::tools::execute_tool(&tc.2, &args, cwd, 60).await;
             messages.push(ChatMessage {
                 role: "tool".into(),
-                content: crate::image_content::ModelContent::text(output.model_text()),
+                content: crate::image_content::ModelContent::text(output.model_text())
+                    .with_retrieved_spans(crate::retrieved_content::full_span(output.model_text())),
                 tool_calls: None,
                 tool_call_id: Some(tc.1.clone()),
                 response_items: Vec::new(),
@@ -5441,6 +7165,90 @@ mod manager_tests {
             images_supported: false,
             pricing: Arc::new(std::collections::HashMap::new()),
         }
+    }
+
+    #[test]
+    fn child_responses_restores_local_arguments_and_filters_retrieved_continuation() {
+        use crate::headless::retrieved_response_fixture as fixture;
+        let settings = crate::provider_filter::ProviderFilterConfig {
+            enabled: true,
+            page_stand_in: crate::provider_filter::PageStandIn::Latin,
+            ..Default::default()
+        };
+        crate::provider_filter::with_test_filter(&settings, || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let temp = tempfile::tempdir().unwrap();
+                    std::fs::write(temp.path().join(fixture::FILE), fixture::PAYLOAD).unwrap();
+                    let filter = crate::provider_filter::current();
+                    let arguments = serde_json::json!({
+                        "path": filter.encode_retrieved(fixture::FILE)
+                    })
+                    .to_string();
+                    let (provider, server) = fixture::start(
+                        filter.encode_retrieved(fixture::ECHO),
+                        arguments.clone(),
+                    )
+                    .await;
+                    let mut runner = permission_test_runner();
+                    runner.client = crate::agent::AgentClient::with_request_store(
+                        "fixture",
+                        &provider,
+                        "fixture-model",
+                        crate::request::RequestStore::default(),
+                    )
+                    .with_filter_for_test(filter);
+                    runner.tool_policy =
+                        crate::tool_selection::ToolSelectionPolicy::replacing(&["read_file"]);
+                    *runner.task_skill_snapshot.lock().unwrap() =
+                        "\nAuthored skill guidance remains readable.".into();
+                    let mut child = request("Read the fixture file and finish.", Uuid::new_v4());
+                    child.context_summary = "CHILD_RETRIEVED_CONTEXT_SENTINEL".into();
+                    child.workspace =
+                        crate::workspace::WorkspaceContext::discover(temp.path()).unwrap();
+                    let (_command_tx, commands) = mpsc::channel(1);
+                    let (_cancel_tx, cancelled) = watch::channel(false);
+                    let (events, mut event_rx) = mpsc::unbounded_channel();
+                    let result = tokio::time::timeout(
+                        std::time::Duration::from_secs(10),
+                        runner.run(AgentRunContext {
+                            id: AgentId::new(),
+                            request: child,
+                            limits: AgentLimits {
+                                max_turns: 2,
+                                ..Default::default()
+                            },
+                            commands,
+                            pending_steers: VecDeque::new(),
+                            cancelled,
+                            events,
+                            job_owner: crate::jobs::JobOwner::new(None),
+                            graph_budget: None,
+                            frozen_policy: None,
+                        }),
+                    )
+                    .await
+                    .unwrap();
+                    assert_eq!(result.unwrap(), "done");
+                    let mut read_succeeded = false;
+                    while let Ok(event) = event_rx.try_recv() {
+                        if matches!(event, RunnerEvent::ToolCompleted { name, succeeded: true } if name == "read_file") {
+                            read_succeeded = true;
+                        }
+                    }
+                    assert!(read_succeeded);
+                    let requests = server.await.unwrap();
+                    let first = requests[0].to_string();
+                    assert!(first.contains("State summary:"));
+                    assert!(first.contains("Read the fixture file and finish."));
+                    assert!(first.contains("Authored skill guidance remains readable."));
+                    assert!(!first.contains("CHILD_RETRIEVED_CONTEXT_SENTINEL"));
+                    fixture::assert_filtered_continuation(&requests, &arguments);
+                });
+        });
     }
 
     fn test_child_policy(
@@ -5761,6 +7569,8 @@ mod manager_tests {
                 workspace: &workspace,
                 policy_approved: mode == "live-deny-after-approval",
                 frozen_policy: context.frozen_policy.as_deref(),
+
+                admitted: None,
             };
             let result = tokio::time::timeout(
                 std::time::Duration::from_secs(1),
@@ -6271,7 +8081,7 @@ mod manager_tests {
                 tokio::select! {
                     _ = wait_cancelled(context.cancelled) => return Err("cancelled".into()),
                     command = context.commands.recv() => {
-                        if let Some(AgentCommand::Message { id, text }) = command {
+                        if let Some(AgentCommand::Message { id, text, .. }) = command {
                             let _ = context.events.send(RunnerEvent::SteerDelivered { id });
                             return Ok(text);
                         }
@@ -6401,6 +8211,8 @@ mod manager_tests {
             parent_turn: turn,
             task_id: None,
             task: task.into(),
+            task_retrieved_spans: Vec::new(),
+            host_task: None,
             context_mode: AgentContextMode::Summary,
             context_summary: "summary-only".into(),
             grants: AgentGrant {
@@ -6415,7 +8227,753 @@ mod manager_tests {
             route: None,
             purpose: AgentRunPurpose::Subagent,
             output_contract: None,
+            repair_contract: None,
             isolation: AgentIsolation::Shared,
+            admitted: None,
+        }
+    }
+
+    type SeenRoute = Arc<std::sync::Mutex<Option<(Option<AgentRoute>, String)>>>;
+
+    struct StrongerAttemptRunner {
+        seen: SeenRoute,
+    }
+
+    #[async_trait]
+    impl AgentRunner for StrongerAttemptRunner {
+        async fn run(&self, context: AgentRunContext) -> Result<String, String> {
+            *self
+                .seen
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner()) = Some((
+                context.request.route.clone(),
+                context.request.context_summary,
+            ));
+            Ok("done".into())
+        }
+    }
+
+    struct ExplodingRunner;
+
+    #[async_trait]
+    impl AgentRunner for ExplodingRunner {
+        async fn run(&self, _context: AgentRunContext) -> Result<String, String> {
+            panic!("mechanical admission must not call the provider runner");
+        }
+    }
+
+    #[tokio::test]
+    async fn spawn_paths_admit_a_mechanical_list_without_a_provider_request() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(root.path())
+            .status()
+            .unwrap()
+            .success());
+        std::fs::write(root.path().join("tracked.txt"), "listed\n").unwrap();
+        assert!(std::process::Command::new("git")
+            .args(["add", "tracked.txt"])
+            .current_dir(root.path())
+            .status()
+            .unwrap()
+            .success());
+        assert!(std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.email=ca@example.com",
+                "-c",
+                "user.name=ca",
+                "commit",
+                "-m",
+                "track",
+                "--quiet",
+            ])
+            .current_dir(root.path())
+            .status()
+            .unwrap()
+            .success());
+        let workspace = crate::workspace::WorkspaceContext::discover(root.path()).unwrap();
+        let manager = AgentManager::new(Arc::new(ExplodingRunner), AgentLimits::default());
+        for origin in [AgentRunOrigin::Conversation, AgentRunOrigin::TaskGraph] {
+            let mut child = request("mechanistic:list_tracked_files:20", Uuid::new_v4());
+            child.workspace = workspace.clone();
+            let id = manager.spawn_with_origin(child, origin).await.unwrap();
+            let snapshot = manager
+                .list()
+                .await
+                .into_iter()
+                .find(|snapshot| snapshot.id == id)
+                .expect("mechanical child");
+            assert_eq!(snapshot.status, AgentStatus::Completed);
+            assert_eq!(snapshot.provider.as_deref(), Some("codex-team"));
+            let summary = snapshot.result_summary.as_deref().unwrap_or("");
+            assert!(summary.contains("provider_requests=0"), "{summary}");
+            assert!(summary.contains("tracked.txt"), "{summary}");
+        }
+    }
+
+    #[tokio::test]
+    async fn spawn_paths_admit_one_stronger_attempt_and_keep_a_mechanical_list_at_zero_provider_requests(
+    ) {
+        let root = tempfile::tempdir().unwrap();
+        assert!(std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(root.path())
+            .status()
+            .unwrap()
+            .success());
+        std::fs::write(root.path().join("tracked.txt"), "listed\n").unwrap();
+        assert!(std::process::Command::new("git")
+            .args(["add", "tracked.txt"])
+            .current_dir(root.path())
+            .status()
+            .unwrap()
+            .success());
+        assert!(std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.email=ca@example.com",
+                "-c",
+                "user.name=ca",
+                "commit",
+                "-m",
+                "track",
+                "--quiet",
+            ])
+            .current_dir(root.path())
+            .status()
+            .unwrap()
+            .success());
+        let workspace = crate::workspace::WorkspaceContext::discover(root.path()).unwrap();
+        let manager = AgentManager::new(Arc::new(ExplodingRunner), AgentLimits::default());
+        let mechanical_id = crate::work::TaskId::new();
+        manager.stage_economic_packet(
+            mechanical_id,
+            crate::mechanistic_delegation::economic_retry_packet(
+                vec![crate::mechanistic_delegation::PacketRoute {
+                    provider: "capable".into(),
+                    model: "large".into(),
+                    tools: Vec::new(),
+                    efforts: Vec::new(),
+                    cost: 9,
+                }],
+                crate::mechanistic_delegation::PriorAttempt {
+                    provider: "cheap".into(),
+                    model: "small".into(),
+                    cost: 1,
+                    failure: crate::mechanistic_delegation::AttemptFailure::Quality,
+                    diagnostic: "host check failed: expected fixed".into(),
+                },
+                9,
+                "grant-v1",
+                false,
+            ),
+        );
+        let mut mechanical = request("mechanistic:list_tracked_files:20", Uuid::new_v4());
+        mechanical.workspace = workspace;
+        mechanical.task_id = Some(mechanical_id);
+        let id = manager
+            .spawn_with_origin(mechanical, AgentRunOrigin::Conversation)
+            .await
+            .unwrap();
+        let snapshot = manager
+            .list()
+            .await
+            .into_iter()
+            .find(|snapshot| snapshot.id == id)
+            .expect("mechanical child");
+        assert_eq!(snapshot.status, AgentStatus::Completed);
+        assert_eq!(snapshot.provider.as_deref(), Some("codex-team"));
+        let summary = snapshot.result_summary.as_deref().unwrap_or("");
+        assert!(summary.contains("provider_requests=0"), "{summary}");
+        assert!(manager.last_economic_admission().is_none());
+
+        let seen = Arc::new(std::sync::Mutex::new(None));
+        let manager = AgentManager::new(
+            Arc::new(StrongerAttemptRunner { seen: seen.clone() }),
+            AgentLimits::default(),
+        );
+        let task_id = crate::work::TaskId::new();
+        let grants_before = vec!["read_file".to_string()];
+        manager.stage_economic_packet(
+            task_id,
+            crate::mechanistic_delegation::economic_retry_packet(
+                vec![
+                    crate::mechanistic_delegation::PacketRoute {
+                        provider: "cheap".into(),
+                        model: "small".into(),
+                        tools: Vec::new(),
+                        efforts: Vec::new(),
+                        cost: 1,
+                    },
+                    crate::mechanistic_delegation::PacketRoute {
+                        provider: "capable".into(),
+                        model: "large".into(),
+                        tools: Vec::new(),
+                        efforts: Vec::new(),
+                        cost: 9,
+                    },
+                ],
+                crate::mechanistic_delegation::PriorAttempt {
+                    provider: "cheap".into(),
+                    model: "small".into(),
+                    cost: 1,
+                    failure: crate::mechanistic_delegation::AttemptFailure::Quality,
+                    diagnostic: "host check failed: expected fixed".into(),
+                },
+                9,
+                "grant-v1",
+                false,
+            ),
+        );
+        let mut child = request("repair the check", Uuid::new_v4());
+        child.task_id = Some(task_id);
+        assert_eq!(child.grants.tools, grants_before);
+        manager
+            .spawn_with_origin(child, AgentRunOrigin::Conversation)
+            .await
+            .unwrap();
+        let admission = manager
+            .last_economic_admission()
+            .expect("stronger admission");
+        assert!(admission.is_stronger_attempt());
+        assert_eq!(admission.selected_provider(), Some("capable"));
+        assert_eq!(admission.selected_model(), Some("large"));
+        assert_eq!(admission.grant_fingerprint(), "grant-v1");
+        assert_eq!(admission.diagnostic(), "host check failed: expected fixed");
+        assert_eq!(admission.provider_requests(), 1);
+        for _ in 0..20 {
+            if seen
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .is_some()
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        let (route, context) = seen
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
+            .expect("stronger attempt reached the runner");
+        assert_eq!(
+            route,
+            Some(AgentRoute {
+                provider: "capable".into(),
+                model: "large".into(),
+            })
+        );
+        assert!(
+            context.contains("host check failed: expected fixed"),
+            "{context}"
+        );
+    }
+
+    #[tokio::test]
+    async fn economic_delegation_acceptance_fixture() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(root.path())
+            .status()
+            .unwrap()
+            .success());
+        std::fs::write(root.path().join("tracked.txt"), "listed\n").unwrap();
+        assert!(std::process::Command::new("git")
+            .args(["add", "tracked.txt"])
+            .current_dir(root.path())
+            .status()
+            .unwrap()
+            .success());
+        assert!(std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.email=ca@example.com",
+                "-c",
+                "user.name=ca",
+                "commit",
+                "-m",
+                "track",
+                "--quiet",
+            ])
+            .current_dir(root.path())
+            .status()
+            .unwrap()
+            .success());
+        std::fs::write(root.path().join("draft.txt"), "untracked-secret\n").unwrap();
+        let workspace = crate::workspace::WorkspaceContext::discover(root.path()).unwrap();
+        let canary = "UNRELATED_TRANSCRIPT_CANARY";
+
+        let mut mechanical = crate::mechanistic_delegation::packet_for_spawn_task(
+            "mechanistic:list_tracked_files:20",
+            "check the tracked file",
+        )
+        .unwrap();
+        mechanical.grant_fingerprint = "grant-v1".into();
+        let mechanical_admission =
+            crate::mechanistic_delegation::admit_typed_task_packet(&mechanical);
+        assert!(mechanical_admission.is_mechanical());
+        assert_eq!(mechanical_admission.executor(), "codex-team");
+        assert_eq!(mechanical_admission.provider_requests(), 0);
+        assert!(!mechanical_admission.creates_ai_graph_child());
+        assert_eq!(mechanical_admission.grant_fingerprint(), "grant-v1");
+        let listed = crate::mechanistic_delegation::dispatch_admitted_mechanical(
+            &workspace,
+            &mechanical_admission,
+            mechanical.operation.clone().unwrap(),
+        )
+        .await;
+        assert!(listed.is_success(), "{}", listed.model_text());
+        assert!(
+            listed.model_text().contains("tracked.txt"),
+            "{}",
+            listed.model_text()
+        );
+        assert!(
+            !listed.model_text().contains("draft.txt"),
+            "{}",
+            listed.model_text()
+        );
+        assert!(!listed.model_text().contains("untracked-secret"));
+        assert!(!listed.model_text().contains(canary));
+        let untracked = crate::mechanistic_delegation::native_candidate_verification(
+            &workspace,
+            vec!["draft.txt".into()],
+            std::time::Duration::from_secs(5),
+            false,
+            false,
+        )
+        .await;
+        assert_eq!(
+            untracked.status,
+            crate::mechanistic_delegation::AutomaticVerificationStatus::Failed
+        );
+        let untracked_context = untracked.context.unwrap_or_default();
+        assert!(
+            untracked_context.contains("UNTRACKED_FULL_DISABLED"),
+            "{untracked_context}"
+        );
+        assert!(!untracked_context.contains("verified\": true"));
+
+        let cheap = crate::mechanistic_delegation::PacketRoute {
+            provider: "cheap".into(),
+            model: "small".into(),
+            tools: vec!["read_file".into()],
+            efforts: vec!["low".into()],
+            cost: 2,
+        };
+        let capable = crate::mechanistic_delegation::PacketRoute {
+            provider: "capable".into(),
+            model: "large".into(),
+            tools: vec!["read_file".into()],
+            efforts: vec!["low".into()],
+            cost: 9,
+        };
+        let mut ai = crate::mechanistic_delegation::TaskPacket {
+            operation: None,
+            allowed_routes: Vec::new(),
+            explicit_route: None,
+            required_tools: vec!["read_file".into()],
+            effort: Some("low".into()),
+            assembled_context_bytes: 16,
+            context_bound: 10_000,
+            candidates: vec![cheap.clone(), capable.clone()],
+            guidance: vec![crate::mechanistic_delegation::GuidanceSnapshot {
+                name: "procedure".into(),
+                bytes: "procedure-v1".into(),
+            }],
+            task_inputs: "check the tracked file".into(),
+            requested_definition: None,
+            managed_definitions: Vec::new(),
+            economic_policy: false,
+            prior_attempt: None,
+            remaining_budget: 0,
+            grant_fingerprint: "grant-v1".into(),
+            stronger_attempt_used: false,
+            contract_digest: String::new(),
+        };
+        let cheap_admission = crate::mechanistic_delegation::admit_typed_task_packet(&ai);
+        assert_eq!(cheap_admission.selected_provider(), Some("cheap"));
+        assert_eq!(cheap_admission.guidance()[0].bytes, "procedure-v1");
+        assert_eq!(cheap_admission.task_inputs(), "check the tracked file");
+        assert!(!cheap_admission.guidance()[0].bytes.contains(canary));
+        assert!(!cheap_admission.task_inputs().contains(canary));
+        assert_eq!(cheap_admission.grant_fingerprint(), "grant-v1");
+        ai.guidance[0].bytes = "procedure-v2".into();
+        assert_eq!(cheap_admission.guidance()[0].bytes, "procedure-v1");
+        let digest_task = crate::work::TaskId(uuid::Uuid::from_u128(1));
+        let digest_definition = assistant_definition(crate::work::PlanId(uuid::Uuid::from_u128(2)));
+        let first_digest =
+            crate::agent_graph::verification_contract_sha256(digest_task, &digest_definition);
+
+        let stronger = crate::mechanistic_delegation::economic_retry_packet(
+            vec![cheap.clone(), capable.clone()],
+            crate::mechanistic_delegation::PriorAttempt {
+                provider: "cheap".into(),
+                model: "small".into(),
+                cost: 2,
+                failure: crate::mechanistic_delegation::AttemptFailure::Quality,
+                diagnostic: "host check failed: expected fixed".into(),
+            },
+            9,
+            "grant-v1",
+            false,
+        );
+        let stronger_admission = crate::mechanistic_delegation::admit_typed_task_packet(&stronger);
+        assert!(stronger_admission.is_stronger_attempt());
+        assert_eq!(stronger_admission.selected_provider(), Some("capable"));
+        assert_eq!(stronger_admission.selected_model(), Some("large"));
+        assert_eq!(stronger_admission.grant_fingerprint(), "grant-v1");
+        assert_eq!(
+            stronger_admission.diagnostic(),
+            "host check failed: expected fixed"
+        );
+        assert_eq!(stronger_admission.attempts_used(), 1);
+        assert_eq!(
+            first_digest,
+            crate::agent_graph::verification_contract_sha256(digest_task, &digest_definition)
+        );
+
+        let seen = Arc::new(std::sync::Mutex::new(None));
+        let manager = AgentManager::new(
+            Arc::new(StrongerAttemptRunner { seen: seen.clone() }),
+            AgentLimits::default(),
+        );
+        let spawned = crate::work::TaskId::new();
+        manager.stage_economic_packet(spawned, stronger.clone());
+        let mut child = request("check the tracked file", Uuid::new_v4());
+        child.task_id = Some(spawned);
+        child.context_summary = "check the tracked file".into();
+        child.workspace = workspace.clone();
+        manager
+            .spawn_with_origin(child, AgentRunOrigin::Conversation)
+            .await
+            .unwrap();
+        for _ in 0..20 {
+            if seen
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .is_some()
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        let (route, context) = seen
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
+            .expect("runner saw the stronger attempt");
+        assert_eq!(route.unwrap().provider, "capable");
+        assert!(
+            context.contains("host check failed: expected fixed"),
+            "{context}"
+        );
+        assert!(context.contains("check the tracked file"), "{context}");
+        assert!(!context.contains(canary), "{context}");
+
+        let plan_id = crate::work::PlanId::new();
+        let task_id = crate::work::TaskId::new();
+        let definition = assistant_definition(plan_id);
+        let mut task = fixture_task(task_id, definition.clone());
+        task.agent_runtime.economic = Some(crate::agent_graph::EconomicEscalationV1 {
+            enabled: true,
+            stronger_used: false,
+            failure: crate::mechanistic_delegation::AttemptFailure::Quality,
+            diagnostic: "host check failed: expected fixed".into(),
+            failed_provider: "cheap".into(),
+            failed_model: "small".into(),
+            failed_cost: 2,
+            remaining_budget: 9,
+            grant_fingerprint: "grant-v1".into(),
+            routes: vec![
+                crate::agent_graph::EconomicRouteV1 {
+                    provider: "cheap".into(),
+                    model: "small".into(),
+                    tools: vec!["read_file".into()],
+                    efforts: vec!["low".into()],
+                    cost: 2,
+                },
+                crate::agent_graph::EconomicRouteV1 {
+                    provider: "capable".into(),
+                    model: "large".into(),
+                    tools: vec!["read_file".into()],
+                    efforts: vec!["low".into()],
+                    cost: 9,
+                },
+            ],
+        });
+        let mut graph = fixture_graph(plan_id);
+        crate::agent_graph::synchronize(std::slice::from_mut(&mut task), &mut graph);
+        assert_ne!(
+            graph.status,
+            crate::agent_graph::AgentGraphStatus::Completed
+        );
+        assert_eq!(
+            task.agent_runtime.state,
+            crate::agent_graph::AgentTaskState::Ready
+        );
+
+        let agent = Uuid::new_v4();
+        let now = chrono::Utc::now();
+        let binding = crate::agent_graph::AgentGraphVerificationBindingV1 {
+            plan_id,
+            configuration_revision: 2,
+            approved_revision: 3,
+        };
+        let snapshot = crate::agent_graph::AgentWorkspaceSnapshotV1 {
+            workspace_identity_sha256: "1".repeat(64),
+            source_revision_sha256: "2".repeat(64),
+            artifact_observations: Vec::new(),
+        };
+        let host = crate::agent_graph::AgentHostVerificationV1 {
+            started: snapshot.clone(),
+            finished: snapshot,
+            observations: Vec::new(),
+        };
+        let tools = ["read_file".to_string()];
+        let receipt = crate::agent_graph::verify_agent_attempt_with_host(
+            Some(binding),
+            task_id,
+            &definition,
+            1,
+            agent,
+            crate::agent_graph::AgentAttemptStatus::Completed,
+            Some(1),
+            Some("checked"),
+            &tools,
+            Some(&host),
+        );
+        assert_eq!(
+            receipt.disposition,
+            crate::agent_graph::AgentVerificationDisposition::Pass
+        );
+        task.status = crate::work::TaskStatus::Completed;
+        task.agent_runtime.state = crate::agent_graph::AgentTaskState::Completed;
+        task.agent_runtime
+            .attempts
+            .push(crate::agent_graph::AgentTaskAttempt {
+                number: 1,
+                agent_id: Some(agent),
+                status: crate::agent_graph::AgentAttemptStatus::Completed,
+                started_at: now,
+                finished_at: Some(now),
+                successful_tools: tools.to_vec(),
+                summary: Some("checked".into()),
+                provider_summary: None,
+                terminal_event_sequence: Some(1),
+                verification_receipt: Some(receipt),
+                workspace_snapshot: None,
+                host_verification: Some(host),
+                handoff_outputs: Vec::new(),
+                handoff_inputs: Vec::new(),
+                budget_usage: crate::agent_graph::AgentGraphBudgetUsageV1::default(),
+            });
+        crate::agent_graph::synchronize(std::slice::from_mut(&mut task), &mut graph);
+        assert_eq!(
+            graph.status,
+            crate::agent_graph::AgentGraphStatus::Completed
+        );
+
+        let mut denied_task = fixture_task(crate::work::TaskId::new(), definition.clone());
+        denied_task.agent_runtime.state = crate::agent_graph::AgentTaskState::Failed;
+        denied_task.agent_runtime.economic = Some(crate::agent_graph::EconomicEscalationV1 {
+            enabled: true,
+            stronger_used: true,
+            failure: crate::mechanistic_delegation::AttemptFailure::Quality,
+            diagnostic: "host check failed: expected fixed".into(),
+            failed_provider: "cheap".into(),
+            failed_model: "small".into(),
+            failed_cost: 2,
+            remaining_budget: 0,
+            grant_fingerprint: "grant-v1".into(),
+            routes: Vec::new(),
+        });
+        let exhausted = crate::mechanistic_delegation::economic_retry_packet(
+            vec![cheap.clone(), capable.clone()],
+            crate::mechanistic_delegation::PriorAttempt {
+                provider: "cheap".into(),
+                model: "small".into(),
+                cost: 2,
+                failure: crate::mechanistic_delegation::AttemptFailure::Quality,
+                diagnostic: "host check failed: expected fixed".into(),
+            },
+            0,
+            "grant-v1",
+            false,
+        );
+        let denied = crate::mechanistic_delegation::admit_typed_task_packet(&exhausted);
+        assert_eq!(denied.denial(), Some("budget"));
+        assert_eq!(denied.grant_fingerprint(), "grant-v1");
+        assert!(!denied.creates_ai_graph_child());
+        let mut denied_graph = fixture_graph(plan_id);
+        crate::agent_graph::synchronize(std::slice::from_mut(&mut denied_task), &mut denied_graph);
+        assert_ne!(
+            denied_graph.status,
+            crate::agent_graph::AgentGraphStatus::Completed
+        );
+
+        let mut missing_tool = ai.clone();
+        missing_tool.required_tools = vec!["missing-tool".into()];
+        missing_tool.grant_fingerprint = "grant-v1".into();
+        let missing = crate::mechanistic_delegation::admit_typed_task_packet(&missing_tool);
+        assert_eq!(missing.denial(), Some("no_eligible_route"));
+        assert_eq!(missing.grant_fingerprint(), "grant-v1");
+        assert!(!missing.creates_ai_graph_child());
+
+        let mut oversized = ai.clone();
+        oversized.assembled_context_bytes = 50;
+        oversized.context_bound = 10;
+        oversized.grant_fingerprint = "grant-v1".into();
+        let oversized = crate::mechanistic_delegation::admit_typed_task_packet(&oversized);
+        assert_eq!(oversized.denial(), Some("context_bound"));
+        assert_eq!(oversized.grant_fingerprint(), "grant-v1");
+        assert!(!oversized.creates_ai_graph_child());
+
+        let mut none = ai.clone();
+        none.candidates.clear();
+        none.grant_fingerprint = "grant-v1".into();
+        let none = crate::mechanistic_delegation::admit_typed_task_packet(&none);
+        assert_eq!(none.denial(), Some("no_eligible_route"));
+        assert!(!none.creates_ai_graph_child());
+
+        let catalog = crate::pricing::OfficialPriceCatalog::seeded();
+        let card = catalog.find("openai", "gpt-5.6-sol").unwrap();
+        let fresh = chrono::DateTime::parse_from_rfc3339("2026-09-14T00:00:00Z")
+            .unwrap()
+            .to_utc();
+        let stale = chrono::DateTime::parse_from_rfc3339("2026-09-15T00:00:01Z")
+            .unwrap()
+            .to_utc();
+        assert!(card.fresh_at(fresh));
+        assert!(!card.fresh_at(stale));
+        let unknown = crate::pricing::DelegationRouter::default()
+            .select(crate::pricing::Complexity::Complex, "inspect", "bounded")
+            .unwrap_err();
+        assert!(unknown.contains("no automatic delegation route qualifies for complex complexity"));
+        assert!(!unknown.contains("grant-v1"));
+        let parent_cost = 7u64;
+        let cheap_cost = 2u64;
+        let overhead = 8u64;
+        assert!(parent_cost < cheap_cost + overhead);
+        assert_eq!(cheap_cost + overhead, 10);
+        let calls_before = seen
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .is_some();
+        assert!(calls_before);
+        let _ = unknown;
+        assert!(seen
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .is_some());
+    }
+
+    fn assistant_definition(
+        plan_id: crate::work::PlanId,
+    ) -> crate::agent_graph::AgentTaskDefinition {
+        let gates = vec![
+            crate::agent_graph::AgentEvidenceGate::AssistantOutput,
+            crate::agent_graph::AgentEvidenceGate::ToolSuccess {
+                tool: "read_file".into(),
+            },
+        ];
+        crate::agent_graph::AgentTaskDefinition {
+            depends_on: Vec::new(),
+            grant: crate::agent_graph::AgentTaskGrant::default(),
+            worktree_id: None,
+            accept_cross_lane_handoff: false,
+            produces: Vec::new(),
+            consumes: Vec::new(),
+            task_kind: crate::agent_graph::AgentTaskKind::Agent,
+            merge_policy: crate::agent_graph::AgentMergePolicy::RejectConflict,
+            max_attempts: 2,
+            evidence: gates.clone(),
+            verification_contract: Some(crate::agent_graph::EvidenceContractV1 {
+                version: crate::agent_graph::EVIDENCE_CONTRACT_VERSION,
+                plan_id: Some(plan_id),
+                configuration_revision: Some(2),
+                gates,
+            }),
+        }
+    }
+
+    fn fixture_graph(plan_id: crate::work::PlanId) -> crate::agent_graph::AgentGraphState {
+        crate::agent_graph::AgentGraphState {
+            status: crate::agent_graph::AgentGraphStatus::Running,
+            plan_id: Some(plan_id),
+            configuration_revision: Some(2),
+            approved_revision: Some(3),
+            ..crate::agent_graph::AgentGraphState::default()
+        }
+    }
+
+    fn fixture_task(
+        task_id: crate::work::TaskId,
+        definition: crate::agent_graph::AgentTaskDefinition,
+    ) -> crate::work::PlanTask {
+        let now = chrono::Utc::now();
+        crate::work::PlanTask {
+            id: task_id,
+            title: "check the tracked file".into(),
+            status: crate::work::TaskStatus::InProgress,
+            owner: None,
+            blocked_reason: None,
+            created_at: now,
+            updated_at: now,
+            evidence: Vec::new(),
+            agent: Some(definition),
+            agent_runtime: crate::agent_graph::AgentTaskRuntime {
+                state: crate::agent_graph::AgentTaskState::Failed,
+                ..crate::agent_graph::AgentTaskRuntime::default()
+            },
+            source_task_id: None,
+        }
+    }
+
+    #[test]
+    fn manager_task_routes_keep_only_restored_argument_origins() {
+        for (arguments, pointer) in [
+            (
+                json!({"task":"Authored CobaltR4WillowP8Meadow; source WillowQ7"}),
+                "/task",
+            ),
+            (
+                json!({"tasks":[{"task":"Authored; source WillowQ7"}]}),
+                "/tasks/0/task",
+            ),
+            (json!({"prompt":"Authored; source WillowQ7"}), "/prompt"),
+            (json!({"message":"Authored; source WillowQ7"}), "/message"),
+        ] {
+            let original = arguments.to_string();
+            let start = original.find("WillowQ7").unwrap();
+            let spans = vec![crate::retrieved_content::RetrievedSpan {
+                source: None,
+                start,
+                end: start + "WillowQ7".len(),
+            }];
+            let ranges = manager_argument_spans(&arguments, &original, &spans, pointer).unwrap();
+            let task = arguments.pointer(pointer).unwrap().as_str().unwrap();
+            assert_eq!(ranges.len(), 1);
+            assert_eq!(&task[ranges[0].start..ranges[0].end], "WillowQ7");
+            let content =
+                crate::image_content::ModelContent::text(task).with_retrieved_spans(ranges);
+            let filter = crate::provider_filter::ProviderFilter::compile(
+                &crate::provider_filter::ProviderFilterConfig {
+                    enabled: true,
+                    page_stand_in: crate::provider_filter::PageStandIn::Latin,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let projected = content.project_retrieved(&filter).unwrap();
+            assert!(projected.as_str().unwrap().starts_with("Authored"));
+            assert!(!projected.as_str().unwrap().contains("WillowQ7"));
+            let mut changed = arguments.clone();
+            *changed.pointer_mut(pointer).unwrap() = json!("changed");
+            assert!(manager_argument_spans(&changed, &original, &spans, pointer).is_err());
         }
     }
 
@@ -6655,6 +9213,30 @@ mod manager_tests {
     async fn run_structured_provider(
         bodies: Vec<String>,
     ) -> (Result<String, String>, Vec<String>, Vec<String>) {
+        run_structured_provider_request(bodies, None).await
+    }
+
+    async fn run_structured_provider_request(
+        bodies: Vec<String>,
+        managed_request: Option<AgentSpawnRequest>,
+    ) -> (Result<String, String>, Vec<String>, Vec<String>) {
+        run_structured_provider_request_with_control_probe(bodies, managed_request, false).await
+    }
+
+    async fn run_structured_provider_request_with_control_probe(
+        bodies: Vec<String>,
+        managed_request: Option<AgentSpawnRequest>,
+        control_probe: bool,
+    ) -> (Result<String, String>, Vec<String>, Vec<String>) {
+        run_structured_provider_with_options(bodies, managed_request, control_probe, None).await
+    }
+
+    async fn run_structured_provider_with_options(
+        bodies: Vec<String>,
+        managed_request: Option<AgentSpawnRequest>,
+        control_probe: bool,
+        options: Option<crate::agent::client::ChatRequestOptions>,
+    ) -> (Result<String, String>, Vec<String>, Vec<String>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -6687,14 +9269,32 @@ mod manager_tests {
             models: vec!["model".into()],
             timeout: crate::config::ProviderTimeoutConfig::default(),
         };
+        let route_clients = AgentRouteClients::default();
+        let route_clients = if let Some(options) = options {
+            let route = AgentRoute {
+                provider: "local".into(),
+                model: "model".into(),
+            };
+            let clients = AgentRouteClients::new([(
+                route.clone(),
+                provider.clone(),
+                crate::request::RequestStore::default(),
+                false,
+            )]);
+            clients.set_request_options([(route, options)]);
+            clients
+        } else {
+            route_clients
+        };
         let runner = ProviderAgentRunner {
             client: crate::agent::AgentClient::with_request_store(
                 "local",
                 &provider,
                 "model",
                 crate::request::RequestStore::default(),
-            ),
-            route_clients: AgentRouteClients::default(),
+            )
+            .with_privacy_context(crate::privacy::current()),
+            route_clients,
             sandbox_mode: crate::sandbox::SandboxMode::PolicyOnly,
             command_timeout_secs: 1,
             approval_rules: Vec::new(),
@@ -6721,20 +9321,87 @@ mod manager_tests {
         let (events, mut event_rx) = mpsc::unbounded_channel();
         let mut agent_request = request("structured provider", Uuid::new_v4());
         agent_request.output_contract = Some(object_contract());
-        let result = runner
-            .run(AgentRunContext {
-                id: AgentId::new(),
-                request: agent_request,
-                limits: AgentLimits::default(),
-                commands,
-                pending_steers: VecDeque::new(),
-                cancelled,
-                events,
-                job_owner: crate::jobs::JobOwner::new(None),
-                graph_budget: None,
-                frozen_policy: None,
-            })
-            .await;
+        let result = if let Some(request) = managed_request {
+            let probe_client = runner.client.clone();
+            let workspace = request.workspace.clone();
+            let manager = AgentManager::new(Arc::new(runner), AgentLimits::default());
+            let id = manager.spawn(request).await.unwrap();
+            let snapshot = manager.await_agent(id).await.unwrap();
+            if control_probe {
+                let work = Arc::new(std::sync::Mutex::new(crate::work::WorkState::default()));
+                let control = crate::privacy::scope(
+                    probe_client.privacy_context(),
+                    execute_manager_tool(
+                        "await_agent",
+                        &json!({"agent_id":id.to_string()}),
+                        &manager,
+                        &work,
+                        &workspace,
+                    ),
+                )
+                .await
+                .unwrap();
+                assert!(control.is_success(), "{control:?}");
+                let source = control.source_for(control.model_text());
+                let probe = crate::request::PreparedModelRequest::new(
+                    crate::request::RequestKind::ToolContinuation,
+                    "local",
+                    "model",
+                    vec![
+                        crate::agent::client::ChatMessage {
+                            role: "assistant".into(),
+                            content: crate::image_content::ModelContent::text(""),
+                            tool_calls: Some(vec![crate::agent::client::ToolCallMsg {
+                                id: "await-control-probe".into(),
+                                call_type: "function".into(),
+                                function: crate::agent::client::FunctionCall {
+                                    name: "await_agent".into(),
+                                    arguments: json!({"agent_id":id.to_string()}).to_string(),
+                                    arguments_retrieved_spans: Vec::new(),
+                                },
+                            }]),
+                            tool_call_id: None,
+                            response_items: Vec::new(),
+                        },
+                        crate::agent::client::ChatMessage {
+                            role: "tool".into(),
+                            content: crate::image_content::ModelContent::text(control.model_text())
+                                .with_source_receipt(source)
+                                .with_tool_result_status(true),
+                            tool_calls: None,
+                            tool_call_id: Some("await-control-probe".into()),
+                            response_items: Vec::new(),
+                        },
+                    ],
+                    vec![],
+                    Default::default(),
+                );
+                let mut stream = probe_client.stream_prepared(&probe).await.unwrap();
+                crate::agent::stream::consume_stream(&mut stream, |_| {})
+                    .await
+                    .unwrap();
+            }
+            if snapshot.status == AgentStatus::Completed {
+                Ok(snapshot.result_summary.unwrap_or_default())
+            } else {
+                Err(snapshot.result_summary.unwrap_or_default())
+            }
+        } else {
+            runner
+                .run(AgentRunContext {
+                    id: AgentId::new(),
+                    request: agent_request,
+                    limits: AgentLimits::default(),
+                    commands,
+                    pending_steers: VecDeque::new(),
+                    cancelled,
+                    events,
+                    job_owner: crate::jobs::JobOwner::new(None),
+                    graph_budget: None,
+                    frozen_policy: None,
+                })
+                .await
+        };
         server.await.unwrap();
         let mut activity = Vec::new();
         while let Ok(event) = event_rx.try_recv() {
@@ -6747,8 +9414,11 @@ mod manager_tests {
     }
 
     fn structured_tool_sse(answer: serde_json::Value) -> String {
-        let arguments =
-            serde_json::to_string(&serde_json::json!({"value": {"answer": answer}})).unwrap();
+        structured_value_sse(serde_json::json!({"answer":answer}))
+    }
+
+    fn structured_value_sse(value: serde_json::Value) -> String {
+        let arguments = serde_json::to_string(&serde_json::json!({"value":value})).unwrap();
         format!(
             "data: {}\n\ndata: [DONE]\n\n",
             serde_json::json!({
@@ -6766,6 +9436,37 @@ mod manager_tests {
                 }]
             })
         )
+    }
+
+    #[tokio::test]
+    async fn delegated_xhigh_reaches_inherited_and_explicit_route_wire() {
+        for explicit in [false, true] {
+            let mut request = request("reasoning wire", Uuid::new_v4());
+            request.output_contract = Some(object_contract());
+            if explicit {
+                request.route = Some(AgentRoute {
+                    provider: "local".into(),
+                    model: "model".into(),
+                });
+            }
+            let (result, captured, _) = run_structured_provider_with_options(
+                vec![structured_value_sse(json!({"answer":"done"}))],
+                Some(request),
+                false,
+                Some(crate::agent::client::ChatRequestOptions {
+                    reasoning_effort: Some(crate::config::ReasoningEffort::XHigh),
+                    reasoning_request_format: Some(
+                        crate::config::ReasoningRequestFormat::ReasoningEffort,
+                    ),
+                    ..Default::default()
+                }),
+            )
+            .await;
+            assert!(result.is_ok(), "{result:?}");
+            let body: serde_json::Value =
+                serde_json::from_str(captured[0].split_once("\r\n\r\n").unwrap().1).unwrap();
+            assert_eq!(body["reasoning_effort"], "xhigh");
+        }
     }
 
     #[tokio::test]
@@ -6803,6 +9504,972 @@ mod manager_tests {
                 .count(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn provider_structured_task_map_repairs_semantic_policy_once() {
+        let mut value = json!({"title":"Map","body":"## Shared purpose and constraints\nKeep local.\n## Task: Inspect\nRead evidence.\n","tasks":["Inspect"],"graph":{"budget":{"allow_unpriced":true,"max_physical_requests":24},"tasks":[{"task_id":"Inspect","tools":["read_file","write_file"],"paths":["evidence.txt","report.txt"],"commands":[],"evidence":[{"kind":"human_review"}],"produces":[{"name":"bad-name","path":"report.txt","kind":"regular_file"}]}]}});
+        let invalid = value.clone();
+        value["graph"]["tasks"][0]["produces"][0]["name"] = "valid_name".into();
+        let mut request = request("Propose an executable task map", Uuid::new_v4());
+        request.output_contract = Some(crate::automatic_tasks::output_contract().unwrap());
+        let (result, requests, _) = run_structured_provider_request(
+            vec![
+                structured_value_sse(invalid),
+                structured_value_sse(value.clone()),
+            ],
+            Some(request.clone()),
+        )
+        .await;
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&result.unwrap()).unwrap(),
+            value
+        );
+        assert_eq!(requests.len(), 2);
+        assert!(requests[1].contains("Task map preflight failed"));
+        assert!(requests[1].contains("only repair turn"));
+
+        value["graph"]["tasks"][0]["produces"][0]["name"] = "still-invalid".into();
+        let (result, requests, _) = run_structured_provider_request(
+            vec![
+                structured_value_sse(value.clone()),
+                structured_value_sse(value),
+            ],
+            Some(request),
+        )
+        .await;
+        assert!(result
+            .unwrap_err()
+            .contains("remained invalid after one repair turn"));
+        assert_eq!(requests.len(), 2);
+    }
+
+    #[test]
+    fn host_instruction_provenance_preserves_planner_controls_and_filters_dynamic_twins() {
+        use crate::agent::provider::ProviderProtocol;
+        use crate::plan_workflow::{PlanWorkflowArgs, WorkflowRole, WorkflowStep};
+        let settings = crate::provider_filter::ProviderFilterConfig {
+            enabled: true,
+            hide: crate::provider_filter::FilterHide {
+                filenames: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        crate::provider_filter::with_test_filter(&settings, || {
+            let temporary = tempfile::tempdir().unwrap();
+            let root = temporary.path().join("workspace");
+            std::fs::create_dir(&root).unwrap();
+            let mut names = crate::automatic_tasks::GUIDANCE
+                .split(|ch: char| !ch.is_ascii_alphabetic())
+                .filter(|word| !word.is_empty())
+                .collect::<std::collections::BTreeSet<_>>();
+            names.extend([
+                "task",
+                "graph",
+                "tools",
+                "evidence",
+                "Task",
+                "bounded",
+                "secret.txt",
+            ]);
+            assert!(names.len() >= 81);
+            for name in names {
+                std::fs::write(root.join(name), "private fixture").unwrap();
+            }
+            let privacy = crate::privacy::Context::open(
+                temporary.path().join("profile"),
+                root.clone(),
+                Uuid::new_v4(),
+                None,
+            )
+            .unwrap();
+            privacy.allow_ephemeral();
+            let twin = "You are a bounded child coding agent. Use only granted tools. Never widen workspace roots or network authority.";
+            let dynamic = format!("secret.txt task graph tools evidence {twin}");
+            let mut work = crate::work::WorkState {
+                automatic_task_map: true,
+                ..Default::default()
+            };
+            let route = AgentRoute {
+                provider: "fixture".into(),
+                model: "model".into(),
+            };
+            crate::plan_workflow::apply_action(
+                &mut work,
+                PlanWorkflowArgs::Start {
+                    goal: dynamic.clone(),
+                    participants: Vec::new(),
+                    steps: vec![WorkflowStep {
+                        role: WorkflowRole::Author,
+                        participant: "author".into(),
+                        route: None,
+                        instructions: dynamic.clone(),
+                    }],
+                    review_loop: None,
+                    implementation: None,
+                },
+                &route,
+                None,
+            )
+            .unwrap();
+            work.automatic_task_map = true;
+            let dispatch = crate::plan_workflow::next_dispatch(&work).unwrap().unwrap();
+            let mut child = request(&dispatch.prompt, Uuid::new_v4());
+            child.host_task = Some(dispatch.host_prompt);
+            child.context_summary = dynamic.clone();
+            child.workspace = crate::workspace::WorkspaceContext::from_primary(root.clone(), root);
+            let messages =
+                initial_child_messages(&child, Some((100_000, 42)), &dynamic, &dynamic, None, true)
+                    .unwrap();
+            let imported =
+                crate::image_content::ModelContent::text(messages[0].content.as_str().unwrap())
+                    .with_legacy_provenance();
+            let mut prepared = crate::request::PreparedModelRequest::new(
+                crate::request::RequestKind::Subagent,
+                "fixture",
+                "model",
+                messages,
+                Vec::new(),
+                Default::default(),
+            );
+            let revision = privacy.prepare_request(&mut prepared).unwrap();
+            assert!(prepared.messages[0]
+                .content
+                .as_str()
+                .unwrap()
+                .contains(twin));
+            assert!(prepared.messages[1]
+                .content
+                .as_str()
+                .unwrap()
+                .contains(crate::task_scope::AUTHOR_GUIDANCE));
+            assert!(prepared.messages[1]
+                .content
+                .as_str()
+                .unwrap()
+                .contains(crate::automatic_tasks::GUIDANCE));
+            assert!(!prepared.messages[1]
+                .content
+                .as_str()
+                .unwrap()
+                .contains(twin));
+            assert!(!prepared.messages.iter().any(|m| m
+                .content
+                .as_str()
+                .unwrap()
+                .contains("secret.txt")));
+            assert!(!imported
+                .mask_privacy(&privacy)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .contains(twin));
+            let mut changed = child.clone();
+            changed.task.push_str(" changed");
+            assert!(initial_child_messages(&changed, None, "", "", None, true).is_err());
+            let fingerprint = privacy.policy_fingerprint();
+            for protocol in [
+                ProviderProtocol::ChatCompletions,
+                ProviderProtocol::OpenAiResponses,
+                ProviderProtocol::AnthropicMessages,
+                ProviderProtocol::GoogleGenerateContent,
+            ] {
+                let source =
+                    crate::agent::stream::ProviderStateSourceV1::for_test("fixture", protocol);
+                let adapter = protocol.adapter();
+                let actual = adapter
+                    .prepare(&prepared, &source, None, None, None)
+                    .unwrap();
+                let mut shadow = prepared.clone();
+                let mut replacements = Vec::new();
+                for message in &mut shadow.messages {
+                    message.content = message.content.host_shadow(&mut replacements).unwrap();
+                }
+                let shadow = adapter.prepare(&shadow, &source, None, None, None).unwrap();
+                let receipt = crate::host_instructions::WireReceipt::bind(
+                    &actual.body,
+                    &shadow.body,
+                    replacements,
+                )
+                .unwrap();
+                let filter = crate::provider_filter::ProviderFilter::compile(
+                    &crate::provider_filter::ProviderFilterConfig {
+                        enabled: true,
+                        hide: crate::provider_filter::FilterHide {
+                            words: vec!["bounded".into()],
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                let (body, _, receipt) = crate::provider_replay::prepare_outbound_with_host(
+                    &actual.body,
+                    &actual.replay,
+                    &filter,
+                    None,
+                    receipt,
+                )
+                .unwrap();
+                assert!(String::from_utf8_lossy(&body).contains(twin));
+                privacy
+                    .validate_wire_with_receipts(
+                        &body,
+                        revision,
+                        &fingerprint,
+                        None,
+                        Some(&receipt),
+                    )
+                    .unwrap();
+                let mut changed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                changed["extra"] = twin.into();
+                assert!(privacy
+                    .validate_wire_with_receipts(
+                        &serde_json::to_vec(&changed).unwrap(),
+                        revision,
+                        &fingerprint,
+                        None,
+                        Some(&receipt)
+                    )
+                    .is_err());
+                let stop = crate::provider_filter::ProviderFilter::compile(
+                    &crate::provider_filter::ProviderFilterConfig {
+                        enabled: true,
+                        phrases: vec!["bounded child coding agent".into()],
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                assert!(crate::provider_replay::prepare_outbound_with_host(
+                    &body,
+                    &actual.replay,
+                    &stop,
+                    None,
+                    receipt
+                )
+                .is_err());
+            }
+        });
+    }
+
+    #[test]
+    fn provider_structured_task_map_restores_private_paths_before_validation() {
+        let settings = crate::provider_filter::ProviderFilterConfig {
+            enabled: true,
+            structural: true,
+            hide: crate::provider_filter::FilterHide {
+                filenames: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        crate::provider_filter::with_test_filter(&settings, || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let temporary = tempfile::tempdir().unwrap();
+                    let root = temporary.path().join("workspace");
+                    std::fs::create_dir(&root).unwrap();
+                    let root = root.canonicalize().unwrap();
+                    let filename = "private-report-338.txt";
+                    std::fs::write(root.join(filename), "retained evidence\n").unwrap();
+                    let privacy = crate::privacy::Context::open(
+                        temporary.path().join("profile"),
+                        root.clone(),
+                        Uuid::new_v4(),
+                        None,
+                    )
+                    .unwrap();
+                    privacy.allow_ephemeral();
+                    let alias = privacy
+                        .project_filename_path(std::path::Path::new(filename))
+                        .unwrap();
+                    assert!(alias.starts_with("__CA_PATH_"), "{alias}");
+                    let value = json!({
+                        "title":"Map",
+                        "body":"## Shared purpose and constraints\nKeep local.\n## Task: Inspect\nRead evidence.\n",
+                        "tasks":["Inspect"],
+                        "graph":{
+                            "budget":{"allow_unpriced":true,"max_physical_requests":24},
+                            "tasks":[{
+                                "task_id":"Inspect", "tools":["read_file"],
+                                "paths":[alias], "commands":[],
+                                "evidence":[{"kind":"artifact","path":alias,"artifact_kind":"regular_file","min_bytes":1}]
+                            }]
+                        }
+                    });
+                    let contract = crate::automatic_tasks::output_contract().unwrap();
+                    let mut child = request("Propose a task map for the supplied evidence", Uuid::new_v4());
+                    child.workspace = crate::workspace::WorkspaceContext::from_primary(root.clone(), root.clone());
+                    child.context_summary = format!("Read {alias}");
+                    child.output_contract = Some(contract.clone());
+                    let (result, requests, _) = crate::privacy::scope(
+                        Some(privacy.clone()),
+                        run_structured_provider_request(vec![structured_value_sse(value)], Some(child)),
+                    ).await;
+                    let result: serde_json::Value = serde_json::from_str(&result.unwrap()).unwrap();
+                    assert_eq!(requests.len(), 1);
+                    assert!(!requests[0].contains(filename), "private filename reached provider");
+                    assert_eq!(result["graph"]["tasks"][0]["paths"], json!([filename]));
+                    assert_eq!(result["graph"]["tasks"][0]["evidence"][0]["path"], filename);
+                    contract.validate_value(&result).unwrap();
+
+                    let mut work = crate::work::WorkState::default();
+                    work.apply_model_mutation(crate::work::WorkMutation::Propose {
+                        expected_revision: 0,
+                        title: result["title"].as_str().unwrap().into(),
+                        body: Some(result["body"].as_str().unwrap().into()),
+                        tasks: vec!["Inspect".into()],
+                    }).unwrap();
+                    crate::automatic_tasks::configure(&mut work, serde_json::from_value(result["graph"].clone()).unwrap()).unwrap();
+                    let definition = work.plan.as_ref().unwrap().tasks[0].agent.as_ref().unwrap();
+                    assert_eq!(definition.grant.paths, [filename]);
+                    assert_eq!(definition.grant.tools, ["read_file"]);
+                    assert!(definition.grant.commands.is_empty() && !definition.grant.network);
+                    assert!(matches!(&definition.evidence[0], crate::agent_graph::AgentEvidenceGate::Artifact(gate) if gate.path == filename));
+
+                    // Absolute and relative references to the same workspace
+                    // file resolve to the same narrow canonical path.
+                    let absolute = privacy.project_filename_path(&root.join(filename)).unwrap();
+                    let mut same_file = result.clone();
+                    same_file["graph"]["tasks"][0]["paths"] = json!([absolute]);
+                    let same_file = validate_structured_output_arguments(&contract, &json!({"value":same_file}).to_string(), Some(&privacy)).unwrap();
+                    assert_eq!(same_file["graph"]["tasks"][0]["paths"], json!([filename]));
+                    assert_eq!(same_file["graph"]["tasks"][0]["evidence"][0]["path"], filename);
+
+                    // Restoration does not authorize an unrelated external path.
+                    let mut invalid = result;
+                    let outside = temporary.path().join("outside-grant.txt");
+                    assert!(!outside.starts_with(&root));
+                    invalid["graph"]["tasks"][0]["paths"] = json!([outside]);
+                    let error = validate_structured_output_arguments(&contract, &json!({"value":invalid}).to_string(), Some(&privacy)).unwrap_err();
+                    assert!(error.contains("Task map preflight failed"), "{error}");
+                    let oversized = format!("{}{}", " ".repeat(1024 * 1024), json!({"value":null}));
+                    let error = validate_structured_output_arguments(&contract, &oversized, Some(&privacy)).unwrap_err();
+                    assert!(error.contains("exceeds the 1048576-byte limit"), "{error}");
+                });
+        });
+    }
+
+    fn narrow_request(root: &std::path::Path, maximum: u8) -> AgentSpawnRequest {
+        let root = root.canonicalize().unwrap();
+        let source = std::fs::read_to_string(root.join("target.txt")).unwrap();
+        let mut request = request(
+            "Replace the incorrect middle line with fixed",
+            Uuid::new_v4(),
+        );
+        request.workspace =
+            crate::workspace::WorkspaceContext::from_primary(root.clone(), root.clone());
+        request.context_summary = "UNRELATED_TRANSCRIPT_CANARY".into();
+        request.grants.tools = vec!["edit_file".into(), "run_command".into()];
+        request.grants.path_scopes = vec![root.to_string_lossy().into_owned()];
+        request.grants.command_scopes = vec!["/usr/bin/grep -q fixed target.txt".into()];
+        request.repair_contract = Some(
+            serde_json::from_value(serde_json::json!({
+                "path":"target.txt", "source_sha256":crate::narrow_worker::digest(&source),
+                "start_line":2,"end_line":2,"context":"Known middle-line repair",
+                "checks":[{"argv":["/usr/bin/grep","-q","fixed","target.txt"],"timeout_secs":1}],
+                "max_attempts":maximum
+            }))
+            .unwrap(),
+        );
+        request
+    }
+
+    #[tokio::test]
+    async fn narrow_worker_managed_repairs_verify_retry_and_stop_at_first_success() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("target.txt"), "prefix\nbad\nsuffix\n").unwrap();
+        let (result, requests, _) = run_structured_provider_request(vec![
+            structured_value_sse(serde_json::json!({"status":"replacement","replacement":"still wrong\n","diagnosis":""})),
+            structured_value_sse(serde_json::json!({"status":"replacement","replacement":"fixed\n","diagnosis":""})),
+        ], Some(narrow_request(temp.path(), 3))).await;
+        let receipt: serde_json::Value = serde_json::from_str(&result.unwrap()).unwrap();
+        assert_eq!(receipt["status"], "complete");
+        assert_eq!(receipt["attempts"], 2);
+        assert_eq!(receipt["checks"][0]["exit_code"], 0);
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("target.txt")).unwrap(),
+            "prefix\nfixed\nsuffix\n"
+        );
+        assert_eq!(requests.len(), 2);
+        for request in &requests {
+            assert!(!request.contains("UNRELATED_TRANSCRIPT_CANARY"));
+            let body: serde_json::Value =
+                serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+            let tools = body["tools"].as_array().unwrap();
+            assert_eq!(tools.len(), 1);
+            assert_eq!(tools[0]["function"]["name"], "report_structured_output");
+        }
+        assert!(requests[1].contains("Host verification failed for the current target"));
+        assert!(requests[1].contains("still wrong"));
+    }
+
+    #[test]
+    fn narrow_worker_host_native_edit_retains_filename_privacy_and_mutation_receipt() {
+        let settings = crate::provider_filter::ProviderFilterConfig {
+            enabled: true,
+            structural: true,
+            hide: crate::provider_filter::FilterHide {
+                filenames: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        crate::provider_filter::with_test_filter(&settings, || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let temporary = tempfile::tempdir().unwrap();
+                    let root = temporary.path().join("workspace");
+                    std::fs::create_dir(&root).unwrap();
+                    let root = root.canonicalize().unwrap();
+                    let path = root.join("target.txt");
+                    let original = "protected prefix\nbad\nprotected suffix\n";
+                    let intended = "protected prefix\nfixed\nprotected suffix\n";
+                    std::fs::write(&path, original).unwrap();
+                    let privacy = crate::privacy::Context::open(
+                        temporary.path().join("profile"),
+                        root.clone(),
+                        Uuid::new_v4(),
+                        None,
+                    )
+                    .unwrap();
+                    privacy.allow_ephemeral();
+                    assert!(privacy.enabled());
+                    crate::privacy::scope(Some(privacy), async {
+                        let mut child = narrow_request(&root, 3);
+                        child.repair_contract.as_mut().unwrap().checks[0].cwd =
+                            Some(root.to_string_lossy().into_owned());
+                        freeze_repair_contract(&mut child).await.unwrap();
+                        let mut repair = crate::narrow_worker::RepairState::new(
+                            child.repair_contract.clone().unwrap(),
+                        )
+                        .unwrap();
+                        let arguments = repair
+                            .edit_arguments(&json!({
+                                "status":"replacement", "replacement":"fixed\n", "diagnosis":""
+                            }))
+                            .unwrap();
+                        assert_eq!(arguments["path"], path.to_str().unwrap());
+                        let runner = permission_test_runner();
+                        let policy = Arc::new(FrozenChildPolicy {
+                            approval: crate::app::ApprovalMode::RunEverything,
+                            approval_rules: Vec::new(),
+                            permission_rules: Vec::new(),
+                            session_grants: Vec::new(),
+                        });
+                        let (_command_tx, commands) = mpsc::channel(1);
+                        let (_cancel_tx, cancelled) = watch::channel(false);
+                        let (events, _event_rx) = mpsc::unbounded_channel();
+                        let mut context = AgentRunContext {
+                            id: AgentId::new(),
+                            request: child,
+                            limits: AgentLimits::default(),
+                            commands,
+                            pending_steers: VecDeque::new(),
+                            cancelled,
+                            events,
+                            job_owner: crate::jobs::JobOwner::new(None),
+                            graph_budget: None,
+                            frozen_policy: Some(policy),
+                        };
+                        // Provider-authored native paths must still fail at the
+                        // filename boundary; only the host-owned repair adapts.
+                        let ordinary = execute_child_tool(
+                            ChildToolContext {
+                                runner: &runner,
+                                id: context.id,
+                                owner: context.job_owner,
+                                grant: &context.request.grants,
+                                workspace: &context.request.workspace,
+                                policy_approved: false,
+                                frozen_policy: context.frozen_policy.as_deref(),
+
+                                admitted: None,
+                            },
+                            "edit_file",
+                            &arguments,
+                        )
+                        .await;
+                        assert!(!ordinary.is_success());
+                        assert!(ordinary
+                            .model_text()
+                            .contains("complete discovered filename alias"));
+                        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+                        let drifted_source = format!("{original}newer exterior\n");
+                        std::fs::write(&path, &drifted_source).unwrap();
+                        let drifted =
+                            narrow_host_tool(&runner, &mut context, "edit_file", &arguments, 1, 1)
+                                .await
+                                .unwrap();
+                        assert!(!drifted.is_success());
+                        assert!(drifted.model_text().contains("changed"), "{drifted:?}");
+                        assert_eq!(std::fs::read_to_string(&path).unwrap(), drifted_source);
+                        std::fs::write(&path, original).unwrap();
+                        let result =
+                            narrow_host_tool(&runner, &mut context, "edit_file", &arguments, 1, 1)
+                                .await
+                                .unwrap();
+                        assert!(result.is_success(), "{result:?}");
+                        repair.accept_mutation(&result).unwrap();
+                        repair.validate_current().unwrap();
+                        assert_eq!(repair.attempts, 1);
+                        assert_eq!(std::fs::read_to_string(&path).unwrap(), intended);
+                        let check = &repair.contract.checks[0];
+                        let check_arguments = json!({
+                            "command":crate::narrow_worker::render_command(&check.argv),
+                            "cwd":check.cwd, "background":false
+                        });
+                        assert_eq!(check_arguments["cwd"], root.to_str().unwrap());
+                        let checked = narrow_host_tool(
+                            &runner,
+                            &mut context,
+                            "run_command",
+                            &check_arguments,
+                            1,
+                            1,
+                        )
+                        .await
+                        .unwrap();
+                        assert!(checked.is_success(), "{checked:?}");
+                        assert!(matches!(
+                            checked.command_observation().unwrap().status,
+                            crate::jobs::JobStatus::Completed { exit_code: 0 }
+                        ));
+                        repair.validate_current().unwrap();
+                        assert_eq!(std::fs::read_to_string(&path).unwrap(), intended);
+                    })
+                    .await;
+                });
+        });
+    }
+
+    #[test]
+    fn narrow_worker_managed_private_source_establishes_host_view_without_model_read() {
+        for filenames in [true, false] {
+            let settings = crate::provider_filter::ProviderFilterConfig {
+                enabled: true,
+                structural: true,
+                hide: crate::provider_filter::FilterHide {
+                    filenames,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            crate::provider_filter::with_test_filter(&settings, || {
+                tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let temporary = tempfile::tempdir().unwrap();
+                    let root = temporary.path().join("workspace");
+                    std::fs::create_dir(&root).unwrap();
+                    let root = root.canonicalize().unwrap();
+                    let original = "SECRET = 'PrivateLiteral317'\nVALUE = 0\nASSET = 'PrivateAsset317.txt'\n";
+                    let intended = original.replacen("VALUE = 0", "VALUE = 1", 1);
+                    let path = root.join("target.py");
+                    std::fs::write(&path, original).unwrap();
+                    std::fs::write(root.join("PrivateAsset317.txt"), "protected asset").unwrap();
+                    let privacy = crate::privacy::Context::open(
+                        temporary.path().join("profile"),
+                        root.clone(),
+                        Uuid::new_v4(),
+                        None,
+                    )
+                    .unwrap();
+                    privacy.allow_ephemeral();
+                    privacy.save_policy(crate::privacy::policy::Policy {
+                        enabled: true,
+                        ..privacy.policy()
+                    }).unwrap();
+                    assert!(privacy.enabled());
+                    assert_eq!(privacy.filenames_enabled(), filenames);
+                    let mut child = request("Set only VALUE to one", Uuid::new_v4());
+                    child.workspace = crate::workspace::WorkspaceContext::from_primary(
+                        root.clone(),
+                        root.clone(),
+                    );
+                    let argv = vec![
+                        "/usr/bin/grep".to_string(),
+                        "-q".into(),
+                        "VALUE = 1".into(),
+                        "target.py".into(),
+                    ];
+                    child.grants.tools = vec!["edit_file".into(), "run_command".into()];
+                    child.grants.path_scopes = vec![root.to_string_lossy().into_owned()];
+                    child.grants.command_scopes = vec![crate::narrow_worker::render_command(&argv)];
+                    child.repair_contract = Some(
+                        serde_json::from_value(json!({
+                            "path":"target.py", "source_sha256":crate::narrow_worker::digest(original),
+                            "start_line":2, "end_line":2, "context":"Set VALUE to one",
+                            "checks":[{"argv":argv,"cwd":root,"timeout_secs":3}],
+                            "max_attempts":3
+                        }))
+                        .unwrap(),
+                    );
+                    // No read or projection is pre-populated. The actual managed
+                    // runner supplies the frozen range and accepts one report.
+                    let (result, requests, _) = crate::privacy::scope(
+                        Some(privacy),
+                        run_structured_provider_request(
+                            vec![structured_value_sse(json!({
+                                "status":"replacement","replacement":"VALUE = 1\n","diagnosis":""
+                            }))],
+                            Some(child),
+                        ),
+                    )
+                    .await;
+                    let receipt: serde_json::Value =
+                        serde_json::from_str(&result.unwrap()).unwrap();
+                    assert_eq!(receipt["status"], "complete");
+                    assert_eq!(receipt["attempts"], 1);
+                    assert_eq!(receipt["checks"][0]["exit_code"], 0);
+                    assert_eq!(requests.len(), 1);
+                    let body: serde_json::Value = serde_json::from_str(
+                        requests[0].split_once("\r\n\r\n").unwrap().1,
+                    )
+                    .unwrap();
+                    assert_eq!(body["tools"].as_array().unwrap().len(), 1);
+                    assert_eq!(body["tools"][0]["function"]["name"], "report_structured_output");
+                    for private in ["PrivateLiteral317", "PrivateAsset317.txt"] {
+                        assert!(!requests[0].contains(private));
+                    }
+                    if filenames {
+                        for private in [root.to_str().unwrap(), "target.py"] {
+                            assert!(!requests[0].contains(private));
+                        }
+                    }
+                    assert_eq!(std::fs::read_to_string(&path).unwrap(), intended);
+                    assert_eq!(
+                        std::fs::read_to_string(root.join("PrivateAsset317.txt")).unwrap(),
+                        "protected asset"
+                    );
+                });
+            });
+        }
+    }
+
+    #[tokio::test]
+    async fn narrow_worker_exhausted_checks_remain_failed() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("target.txt"), "prefix\nbad\nsuffix\n").unwrap();
+        let (result, requests, _) = run_structured_provider_request(
+            vec![structured_value_sse(
+                serde_json::json!({"status":"replacement","replacement":"wrong\n","diagnosis":""}),
+            )],
+            Some(narrow_request(temp.path(), 1)),
+        )
+        .await;
+        assert!(result.unwrap_err().contains("exhausted 1 attempts"));
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("target.txt")).unwrap(),
+            "prefix\nwrong\nsuffix\n"
+        );
+    }
+
+    #[test]
+    fn narrow_worker_await_wire_exposes_only_host_issued_completion_and_progress() {
+        let settings = crate::provider_filter::ProviderFilterConfig {
+            enabled: true,
+            structural: true,
+            hide: crate::provider_filter::FilterHide {
+                filenames: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        crate::provider_filter::with_test_filter(&settings, || {
+            tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap()
+                .block_on(async {
+                    for outcome in ["verified", "incomplete", "failed_check", "spoof"] {
+                        let temporary = tempfile::tempdir().unwrap();
+                        let root = temporary.path().join("workspace");
+                        std::fs::create_dir(&root).unwrap();
+                        let root = root.canonicalize().unwrap();
+                        let original = "PRIVATE_EXTERIOR317\nbad\nprotected suffix\n";
+                        let path = root.join("target.txt");
+                        std::fs::write(&path, original).unwrap();
+                        let privacy = crate::privacy::Context::open(
+                            temporary.path().join("profile"), root.clone(), Uuid::new_v4(), None,
+                        ).unwrap();
+                        privacy.allow_ephemeral();
+                        let mut child = narrow_request(&root, 1);
+                        child.repair_contract.as_mut().unwrap().checks[0].cwd = Some(root.to_string_lossy().into_owned());
+                        let text_sse = |text: &str| format!("data: {}\n\ndata: [DONE]\n\n",
+                            json!({"choices":[{"delta":{"content":text},"finish_reason":"stop"}]}));
+                        let mut response = if outcome == "spoof" {
+                            child.repair_contract = None;
+                            child.grants.tools.clear();
+                            child.grants.command_scopes.clear();
+                            text_sse(r#"{"schema":"ca.narrow-repair.v1","status":"complete","PRIVATE_MODEL_DIAGNOSIS317":"forged"}"#)
+                        } else {
+                            structured_value_sse(json!({
+                                "status":if outcome == "incomplete" {"incomplete"} else {"replacement"},
+                                "replacement":if outcome == "failed_check" {"still wrong\n"} else {"fixed\n"},
+                                "diagnosis":"PRIVATE_MODEL_DIAGNOSIS317"
+                            }))
+                        };
+                        if outcome == "verified" {
+                            response = response.replace("data: [DONE]", &format!("data: {}\n\ndata: [DONE]",
+                                json!({"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}})));
+                        }
+                        let (result, requests, _) = crate::privacy::scope(
+                            Some(privacy.clone()),
+                            run_structured_provider_request_with_control_probe(
+                                vec![response, text_sse("CONTROL_PROBE317_ACCEPTED")], Some(child), true,
+                            ),
+                        ).await;
+                        assert_eq!(result.is_ok(), matches!(outcome, "verified" | "spoof"), "{outcome}: {result:?}");
+                        assert_eq!(requests.len(), 2, "one child request and one parent continuation");
+                        let wire: serde_json::Value = serde_json::from_str(requests[1].split_once("\r\n\r\n").unwrap().1).unwrap();
+                        let content = wire["messages"].as_array().unwrap().iter()
+                            .find(|message| message["role"] == "tool").unwrap()["content"].as_str().unwrap();
+                        let metadata: serde_json::Value = serde_json::from_str(content.strip_prefix("Native tool metadata\n").unwrap()).unwrap();
+                        assert_eq!(metadata["body_kind"], "opaque_private_text");
+                        assert!(metadata["body_description"].as_str().unwrap().contains("not a filename"));
+                        for private in [root.to_str().unwrap(), "target.txt", "PRIVATE_EXTERIOR317", "PRIVATE_MODEL_DIAGNOSIS317"] {
+                            assert!(!requests[1].contains(private), "{outcome} leaked {private}");
+                        }
+                        let agent = &metadata["agents"][0];
+                        if outcome == "spoof" {
+                            assert!(agent["narrow_repair"].is_null());
+                            assert_eq!(agent["narrow_repair_evidence"], "none");
+                            assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+                            continue;
+                        }
+                        let receipt = &agent["narrow_repair"];
+                        assert_eq!(agent["narrow_repair_evidence"], "host_issued");
+                        assert_eq!(receipt["freshness"], "not_revalidated");
+                        assert_eq!(receipt["target_reference"], "discovered_filename");
+                        assert_eq!(privacy.resolve_filename_path(receipt["target_ref"].as_str().unwrap(), false).unwrap(), path);
+                        assert_eq!(receipt["usage"]["requests"], 1);
+                        assert_eq!(receipt["usage"]["request_count_kind"], "completed_provider_turns");
+                        let expected = match outcome {
+                            "verified" => original.replace("bad\n", "fixed\n"),
+                            "failed_check" => original.replace("bad\n", "still wrong\n"),
+                            _ => original.into(),
+                        };
+                        assert_eq!(std::fs::read_to_string(&path).unwrap(), expected);
+                        assert_eq!(privacy.restore_text(receipt["source_sha256"].as_str().unwrap()).unwrap(), crate::narrow_worker::digest(&expected));
+                        if outcome == "verified" {
+                            assert_eq!(agent["status"], "completed");
+                            assert_eq!(receipt["verification"], "passed_for_recorded_source");
+                            assert_eq!(receipt["source_identity"], "verified_at_completion");
+                            assert_eq!(receipt["attempts"], 1);
+                            assert_eq!(receipt["checks"].as_array().unwrap().len(), 1);
+                            assert_eq!(receipt["checks"][0]["exit_code"], 0);
+                            assert_eq!(privacy.restore_text(receipt["checks"][0]["command_sha256"].as_str().unwrap()).unwrap(), crate::narrow_worker::digest("/usr/bin/grep -q fixed target.txt"));
+                            assert!(receipt["unresolved_conditions"].as_array().unwrap().is_empty());
+                            assert_eq!(receipt["usage"]["prompt_tokens"], 3);
+                            assert_eq!(receipt["usage"]["completion_tokens"], 2);
+                        } else {
+                            assert_eq!(agent["status"], "failed");
+                            assert_eq!(receipt["verification"], "not_verified");
+                            assert_eq!(receipt["source_identity"], if outcome == "failed_check" {"applied_at_attempt"} else {"admitted"});
+                            if outcome == "failed_check" { assert_eq!(receipt["attempts"], 1); }
+                            else { assert!(receipt["attempts"].is_null()); }
+                            assert!(receipt["checks"].as_array().unwrap().is_empty());
+                            assert_eq!(receipt["unresolved_conditions"], json!(["not_verified"]));
+                            assert!(receipt["usage"]["prompt_tokens"].is_null());
+                            assert!(receipt["usage"]["completion_tokens"].is_null());
+                        }
+                    }
+                });
+        });
+    }
+
+    #[tokio::test]
+    async fn narrow_worker_incomplete_diagnosis_never_edits() {
+        let temp = tempfile::tempdir().unwrap();
+        let original = "prefix\nbad\nsuffix\n";
+        std::fs::write(temp.path().join("target.txt"), original).unwrap();
+        let (result, requests, _) = run_structured_provider_request(
+            vec![structured_value_sse(serde_json::json!({"status":"incomplete","replacement":"","diagnosis":"The defect is in a different function"}))],
+            Some(narrow_request(temp.path(), 3)),
+        ).await;
+        assert!(result.unwrap_err().contains("different function"));
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("target.txt")).unwrap(),
+            original
+        );
+    }
+
+    #[tokio::test]
+    async fn narrow_worker_admission_rejects_stale_source_and_missing_check_grants() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("target.txt"), "prefix\nbad\nsuffix\n").unwrap();
+        let manager = AgentManager::new(Arc::new(FakeRunner), AgentLimits::default());
+        let request = narrow_request(temp.path(), 3);
+        std::fs::write(temp.path().join("target.txt"), "prefix\nnewer\nsuffix\n").unwrap();
+        assert!(manager
+            .spawn(request)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("digest changed"));
+        let mut request = narrow_request(temp.path(), 3);
+        request.grants.command_scopes.clear();
+        assert!(manager
+            .spawn(request)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("command scope"));
+        assert!(manager.list().await.is_empty());
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("target.txt")).unwrap(),
+            "prefix\nnewer\nsuffix\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn narrow_worker_exact_edit_skips_enabled_formatter_before_publication() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let path = root.join("target.txt");
+        let original = "prefix\nbad\nsuffix\n";
+        let intended = "prefix\nfixed\nsuffix\n";
+        std::fs::write(&path, original).unwrap();
+        let workspace =
+            crate::workspace::WorkspaceContext::from_primary(root.clone(), root.clone());
+        let grant = AgentGrant {
+            tools: vec!["edit_file".into()],
+            workspace_root_ids: Vec::new(),
+            path_scopes: vec![root.to_string_lossy().into_owned()],
+            command_scopes: Vec::new(),
+            network: false,
+        };
+        let runner = permission_test_runner();
+        let arguments =
+            serde_json::json!({"path":path,"old_string":original,"new_string":intended});
+        let config = crate::formatting::FormatterConfig {
+            enabled: true,
+            presets: Vec::new(),
+            custom: vec![crate::formatting::FormatterRule {
+                extensions: vec!["txt".into()],
+                command: vec!["/usr/bin/sed".into(), "s/^prefix$/OUTSIDE_TARGET/".into()],
+            }],
+        };
+        crate::formatting::with_test_config(config, async {
+            // Establish that this enabled formatter would change protected bytes.
+            let mut formatted = arguments.clone();
+            crate::formatting::prepare_with_authority(
+                "edit_file",
+                &mut formatted,
+                &workspace,
+                crate::sandbox::SandboxMode::PolicyOnly,
+                |_| true,
+            )
+            .await
+            .unwrap();
+            assert!(formatted["_ca_edit_preview"]
+                .as_str()
+                .unwrap()
+                .contains("OUTSIDE_TARGET"));
+            drop(crate::formatting::consume("edit_file", &formatted).unwrap());
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+            let result = execute_child_exact_range_edit(
+                ChildToolContext {
+                    runner: &runner,
+                    id: AgentId::new(),
+                    owner: crate::jobs::JobOwner::new(None),
+                    grant: &grant,
+                    workspace: &workspace,
+                    policy_approved: false,
+                    frozen_policy: None,
+
+                    admitted: None,
+                },
+                &arguments,
+            )
+            .await;
+            assert!(result.is_success(), "{result:?}");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), intended);
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn narrow_worker_isolation_rebases_restored_absolute_target_and_check_cwd() {
+        let repository = tempfile::tempdir().unwrap();
+        for args in [
+            vec!["init", "-q"],
+            vec!["config", "user.email", "test@example.invalid"],
+            vec!["config", "user.name", "Test"],
+        ] {
+            assert!(std::process::Command::new("git")
+                .args(args)
+                .current_dir(repository.path())
+                .env("GIT_CONFIG_COUNT", "1")
+                .env("GIT_CONFIG_KEY_0", "advice.defaultBranchName")
+                .env("GIT_CONFIG_VALUE_0", "false")
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap()
+                .success());
+        }
+        std::fs::write(
+            repository.path().join("target.txt"),
+            "prefix\nbad\nsuffix\n",
+        )
+        .unwrap();
+        for args in [vec!["add", "target.txt"], vec!["commit", "-m", "base"]] {
+            assert!(std::process::Command::new("git")
+                .args(args)
+                .current_dir(repository.path())
+                .status()
+                .unwrap()
+                .success());
+        }
+        let manager = AgentManager::new(Arc::new(WorkspaceRunner), AgentLimits::default());
+        let owned = tempfile::tempdir().unwrap();
+        manager.set_worktree_store(Some(crate::worktree::WorktreeStore::new(
+            owned.path(),
+            true,
+        )));
+        let mut request = narrow_request(repository.path(), 3);
+        let original_root = repository.path().canonicalize().unwrap();
+        let contract = request.repair_contract.as_mut().unwrap();
+        contract.path = original_root
+            .join("target.txt")
+            .to_string_lossy()
+            .into_owned();
+        contract.checks[0].cwd = Some(original_root.to_string_lossy().into_owned());
+        request.isolation = AgentIsolation::Worktree;
+        let id = manager.spawn(request).await.unwrap();
+        let snapshot = manager.await_agent(id).await.unwrap();
+        assert_eq!(snapshot.status, AgentStatus::Completed);
+        let worktree = snapshot.worktree.unwrap();
+        assert_ne!(worktree.path, original_root);
+        assert_eq!(
+            std::fs::read_to_string(worktree.path.join("target.txt")).unwrap(),
+            "prefix\nbad\nsuffix\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(original_root.join("target.txt")).unwrap(),
+            "prefix\nbad\nsuffix\n"
+        );
+        let mut outside_scope = narrow_request(repository.path(), 3);
+        outside_scope.grants.path_scopes = vec![original_root
+            .join("other.txt")
+            .to_string_lossy()
+            .into_owned()];
+        outside_scope.isolation = AgentIsolation::Worktree;
+        assert!(manager
+            .spawn(outside_scope)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("original inherited path scope"));
     }
 
     #[tokio::test]
@@ -7056,13 +10723,17 @@ mod manager_tests {
     async fn optional_child_worktree_has_owned_branch_and_truthful_receipt() {
         let repository = tempfile::tempdir().unwrap();
         for args in [
-            vec!["init"],
+            vec!["init", "-q"],
             vec!["config", "user.email", "test@example.invalid"],
             vec!["config", "user.name", "Test"],
         ] {
             assert!(std::process::Command::new("git")
                 .args(args)
                 .current_dir(repository.path())
+                .env("GIT_CONFIG_COUNT", "1")
+                .env("GIT_CONFIG_KEY_0", "advice.defaultBranchName")
+                .env("GIT_CONFIG_VALUE_0", "false")
+                .stderr(std::process::Stdio::null())
                 .status()
                 .unwrap()
                 .success());
@@ -7071,12 +10742,16 @@ mod manager_tests {
         assert!(std::process::Command::new("git")
             .args(["add", "README.md"])
             .current_dir(repository.path())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .status()
             .unwrap()
             .success());
         assert!(std::process::Command::new("git")
-            .args(["commit", "-m", "base"])
+            .args(["commit", "-q", "-m", "base"])
             .current_dir(repository.path())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .status()
             .unwrap()
             .success());
@@ -7671,6 +11346,112 @@ mod manager_tests {
     }
 
     #[tokio::test]
+    async fn xai_oauth_route_resolves_runtime_credential_before_provider_traffic() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = vec![0_u8; 16 * 1024];
+            let count = socket.read(&mut request).await.unwrap();
+            let request = String::from_utf8_lossy(&request[..count]).to_ascii_lowercase();
+            assert!(
+                request.contains("authorization: bearer runtime-secret\r\n"),
+                "xai-oauth child omitted the runtime token"
+            );
+            let body = concat!(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":null}]}\n\n",
+                "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":8,\"completion_tokens\":1,\"total_tokens\":9}}\n\n",
+                "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+                "data: [DONE]\n\n"
+            );
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+        let route = AgentRoute {
+            provider: "xai-oauth".into(),
+            model: "grok-4.7".into(),
+        };
+        let request_store = crate::request::RequestStore::default();
+        let route_provider = crate::config::ProviderConfig {
+            google: None,
+            tool_schema_policy: Default::default(),
+            base_url: format!("http://{address}/v1"),
+            api_key: String::new(),
+            protocol: crate::agent::ProviderProtocol::default(),
+            prompt_cache_mode: crate::config::PromptCacheMode::Implicit,
+            models: vec![route.model.clone()],
+            timeout: crate::config::ProviderTimeoutConfig {
+                connect_timeout_secs: Some(1),
+                max_attempts: Some(1),
+                ..Default::default()
+            },
+        };
+        let resolver = Arc::new(FixedRuntimeResolver {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let ledger = Arc::new(std::sync::Mutex::new(crate::usage::UsageLedger::default()));
+        let runner = ProviderAgentRunner {
+            client: crate::agent::AgentClient::with_request_store(
+                "deepseek",
+                &route_provider,
+                "deepseek-parent",
+                request_store.clone(),
+            ),
+            route_clients: AgentRouteClients::with_runtime_resolver(
+                [(route.clone(), route_provider, request_store.clone(), false)],
+                resolver.clone(),
+            ),
+            sandbox_mode: crate::sandbox::SandboxMode::PolicyOnly,
+            command_timeout_secs: 1,
+            approval_rules: Vec::new(),
+            permission_rules: Vec::new(),
+            session_grants: Arc::new(std::sync::Mutex::new(
+                crate::permission::SessionGrantStore::default(),
+            )),
+            skills: Arc::new(std::sync::Mutex::new(crate::skills::SkillRegistry::empty())),
+            task_skill_snapshot: Arc::new(std::sync::Mutex::new(String::new())),
+            manager_link: Arc::new(std::sync::OnceLock::new()),
+            usage_recorder: crate::usage::UsageRecorder::new(
+                ledger,
+                crate::usage::UsageKind::Subagent,
+                "deepseek",
+                "deepseek-parent",
+            ),
+            tool_policy: crate::tool_selection::ToolSelectionPolicy::default(),
+            skills_enabled: false,
+            images_supported: false,
+            pricing: Arc::new(std::collections::HashMap::new()),
+        };
+        let (_command_tx, commands) = mpsc::channel(1);
+        let (_cancel_tx, cancelled) = watch::channel(false);
+        let (events, _) = mpsc::unbounded_channel();
+        let mut agent_request = request("answer", Uuid::new_v4());
+        agent_request.route = Some(route);
+        let result = runner
+            .run(AgentRunContext {
+                id: AgentId::new(),
+                request: agent_request,
+                limits: AgentLimits::default(),
+                commands,
+                pending_steers: VecDeque::new(),
+                cancelled,
+                events,
+                job_owner: crate::jobs::JobOwner::new(None),
+                graph_budget: None,
+                frozen_policy: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(result, "done");
+        assert_eq!(resolver.calls.load(std::sync::atomic::Ordering::Acquire), 1);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn stable_spawn_list_await_message_cancel_and_bounds() {
         let limits = AgentLimits {
             retained_output_bytes: 64,
@@ -7743,6 +11524,12 @@ mod manager_tests {
             .send(AgentCommand::Message {
                 id: steer_id,
                 text: "use the narrower path".into(),
+                retrieved_spans: vec![crate::retrieved_content::RetrievedSpan {
+                    source: None,
+                    start: 8,
+                    end: 16,
+                }],
+                front: false,
             })
             .await
             .unwrap();
@@ -7764,12 +11551,33 @@ mod manager_tests {
             .unwrap());
         assert_eq!(
             context.pending_steers,
-            VecDeque::from([(steer_id, "use the narrower path".into())])
+            VecDeque::from([(
+                steer_id,
+                "use the narrower path".into(),
+                vec![crate::retrieved_content::RetrievedSpan {
+                    source: None,
+                    start: 8,
+                    end: 16
+                }]
+            )])
         );
         let mut messages = Vec::new();
         drain_child_steering(&mut context, &mut messages);
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].content.as_str(), Some("use the narrower path"));
+        let filter = crate::provider_filter::ProviderFilter::compile(
+            &crate::provider_filter::ProviderFilterConfig {
+                enabled: true,
+                page_stand_in: crate::provider_filter::PageStandIn::Latin,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let projected = messages[0].content.project_retrieved(&filter).unwrap();
+        let projected = projected.as_str().unwrap();
+        assert!(projected.starts_with("use the "));
+        assert!(projected.ends_with(" path"));
+        assert!(!projected.contains("narrower"));
         assert!(matches!(
             event_rx.recv().await,
             Some(RunnerEvent::ApprovalRequired(_))
@@ -7828,6 +11636,8 @@ mod manager_tests {
             .send(AgentCommand::Message {
                 id: steer_id,
                 text: "use the wider path".into(),
+                retrieved_spans: Vec::new(),
+                front: false,
             })
             .await
             .unwrap();
@@ -7898,6 +11708,8 @@ mod manager_tests {
             .send(AgentCommand::Message {
                 id: Uuid::new_v4(),
                 text: "a\u{1b}b".to_string(),
+                retrieved_spans: Vec::new(),
+                front: false,
             })
             .await
             .unwrap();
@@ -7911,6 +11723,142 @@ mod manager_tests {
         )
         .await;
         assert!(!result.is_success());
+    }
+
+    #[tokio::test]
+    async fn privacy_native_agent_controls_restore_exact_ids_and_keep_private_task_output_hidden() {
+        struct PrivateRunner;
+        #[async_trait]
+        impl AgentRunner for PrivateRunner {
+            async fn run(&self, _context: AgentRunContext) -> Result<String, String> {
+                Ok("PRIVATE_CHILD_SUMMARY_CANARY 11111111-2222-4333-8444-555555555555".into())
+            }
+        }
+        fn metadata(
+            privacy: &crate::privacy::Context,
+            result: &crate::agent::registry::ToolExecutionResult,
+        ) -> serde_json::Value {
+            assert!(result.is_success());
+            let original = result.model_text();
+            let source = result
+                .source_for(original)
+                .expect("typed manager result must retain its source receipt");
+            let sent = privacy.project_retrieved(original, Some(&source)).unwrap();
+            assert!(!sent.contains("PRIVATE_CHILD_TASK_CANARY"));
+            assert!(!sent.contains("PRIVATE_CHILD_SUMMARY_CANARY"));
+            assert!(!sent.contains("11111111-2222-4333-8444-555555555555"));
+            assert_eq!(
+                privacy.mask_known(&sent).unwrap(),
+                sent,
+                "fixed status metadata must survive the final masking boundary"
+            );
+            serde_json::from_str(sent.strip_prefix("Native tool metadata\n").unwrap()).unwrap()
+        }
+        let temporary = tempfile::tempdir().unwrap();
+        let workspace = crate::workspace::WorkspaceContext::discover(temporary.path()).unwrap();
+        let privacy = crate::privacy::Context::open(
+            temporary.path().join("profile"),
+            temporary.path().into(),
+            Uuid::new_v4(),
+            None,
+        )
+        .unwrap();
+        privacy.allow_ephemeral();
+        let mut policy = privacy.policy();
+        policy.enabled = true;
+        privacy.save_policy(policy).unwrap();
+        // A project value that spells a status must not corrupt typed controls.
+        privacy.project_source("private.txt", "completed").unwrap();
+        let manager = AgentManager::new(Arc::new(PrivateRunner), AgentLimits::default());
+        let work = Arc::new(std::sync::Mutex::new(crate::work::WorkState::default()));
+        let spawned = crate::privacy::scope(
+            Some(privacy.clone()),
+            execute_manager_tool(
+                "spawn_agent",
+                &json!({"task":"PRIVATE_CHILD_TASK_CANARY", "tools":["read_file"]}),
+                &manager,
+                &work,
+                &workspace,
+            ),
+        )
+        .await
+        .unwrap();
+        let spawn_metadata = metadata(&privacy, &spawned);
+        let alias = spawn_metadata["agents"][0]["agent_id"].as_str().unwrap();
+        let arguments = privacy
+            .restore_arguments(&json!({"agent_id":alias, "timeout_secs":0}))
+            .unwrap();
+        let id: AgentId = arguments["agent_id"].as_str().unwrap().parse().unwrap();
+        assert!(manager.snapshot(id).await.is_ok());
+        assert!(!spawn_metadata.to_string().contains(&id.to_string()));
+        for timeout in [0, 2] {
+            let waited = crate::privacy::scope(
+                Some(privacy.clone()),
+                execute_manager_tool(
+                    "await_agent",
+                    &json!({"agent_id":id.to_string(), "timeout_secs":timeout}),
+                    &manager,
+                    &work,
+                    &workspace,
+                ),
+            )
+            .await
+            .unwrap();
+            let waited_metadata = metadata(&privacy, &waited);
+            assert_eq!(waited_metadata["agents"][0]["agent_id"], alias);
+            if timeout == 2 {
+                assert_eq!(waited_metadata["agents"][0]["status"], "completed");
+            }
+        }
+        let listed = crate::privacy::scope(
+            Some(privacy.clone()),
+            execute_manager_tool("list_agents", &json!({}), &manager, &work, &workspace),
+        )
+        .await
+        .unwrap();
+        assert_eq!(metadata(&privacy, &listed)["agents"][0]["agent_id"], alias);
+
+        let batch = crate::privacy::scope(
+            Some(privacy.clone()),
+            execute_manager_tool(
+                "spawn_agent_batch",
+                &json!({"tasks":[
+                    {"task":"PRIVATE_CHILD_TASK_CANARY batch one", "tools":["read_file"]},
+                    {"task":"PRIVATE_CHILD_TASK_CANARY batch two", "tools":["read_file"]}
+                ]}),
+                &manager,
+                &work,
+                &workspace,
+            ),
+        )
+        .await
+        .unwrap();
+        let batch_metadata = metadata(&privacy, &batch);
+        assert_eq!(batch_metadata["agents"].as_array().unwrap().len(), 2);
+        let batch_alias = batch_metadata["batch"]["batch_id"].as_str().unwrap();
+        let batch_arguments = privacy
+            .restore_arguments(&json!({"batch_id":batch_alias, "timeout_secs":2}))
+            .unwrap();
+        assert!(batch_arguments["batch_id"]
+            .as_str()
+            .unwrap()
+            .parse::<AgentBatchId>()
+            .is_ok());
+        let waited = crate::privacy::scope(
+            Some(privacy.clone()),
+            execute_manager_tool(
+                "await_agent_batch",
+                &batch_arguments,
+                &manager,
+                &work,
+                &workspace,
+            ),
+        )
+        .await
+        .unwrap();
+        let waited_metadata = metadata(&privacy, &waited);
+        assert_eq!(waited_metadata["batch"]["batch_id"], batch_alias);
+        assert_eq!(waited_metadata["batch"]["status"], "completed");
     }
 
     #[tokio::test]
@@ -8620,6 +12568,72 @@ mod manager_tests {
         };
         let owner = crate::jobs::JobOwner::new(None);
         let id = AgentId::new();
+        // A built-in without an original top-level destination resource must
+        // still honor inherited write scopes when filename privacy enables it.
+        let filename_settings = crate::provider_filter::ProviderFilterConfig {
+            enabled: true,
+            hide: crate::provider_filter::FilterHide {
+                filenames: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let filename_context = crate::provider_filter::with_test_filter(&filename_settings, || {
+            crate::privacy::Context::open(
+                temp.path().join("private-profile"),
+                temp.path().to_path_buf(),
+                uuid::Uuid::new_v4(),
+                None,
+            )
+            .unwrap()
+        });
+        filename_context.allow_ephemeral();
+        let image_grant = AgentGrant {
+            tools: vec!["generate_image".into()],
+            workspace_root_ids: vec![],
+            path_scopes: vec![allowed_scope.to_string_lossy().into_owned()],
+            command_scopes: vec![],
+            network: true,
+        };
+        let image_context = ChildToolContext {
+            runner: &runner,
+            id,
+            owner: crate::jobs::JobOwner::new(Some(filename_context.session_id)),
+            grant: &image_grant,
+            workspace: &workspace,
+            policy_approved: true,
+            frozen_policy: None,
+
+            admitted: None,
+        };
+        assert!(prepare_child_tool(
+            &image_context,
+            "generate_image",
+            &serde_json::json!({"prompt":"public image","filename":denied})
+        )
+        .is_err());
+        assert!(prepare_child_tool(
+            &image_context,
+            "generate_image",
+            &serde_json::json!({"prompt":"public image","filename":allowed})
+        )
+        .is_ok());
+        #[cfg(unix)]
+        {
+            let assigned_dir = temp.path().join("assigned-images");
+            let unassigned_dir = temp.path().join("unassigned-images");
+            std::fs::create_dir(&assigned_dir).unwrap();
+            std::fs::create_dir(&unassigned_dir).unwrap();
+            std::os::unix::fs::symlink(&unassigned_dir, assigned_dir.join("linked")).unwrap();
+            let mut directory_grant = image_grant.clone();
+            directory_grant.path_scopes = vec![assigned_dir.to_string_lossy().into_owned()];
+            let directory_context = ChildToolContext {
+                grant: &directory_grant,
+                ..image_context
+            };
+            assert!(prepare_child_tool(&directory_context, "generate_image", &serde_json::json!({"prompt":"public image","filename":assigned_dir.join("plain.png")})).is_ok());
+            assert!(prepare_child_tool(&directory_context, "generate_image", &serde_json::json!({"prompt":"public image","filename":assigned_dir.join("linked/escape.png")})).is_err());
+        }
         let allowed_result = execute_child_tool(
             ChildToolContext {
                 runner: &runner,
@@ -8629,6 +12643,8 @@ mod manager_tests {
                 workspace: &workspace,
                 policy_approved: false,
                 frozen_policy: None,
+
+                admitted: None,
             },
             "read_file",
             &serde_json::json!({"path":allowed}),
@@ -8644,12 +12660,20 @@ mod manager_tests {
                 workspace: &workspace,
                 policy_approved: false,
                 frozen_policy: None,
+
+                admitted: None,
             },
             "read_file",
             &serde_json::json!({"path":outside_read}),
         )
         .await;
-        assert!(outside_result.is_success(), "{outside_result:?}");
+        assert!(
+            matches!(
+                outside_result,
+                crate::agent::registry::ToolExecutionResult::Denied(_)
+            ),
+            "{outside_result:?}"
+        );
         runner.permission_rules = vec![crate::permission::PermissionRule {
             decision: crate::permission::PermissionDecision::Ask,
             matcher: crate::permission::PermissionMatcher::Tool {
@@ -8666,6 +12690,8 @@ mod manager_tests {
                     workspace: &workspace,
                     policy_approved: false,
                     frozen_policy: None,
+
+                    admitted: None,
                 },
                 "read_file",
                 &serde_json::json!({"path":allowed}),
@@ -8682,6 +12708,8 @@ mod manager_tests {
                 workspace: &workspace,
                 policy_approved: true,
                 frozen_policy: None,
+
+                admitted: None,
             },
             "read_file",
             &serde_json::json!({"path":allowed}),
@@ -8689,21 +12717,24 @@ mod manager_tests {
         .await
         .is_success());
         runner.permission_rules.clear();
-        assert!(execute_child_tool(
-            ChildToolContext {
-                runner: &runner,
-                id,
-                owner,
-                grant: &grant,
-                workspace: &workspace,
-                policy_approved: false,
-                frozen_policy: None,
-            },
-            "read_file",
-            &serde_json::json!({"path":denied}),
-        )
-        .await
-        .is_success());
+        assert!(matches!(
+            execute_child_tool(
+                ChildToolContext {
+                    runner: &runner,
+                    id,
+                    owner,
+                    grant: &grant,
+                    admitted: None,
+                    workspace: &workspace,
+                    policy_approved: false,
+                    frozen_policy: None,
+                },
+                "read_file",
+                &serde_json::json!({"path":denied}),
+            )
+            .await,
+            crate::agent::registry::ToolExecutionResult::Denied(_)
+        ));
         assert!(matches!(
             execute_child_tool(
                 ChildToolContext {
@@ -8714,6 +12745,8 @@ mod manager_tests {
                     workspace: &workspace,
                     policy_approved: false,
                     frozen_policy: None,
+
+                    admitted: None,
                 },
                 "write_file",
                 &serde_json::json!({"path":denied,"content":"blocked"}),
@@ -8731,6 +12764,8 @@ mod manager_tests {
                     workspace: &workspace,
                     policy_approved: false,
                     frozen_policy: None,
+
+                    admitted: None,
                 },
                 "run_command",
                 &serde_json::json!({"command":"printf wider"}),
@@ -8748,6 +12783,8 @@ mod manager_tests {
                     workspace: &workspace,
                     policy_approved: false,
                     frozen_policy: None,
+
+                    admitted: None,
                 },
                 "run_command",
                 &serde_json::json!({"command":"printf scoped", "network":true}),
@@ -8756,6 +12793,613 @@ mod manager_tests {
             crate::agent::registry::ToolExecutionResult::Denied(_)
         ));
         cleanup_owned_jobs(owner).await;
+    }
+
+    #[tokio::test]
+    async fn isolated_child_command_runs_only_through_the_confined_worker() {
+        let _mediation = crate::child_mediation::MediationTestPermit::acquire();
+        let executable = std::env::var("CA_WORKER_TEST_BIN")
+            .unwrap_or_else(|_| format!("{}/target/release/ca", env!("CARGO_MANIFEST_DIR")));
+        assert!(
+            std::path::Path::new(&executable).is_file(),
+            "worker test binary is missing: {executable}"
+        );
+        let previous = std::env::var("CA_WORKER_TEST_BIN").ok();
+        std::env::set_var("CA_WORKER_TEST_BIN", &executable);
+        crate::isolated_worker::set_commands_confined(true);
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = crate::workspace::WorkspaceContext::discover(temp.path()).unwrap();
+        let runner = ProviderAgentRunner {
+            client: crate::agent::AgentClient::new(
+                &crate::config::ProviderConfig {
+                    google: None,
+                    tool_schema_policy: Default::default(),
+                    base_url: "http://127.0.0.1:1/v1".into(),
+                    api_key: "test".into(),
+                    protocol: crate::agent::ProviderProtocol::default(),
+                    prompt_cache_mode: crate::config::PromptCacheMode::Implicit,
+                    models: vec!["fake".into()],
+                    timeout: crate::config::ProviderTimeoutConfig::default(),
+                },
+                "fake",
+            ),
+            route_clients: AgentRouteClients::default(),
+            sandbox_mode: crate::sandbox::SandboxMode::PolicyOnly,
+            command_timeout_secs: 15,
+            approval_rules: Vec::new(),
+            permission_rules: Vec::new(),
+            session_grants: Arc::new(std::sync::Mutex::new(
+                crate::permission::SessionGrantStore::default(),
+            )),
+            skills: Arc::new(std::sync::Mutex::new(crate::skills::SkillRegistry::empty())),
+            task_skill_snapshot: Arc::new(std::sync::Mutex::new(String::new())),
+            manager_link: Arc::new(std::sync::OnceLock::new()),
+            usage_recorder: crate::usage::UsageRecorder::new(
+                Arc::new(std::sync::Mutex::new(crate::usage::UsageLedger::default())),
+                crate::usage::UsageKind::Subagent,
+                "test",
+                "fake",
+            ),
+            tool_policy: crate::tool_selection::ToolSelectionPolicy::default(),
+            skills_enabled: true,
+            images_supported: false,
+            pricing: Arc::new(std::collections::HashMap::new()),
+        };
+        let grant = AgentGrant {
+            tools: vec!["run_command".into()],
+            workspace_root_ids: vec![],
+            path_scopes: vec![temp.path().to_string_lossy().into_owned()],
+            command_scopes: vec!["printf scoped".into()],
+            network: false,
+        };
+        let owner = crate::jobs::JobOwner::new(None);
+        let result = execute_child_tool(
+            ChildToolContext {
+                runner: &runner,
+                id: AgentId::new(),
+                owner,
+                grant: &grant,
+                workspace: &workspace,
+                policy_approved: true,
+                frozen_policy: None,
+                admitted: None,
+            },
+            "run_command",
+            &serde_json::json!({"command":"printf scoped"}),
+        )
+        .await;
+        crate::isolated_worker::set_commands_confined(false);
+        if let Some(previous) = previous {
+            std::env::set_var("CA_WORKER_TEST_BIN", previous);
+        } else {
+            std::env::remove_var("CA_WORKER_TEST_BIN");
+        }
+        let _ = runner;
+        assert!(result.is_success(), "{result:?}");
+        assert!(
+            result.model_text().contains("scoped"),
+            "confined worker did not return the command output: {result:?}"
+        );
+        cleanup_owned_jobs(owner).await;
+    }
+
+    #[tokio::test]
+    async fn admitted_child_typed_operation_uses_the_vetted_proxy_once() {
+        let _mediation = crate::child_mediation::MediationTestPermit::acquire();
+        crate::child_mediation::reset_for_test();
+        let (address, hits) = crate::child_mediation::fixture_server(200, "ok");
+        let (redirect_address, redirect_hits) = crate::child_mediation::fixture_server(302, "go");
+        let decoy = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let decoy_address = decoy.local_addr().unwrap();
+        let decoy_hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let decoy_hits_thread = std::sync::Arc::clone(&decoy_hits);
+        std::thread::spawn(move || {
+            if let Ok((mut socket, _)) = decoy.accept() {
+                decoy_hits_thread.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let _ = std::io::Write::write_all(&mut socket, b"HTTP/1.1 200 bypass\r\n\r\n");
+            }
+        });
+        let workspace = crate::workspace::WorkspaceContext::discover("/tmp").unwrap();
+        let runner = ProviderAgentRunner {
+            client: crate::agent::AgentClient::new(
+                &crate::config::ProviderConfig {
+                    google: None,
+                    tool_schema_policy: Default::default(),
+                    base_url: "http://127.0.0.1:1/v1".into(),
+                    api_key: "test".into(),
+                    protocol: crate::agent::ProviderProtocol::default(),
+                    prompt_cache_mode: crate::config::PromptCacheMode::Implicit,
+                    models: vec!["fake".into()],
+                    timeout: crate::config::ProviderTimeoutConfig::default(),
+                },
+                "fake",
+            ),
+            route_clients: AgentRouteClients::default(),
+            sandbox_mode: crate::sandbox::SandboxMode::PolicyOnly,
+            command_timeout_secs: 2,
+            approval_rules: Vec::new(),
+            permission_rules: Vec::new(),
+            session_grants: Arc::new(std::sync::Mutex::new(
+                crate::permission::SessionGrantStore::default(),
+            )),
+            skills: Arc::new(std::sync::Mutex::new(crate::skills::SkillRegistry::empty())),
+            task_skill_snapshot: Arc::new(std::sync::Mutex::new(String::new())),
+            manager_link: Arc::new(std::sync::OnceLock::new()),
+            usage_recorder: crate::usage::UsageRecorder::new(
+                Arc::new(std::sync::Mutex::new(crate::usage::UsageLedger::default())),
+                crate::usage::UsageKind::Subagent,
+                "test",
+                "fake",
+            ),
+            tool_policy: crate::tool_selection::ToolSelectionPolicy::default(),
+            skills_enabled: false,
+            images_supported: false,
+            pricing: Arc::new(std::collections::HashMap::new()),
+        };
+        let owner = crate::jobs::JobOwner::new(None);
+        let owner_key = owner.run_id.to_string();
+        let legacy = AgentGrant {
+            tools: vec![
+                "http_request".into(),
+                "git_operation".into(),
+                "ssh_operation".into(),
+            ],
+            workspace_root_ids: vec![],
+            path_scopes: vec![workspace.cwd().to_string_lossy().into_owned()],
+            command_scopes: vec![],
+            network: false,
+        };
+        let mut admitted = crate::execution_grant::AdmittedExecutionGrant::from_legacy(
+            crate::execution_grant::LegacyGrantView {
+                tools: &legacy.tools,
+                path_scopes: &legacy.path_scopes,
+                command_scopes: &legacy.command_scopes,
+            },
+            owner.run_id,
+            1,
+            Vec::new(),
+        )
+        .unwrap();
+        admitted.host_bind_destination("local-http");
+        admitted.host_bind_destination("local-redirect");
+        crate::child_mediation::host_publish_route(
+            "local-http",
+            &owner_key,
+            "http",
+            "localhost",
+            address,
+            1,
+            vec![crate::network_broker::AddressClass::Loopback],
+        );
+        crate::child_mediation::host_publish_route(
+            "local-redirect",
+            &owner_key,
+            "http",
+            "localhost",
+            redirect_address,
+            1,
+            vec![crate::network_broker::AddressClass::Loopback],
+        );
+        let previous_proxy = std::env::var("http_proxy").ok();
+        std::env::set_var("http_proxy", format!("http://{decoy_address}"));
+        let context = ChildToolContext {
+            runner: &runner,
+            id: AgentId::new(),
+            owner,
+            grant: &legacy,
+            workspace: &workspace,
+            policy_approved: true,
+            frozen_policy: None,
+            admitted: Some(&admitted),
+        };
+        let first = execute_child_tool(
+            context,
+            "http_request",
+            &serde_json::json!({
+                "method": "GET",
+                "path": "/once",
+                "body": "",
+                "destination": "local-http"
+            }),
+        )
+        .await;
+        assert!(first.is_success(), "{first:?}");
+        assert!(first.model_text().contains("ok"), "{first:?}");
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let job_policy = child_job_policy(&ChildToolContext {
+            runner: &runner,
+            id: AgentId::new(),
+            owner,
+            grant: &legacy,
+            workspace: &workspace,
+            policy_approved: true,
+            frozen_policy: None,
+            admitted: Some(&admitted),
+        });
+        let proxy_port = job_policy
+            .proxy_port()
+            .expect("admitted child job applies the vetted proxy port");
+        let second = execute_child_tool(
+            ChildToolContext {
+                runner: &runner,
+                id: AgentId::new(),
+                owner,
+                grant: &legacy,
+                workspace: &workspace,
+                policy_approved: true,
+                frozen_policy: None,
+                admitted: Some(&admitted),
+            },
+            "http_request",
+            &serde_json::json!({
+                "method": "GET",
+                "path": "/once",
+                "body": "",
+                "destination": "local-http"
+            }),
+        )
+        .await;
+        assert!(second.is_success(), "{second:?}");
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let uncertain_key = crate::child_mediation::fail_latest_local_write().unwrap();
+        let replay = execute_child_tool(
+            ChildToolContext {
+                runner: &runner,
+                id: AgentId::new(),
+                owner,
+                grant: &legacy,
+                workspace: &workspace,
+                policy_approved: true,
+                frozen_policy: None,
+                admitted: Some(&admitted),
+            },
+            "http_request",
+            &serde_json::json!({
+                "method": "GET",
+                "path": "/once",
+                "body": "",
+                "destination": "local-http"
+            }),
+        )
+        .await;
+        assert!(replay.model_text().contains("not replayed"), "{replay:?}");
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let reconciled = crate::child_mediation::confirm_uncertain(&uncertain_key).unwrap();
+        assert!(reconciled.contains("ok"));
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(decoy_hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+        let redirect = execute_child_tool(
+            ChildToolContext {
+                runner: &runner,
+                id: AgentId::new(),
+                owner,
+                grant: &legacy,
+                workspace: &workspace,
+                policy_approved: true,
+                frozen_policy: None,
+                admitted: Some(&admitted),
+            },
+            "http_request",
+            &serde_json::json!({
+                "method": "GET",
+                "path": "/next",
+                "body": "",
+                "destination": "local-redirect"
+            }),
+        )
+        .await;
+        assert!(redirect.model_text().contains("redirect"), "{redirect:?}");
+        assert_eq!(redirect_hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let again = execute_child_tool(
+            ChildToolContext {
+                runner: &runner,
+                id: AgentId::new(),
+                owner,
+                grant: &legacy,
+                workspace: &workspace,
+                policy_approved: true,
+                frozen_policy: None,
+                admitted: Some(&admitted),
+            },
+            "http_request",
+            &serde_json::json!({
+                "method": "GET",
+                "path": "/next",
+                "body": "",
+                "destination": "local-redirect"
+            }),
+        )
+        .await;
+        assert!(again.is_success(), "{again:?}");
+        assert_eq!(redirect_hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let credential = execute_child_tool(
+            ChildToolContext {
+                runner: &runner,
+                id: AgentId::new(),
+                owner,
+                grant: &legacy,
+                workspace: &workspace,
+                policy_approved: true,
+                frozen_policy: None,
+                admitted: Some(&admitted),
+            },
+            "git_operation",
+            &serde_json::json!({
+                "repository": "/work",
+                "remote": "local-http",
+                "operation": "config",
+                "git_ref": "main",
+                "path": "hooks"
+            }),
+        )
+        .await;
+        assert!(!credential.is_success(), "{credential:?}");
+        let moved = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let moved_address = moved.local_addr().unwrap();
+        let moved_hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        admitted.host_bind_destination("local-moved");
+        crate::child_mediation::host_publish_route(
+            "local-moved",
+            &owner_key,
+            "http",
+            "localhost",
+            address,
+            1,
+            vec![crate::network_broker::AddressClass::Loopback],
+        );
+        assert!(crate::child_mediation::host_retarget_published_route(
+            "local-moved",
+            moved_address
+        ));
+        let changed = execute_child_tool(
+            ChildToolContext {
+                runner: &runner,
+                id: AgentId::new(),
+                owner,
+                grant: &legacy,
+                workspace: &workspace,
+                policy_approved: true,
+                frozen_policy: None,
+                admitted: Some(&admitted),
+            },
+            "http_request",
+            &serde_json::json!({
+                "method": "GET",
+                "path": "/moved",
+                "body": "",
+                "destination": "local-moved"
+            }),
+        )
+        .await;
+        assert!(
+            changed.model_text().contains("changed between admission"),
+            "{changed:?}"
+        );
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(moved_hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+        let _ = moved;
+        admitted.host_bind_destination("local-udp");
+        crate::child_mediation::host_publish_route(
+            "local-udp",
+            &owner_key,
+            "udp",
+            "localhost",
+            address,
+            1,
+            vec![crate::network_broker::AddressClass::Loopback],
+        );
+        let udp_family = execute_child_tool(
+            ChildToolContext {
+                runner: &runner,
+                id: AgentId::new(),
+                owner,
+                grant: &legacy,
+                workspace: &workspace,
+                policy_approved: true,
+                frozen_policy: None,
+                admitted: Some(&admitted),
+            },
+            "http_request",
+            &serde_json::json!({
+                "method": "GET",
+                "path": "/udp",
+                "body": "",
+                "destination": "local-udp"
+            }),
+        )
+        .await;
+        assert!(
+            udp_family.model_text().contains("socket family"),
+            "{udp_family:?}"
+        );
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let profile = crate::child_mediation::child_network_profile(proxy_port).unwrap();
+        assert!(profile.contains("(deny network*)"));
+        assert!(!profile.contains("(allow network*)"));
+        assert!(!profile.contains("com.apple.securityd"));
+        assert!(!profile.contains("Library/Keychains"));
+        assert!(!profile.contains(".ssh"));
+        assert!(!profile.contains(".config/gh"));
+        assert!(!profile.contains(".git-credentials"));
+        assert!(!crate::network_broker::direct_udp_allowed());
+        if std::path::Path::new("/usr/bin/sandbox-exec").exists() {
+            let forbidden =
+                std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+            let forbidden_port = forbidden.local_addr().unwrap().port();
+            let forbidden_hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let forbidden_thread = std::sync::Arc::clone(&forbidden_hits);
+            std::thread::spawn(move || {
+                if forbidden.accept().is_ok() {
+                    forbidden_thread.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            });
+            let script = format!(
+                "import socket\n\
+                 s=socket.socket(); s.settimeout(1)\n\
+                 s.connect(('127.0.0.1', {forbidden_port}))\n"
+            );
+            let direct = std::process::Command::new("/usr/bin/sandbox-exec")
+                .args(["-p", &profile, "/usr/bin/python3", "-c", &script])
+                .output()
+                .unwrap();
+            assert!(!direct.status.success(), "direct TCP was allowed");
+            let udp = format!(
+                "import socket\n\
+                 s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(1)\n\
+                 s.sendto(b'x', ('127.0.0.1', {forbidden_port}))\n"
+            );
+            let udp_result = std::process::Command::new("/usr/bin/sandbox-exec")
+                .args(["-p", &profile, "/usr/bin/python3", "-c", &udp])
+                .output()
+                .unwrap();
+            assert!(!udp_result.status.success(), "UDP was allowed");
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            assert_eq!(forbidden_hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+        }
+        if let Some(value) = previous_proxy {
+            std::env::set_var("http_proxy", value);
+        } else {
+            std::env::remove_var("http_proxy");
+        }
+        let _ = runner.command_timeout_secs;
+        crate::child_mediation::reset_for_test();
+    }
+
+    #[tokio::test]
+    async fn policy_generation_revocation_blocks_until_cleanup_is_confirmed() {
+        let _mediation = crate::child_mediation::MediationTestPermit::acquire();
+        crate::child_mediation::reset_for_test();
+        let owner = crate::jobs::JobOwner::new(None);
+        let manager = crate::jobs::JobManager::new();
+        let workspace = std::env::temp_dir();
+        let _job = manager
+            .start_sandboxed_owned_with_policy_and_origin(
+                "sleep 30",
+                workspace.to_string_lossy(),
+                true,
+                std::time::Duration::from_secs(30),
+                vec![workspace.clone()],
+                false,
+                crate::sandbox::SandboxMode::Off,
+                owner,
+                crate::jobs::JobExecutionPolicy::default(),
+                crate::jobs::JobOrigin::ModelTool,
+            )
+            .await
+            .unwrap();
+        assert!(crate::child_mediation::queue_approval(1, "queued").is_ok());
+        crate::child_mediation::note_cancel_without_confirmation(1);
+        assert!(crate::child_mediation::queue_approval(1, "later").is_err());
+        assert!(!crate::child_mediation::nested_spawn_allowed(1));
+        let mut blocked_grant = crate::execution_grant::AdmittedExecutionGrant::from_legacy(
+            crate::execution_grant::LegacyGrantView {
+                tools: &["http_request".into()],
+                path_scopes: &[],
+                command_scopes: &[],
+            },
+            owner.run_id,
+            1,
+            Vec::new(),
+        )
+        .unwrap();
+        blocked_grant.host_bind_destination("local-http");
+        let unconfirmed = crate::child_mediation::execute_mediated(
+            &blocked_grant,
+            &owner.run_id.to_string(),
+            "http_request",
+            &serde_json::json!({"method":"GET","path":"/x","body":"","destination":"local-http"}),
+        )
+        .await;
+        assert!(
+            unconfirmed.model_text().contains("blocked until cleanup"),
+            "{unconfirmed:?}"
+        );
+        crate::child_mediation::reset_for_test();
+        assert!(crate::child_mediation::queue_approval(1, "queued").is_ok());
+        let _proxy = crate::child_mediation::host_open_proxy(1).unwrap();
+        let mut worker = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        crate::child_mediation::track_worker_pid(worker.id() as i32);
+        let agents = AgentManager::new(Arc::new(FakeRunner), AgentLimits::default());
+        let report = agents.advance_policy_generation(&manager, owner).await;
+        let worker_status = worker.wait().unwrap();
+        assert!(!worker_status.success(), "revoked worker kept running");
+        assert!(report.cancel_requested);
+        assert!(report.tunnels_closed);
+        assert!(report.jobs_terminal, "{report:?}");
+        assert!(report.confirmed, "{report:?}");
+        assert_eq!(
+            crate::child_mediation::queued_approvals(report.generation),
+            0
+        );
+        let mut admitted = crate::execution_grant::AdmittedExecutionGrant::from_legacy(
+            crate::execution_grant::LegacyGrantView {
+                tools: &["http_request".into()],
+                path_scopes: &[],
+                command_scopes: &[],
+            },
+            owner.run_id,
+            report.generation,
+            Vec::new(),
+        )
+        .unwrap();
+        admitted.host_bind_destination("local-http");
+        let blocked = crate::child_mediation::execute_mediated(
+            &admitted,
+            &owner.run_id.to_string(),
+            "http_request",
+            &serde_json::json!({"method":"GET","path":"/x","body":"","destination":"local-http"}),
+        )
+        .await;
+        assert!(
+            blocked.model_text().contains("stale grant generation"),
+            "{blocked:?}"
+        );
+        let runner = permission_test_runner();
+        let workspace = crate::workspace::WorkspaceContext::discover("/tmp").unwrap();
+        let mut spawn_request = request("parent", Uuid::new_v4());
+        spawn_request.workspace = workspace.clone();
+        spawn_request.grants.tools = vec!["spawn_agent".into(), "read_file".into()];
+        let (_commands, commands) = mpsc::channel(1);
+        let (_cancelled, cancelled) = watch::channel(false);
+        let (events, _) = mpsc::unbounded_channel();
+        let run = AgentRunContext {
+            id: AgentId::new(),
+            request: spawn_request,
+            limits: AgentLimits::default(),
+            commands,
+            pending_steers: VecDeque::new(),
+            cancelled,
+            events,
+            job_owner: owner,
+            graph_budget: None,
+            frozen_policy: None,
+        };
+        let legacy = &run.request.grants;
+        let nested = execute_child_nested_spawn(
+            &run,
+            &ChildToolContext {
+                runner: &runner,
+                id: run.id,
+                owner,
+                grant: legacy,
+                admitted: Some(&admitted),
+                workspace: &workspace,
+                policy_approved: true,
+                frozen_policy: None,
+            },
+            &serde_json::json!({"task":"revoked descendant","tools":["read_file"]}),
+        )
+        .await;
+        assert!(
+            nested.model_text().contains("stale grant generation"),
+            "{nested:?}"
+        );
+        assert!(agents.list().await.is_empty(), "{nested:?}");
+        manager.shutdown().await;
+        crate::child_mediation::reset_for_test();
     }
 
     #[tokio::test]
@@ -8777,6 +13421,8 @@ mod manager_tests {
                 parent_turn: Uuid::new_v4(),
                 task_id: None,
                 task: "parent".into(),
+                task_retrieved_spans: Vec::new(),
+                host_task: None,
                 context_mode: AgentContextMode::Summary,
                 context_summary: "summary".into(),
                 grants: AgentGrant {
@@ -8791,7 +13437,10 @@ mod manager_tests {
                 route: None,
                 purpose: AgentRunPurpose::Subagent,
                 output_contract: None,
+                repair_contract: None,
                 isolation: AgentIsolation::Shared,
+
+                admitted: None,
             },
             limits,
             commands,
@@ -8856,6 +13505,46 @@ mod manager_tests {
     }
 
     #[tokio::test]
+    async fn explicit_toolless_planner_has_no_file_or_command_grants() {
+        let manager = AgentManager::new_with_tool_policy(
+            Arc::new(FakeRunner),
+            AgentLimits::default(),
+            crate::tool_selection::ToolSelectionPolicy::replacing(&["read_file"]),
+            false,
+            false,
+        );
+        let work = Arc::new(std::sync::Mutex::new(crate::work::WorkState::default()));
+        let workspace = crate::workspace::WorkspaceContext::discover("/tmp").unwrap();
+        let result = execute_manager_tool(
+            "spawn_agent",
+            &json!({"task":"Review anonymous references only","tools":[]}),
+            &manager,
+            &work,
+            &workspace,
+        )
+        .await
+        .unwrap();
+        assert!(result.is_success(), "{}", result.model_text());
+        let children = manager.list().await;
+        assert_eq!(children.len(), 1);
+        assert!(children[0].grants.tools.is_empty());
+        assert!(children[0].grants.command_scopes.is_empty());
+        assert!(!children[0].grants.network);
+        let invalid = execute_manager_tool(
+            "spawn_agent",
+            &json!({"task":"invalid","tools":[42]}),
+            &manager,
+            &work,
+            &workspace,
+        )
+        .await
+        .unwrap();
+        assert!(!invalid.is_success());
+        assert_eq!(manager.list().await.len(), 1);
+        manager.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn named_agent_presets_narrow_to_run_policy_but_explicit_grants_remain_strict() {
         let manager = AgentManager::new_with_tool_policy(
             Arc::new(FakeRunner),
@@ -8896,6 +13585,67 @@ mod manager_tests {
             .model_text()
             .contains("explicit valid non-agent tool grants"));
         assert_eq!(manager.list().await.len(), 1);
+        manager.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn headless_named_explore_keeps_local_defaults_and_explicit_workers_keep_grants() {
+        let manager = AgentManager::new(Arc::new(FakeRunner), AgentLimits::default());
+        manager.allow_headless_granted_workers();
+        let work = Arc::new(std::sync::Mutex::new(crate::work::WorkState::default()));
+        let temporary = tempfile::tempdir().unwrap();
+        let workspace = crate::workspace::WorkspaceContext::discover(temporary.path()).unwrap();
+        let named = execute_manager_tool(
+            "task",
+            &json!({"subagent_name":"explore", "prompt":"done"}),
+            &manager,
+            &work,
+            &workspace,
+        )
+        .await
+        .unwrap();
+        assert!(named.is_success(), "{named:?}");
+        let children = manager.list().await;
+        assert_eq!(children.len(), 1);
+        let tools = children[0]
+            .grants
+            .tools
+            .iter()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            tools,
+            std::collections::BTreeSet::from([
+                "glob",
+                "list_dir",
+                "read_file",
+                "read_todos",
+                "search_files"
+            ])
+        );
+        assert!(!children[0].grants.network);
+        let explicit = execute_manager_tool(
+            "spawn_agent",
+            &json!({"task":"done", "tools":["edit_file","run_command","web_search"],
+                "commands":["/usr/bin/true"]}),
+            &manager,
+            &work,
+            &workspace,
+        )
+        .await
+        .unwrap();
+        assert!(explicit.is_success(), "{explicit:?}");
+        let children = manager.list().await;
+        let granted = children
+            .iter()
+            .find(|child| child.grants.tools.iter().any(|tool| tool == "edit_file"))
+            .unwrap();
+        assert_eq!(
+            granted.grants.tools,
+            ["edit_file", "run_command", "web_search"]
+        );
+        assert_eq!(granted.grants.command_scopes, ["/usr/bin/true"]);
+        assert!(!granted.grants.network);
         manager.shutdown().await;
     }
 

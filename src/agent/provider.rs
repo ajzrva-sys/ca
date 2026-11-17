@@ -94,6 +94,11 @@ impl ProviderAdapter {
         responses_options: Option<&OpenAiResponsesRequestOptions>,
         prompt_cache: Option<&OpenAiPromptCacheRequest>,
     ) -> Result<AdapterRequest, ProviderError> {
+        if let Some(history) = &request.imported_history {
+            history
+                .validate_route(&request.provider, self.protocol.label(), &request.model)
+                .map_err(ProviderError::Protocol)?;
+        }
         // Existing protocols require identity translation; keep their canonical history borrowed.
         for tool in &request.tools {
             let _ = crate::tool_schema::translate(
@@ -106,7 +111,7 @@ impl ProviderAdapter {
         }
         match self.protocol {
             ProviderProtocol::GoogleGenerateContent => {
-                let (body, diagnostics, parts) =
+                let (body, diagnostics, parts, privacy_prefixes) =
                     crate::google_provider::body(request, source, request.tool_schema_policy)?;
                 Ok(AdapterRequest {
                     path: crate::google_provider::model_path(&request.model)?,
@@ -114,6 +119,7 @@ impl ProviderAdapter {
                     diagnostics,
                     replay: crate::provider_replay::ReplayBindings {
                         google_parts: parts,
+                        google_privacy_prefixes: privacy_prefixes,
                         ..Default::default()
                     },
                 })
@@ -124,18 +130,39 @@ impl ProviderAdapter {
                 path: "chat/completions".into(),
                 body: serialize_chat_completions(request, source, contract)?,
             }),
-            ProviderProtocol::OpenAiResponses => Ok(AdapterRequest {
-                replay: Default::default(),
-                diagnostics: Vec::new(),
-                path: "responses".into(),
-                body: serialize_openai_responses(
+            ProviderProtocol::OpenAiResponses => {
+                let native = openai_responses_request(
                     request,
                     source,
                     contract,
                     responses_options,
                     prompt_cache,
-                )?,
-            }),
+                )?;
+                // Only Output variants have passed route and canonical-history
+                // validation. Ordinary authored/fallback calls still filter.
+                let responses_items = native
+                    .input
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, item)| {
+                        matches!(item, OpenAiResponsesInputItem::Output(_)).then_some(index)
+                    })
+                    .collect();
+                Ok(AdapterRequest {
+                    replay: crate::provider_replay::ReplayBindings {
+                        responses_items,
+                        responses_privacy_prefixes: native.privacy_prefixes.clone(),
+                        ..Default::default()
+                    },
+                    diagnostics: Vec::new(),
+                    path: "responses".into(),
+                    body: serde_json::to_vec(&native).map_err(|_| {
+                        ProviderError::Protocol(
+                            "could not serialize the prepared provider request".into(),
+                        )
+                    })?,
+                })
+            }
             ProviderProtocol::AnthropicMessages => {
                 let native = anthropic_messages_request(request, Some(source))?;
                 let diagnostics = if native.replay_invalidated {
@@ -150,9 +177,8 @@ impl ProviderAdapter {
                     })?,
                     diagnostics,
                     replay: crate::provider_replay::ReplayBindings {
-                        google_parts: Vec::new(),
                         messages: native.replay_bindings,
-                        request_sequence: 0,
+                        ..Default::default()
                     },
                 })
             }
@@ -219,13 +245,17 @@ impl ProviderAdapter {
                     }),
                 ),
             ),
-            ProviderProtocol::OpenAiResponses => ProviderStreamDecoder::OpenAiResponses(
-                OpenAiResponsesDecoder::for_source_with_cache_usage(
+            ProviderProtocol::OpenAiResponses => {
+                let mut decoder = OpenAiResponsesDecoder::for_source_with_cache_usage(
                     source.clone(),
                     request_id_sha256,
                     cache_usage_format,
-                ),
-            ),
+                );
+                decoder.chatgpt_plan = contract.is_some_and(|contract| {
+                    contract.family() == crate::provider_contract::FirstPartyProvider::OpenAiChatGpt
+                });
+                ProviderStreamDecoder::OpenAiResponses(decoder)
+            }
             ProviderProtocol::AnthropicMessages => ProviderStreamDecoder::AnthropicMessages(
                 AnthropicMessagesDecoder::for_request(cache_usage_format, request, source),
             ),
@@ -253,6 +283,11 @@ pub(crate) enum ProviderStreamDecoder {
 
 impl ProviderStreamDecoder {
     pub(crate) fn bind_sent_prefix(&mut self, prefix: &crate::provider_replay::SentPrefix) {
+        if let Self::OpenAiResponses(decoder) = self {
+            if decoder.source.privacy_policy_digest.is_some() {
+                decoder.privacy_prefix_sha256 = Some(prefix.0.clone());
+            }
+        }
         if let Self::Google(decoder) = self {
             decoder.bind_sent_prefix(&prefix.0);
         }
@@ -640,11 +675,25 @@ fn cache_usage_from_chat_shape(
     }
 }
 
+fn shim_upstream_message(text: &str) -> String {
+    let mut end = text.len().min(300);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("chatgpt-shim upstream error: {}", &text[..end])
+}
+
 fn chat_completions_events(
     value: &serde_json::Value,
     reasoning_field: Option<&str>,
     cache_usage_format: Option<PromptCacheUsageFormat>,
 ) -> Result<Vec<ProviderEvent>, ProviderError> {
+    if let Some(message) = value
+        .pointer("/error/message")
+        .and_then(serde_json::Value::as_str)
+    {
+        return Err(ProviderError::Protocol(shim_upstream_message(message)));
+    }
     let mut events = Vec::new();
     let usage = usage_from_chat_completions(value, cache_usage_format)?;
     let choices = value
@@ -667,6 +716,9 @@ fn chat_completions_events(
                 }
             }
             if let Some(content) = delta.get("content").and_then(serde_json::Value::as_str) {
+                if content.contains("[chatgpt-shim upstream error") {
+                    return Err(ProviderError::Protocol(shim_upstream_message(content)));
+                }
                 if !content.is_empty() {
                     events.push(ProviderEvent::Text(content.to_string()));
                 }
@@ -856,6 +908,7 @@ pub(crate) struct OpenAiResponsesDecoder {
     text: BTreeMap<(usize, usize), String>,
     reasoning: BTreeMap<(String, usize, usize), String>,
     source: ProviderStateSourceV1,
+    privacy_prefix_sha256: Option<String>,
     output_items: BTreeMap<usize, serde_json::Value>,
     output_item_bytes: usize,
     metadata: ResponsesMetadataState,
@@ -863,6 +916,9 @@ pub(crate) struct OpenAiResponsesDecoder {
     cache_usage_format: Option<PromptCacheUsageFormat>,
     completed: bool,
     saw_function_call: bool,
+    chatgpt_plan: bool,
+    /// SSE `event:` name for the frame currently being assembled. Cleared on dispatch.
+    sse_event: String,
 }
 
 impl OpenAiResponsesDecoder {
@@ -906,6 +962,7 @@ impl OpenAiResponsesDecoder {
             text: BTreeMap::new(),
             reasoning: BTreeMap::new(),
             source,
+            privacy_prefix_sha256: None,
             output_items: BTreeMap::new(),
             output_item_bytes: 0,
             metadata: ResponsesMetadataState::default(),
@@ -913,6 +970,8 @@ impl OpenAiResponsesDecoder {
             cache_usage_format,
             completed: false,
             saw_function_call: false,
+            chatgpt_plan: false,
+            sse_event: String::new(),
         }
     }
 
@@ -981,6 +1040,10 @@ impl OpenAiResponsesDecoder {
             Some(index) => (&line[..index], &line[index + 1..]),
             None => (line, &[][..]),
         };
+        if field == b"event" {
+            self.sse_event = String::from_utf8_lossy(value).trim().to_string();
+            return Ok(None);
+        }
         if field != b"data" {
             return Ok(None);
         }
@@ -1001,9 +1064,11 @@ impl OpenAiResponsesDecoder {
     fn dispatch(&mut self) -> Result<Option<Vec<ProviderEvent>>, ProviderError> {
         if self.data_lines.is_empty() {
             self.event_size = 0;
+            self.sse_event.clear();
             return Ok(None);
         }
         let lines = std::mem::take(&mut self.data_lines);
+        let event_name = std::mem::take(&mut self.sse_event);
         self.event_size = 0;
         let mut data = Vec::new();
         for (index, line) in lines.into_iter().enumerate() {
@@ -1013,8 +1078,22 @@ impl OpenAiResponsesDecoder {
             data.extend(line);
         }
         let data = String::from_utf8(data).map_err(|_| ProviderError::InvalidUtf8)?;
-        let value: serde_json::Value = serde_json::from_str(&data)
-            .map_err(|error| ProviderError::MalformedData(error.to_string()))?;
+        let named_check = event_name == crate::prose_recovery::DOOM_LOOP_CHECK_EVENT;
+        let value: serde_json::Value = match serde_json::from_str(&data) {
+            Ok(value) => value,
+            Err(_) if named_check => return Ok(Some(Vec::new())),
+            Err(error) => return Err(ProviderError::MalformedData(error.to_string())),
+        };
+        let typed_check = value.get("type").and_then(serde_json::Value::as_str)
+            == Some(crate::prose_recovery::DOOM_LOOP_CHECK_EVENT);
+        if named_check || typed_check {
+            if crate::prose_recovery::doom_loop_is_confident(&value) {
+                return Err(ProviderError::StreamAnomaly(
+                    crate::agent::stream::StreamAnomalyKind::RepetitionLoop,
+                ));
+            }
+            return Ok(Some(Vec::new()));
+        }
         Ok(Some(self.translate(&value)?))
     }
 
@@ -1055,7 +1134,7 @@ impl OpenAiResponsesDecoder {
                                 Some(arguments.to_string());
                         }
                     }
-                    "message" | "reasoning" => {}
+                    "message" | "reasoning" | "code_interpreter_call" => {}
                     _ => {
                         return Err(ProviderError::Protocol(
                             "unsupported response output item".into(),
@@ -1146,7 +1225,12 @@ impl OpenAiResponsesDecoder {
             "response.content_part.added"
             | "response.content_part.done"
             | "response.reasoning_summary_part.added"
-            | "response.reasoning_summary_part.done" => {}
+            | "response.reasoning_summary_part.done"
+            | "response.code_interpreter_call.in_progress"
+            | "response.code_interpreter_call.interpreting"
+            | "response.code_interpreter_call.completed"
+            | "response.code_interpreter_call_code.delta"
+            | "response.code_interpreter_call_code.done" => {}
             // Codex emits advisory metadata between output and completion. It is
             // neither assistant output nor the terminal response metadata.
             "response.metadata" => {}
@@ -1161,6 +1245,11 @@ impl OpenAiResponsesDecoder {
                     } else {
                         ProviderError::ResponseIncomplete
                     });
+                }
+                if crate::prose_recovery::doom_loop_is_confident(response) {
+                    return Err(ProviderError::StreamAnomaly(
+                        crate::agent::stream::StreamAnomalyKind::RepetitionLoop,
+                    ));
                 }
                 let response_metadata = self
                     .metadata
@@ -1179,6 +1268,10 @@ impl OpenAiResponsesDecoder {
                 events.extend(self.output_items.iter().map(|(output_index, item)| {
                     ProviderEvent::ResponseItem(ProviderResponseItem::ResponsesOutput {
                         source: self.source.clone(),
+                        privacy_prefix_sha256: item
+                            .get("encrypted_content")
+                            .filter(|value| !value.is_null() && value.as_str() != Some(""))
+                            .and(self.privacy_prefix_sha256.clone()),
                         output_index: *output_index,
                         item: item.clone(),
                     })
@@ -1194,7 +1287,33 @@ impl OpenAiResponsesDecoder {
                 });
                 events.push(ProviderEvent::Done);
             }
-            "response.failed" | "error" => return Err(ProviderError::ResponseFailed),
+            "response.failed" | "error" => {
+                let code = value
+                    .pointer("/response/error/code")
+                    .or_else(|| value.pointer("/error/code"))
+                    .or_else(|| value.get("code"))
+                    .and_then(serde_json::Value::as_str);
+                if self.chatgpt_plan {
+                    let status = match code {
+                        Some("subscription_sharing_usage_unavailable") => 503,
+                        _ => 429,
+                    };
+                    let body = serde_json::to_string(value).unwrap_or_default();
+                    let verdict =
+                        crate::chatgpt_plan_auth::classify_chatgpt_plan_error(status, &body);
+                    if verdict.is_usage_limit {
+                        return Err(ProviderError::http_with_excerpt(
+                            status,
+                            verdict.user_message,
+                        ));
+                    }
+                }
+                // Keep the recognized refusal typed without exposing provider text.
+                return Err(match code {
+                    Some("cyber_policy") => ProviderError::ResponseRefused,
+                    _ => ProviderError::ResponseFailed,
+                });
+            }
             "response.incomplete" => {
                 return Err(value
                     .get("response")
@@ -1220,7 +1339,7 @@ impl OpenAiResponsesDecoder {
         events: &mut Vec<ProviderEvent>,
     ) -> Result<(), ProviderError> {
         match validate_response_output_item(item)? {
-            ResponsesOutputKind::Reasoning => {}
+            ResponsesOutputKind::Reasoning | ResponsesOutputKind::Hosted => {}
             ResponsesOutputKind::Message => {
                 for (content_index, text) in
                     response_message_text_parts(item)?.into_iter().enumerate()
@@ -1357,6 +1476,7 @@ enum ResponsesOutputKind {
     Reasoning,
     Message,
     FunctionCall,
+    Hosted,
 }
 
 fn responses_incomplete_error(response: &serde_json::Value) -> ProviderError {
@@ -1461,6 +1581,9 @@ fn validate_response_output_item(
             required_string(item, "arguments")?;
             ResponsesOutputKind::FunctionCall
         }
+        "web_search_call" | "custom_tool_call" | "code_interpreter_call" => {
+            ResponsesOutputKind::Hosted
+        }
         _ => {
             return Err(ProviderError::Protocol(
                 "unsupported response output item".into(),
@@ -1511,7 +1634,10 @@ fn validate_response_reasoning_parts(
                 "response reasoning item {field} entry must be an object"
             ))
         })?;
-        if part.get("type").and_then(serde_json::Value::as_str) != Some(expected_type)
+        let part_type = part.get("type").and_then(serde_json::Value::as_str);
+        let type_ok =
+            part_type == Some(expected_type) || (field == "content" && part_type.is_none());
+        if !type_ok
             || part
                 .get("text")
                 .and_then(serde_json::Value::as_str)
@@ -1550,7 +1676,7 @@ fn response_output_item_bytes(item: &serde_json::Value) -> Result<usize, Provide
         .map_err(|error| ProviderError::MalformedData(error.to_string()))
 }
 
-fn response_output_items_for_replay<'a>(
+pub(crate) fn response_output_items_for_replay<'a>(
     message: &'a ChatMessage,
     source: &ProviderStateSourceV1,
 ) -> Result<Option<Vec<&'a serde_json::Value>>, ProviderError> {
@@ -1562,6 +1688,7 @@ fn response_output_items_for_replay<'a>(
                 source: item_source,
                 output_index,
                 item,
+                ..
             } if item_source == source => Some((*output_index, item)),
             _ => None,
         })
@@ -1607,34 +1734,58 @@ fn response_output_items_for_replay<'a>(
     Ok(Some(selected))
 }
 
+/// Outgoing Responses replay. `status` is output-only and rejected on input.
+/// Reasoning content without `type` is also rejected; the API requires
+/// `reasoning_text`. The stored item is left unchanged.
+fn responses_replay_item(item: &serde_json::Value) -> serde_json::Value {
+    let mut item = item.clone();
+    let Some(object) = item.as_object_mut() else {
+        return item;
+    };
+    if object.get("type").and_then(serde_json::Value::as_str) != Some("reasoning") {
+        return item;
+    }
+    object.remove("status");
+    if let Some(content) = object
+        .get_mut("content")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for part in content {
+            if let Some(part) = part.as_object_mut() {
+                part.entry("type".to_string())
+                    .or_insert_with(|| serde_json::Value::String("reasoning_text".into()));
+            }
+        }
+    }
+    item
+}
+
 fn validate_response_output_replay(
     message: &ChatMessage,
     items: &[&serde_json::Value],
 ) -> Result<(), ProviderError> {
-    let canonical_text = message.content.as_str().ok_or_else(|| {
-        ProviderError::Protocol("response assistant history must contain text".into())
-    })?;
-    let mut output_text = String::new();
+    if message.content.as_str().is_none() {
+        return Err(ProviderError::Protocol(
+            "response assistant history must contain text".into(),
+        ));
+    }
+    // The stored sentence is the local display view. The response item is the
+    // provider's own message and is what this route replays. Filename privacy
+    // makes those strings differ; that is not a failed turn. Outgoing
+    // projection still masks known private names. A mismatched tool call is a
+    // different action and still fails.
     let mut output_calls = Vec::new();
     for item in items {
         match validate_response_output_item(item)? {
-            ResponsesOutputKind::Reasoning => {}
-            ResponsesOutputKind::Message => {
-                for text in response_message_text_parts(item)? {
-                    output_text.push_str(text);
-                }
-            }
+            ResponsesOutputKind::Reasoning
+            | ResponsesOutputKind::Message
+            | ResponsesOutputKind::Hosted => {}
             ResponsesOutputKind::FunctionCall => output_calls.push((
                 required_string(item, "call_id")?,
                 required_string(item, "name")?,
                 required_string(item, "arguments")?,
             )),
         }
-    }
-    if output_text != canonical_text {
-        return Err(ProviderError::Protocol(
-            "response output message does not match canonical assistant text".into(),
-        ));
     }
     let canonical_calls = message.tool_calls.as_deref().unwrap_or_default();
     if output_calls.len() != canonical_calls.len()
@@ -1645,7 +1796,7 @@ fn validate_response_output_replay(
                 call.call_type != "function"
                     || *call_id != call.id
                     || *name != call.function.name
-                    || *arguments != call.function.arguments
+                    || !response_tool_arguments_match(arguments, &call.function.arguments)
             })
     {
         return Err(ProviderError::Protocol(
@@ -1653,6 +1804,27 @@ fn validate_response_output_replay(
         ));
     }
     Ok(())
+}
+
+fn response_tool_arguments_match(raw: &str, canonical: &str) -> bool {
+    if raw == canonical {
+        return true;
+    }
+    let Ok(canonical) = serde_json::from_str::<serde_json::Value>(canonical) else {
+        return false;
+    };
+    let Ok(normalized) = crate::agent::stream::normalized_tool_arguments(raw) else {
+        return false;
+    };
+    let Ok(raw) = serde_json::from_str::<serde_json::Value>(&normalized) else {
+        return false;
+    };
+    if !canonical.is_object() || !raw.is_object() {
+        return false;
+    }
+    // Match the assembler's local view without rewriting provider-issued replay
+    // items. Restore values once; tool/property names remain exact.
+    canonical == raw || canonical == crate::provider_filter::restore_local_value(&raw)
 }
 
 fn required_string<'a>(
@@ -2410,14 +2582,31 @@ fn chat_completions_request(
             _ => (None, None, None),
         },
     };
+    // ChatGPT's consumer chat has no tool channel. The local shim turns a
+    // tools array, and any tool-call history, into TOOL_CALL text in the
+    // transcript. Send the spoken messages only.
+    let plain_chat = crate::chatgpt_plan_auth::consumer_chat_shim(&source.provider);
+    let messages = request
+        .messages
+        .iter()
+        .filter(|message| !plain_chat || message.role != "tool")
+        .filter_map(|message| {
+            if plain_chat && message.tool_calls.is_some() {
+                if message.content.as_str().is_none_or(str::is_empty) {
+                    return None;
+                }
+                let mut spoken = message.clone();
+                spoken.tool_calls = None;
+                spoken.tool_call_id = None;
+                return Some(chat_completions_message(&spoken, contract, source));
+            }
+            Some(chat_completions_message(message, contract, source))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(ChatCompletionsRequest {
         model: request.model.clone(),
-        messages: request
-            .messages
-            .iter()
-            .map(|message| chat_completions_message(message, contract, source))
-            .collect::<Result<Vec<_>, _>>()?,
-        tools: (!request.tools.is_empty()).then(|| request.tools.clone()),
+        messages,
+        tools: (!plain_chat && !request.tools.is_empty()).then(|| request.tools.clone()),
         stream: true,
         reasoning_effort,
         reasoning,
@@ -2510,10 +2699,12 @@ fn serialize_chat_completions(
 
 #[derive(Debug, Clone, Serialize)]
 struct OpenAiResponsesRequest {
+    #[serde(skip)]
+    privacy_prefixes: Vec<(usize, String)>,
     model: String,
     input: Vec<OpenAiResponsesInputItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<OpenAiResponsesTool>>,
+    tools: Option<Vec<serde_json::Value>>,
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning: Option<ReasoningRequest>,
@@ -2544,6 +2735,9 @@ struct PromptCacheBreakpoint {
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 enum OpenAiResponsesInputItem {
+    /// User-imported history still passes through final outbound filtering.
+    /// It is intentionally not a locally authenticated Output replay item.
+    Imported(Box<serde_json::value::RawValue>),
     Output(serde_json::Value),
     Message {
         role: String,
@@ -2623,7 +2817,18 @@ fn openai_responses_request(
             ));
         }
     }
-    let mut input = Vec::new();
+    let mut input = request
+        .imported_history
+        .as_ref()
+        .map_or_else(Vec::new, |history| {
+            history
+                .items()
+                .iter()
+                .cloned()
+                .map(OpenAiResponsesInputItem::Imported)
+                .collect()
+        });
+    let mut privacy_prefixes = Vec::new();
     for (message_index, message) in request.messages.iter().enumerate() {
         match message.role.as_str() {
             "system" | "developer" | "user" => {
@@ -2657,10 +2862,30 @@ fn openai_responses_request(
                     ));
                 }
                 if let Some(items) = response_output_items_for_replay(message, source)? {
+                    if source.privacy_policy_digest.is_some() {
+                        for response in &message.response_items {
+                            if response
+                                .opaque_source()
+                                .is_some_and(|origin| origin == source)
+                            {
+                                let ProviderResponseItem::ResponsesOutput {
+                                    privacy_prefix_sha256,
+                                    ..
+                                } = response
+                                else {
+                                    continue;
+                                };
+                                let prefix = privacy_prefix_sha256.clone().ok_or_else(|| ProviderError::PrivacyBlocked {
+                                    detail: "Opaque Responses history has no host prefix receipt; use /filter continue".into(),
+                                })?;
+                                privacy_prefixes.push((input.len(), prefix));
+                            }
+                        }
+                    }
                     input.extend(
-                        items
-                            .into_iter()
-                            .map(|item| OpenAiResponsesInputItem::Output(item.clone())),
+                        items.into_iter().map(|item| {
+                            OpenAiResponsesInputItem::Output(responses_replay_item(item))
+                        }),
                     );
                 } else {
                     if !content.is_empty() || calls.is_empty() {
@@ -2710,30 +2935,38 @@ fn openai_responses_request(
             }
         }
     }
-    let tools = if request.tools.is_empty() {
-        None
-    } else {
-        Some(
-            request
-                .tools
-                .iter()
-                .map(|tool| {
-                    if tool.def_type != "function" {
-                        return Err(ProviderError::Protocol(
-                            "openai_responses supports function tools only".into(),
-                        ));
-                    }
-                    Ok(OpenAiResponsesTool {
-                        tool_type: "function",
-                        name: tool.function.name.clone(),
-                        description: tool.function.description.clone(),
-                        parameters: tool.function.parameters.clone(),
-                        strict: false,
-                    })
-                })
-                .collect::<Result<Vec<_>, ProviderError>>()?,
-        )
-    };
+    let xai = contract.is_some_and(|contract| {
+        contract.family() == crate::provider_contract::FirstPartyProvider::Xai
+    });
+    let mut tool_values = Vec::new();
+    for tool in &request.tools {
+        if tool.def_type != "function" {
+            return Err(ProviderError::Protocol(
+                "openai_responses supports function tools only".into(),
+            ));
+        }
+        if xai && tool.function.name == "web_search" {
+            continue;
+        }
+        tool_values.push(
+            serde_json::to_value(OpenAiResponsesTool {
+                tool_type: "function",
+                name: tool.function.name.clone(),
+                description: tool.function.description.clone(),
+                parameters: tool.function.parameters.clone(),
+                strict: false,
+            })
+            .map_err(|_| {
+                ProviderError::Protocol("could not serialize the prepared provider request".into())
+            })?,
+        );
+    }
+    if xai {
+        tool_values.push(serde_json::json!({"type": "web_search"}));
+        tool_values.push(serde_json::json!({"type": "x_search"}));
+        tool_values.push(serde_json::json!({"type": "code_interpreter"}));
+    }
+    let tools = (!tool_values.is_empty()).then_some(tool_values);
     let reasoning_effort = match contract {
         Some(contract) => contract
             .responses_reasoning_effort(request.options.reasoning_effort)
@@ -2758,16 +2991,30 @@ fn openai_responses_request(
         None => (None, None),
     };
     Ok(OpenAiResponsesRequest {
+        privacy_prefixes,
         model: request.model.clone(),
         input,
         tools,
         stream: true,
         reasoning: reasoning_effort.map(|effort| ReasoningRequest { effort }),
-        include: contract
-            .is_some_and(|contract| contract.includes_encrypted_reasoning())
-            .then(|| vec!["reasoning.encrypted_content"]),
-        max_output_tokens: options.and_then(|options| options.max_output_tokens()),
-        store: if contract.is_some_and(|contract| contract.is_openai()) {
+        include: {
+            let mut include = Vec::new();
+            if contract.is_some_and(|contract| contract.includes_encrypted_reasoning()) {
+                include.push("reasoning.encrypted_content");
+            }
+            if xai {
+                include.push("no_inline_citations");
+            }
+            (!include.is_empty()).then_some(include)
+        },
+        max_output_tokens: if contract.is_some_and(|contract| {
+            contract.family() == crate::provider_contract::FirstPartyProvider::OpenAiChatGpt
+        }) {
+            None
+        } else {
+            options.and_then(|options| options.max_output_tokens())
+        },
+        store: if contract.is_some_and(|contract| contract.includes_encrypted_reasoning()) {
             Some(false)
         } else {
             options.map(|options| options.store())
@@ -2832,6 +3079,7 @@ fn openai_responses_content(
     ))
 }
 
+#[cfg(test)]
 fn serialize_openai_responses(
     request: &crate::request::PreparedModelRequest,
     source: &ProviderStateSourceV1,
@@ -3210,9 +3458,8 @@ fn serialize_anthropic_messages_on_route(
     crate::provider_replay::prepare_outbound(
         &bytes,
         &crate::provider_replay::ReplayBindings {
-            google_parts: Vec::new(),
             messages: native.replay_bindings,
-            request_sequence: 0,
+            ..Default::default()
         },
         &filter,
     )
@@ -3261,10 +3508,11 @@ fn test_contract_for_request(
     protocol: ProviderProtocol,
 ) -> Option<crate::provider_contract::FirstPartyContract> {
     let base_url = match request.provider.as_str() {
-        "openai" => "https://api.openai.com/v1",
+        "openai" | "openai-chatgpt" => "https://api.openai.com/v1",
         "openai-codex" => "https://chatgpt.com/backend-api/codex",
         "mimo" => "https://api.xiaomimimo.com/v1",
         "deepseek" => "https://api.deepseek.com/v1",
+        "xai" => "https://api.x.ai/v1",
         _ => return None,
     };
     let provider = crate::config::ProviderConfig {
@@ -3325,6 +3573,125 @@ mod tests {
         assert!(toml::from_str::<Wrapper>("protocol = \"responses\"").is_err());
     }
 
+    fn allowlisted_headers(
+        protocol: ProviderProtocol,
+        credential_present: bool,
+    ) -> Vec<(&'static str, &'static str)> {
+        let mut headers = vec![("content-type", "application/json")];
+        if credential_present {
+            match protocol {
+                ProviderProtocol::GoogleGenerateContent => {
+                    headers.push(("x-goog-api-key", "present"))
+                }
+                ProviderProtocol::ChatCompletions | ProviderProtocol::OpenAiResponses => {
+                    headers.push(("authorization", "present"))
+                }
+                ProviderProtocol::AnthropicMessages => {
+                    headers.push(("anthropic-version", "2023-06-01"));
+                    headers.push(("x-api-key", "present"));
+                }
+            }
+        }
+        headers
+    }
+
+    #[test]
+    fn catalog_request_snapshots_cover_every_template_without_secrets() {
+        let secret = "synthetic-secret-do-not-record";
+        let mut seen = std::collections::BTreeSet::new();
+        let mut ready = 0usize;
+        let mut unavailable = 0usize;
+        for template in crate::provider_templates::ALL {
+            assert!(
+                seen.insert(template.id),
+                "duplicate template {}",
+                template.id
+            );
+            let Some(adapter) = template.availability.adapter() else {
+                assert!(!template.is_installable(), "{}", template.id);
+                assert!(!template.availability.reason().is_empty());
+                unavailable += 1;
+                continue;
+            };
+            ready += 1;
+            let protocol = adapter.protocol();
+            for (kind, label) in [
+                (crate::request::RequestKind::MainTurn, "initial"),
+                (crate::request::RequestKind::ToolContinuation, "tool"),
+                (crate::request::RequestKind::ContextCheckpoint, "checkpoint"),
+            ] {
+                for effort in [
+                    None,
+                    Some(crate::config::ReasoningEffort::None),
+                    Some(crate::config::ReasoningEffort::High),
+                ] {
+                    let options = crate::agent::client::ChatRequestOptions {
+                        reasoning_effort: effort,
+                        ..crate::agent::client::ChatRequestOptions::default()
+                    };
+                    let request = crate::request::PreparedModelRequest::new(
+                        kind,
+                        template.provider_id,
+                        template.starter_model.unwrap_or("snapshot-model"),
+                        vec![crate::agent::client::ChatMessage {
+                            role: "user".into(),
+                            content: crate::image_content::ModelContent::text("snapshot"),
+                            tool_calls: None,
+                            tool_call_id: None,
+                            response_items: Vec::new(),
+                        }],
+                        Vec::new(),
+                        options,
+                    );
+                    let source = crate::agent::stream::ProviderStateSourceV1::for_test(
+                        template.provider_id,
+                        protocol,
+                    );
+                    let prepared = protocol
+                        .adapter()
+                        .prepare(&request, &source, None, None, None)
+                        .unwrap_or_else(|error| {
+                            panic!("{} {label} {effort:?} failed: {error}", template.id)
+                        });
+                    let body = String::from_utf8_lossy(&prepared.body);
+                    assert!(!prepared.body.is_empty(), "{}", template.id);
+                    assert!(!body.contains(secret), "{}", template.id);
+                    let headers = allowlisted_headers(protocol, true);
+                    let rendered = format!("{headers:?}");
+                    assert!(!rendered.contains(secret));
+                    assert!(rendered.contains("content-type"));
+                    assert!(!rendered.contains("Bearer"));
+                }
+            }
+        }
+        assert_eq!(seen.len(), crate::provider_templates::ALL.len());
+        assert!(ready > 0 && unavailable > 0);
+        let custom = crate::request::PreparedModelRequest::new(
+            crate::request::RequestKind::MainTurn,
+            "custom-endpoint",
+            "custom-model",
+            vec![crate::agent::client::ChatMessage {
+                role: "user".into(),
+                content: crate::image_content::ModelContent::text("snapshot"),
+                tool_calls: None,
+                tool_call_id: None,
+                response_items: Vec::new(),
+            }],
+            Vec::new(),
+            crate::agent::client::ChatRequestOptions::default(),
+        );
+        let source = crate::agent::stream::ProviderStateSourceV1::for_test(
+            "custom-endpoint",
+            ProviderProtocol::ChatCompletions,
+        );
+        let prepared = ProviderProtocol::ChatCompletions
+            .adapter()
+            .prepare(&custom, &source, None, None, None)
+            .unwrap();
+        assert!(!prepared.body.is_empty());
+        assert!(!String::from_utf8_lossy(&prepared.body).contains(secret));
+    }
+
     #[test]
     fn chat_completions_request_maps_typed_image_content() {
         let image = crate::image_content::normalize_rgba(1, 1, vec![10, 20, 30, 255]).unwrap();
@@ -3359,6 +3726,7 @@ mod tests {
                 id: "call-1".into(),
                 call_type: "function".into(),
                 function: crate::agent::client::FunctionCall {
+                    arguments_retrieved_spans: Vec::new(),
                     name: "read_file".into(),
                     arguments: "{\"path\":\"a\"}".into(),
                 },
@@ -3367,6 +3735,7 @@ mod tests {
                 id: "call-2".into(),
                 call_type: "function".into(),
                 function: crate::agent::client::FunctionCall {
+                    arguments_retrieved_spans: Vec::new(),
                     name: "read_file".into(),
                     arguments: "{\"path\":\"b\"}".into(),
                 },
@@ -3474,6 +3843,7 @@ mod tests {
                     id: "call".into(),
                     call_type: "function".into(),
                     function: crate::agent::client::FunctionCall {
+                        arguments_retrieved_spans: Vec::new(),
                         name: "tool".into(),
                         arguments: "[]".into(),
                     },
@@ -3696,6 +4066,7 @@ mod tests {
                         id: "call-1".into(),
                         call_type: "function".into(),
                         function: crate::agent::client::FunctionCall {
+                            arguments_retrieved_spans: Vec::new(),
                             name: "read_file".into(),
                             arguments: "{\"path\":\"input.txt\"}".into(),
                         },
@@ -3738,6 +4109,266 @@ mod tests {
             openai_responses_bytes_with_options_for_test(&request, &capped).unwrap(),
             br#"{"model":"gpt-5.6-sol","input":[{"role":"system","content":"rules"},{"role":"user","content":"read it"},{"type":"function_call","call_id":"call-1","name":"read_file","arguments":"{\"path\":\"input.txt\"}"},{"type":"function_call_output","call_id":"call-1","output":"hello"}],"tools":[{"type":"function","name":"read_file","description":"Read a file","parameters":{"type":"object"},"strict":false}],"stream":true,"reasoning":{"effort":"high"},"include":["reasoning.encrypted_content"],"max_output_tokens":8192,"store":false,"service_tier":"default"}"#
         );
+    }
+
+    #[test]
+    fn xai_responses_request_keeps_encrypted_reasoning_for_the_next_turn() {
+        let reasoning_item = serde_json::json!({
+            "id": "rs_grok",
+            "type": "reasoning",
+            "summary": [],
+            "encrypted_content": "opaque-grok-state",
+            "status": "completed"
+        });
+        let request = crate::request::PreparedModelRequest::new(
+            crate::request::RequestKind::ToolContinuation,
+            "xai",
+            "grok-4.7",
+            vec![
+                ChatMessage {
+                    role: "user".into(),
+                    content: crate::image_content::ModelContent::text("read it"),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    response_items: Vec::new(),
+                },
+                ChatMessage {
+                    role: "assistant".into(),
+                    content: crate::image_content::ModelContent::text(String::new()),
+                    tool_calls: Some(vec![crate::agent::client::ToolCallMsg {
+                        id: "call-1".into(),
+                        call_type: "function".into(),
+                        function: crate::agent::client::FunctionCall {
+                            arguments_retrieved_spans: Vec::new(),
+                            name: "read_file".into(),
+                            arguments: "{\"path\":\"input.txt\"}".into(),
+                        },
+                    }]),
+                    tool_call_id: None,
+                    response_items: vec![
+                        ProviderResponseItem::ResponsesOutput {
+                            privacy_prefix_sha256: None,
+                            source: ProviderStateSourceV1::for_test(
+                                "xai",
+                                ProviderProtocol::OpenAiResponses,
+                            ),
+                            output_index: 0,
+                            item: reasoning_item.clone(),
+                        },
+                        ProviderResponseItem::ResponsesOutput {
+                            privacy_prefix_sha256: None,
+                            source: ProviderStateSourceV1::for_test(
+                                "xai",
+                                ProviderProtocol::OpenAiResponses,
+                            ),
+                            output_index: 1,
+                            item: serde_json::json!({
+                                "id": "fc_grok",
+                                "type": "function_call",
+                                "call_id": "call-1",
+                                "name": "read_file",
+                                "arguments": "{\"path\":\"input.txt\"}",
+                                "status": "completed"
+                            }),
+                        },
+                    ],
+                },
+                ChatMessage {
+                    role: "tool".into(),
+                    content: crate::image_content::ModelContent::text("hello"),
+                    tool_calls: None,
+                    tool_call_id: Some("call-1".into()),
+                    response_items: Vec::new(),
+                },
+            ],
+            Vec::new(),
+            crate::agent::client::ChatRequestOptions {
+                reasoning_effort: Some(ReasoningEffort::High),
+                reasoning_request_format: None,
+                reasoning_stream_field: None,
+                tool_call_format: None,
+            },
+        );
+        let bytes = openai_responses_bytes_for_test(&request).unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["model"], "grok-4.7");
+        assert_eq!(body["store"], false);
+        assert_eq!(
+            body["include"],
+            serde_json::json!(["reasoning.encrypted_content", "no_inline_citations"])
+        );
+        assert_eq!(body["reasoning"]["effort"], "high");
+        assert!(body.get("service_tier").is_none());
+        assert!(reasoning_item.get("status").is_some());
+        let mut sent_reasoning = reasoning_item.clone();
+        sent_reasoning.as_object_mut().unwrap().remove("status");
+        assert_eq!(body["input"][1], sent_reasoning);
+        assert_eq!(body["input"][2]["type"], "function_call");
+        assert_eq!(body["input"][2]["call_id"], "call-1");
+        assert_eq!(body["input"][3]["output"], "hello");
+
+        let mut disabled = request;
+        disabled.options.reasoning_effort = Some(ReasoningEffort::None);
+        assert!(openai_responses_bytes_for_test(&disabled).is_err());
+
+        let mut older = disabled;
+        older.model = "grok-4.5".into();
+        older.options.reasoning_effort = Some(ReasoningEffort::XHigh);
+        let older_body: serde_json::Value =
+            serde_json::from_slice(&openai_responses_bytes_for_test(&older).unwrap()).unwrap();
+        assert_eq!(older_body["reasoning"]["effort"], "high");
+        assert_eq!(older_body["store"], false);
+    }
+
+    #[test]
+    fn xai_responses_replay_drops_output_status_and_types_reasoning_text() {
+        let stored = serde_json::json!({
+            "id": "rs_grok",
+            "type": "reasoning",
+            "summary": [],
+            "encrypted_content": "opaque-grok-state",
+            "status": "completed",
+            "content": [{"text": "looked at the file"}]
+        });
+        let request = crate::request::PreparedModelRequest::new(
+            crate::request::RequestKind::ToolContinuation,
+            "xai",
+            "grok-4.7",
+            vec![ChatMessage {
+                role: "assistant".into(),
+                content: crate::image_content::ModelContent::text(String::new()),
+                tool_calls: None,
+                tool_call_id: None,
+                response_items: vec![ProviderResponseItem::ResponsesOutput {
+                    privacy_prefix_sha256: None,
+                    source: ProviderStateSourceV1::for_test(
+                        "xai",
+                        ProviderProtocol::OpenAiResponses,
+                    ),
+                    output_index: 0,
+                    item: stored.clone(),
+                }],
+            }],
+            Vec::new(),
+            crate::agent::client::ChatRequestOptions {
+                reasoning_effort: Some(ReasoningEffort::High),
+                reasoning_request_format: None,
+                reasoning_stream_field: None,
+                tool_call_format: None,
+            },
+        );
+        let body: serde_json::Value =
+            serde_json::from_slice(&openai_responses_bytes_for_test(&request).unwrap()).unwrap();
+        let sent = &body["input"][0];
+        assert!(sent.get("status").is_none());
+        assert_eq!(sent["id"], "rs_grok");
+        assert_eq!(sent["encrypted_content"], "opaque-grok-state");
+        assert_eq!(sent["summary"], serde_json::json!([]));
+        assert_eq!(sent["content"][0]["type"], "reasoning_text");
+        assert_eq!(sent["content"][0]["text"], "looked at the file");
+        let ProviderResponseItem::ResponsesOutput { item, .. } =
+            &request.messages[0].response_items[0]
+        else {
+            panic!("stored item is a responses output");
+        };
+        assert_eq!(item["status"], "completed");
+        assert!(item["content"][0].get("type").is_none());
+    }
+
+    #[test]
+    fn xai_responses_sends_hosted_search_and_hides_the_function_tool() {
+        let messages = vec![ChatMessage {
+            role: "user".into(),
+            content: crate::image_content::ModelContent::text("testing"),
+            tool_calls: None,
+            tool_call_id: None,
+            response_items: Vec::new(),
+        }];
+        let options = crate::agent::client::ChatRequestOptions {
+            reasoning_effort: Some(ReasoningEffort::High),
+            reasoning_request_format: None,
+            reasoning_stream_field: None,
+            tool_call_format: None,
+        };
+        let tools = vec![
+            ToolDef {
+                def_type: "function".into(),
+                function: crate::agent::client::ToolFunction {
+                    name: "web_search".into(),
+                    description: "Search".into(),
+                    parameters: serde_json::json!({"type": "object"}),
+                },
+            },
+            ToolDef {
+                def_type: "function".into(),
+                function: crate::agent::client::ToolFunction {
+                    name: "read_file".into(),
+                    description: "Read a file".into(),
+                    parameters: serde_json::json!({"type": "object"}),
+                },
+            },
+        ];
+        let xai = crate::request::PreparedModelRequest::new(
+            crate::request::RequestKind::MainTurn,
+            "xai",
+            "grok-4.7",
+            messages.clone(),
+            tools.clone(),
+            options.clone(),
+        );
+        let body: serde_json::Value =
+            serde_json::from_slice(&openai_responses_bytes_for_test(&xai).unwrap()).unwrap();
+        let kinds = body["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| {
+                (
+                    tool["type"].as_str().unwrap_or(""),
+                    tool["name"].as_str().unwrap_or(""),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            vec![
+                ("function", "read_file"),
+                ("web_search", ""),
+                ("x_search", ""),
+                ("code_interpreter", ""),
+            ]
+        );
+        assert_eq!(
+            body["include"],
+            serde_json::json!(["reasoning.encrypted_content", "no_inline_citations"])
+        );
+        let openai = crate::request::PreparedModelRequest::new(
+            crate::request::RequestKind::MainTurn,
+            "openai",
+            "gpt-5.6-sol",
+            messages,
+            tools,
+            options,
+        );
+        let openai_body: serde_json::Value =
+            serde_json::from_slice(&openai_responses_bytes_for_test(&openai).unwrap()).unwrap();
+        let openai_names = openai_body["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap_or(""))
+            .collect::<Vec<_>>();
+        assert_eq!(openai_names, vec!["web_search", "read_file"]);
+        assert_eq!(
+            openai_body["include"],
+            serde_json::json!(["reasoning.encrypted_content"])
+        );
+        assert!(validate_response_output_item(&serde_json::json!({
+            "id": "ws_1",
+            "type": "web_search_call",
+            "status": "completed"
+        }))
+        .is_ok());
     }
 
     #[test]
@@ -3830,6 +4461,7 @@ mod tests {
                         id: "call-1".into(),
                         call_type: "function".into(),
                         function: crate::agent::client::FunctionCall {
+                            arguments_retrieved_spans: Vec::new(),
                             name: "read_file".into(),
                             arguments: "{\"path\":\"input.txt\"}".into(),
                         },
@@ -3837,6 +4469,7 @@ mod tests {
                     tool_call_id: None,
                     response_items: vec![
                         ProviderResponseItem::ResponsesOutput {
+                            privacy_prefix_sha256: None,
                             source: ProviderStateSourceV1::for_test(
                                 "other-provider",
                                 ProviderProtocol::OpenAiResponses,
@@ -3849,6 +4482,7 @@ mod tests {
                             }),
                         },
                         ProviderResponseItem::ResponsesOutput {
+                            privacy_prefix_sha256: None,
                             source: ProviderStateSourceV1::for_test(
                                 "openai",
                                 ProviderProtocol::OpenAiResponses,
@@ -3857,6 +4491,7 @@ mod tests {
                             item: reasoning_item.clone(),
                         },
                         ProviderResponseItem::ResponsesOutput {
+                            privacy_prefix_sha256: None,
                             source: ProviderStateSourceV1::for_test(
                                 "openai",
                                 ProviderProtocol::OpenAiResponses,
@@ -3865,6 +4500,7 @@ mod tests {
                             item: earlier_reasoning_item.clone(),
                         },
                         ProviderResponseItem::ResponsesOutput {
+                            privacy_prefix_sha256: None,
                             source: ProviderStateSourceV1::for_test(
                                 "openai",
                                 ProviderProtocol::OpenAiResponses,
@@ -3873,6 +4509,7 @@ mod tests {
                             item: function_call_item.clone(),
                         },
                         ProviderResponseItem::ResponsesOutput {
+                            privacy_prefix_sha256: None,
                             source: ProviderStateSourceV1::for_test(
                                 "openai",
                                 ProviderProtocol::OpenAiResponses,
@@ -3896,11 +4533,15 @@ mod tests {
 
         let bytes = openai_responses_bytes_for_test(&request).unwrap();
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let mut sent_earlier = earlier_reasoning_item.clone();
+        let mut sent_reasoning = reasoning_item.clone();
+        sent_earlier.as_object_mut().unwrap().remove("status");
+        sent_reasoning.as_object_mut().unwrap().remove("status");
         assert_eq!(
             body["input"],
             serde_json::json!([
-                earlier_reasoning_item,
-                reasoning_item,
+                sent_earlier,
+                sent_reasoning,
                 message_item,
                 function_call_item,
                 {
@@ -3920,6 +4561,7 @@ mod tests {
     #[test]
     fn responses_replay_rejects_duplicate_indexes_and_excess_item_count() {
         let reasoning = |output_index: usize, id: String| ProviderResponseItem::ResponsesOutput {
+            privacy_prefix_sha256: None,
             source: ProviderStateSourceV1::for_test("openai", ProviderProtocol::OpenAiResponses),
             output_index,
             item: serde_json::json!({
@@ -3954,6 +4596,296 @@ mod tests {
     }
 
     #[test]
+    fn responses_replay_accepts_restored_history_and_preserves_issued_items() {
+        let config = crate::provider_filter::ProviderFilterConfig {
+            enabled: true,
+            adjustments: vec![crate::provider_filter::ContentAdjustment {
+                from: "private \"quoted\" \\ path".into(),
+                to: "replacement".into(),
+            }],
+            ..Default::default()
+        };
+        crate::provider_filter::with_test_filter(&config, || {
+            let source =
+                ProviderStateSourceV1::for_test("openai", ProviderProtocol::OpenAiResponses);
+            let issued = [
+                serde_json::json!({
+                    "id": "rs_1", "type": "reasoning", "summary": [],
+                    "encrypted_content": "opaque reasoning", "status": "completed"
+                }),
+                serde_json::json!({
+                    "id": "msg_1", "type": "message", "role": "assistant",
+                    "content": [{"type": "output_text", "text": "replacement", "annotations": []}],
+                    "status": "completed"
+                }),
+                serde_json::json!({
+                    "id": "fc_1", "type": "function_call", "call_id": "call-1",
+                    "name": "read_file", "arguments": "{\"path\":\"replacement.txt\"}",
+                    "status": "completed"
+                }),
+            ];
+            let message = ChatMessage {
+                role: "assistant".into(),
+                content: crate::image_content::ModelContent::text("private \"quoted\" \\ path"),
+                tool_calls: Some(vec![crate::agent::client::ToolCallMsg {
+                    id: "call-1".into(),
+                    call_type: "function".into(),
+                    function: crate::agent::client::FunctionCall {
+                        arguments_retrieved_spans: Vec::new(),
+                        name: "read_file".into(),
+                        arguments: serde_json::json!({"path": "private \"quoted\" \\ path.txt"})
+                            .to_string(),
+                    },
+                }]),
+                tool_call_id: None,
+                response_items: issued
+                    .iter()
+                    .enumerate()
+                    .map(
+                        |(output_index, item)| ProviderResponseItem::ResponsesOutput {
+                            privacy_prefix_sha256: None,
+                            source: source.clone(),
+                            output_index,
+                            item: item.clone(),
+                        },
+                    )
+                    .collect(),
+            };
+            let replay = response_output_items_for_replay(&message, &source)
+                .unwrap()
+                .unwrap();
+            assert_eq!(replay, issued.iter().collect::<Vec<_>>());
+
+            for field in ["id", "name", "arguments", "count"] {
+                let mut changed = message.clone();
+                let calls = changed.tool_calls.as_mut().unwrap();
+                match field {
+                    "id" => calls[0].id = "another-call".into(),
+                    "name" => calls[0].function.name = "write_file".into(),
+                    "arguments" => calls[0].function.arguments = "{\"path\":\"other.txt\"}".into(),
+                    "count" => calls.clear(),
+                    _ => unreachable!(),
+                }
+                assert!(
+                    matches!(
+                        response_output_items_for_replay(&changed, &source),
+                        Err(ProviderError::Protocol(error))
+                            if error.contains("canonical assistant tool calls")
+                    ),
+                    "{field}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn responses_replay_overlapping_aliases_stay_exact_after_final_filtering() {
+        let config = crate::provider_filter::ProviderFilterConfig {
+            enabled: true,
+            page_stand_in: crate::provider_filter::PageStandIn::Latin,
+            adjustments: vec![crate::provider_filter::ContentAdjustment {
+                from: "main-image.png".into(),
+                to: "alias-main-image.png".into(),
+            }],
+            ..Default::default()
+        };
+        crate::provider_filter::with_test_filter(&config, || {
+            let source =
+                ProviderStateSourceV1::for_test("openai", ProviderProtocol::OpenAiResponses);
+            let issued = [
+                serde_json::json!({
+                    "id":"rs_1", "type":"reasoning", "summary":[],
+                    "encrypted_content":"opaque-state", "status":"completed"
+                }),
+                serde_json::json!({
+                    "id":"msg_1", "type":"message", "role":"assistant",
+                    "content":[{"type":"output_text", "text":"Inspect alias-main-image.png", "annotations":[]}],
+                    "status":"completed"
+                }),
+                serde_json::json!({
+                    "id":"fc_1", "type":"function_call", "call_id":"call-1",
+                    "name":"view_image", "arguments":" { \"path\" : \"alias-main-image.png\" } ",
+                    "status":"completed"
+                }),
+            ];
+            let assistant = ChatMessage {
+                role: "assistant".into(),
+                content: crate::image_content::ModelContent::text("Inspect main-image.png"),
+                tool_calls: Some(vec![crate::agent::client::ToolCallMsg {
+                    id: "call-1".into(),
+                    call_type: "function".into(),
+                    function: crate::agent::client::FunctionCall {
+                        arguments_retrieved_spans: Vec::new(),
+                        name: "view_image".into(),
+                        arguments: "{\"path\":\"main-image.png\"}".into(),
+                    },
+                }]),
+                tool_call_id: None,
+                response_items: issued
+                    .iter()
+                    .enumerate()
+                    .map(
+                        |(output_index, item)| ProviderResponseItem::ResponsesOutput {
+                            privacy_prefix_sha256: None,
+                            source: source.clone(),
+                            output_index,
+                            item: item.clone(),
+                        },
+                    )
+                    .collect(),
+            };
+            let request = crate::request::PreparedModelRequest::new(
+                crate::request::RequestKind::ToolContinuation,
+                "openai",
+                "gpt-6.1-sol",
+                vec![
+                    ChatMessage {
+                        role: "user".into(),
+                        content: crate::image_content::ModelContent::text(
+                            "Authored main-image.png",
+                        ),
+                        tool_calls: None,
+                        tool_call_id: None,
+                        response_items: Vec::new(),
+                    },
+                    assistant,
+                    ChatMessage {
+                        role: "tool".into(),
+                        content: crate::image_content::ModelContent::text("RetrievedCanary"),
+                        tool_calls: None,
+                        tool_call_id: Some("call-1".into()),
+                        response_items: Vec::new(),
+                    },
+                ],
+                Vec::new(),
+                crate::agent::client::ChatRequestOptions::default(),
+            );
+            let original = serde_json::to_value(&request.messages).unwrap();
+            let filter = crate::provider_filter::current();
+            for _ in 0..2 {
+                let prepared = ProviderProtocol::OpenAiResponses
+                    .adapter()
+                    .prepare(&request, &source, None, None, None)
+                    .unwrap();
+                let (bytes, diagnostics) = crate::provider_replay::prepare_outbound(
+                    &prepared.body,
+                    &prepared.replay,
+                    &filter,
+                )
+                .unwrap();
+                let sent: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                assert!(diagnostics.is_empty());
+                assert_eq!(&sent["input"].as_array().unwrap()[1..4], &issued);
+                assert_eq!(sent["input"][0]["content"], "Authored alias-main-image.png");
+                assert_eq!(sent["input"][4]["type"], "function_call_output");
+                assert_eq!(sent["input"][4]["call_id"], "call-1");
+                assert!(sent["input"][4]["output"].as_str().unwrap().contains('«'));
+                assert!(!String::from_utf8(bytes)
+                    .unwrap()
+                    .contains("RetrievedCanary"));
+            }
+            assert_eq!(serde_json::to_value(&request.messages).unwrap(), original);
+
+            let prepared = ProviderProtocol::OpenAiResponses
+                .adapter()
+                .prepare(&request, &source, None, None, None)
+                .unwrap();
+            for (pattern, stopped) in [("opaque-state", true), ("null", false)] {
+                let stop_filter = crate::provider_filter::ProviderFilter::compile(
+                    &crate::provider_filter::ProviderFilterConfig {
+                        enabled: true,
+                        rules: vec![crate::provider_filter::ProviderFilterRule {
+                            id: "replay-stop".into(),
+                            target: crate::provider_filter::ProviderFilterTarget::Request,
+                            kind: crate::provider_filter::ProviderFilterKind::Literal,
+                            pattern: pattern.into(),
+                        }],
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                let result = crate::provider_replay::prepare_outbound(
+                    &prepared.body,
+                    &prepared.replay,
+                    &stop_filter,
+                );
+                assert_eq!(
+                    matches!(result, Err(ProviderError::FilterStopped { .. })),
+                    stopped,
+                    "stop scan must inspect restored items, not temporary masks"
+                );
+                if !stopped {
+                    result.unwrap();
+                }
+            }
+
+            let mut legacy = request;
+            legacy.messages[1].response_items.clear();
+            let prepared = ProviderProtocol::OpenAiResponses
+                .adapter()
+                .prepare(&legacy, &source, None, None, None)
+                .unwrap();
+            let (bytes, _) =
+                crate::provider_replay::prepare_outbound(&prepared.body, &prepared.replay, &filter)
+                    .unwrap();
+            let sent: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(
+                sent["input"][2]["arguments"],
+                "{\"path\":\"alias-main-image.png\"}"
+            );
+        });
+    }
+
+    #[test]
+    fn responses_replay_matches_object_arguments_after_existing_normalization() {
+        let canonical = r#"{"line":2,"path":"input.txt"}"#;
+        for raw in [
+            r#" { "path": "input.txt", "line": 2 } "#,
+            r#"{"path":"\u0069nput.txt","line":2}"#,
+            r#"{"line":2,"path":"input.txt"} trailing note"#,
+            r#"{"line":2,"path":"input.txt"}{"path":"input.txt","line":2}"#,
+        ] {
+            assert!(response_tool_arguments_match(raw, canonical), "{raw}");
+        }
+        for raw in [
+            r#"{"line":2,"path":"other.txt"}"#,
+            r#"{"line":2,"path":"input.txt"}{"line":3}"#,
+            r#"{"line":2,"path":"input.txt"}{"line":"#,
+            r#"["input.txt",2]"#,
+            r#"{"line":2,"path":"input.txt""#,
+        ] {
+            assert!(!response_tool_arguments_match(raw, canonical), "{raw}");
+        }
+    }
+
+    #[test]
+    fn responses_replay_restores_argument_values_once_and_keeps_keys_exact() {
+        let original = "private \"quoted\" \\ path";
+        let config = crate::provider_filter::ProviderFilterConfig {
+            enabled: true,
+            adjustments: vec![crate::provider_filter::ContentAdjustment {
+                from: original.into(),
+                to: "replacement".into(),
+            }],
+            ..Default::default()
+        };
+        crate::provider_filter::with_test_filter(&config, || {
+            let raw = serde_json::json!({"path": "replacement.txt"}).to_string();
+            let canonical = serde_json::json!({"path": format!("{original}.txt")}).to_string();
+            assert!(response_tool_arguments_match(&raw, &canonical));
+            assert!(response_tool_arguments_match(&raw, &raw));
+            assert!(!response_tool_arguments_match(
+                &raw,
+                &serde_json::json!({"path": "different.txt"}).to_string()
+            ));
+            assert!(!response_tool_arguments_match(
+                &serde_json::json!({"replacement": "value"}).to_string(),
+                &serde_json::json!({"private \"quoted\" \\ path": "value"}).to_string()
+            ));
+        });
+    }
+
+    #[test]
     fn responses_replay_rejects_output_that_disagrees_with_canonical_history() {
         let message = ChatMessage {
             role: "assistant".into(),
@@ -3961,6 +4893,7 @@ mod tests {
             tool_calls: None,
             tool_call_id: None,
             response_items: vec![ProviderResponseItem::ResponsesOutput {
+                privacy_prefix_sha256: None,
                 source: ProviderStateSourceV1::for_test(
                     "openai",
                     ProviderProtocol::OpenAiResponses,
@@ -3980,11 +4913,12 @@ mod tests {
             }],
         };
 
-        assert!(matches!(
-            response_output_items_for_replay(&message, &ProviderStateSourceV1::for_test("openai", ProviderProtocol::OpenAiResponses)),
-            Err(ProviderError::Protocol(message))
-                if message.contains("canonical assistant text")
-        ));
+        assert!(response_output_items_for_replay(
+            &message,
+            &ProviderStateSourceV1::for_test("openai", ProviderProtocol::OpenAiResponses),
+        )
+        .expect("a different provider sentence must still replay")
+        .is_some());
         assert_eq!(
             response_output_items_for_replay(
                 &message,
@@ -3996,6 +4930,49 @@ mod tests {
             .unwrap(),
             None,
             "foreign route state must be ignored so ordinary synthesis remains available"
+        );
+    }
+
+    #[test]
+    fn responses_replay_rejects_function_call_that_disagrees_with_canonical_history() {
+        let message = ChatMessage {
+            role: "assistant".into(),
+            content: crate::image_content::ModelContent::text("canonical text"),
+            tool_calls: Some(vec![crate::agent::client::ToolCallMsg {
+                id: "call-1".into(),
+                call_type: "function".into(),
+                function: crate::agent::client::FunctionCall {
+                    name: "read_file".into(),
+                    arguments: "{\"path\":\".\"}".into(),
+                    arguments_retrieved_spans: Vec::new(),
+                },
+            }]),
+            tool_call_id: None,
+            response_items: vec![ProviderResponseItem::ResponsesOutput {
+                privacy_prefix_sha256: None,
+                source: ProviderStateSourceV1::for_test(
+                    "openai",
+                    ProviderProtocol::OpenAiResponses,
+                ),
+                output_index: 0,
+                item: serde_json::json!({
+                    "id": "fc_1",
+                    "type": "function_call",
+                    "call_id": "call-1",
+                    "name": "list_dir",
+                    "arguments": "{\"path\":\".\"}",
+                    "status": "completed"
+                }),
+            }],
+        };
+        let error = response_output_items_for_replay(
+            &message,
+            &ProviderStateSourceV1::for_test("openai", ProviderProtocol::OpenAiResponses),
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("function calls do not match"),
+            "{error}"
         );
     }
 
@@ -4108,6 +5085,90 @@ mod tests {
     }
 
     #[test]
+    fn responses_decoder_aborts_a_confident_thinking_loop_and_keeps_the_rest() {
+        let mut decoder = OpenAiResponsesDecoder::new();
+        let loose = concat!(
+            "event: response.doom_loop_check\n",
+            "data: {\"type\":\"response.doom_loop_check\",\"doom_loop_check\":{\"triggers\":[\"tail_repetition:4@response\"]}}\n\n",
+            "event: response.doom_loop_check\n",
+            "data: not json\n\n",
+            "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"kept\"}\n\n",
+        );
+        let mut events = Vec::new();
+        for byte in loose.as_bytes() {
+            events.extend(decoder.push(&[*byte]).unwrap());
+        }
+        assert_eq!(events, vec![ProviderEvent::Text("kept".into())]);
+
+        let mut aborted = OpenAiResponsesDecoder::new();
+        let tight = concat!(
+            "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"loop\"}\n\n",
+            "data: {\"type\":\"response.doom_loop_check\",\"doom_loop_check\":{\"triggers\":[\"tail_repetition:8@thinking\"]}}\n\n",
+            "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"more\"}\n\n",
+        );
+        let mut seen = Vec::new();
+        let mut error = None;
+        for byte in tight.as_bytes() {
+            match aborted.push(&[*byte]) {
+                Ok(events) => seen.extend(events),
+                Err(err) => {
+                    error = Some(err);
+                    break;
+                }
+            }
+        }
+        assert_eq!(seen, vec![ProviderEvent::Text("loop".into())]);
+        assert_eq!(
+            error,
+            Some(ProviderError::StreamAnomaly(
+                crate::agent::stream::StreamAnomalyKind::RepetitionLoop
+            ))
+        );
+
+        let mut calling = OpenAiResponsesDecoder::new();
+        let with_call = concat!(
+            "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"call_id\":\"call-1\",\"name\":\"read_file\",\"arguments\":\"\"}}\n\n",
+            "data: {\"type\":\"response.doom_loop_check\",\"doom_loop_check\":{\"triggers\":[\"tail_repetition:8@thinking\"]}}\n\n",
+            "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":0,\"delta\":\"{}\"}\n\n",
+        );
+        let mut call_error = None;
+        for byte in with_call.as_bytes() {
+            if let Err(error) = calling.push(&[*byte]) {
+                call_error = Some(error);
+                break;
+            }
+        }
+        assert_eq!(
+            call_error,
+            Some(ProviderError::StreamAnomaly(
+                crate::agent::stream::StreamAnomalyKind::RepetitionLoop
+            ))
+        );
+        let mut hosted = OpenAiResponsesDecoder::with_request_id_for_test("req-ci");
+        let interpreter = concat!(
+            "data: {\"type\":\"response.code_interpreter_call.in_progress\",\"item_id\":\"ci-1\"}\n\n",
+            "data: {\"type\":\"response.code_interpreter_call_code.delta\",\"output_index\":0,\"delta\":\"print(1)\"}\n\n",
+            "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"ci-1\",\"type\":\"code_interpreter_call\",\"status\":\"completed\",\"code\":\"print(1)\"}}\n\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-ci\",\"model\":\"grok-4.7\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n",
+        );
+        let mut hosted_events = Vec::new();
+        for byte in interpreter.as_bytes() {
+            hosted_events.extend(hosted.push(&[*byte]).unwrap());
+        }
+        assert!(hosted_events
+            .iter()
+            .any(|event| matches!(event, ProviderEvent::ResponseItem(_))));
+
+        let mut completed = OpenAiResponsesDecoder::new();
+        let terminal = "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\",\"model\":\"grok-4.7\",\"status\":\"completed\",\"doom_loop_check\":{\"triggers\":[\"tail_repetition:8@thinking\"]},\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n";
+        let error = completed.push(terminal.as_bytes()).unwrap_err();
+        assert_eq!(
+            error,
+            ProviderError::StreamAnomaly(crate::agent::stream::StreamAnomalyKind::RepetitionLoop)
+        );
+    }
+
+    #[test]
     fn responses_decoder_maps_text_reasoning_tools_usage_finish_and_done() {
         let reasoning_item = serde_json::json!({
             "id": "rs_1",
@@ -4169,6 +5230,7 @@ mod tests {
                     arg: "\"input.txt\"}".into(),
                 },
                 ProviderEvent::ResponseItem(ProviderResponseItem::ResponsesOutput {
+                    privacy_prefix_sha256: None,
                     source: ProviderStateSourceV1::for_test(
                         "unknown",
                         ProviderProtocol::OpenAiResponses
@@ -4177,6 +5239,7 @@ mod tests {
                     item: reasoning_item,
                 }),
                 ProviderEvent::ResponseItem(ProviderResponseItem::ResponsesOutput {
+                    privacy_prefix_sha256: None,
                     source: ProviderStateSourceV1::for_test(
                         "unknown",
                         ProviderProtocol::OpenAiResponses
@@ -4185,6 +5248,7 @@ mod tests {
                     item: message_item,
                 }),
                 ProviderEvent::ResponseItem(ProviderResponseItem::ResponsesOutput {
+                    privacy_prefix_sha256: None,
                     source: ProviderStateSourceV1::for_test(
                         "unknown",
                         ProviderProtocol::OpenAiResponses
@@ -4371,6 +5435,7 @@ mod tests {
         assert_eq!(
             turn.response_items[0],
             ProviderResponseItem::ResponsesOutput {
+                privacy_prefix_sha256: None,
                 source: ProviderStateSourceV1::for_test(
                     "openai",
                     ProviderProtocol::OpenAiResponses
@@ -4382,6 +5447,7 @@ mod tests {
         assert_eq!(
             turn.response_items[1],
             ProviderResponseItem::ResponsesOutput {
+                privacy_prefix_sha256: None,
                 source: ProviderStateSourceV1::for_test(
                     "openai",
                     ProviderProtocol::OpenAiResponses
@@ -4392,6 +5458,26 @@ mod tests {
         );
         assert_eq!(turn.tool_calls.len(), 1);
         assert_eq!(turn.tool_calls[0].id, "call-1");
+    }
+
+    #[test]
+    fn chatgpt_plan_midstream_usage_limit_is_the_plan_message() {
+        let event = r#"{"type":"response.failed","response":{"error":{"code":"subscription_sharing_usage_limit_exceeded"}}}"#;
+        let mut plan = OpenAiResponsesDecoder::new();
+        plan.chatgpt_plan = true;
+        let error = plan
+            .push(format!("data: {event}\n\n").as_bytes())
+            .unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("ChatGPT plan usage limit"));
+        assert!(!message.contains("openai-codex"));
+        assert!(!error.to_string().contains("subscription_sharing"));
+
+        let mut codex = OpenAiResponsesDecoder::new();
+        let codex_error = codex
+            .push(format!("data: {event}\n\n").as_bytes())
+            .unwrap_err();
+        assert_eq!(codex_error, ProviderError::ResponseFailed);
     }
 
     #[test]
@@ -4417,6 +5503,139 @@ mod tests {
             assert_eq!(error, expected);
             assert!(!error.to_string().contains("sentinel-provider-body"));
         }
+    }
+
+    #[test]
+    fn responses_decoder_classifies_structured_cyber_policy_failures_safely() {
+        for event in [
+            serde_json::json!({
+                "type": "response.failed",
+                "response": { "error": {
+                    "code": "cyber_policy",
+                    "message": "sentinel-provider-private-body"
+                }}
+            }),
+            serde_json::json!({
+                "type": "response.failed",
+                "error": {
+                    "code": "cyber_policy",
+                    "message": "sentinel-provider-private-body"
+                }
+            }),
+            serde_json::json!({
+                "type": "response.failed",
+                "code": "cyber_policy",
+                "message": "sentinel-provider-private-body"
+            }),
+            serde_json::json!({
+                "type": "error",
+                "error": {
+                    "code": "cyber_policy",
+                    "message": "sentinel-provider-private-body"
+                }
+            }),
+            serde_json::json!({
+                "type": "error",
+                "code": "cyber_policy",
+                "message": "sentinel-provider-private-body"
+            }),
+        ] {
+            let mut decoder = OpenAiResponsesDecoder::new();
+            let error = decoder
+                .push(format!("data: {event}\n\n").as_bytes())
+                .unwrap_err();
+            assert_eq!(error, ProviderError::ResponseRefused);
+            assert_eq!(error.to_string(), "provider response was refused");
+            assert!(!format!("{error:?}").contains("sentinel-provider-private-body"));
+        }
+    }
+
+    #[test]
+    fn responses_decoder_keeps_unknown_failure_codes_generic_and_private() {
+        for code in [
+            serde_json::json!("unknown_policy"),
+            serde_json::json!("CYBER_POLICY"),
+            serde_json::json!("cyber_policy-sentinel-provider-private-body"),
+            serde_json::json!(123),
+            serde_json::json!(["cyber_policy"]),
+            serde_json::json!({ "code": "cyber_policy" }),
+            serde_json::Value::Null,
+        ] {
+            for event in [
+                serde_json::json!({
+                    "type": "response.failed",
+                    "response": { "error": {
+                        "code": code.clone(),
+                        "message": "cyber_policy sentinel-provider-private-body"
+                    }}
+                }),
+                serde_json::json!({
+                    "type": "error",
+                    "error": {
+                        "code": code.clone(),
+                        "message": "cyber_policy sentinel-provider-private-body"
+                    }
+                }),
+                serde_json::json!({
+                    "type": "error",
+                    "code": code.clone(),
+                    "message": "cyber_policy sentinel-provider-private-body"
+                }),
+            ] {
+                let mut decoder = OpenAiResponsesDecoder::new();
+                let error = decoder
+                    .push(format!("data: {event}\n\n").as_bytes())
+                    .unwrap_err();
+                assert_eq!(error, ProviderError::ResponseFailed);
+                assert!(!format!("{error:?}").contains("sentinel-provider-private-body"));
+                assert!(!error.to_string().contains("sentinel-provider-private-body"));
+            }
+        }
+    }
+
+    #[test]
+    fn responses_policy_failure_after_tool_fragments_cannot_finish_a_turn() {
+        let mut decoder = OpenAiResponsesDecoder::new();
+        let mut assembler = crate::agent::stream::AssistantTurnAssembler::new();
+        for event in [
+            serde_json::json!({
+                "type": "response.output_item.added", "output_index": 0,
+                "item": { "type": "function_call", "call_id": "call-1",
+                    "name": "read_file", "arguments": "" }
+            }),
+            serde_json::json!({
+                "type": "response.function_call_arguments.delta", "output_index": 0,
+                "delta": "{\"path\":\"copied-input.txt\"}"
+            }),
+        ] {
+            for item in decoder
+                .push(format!("data: {event}\n\n").as_bytes())
+                .unwrap()
+            {
+                assert!(!matches!(
+                    &item,
+                    ProviderEvent::Finish { .. } | ProviderEvent::Done
+                ));
+                assembler.push(&item).unwrap();
+            }
+        }
+        let failure = serde_json::json!({
+            "type": "response.failed",
+            "response": { "error": {
+                "code": "cyber_policy", "message": "sentinel-provider-private-body"
+            }}
+        });
+        assert_eq!(
+            decoder
+                .push(format!("data: {failure}\n\n").as_bytes())
+                .unwrap_err(),
+            ProviderError::ResponseRefused
+        );
+        assert_eq!(
+            assembler.finish().unwrap_err(),
+            ProviderError::PrematureEof,
+            "a failed response must not expose partial tool calls as a completed turn"
+        );
     }
 
     #[test]
@@ -5143,6 +6362,24 @@ mod tests {
     }
 
     #[test]
+    fn chatgpt_plan_responses_body_sets_store_false_and_stream_true() {
+        let request = first_party_request(
+            "openai-chatgpt",
+            "gpt-6.1-sol",
+            Some(ReasoningEffort::Medium),
+        );
+        let body: serde_json::Value =
+            serde_json::from_slice(&openai_responses_bytes_for_test(&request).unwrap()).unwrap();
+        assert_eq!(body["store"], false);
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["model"], "gpt-6.1-sol");
+        assert!(body.get("prompt_cache_key").is_none());
+        assert!(body.get("max_output_tokens").is_none());
+        assert!(body.get("prompt_cache_retention").is_none());
+        assert!(body.get("temperature").is_none());
+    }
+
+    #[test]
     fn mimo_and_deepseek_chat_use_exact_thinking_contracts() {
         let mimo = first_party_request("mimo", "mimo-v2.5-pro", Some(ReasoningEffort::High));
         let mimo = chat_completions_json_for_test(&mimo);
@@ -5304,6 +6541,144 @@ mod tests {
         assert_eq!(off["prompt_cache_options"]["mode"], "explicit");
         assert!(off.to_string().find("prompt_cache_breakpoint").is_none());
     }
+
+    fn assemble_responses_tool_turn(
+        deltas: &[((usize, usize), &str)],
+        message_text: &str,
+    ) -> crate::agent::stream::AssembledAssistantTurn {
+        let source =
+            ProviderStateSourceV1::for_test("xai-oauth", ProviderProtocol::OpenAiResponses);
+        let arguments = r#"{"path":"."}"#;
+        let mut events = Vec::new();
+        for ((output_index, content_index), delta) in deltas {
+            events.push(serde_json::json!({
+                "type": "response.output_text.delta",
+                "output_index": output_index,
+                "content_index": content_index,
+                "delta": delta,
+            }));
+        }
+        events.push(serde_json::json!({
+            "type": "response.output_item.added",
+            "output_index": 2,
+            "item": {
+                "type": "function_call",
+                "call_id": "call-1",
+                "name": "list_dir",
+                "arguments": arguments,
+            },
+        }));
+        events.push(serde_json::json!({
+            "type": "response.completed",
+            "response": {
+                "status": "completed",
+                "output": [
+                    {
+                        "id": "rs_1",
+                        "type": "reasoning",
+                        "encrypted_content": "opaque-encrypted",
+                        "status": "completed"
+                    },
+                    {
+                        "id": "msg_1",
+                        "type": "message",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [{
+                            "type": "output_text",
+                            "text": message_text,
+                            "annotations": []
+                        }]
+                    },
+                    {
+                        "id": "fc_1",
+                        "type": "function_call",
+                        "call_id": "call-1",
+                        "name": "list_dir",
+                        "arguments": arguments,
+                        "status": "completed"
+                    }
+                ],
+                "usage": {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5}
+            }
+        }));
+        let body = events
+            .into_iter()
+            .map(|event| format!("data: {event}\n\n"))
+            .collect::<String>();
+        let mut decoder = OpenAiResponsesDecoder::for_source(source, None);
+        let mut assembler = crate::agent::stream::AssistantTurnAssembler::new();
+        for event in decoder.push(body.as_bytes()).unwrap() {
+            assembler.push(&event).unwrap();
+        }
+        for event in decoder.finish().unwrap() {
+            assembler.push(&event).unwrap();
+        }
+        assembler.finish().unwrap()
+    }
+
+    fn assistant_from_turn(turn: crate::agent::stream::AssembledAssistantTurn) -> ChatMessage {
+        let calls = turn.tool_calls;
+        ChatMessage {
+            role: "assistant".into(),
+            content: crate::image_content::ModelContent::text(turn.content)
+                .with_retrieved_spans(turn.retrieved_spans),
+            tool_calls: (!calls.is_empty()).then(|| {
+                calls
+                    .into_iter()
+                    .map(|call| crate::agent::client::ToolCallMsg {
+                        id: call.id,
+                        call_type: "function".into(),
+                        function: crate::agent::client::FunctionCall {
+                            name: call.name,
+                            arguments: call.arguments,
+                            arguments_retrieved_spans: call.arguments_retrieved_spans,
+                        },
+                    })
+                    .collect()
+            }),
+            tool_call_id: None,
+            response_items: turn.response_items,
+        }
+    }
+
+    fn replay_responses_turn(message: &ChatMessage) -> Result<(), ProviderError> {
+        let source =
+            ProviderStateSourceV1::for_test("xai-oauth", ProviderProtocol::OpenAiResponses);
+        response_output_items_for_replay(message, &source).map(|_| ())
+    }
+
+    #[test]
+    fn responses_tool_turn_matching_output_text_replays() {
+        let message_text = "Listing the workspace.";
+        let turn = assemble_responses_tool_turn(&[((1, 0), message_text)], message_text);
+        assert_eq!(turn.finish_reason, FinishReason::ToolCalls);
+        assert_eq!(turn.content, message_text);
+        let message = assistant_from_turn(turn);
+        replay_responses_turn(&message).expect("matching deltas replay");
+    }
+
+    #[test]
+    fn responses_tool_turn_uncovered_output_text_replays_completed_message() {
+        let message_text = "Listing the workspace.";
+        let turn = assemble_responses_tool_turn(
+            &[
+                ((0, 0), "uncovered reasoning prose"),
+                ((1, 1), "extra part"),
+            ],
+            message_text,
+        );
+        assert_eq!(turn.finish_reason, FinishReason::ToolCalls);
+        let message = assistant_from_turn(turn);
+        let stored = message.content.as_str().map(str::to_string);
+        if let Err(error) = replay_responses_turn(&message) {
+            panic!("replay rejected completed message text: {error}; canonical={stored:?}");
+        }
+        assert_eq!(message.content.as_str(), Some(message_text));
+        let stored = message.content.as_str().unwrap();
+        assert!(!stored.contains("uncovered"));
+        assert!(!stored.contains("extra part"));
+    }
 }
 
 #[cfg(test)]
@@ -5370,6 +6745,7 @@ mod native_replay_tests {
                         id: call.id,
                         call_type: "function".into(),
                         function: crate::agent::client::FunctionCall {
+                            arguments_retrieved_spans: Vec::new(),
                             name: call.name,
                             arguments: call.arguments,
                         },

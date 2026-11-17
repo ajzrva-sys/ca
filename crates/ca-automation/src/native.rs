@@ -22,8 +22,21 @@ pub enum EngineOperation {
         repository: PathBuf,
         request: MechanisticRequestV1,
     },
+    /// Host-only binding: no native path or selection member enters model IO.
+    FileMove {
+        private_root: PathBuf,
+        binding: crate::private_files::MoveBinding,
+    },
 }
 pub struct AutomationEngine;
+pub type FileMoveProgress = std::sync::Arc<
+    dyn Fn(&ca_automation_protocol::private_files::FileMoveProgressV1) + Send + Sync,
+>;
+#[derive(Default)]
+pub struct FileMoveHooks {
+    pub progress: Option<FileMoveProgress>,
+    pub cancelled: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+}
 impl AutomationEngine {
     /// These typed actions apply required isolation at every repository command
     /// boundary. Hosts may leave their trusted coordinator outside an outer
@@ -48,6 +61,17 @@ impl AutomationEngine {
     ) -> Result<serde_json::Value> {
         context.validate().map_err(anyhow::Error::msg)?;
         match operation {
+            EngineOperation::FileMove {
+                private_root,
+                binding,
+            } => {
+                let files = crate::private_files::PrivateFiles::open(private_root)?;
+                let expected = files.bind_move(&binding.selection, &binding.destination)?;
+                anyhow::ensure!(
+                    serde_json::to_vec(&expected)? == serde_json::to_vec(binding)?,
+                    "private move binding changed"
+                );
+            }
             EngineOperation::Workflow { request, .. } => {
                 ca_automation_protocol::validate_workflow_request(request)
                     .map_err(anyhow::Error::msg)?
@@ -81,6 +105,13 @@ impl AutomationEngine {
         operation: EngineOperation,
     ) -> Result<ExecutionReceipt> {
         Self::preview(context, &operation)?;
+        if let EngineOperation::FileMove {
+            private_root,
+            binding,
+        } = operation
+        {
+            return Self::start_file_move(context, private_root, binding).await;
+        }
         let store = RunStore::open(context)?;
         let existing = store.status()?;
         if existing.state.terminal() {
@@ -142,6 +173,9 @@ impl AutomationEngine {
         let result = EXECUTION_STORE
             .scope(store.clone(), async {
                 match operation {
+                    EngineOperation::FileMove { .. } => {
+                        unreachable!("file move has a journal-aware admission path")
+                    }
                     EngineOperation::Workflow {
                         config_path,
                         request,
@@ -245,6 +279,103 @@ impl AutomationEngine {
                 ExecutionState::NeedsAttention,
                 None,
                 Some(format!("{error:#}")),
+            ),
+        }
+    }
+
+    async fn start_file_move(
+        context: &ExecutionContext,
+        private_root: PathBuf,
+        binding: crate::private_files::MoveBinding,
+    ) -> Result<ExecutionReceipt> {
+        let context = context.clone();
+        tokio::task::spawn_blocking(move || {
+            Self::execute_private_move(&context, private_root, binding, FileMoveHooks::default())
+        })
+        .await
+        .context("private move executor stopped")?
+    }
+
+    /// The caller runs this native executor on an owned blocking worker.
+    pub fn execute_private_move(
+        context: &ExecutionContext,
+        private_root: PathBuf,
+        binding: crate::private_files::MoveBinding,
+        hooks: FileMoveHooks,
+    ) -> Result<ExecutionReceipt> {
+        Self::preview(
+            context,
+            &EngineOperation::FileMove {
+                private_root: private_root.clone(),
+                binding: binding.clone(),
+            },
+        )?;
+        let store = RunStore::open(context)?;
+        let _owner = store.execution_lease()?;
+        let _resources = store.acquire_resources()?;
+        let status = store.status()?;
+        if status.state == ExecutionState::NeedsAttention {
+            store.clear_cancel_for_private_continuation()?;
+        }
+        if status.state == ExecutionState::Succeeded {
+            return Ok(status);
+        }
+        if status.state == ExecutionState::Prepared {
+            store.start()?;
+        }
+        let status = store.status()?;
+        if status.actions.is_empty() {
+            store.prepare_action("target")?;
+        }
+        let action = store
+            .status()?
+            .actions
+            .into_iter()
+            .find(|a| a.id == "target")
+            .context("file move target is missing")?;
+        if action.state == crate::runtime::ActionState::Confirmed {
+            let result = action.result.context("file move receipt is missing")?;
+            return store.finish(ExecutionState::Succeeded, Some(result), None);
+        }
+        if action.state == crate::runtime::ActionState::Prepared {
+            store.begin_action("target")?;
+        }
+        let result = (|| {
+            let files = crate::private_files::PrivateFiles::open(&private_root)?;
+            files.execute(
+                &binding,
+                &crate::private_files::MoveControl {
+                    cancel: Some(&|| {
+                        store.cancel_requested().unwrap_or(true)
+                            || hooks
+                                .cancelled
+                                .as_ref()
+                                .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire))
+                    }),
+                    progress: hooks.progress.as_deref().map(|f| {
+                        f as &dyn Fn(&ca_automation_protocol::private_files::FileMoveProgressV1)
+                    }),
+                    ..Default::default()
+                },
+            )
+        })();
+        match result {
+            Ok(progress) if progress.cancelled => store.finish(
+                ExecutionState::NeedsAttention,
+                Some(serde_json::to_value(progress)?),
+                Some("private batch parked; completed entries are journaled".into()),
+            ),
+            Ok(progress) => {
+                let value = serde_json::to_value(progress)?;
+                // This read-back comes from synchronized per-file journals. A
+                // lost aggregate receipt never causes a filesystem action replay.
+                store.reconcile_action("target", Some(value.clone()), false)?;
+                store.finish(ExecutionState::Succeeded, Some(value), None)
+            }
+            Err(_) => store.finish(
+                ExecutionState::NeedsAttention,
+                None,
+                Some("private batch needs local journal reconciliation".into()),
             ),
         }
     }

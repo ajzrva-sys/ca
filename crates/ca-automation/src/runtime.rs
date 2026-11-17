@@ -495,6 +495,52 @@ impl RunStore {
         }
         Ok(())
     }
+    /// Prepare, begin, and confirm one effect. A confirmed action returns the
+    /// stored result and does not run the effect again.
+    pub fn perform_once<F>(&self, id: &str, effect: F) -> Result<serde_json::Value>
+    where
+        F: FnOnce() -> Result<serde_json::Value>,
+    {
+        self.prepare_action(id)?;
+        if !self.begin_action(id)? {
+            let receipt = self.status()?;
+            return Ok(receipt
+                .actions
+                .iter()
+                .find(|action| action.id == id)
+                .and_then(|action| action.result.clone())
+                .unwrap_or(serde_json::Value::Null));
+        }
+        match effect() {
+            Ok(value) => {
+                if let Err(error) = self.confirm_action(id, value.clone()) {
+                    let _ = self.mark_unknown(id);
+                    return Err(error);
+                }
+                Ok(value)
+            }
+            Err(error) => {
+                let _ = self.mark_unknown(id);
+                Err(error)
+            }
+        }
+    }
+
+    pub fn mark_unknown(&self, id: &str) -> Result<()> {
+        let _lock = self.lock()?;
+        let mut receipt = self.status()?;
+        let action = receipt
+            .actions
+            .iter_mut()
+            .find(|action| action.id == id)
+            .context("unknown action")?;
+        if action.state == ActionState::Running {
+            action.state = ActionState::Unknown;
+            self.write(&receipt)?;
+        }
+        Ok(())
+    }
+
     pub fn begin_action(&self, id: &str) -> Result<bool> {
         let _lock = self.lock()?;
         let mut r = self.status()?;
@@ -600,6 +646,27 @@ impl RunStore {
             return Ok(false);
         }
         read(&path, 16)
+    }
+    /// The identical private operation is explicitly admitted again under its
+    /// execution lease. Completed entries remain immutable in the file journal.
+    pub(crate) fn clear_cancel_for_private_continuation(&self) -> Result<()> {
+        let _lock = self.lock()?;
+        let mut r = self.status()?;
+        anyhow::ensure!(
+            r.state == ExecutionState::NeedsAttention
+                && r.actions.iter().any(|a| a.id == "target"
+                    && matches!(a.state, ActionState::Running | ActionState::Unknown)),
+            "private operation is not parked for continuation"
+        );
+        match fs::remove_file(self.root.join("cancel.json")) {
+            Ok(()) => File::open(&self.root)?.sync_all()?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+        r.state = ExecutionState::Running;
+        r.result = None;
+        r.reason = None;
+        self.write(&r)
     }
     pub fn reconcile(&self) -> Result<ExecutionReceipt> {
         let Ok(_executor) = self.execution_lease() else {
@@ -839,6 +906,50 @@ mod tests {
         );
         Ok(())
     }
+    #[test]
+    fn one_observed_effect_is_not_repeated_when_the_local_write_fails() -> Result<()> {
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
+        let address = listener.local_addr()?;
+        let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let hits_thread = std::sync::Arc::clone(&hits);
+        std::thread::spawn(move || {
+            if let Ok((mut socket, _)) = listener.accept() {
+                hits_thread.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let _ = std::io::Write::write_all(&mut socket, b"ok");
+            }
+        });
+        let t = tempfile::tempdir()?;
+        let mut ctx = context(&t, "durable");
+        ctx.output_bytes = 4;
+        let store = RunStore::open(&ctx)?;
+        store.start()?;
+        let failed = store.perform_once("effect", || {
+            let mut socket = std::net::TcpStream::connect(address)?;
+            let mut buffer = [0u8; 2];
+            std::io::Read::read_exact(&mut socket, &mut buffer)?;
+            Ok(serde_json::json!({"body":"ok"}))
+        });
+        assert!(failed.is_err(), "oversized local confirmation must fail");
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let again = store.perform_once("effect", || {
+            let _ = std::net::TcpStream::connect(address)?;
+            Ok(serde_json::json!("replayed"))
+        });
+        assert!(again.is_err(), "an uncertain effect must not run again");
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        store.reconcile_action("effect", Some(serde_json::json!({"body":"ok"})), false)?;
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let status = store.status()?;
+        let action = status
+            .actions
+            .iter()
+            .find(|action| action.id == "effect")
+            .unwrap();
+        assert_eq!(action.state, ActionState::Confirmed);
+        assert_eq!(action.result.as_ref().unwrap()["body"], "ok");
+        Ok(())
+    }
+
     #[test]
     fn unknown_effect_is_held_until_readback() -> Result<()> {
         let t = tempfile::tempdir()?;

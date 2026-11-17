@@ -2,7 +2,6 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
 
 
@@ -27,13 +26,13 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
 
 
 
-
+│ Working on your request…
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Add a follow-up…                                                                                │
-╰ Esc stop · Enter interrupt · Alt+Enter queue ────────────────────────────────────── agent · auto ╯
-Working on your request…
+│› Add a follow-up…                                                                                │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto
+Esc stop · queue · Alt+S · Enter queue · Ctrl+S send now
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
 
 
 
@@ -52,8 +51,9 @@ Working on your request…
 
 
 
-
+│ Working on your request…
 ╭──────────────────────────────────────────────────────────╮
-│› ▌Add a follow-up…                                        │
-╰ Esc stop · Enter interrupt · Alt+Enter queue ────────────╯
-Working on your request…
+│› Add a follow-up…                                        │
+╰──────────────────────────────────────────────────────────╯
+ca · model auto
+Esc stop · queue · Alt+S · Enter queue · Ctrl+S send now

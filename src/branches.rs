@@ -420,6 +420,7 @@ mod tests {
 
     fn message(role: Role, content: &str, second: i64) -> Message {
         Message {
+            retrieved_spans: Some(Vec::new()),
             role,
             content: content.into(),
             tool_calls: None,

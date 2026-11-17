@@ -17,6 +17,7 @@ pub enum KeyAction {
     QueueInput,
     SaveOrSteer,
     ToggleExpand,
+    ToggleTaskMap,
     HistorySearch,
     StashDraft,
     ComposerUndo,
@@ -27,6 +28,7 @@ pub enum KeyAction {
     TranscriptTop,
     TranscriptBottom,
     CopyTranscript,
+    QuoteSelection,
     SplitHorizontal,
     SplitVertical,
     NextPane,
@@ -35,7 +37,7 @@ pub enum KeyAction {
 }
 
 impl KeyAction {
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 26] = [
         Self::ModelPicker,
         Self::OpenEditor,
         Self::CycleModel,
@@ -45,6 +47,7 @@ impl KeyAction {
         Self::QueueInput,
         Self::SaveOrSteer,
         Self::ToggleExpand,
+        Self::ToggleTaskMap,
         Self::HistorySearch,
         Self::StashDraft,
         Self::ComposerUndo,
@@ -55,6 +58,7 @@ impl KeyAction {
         Self::TranscriptTop,
         Self::TranscriptBottom,
         Self::CopyTranscript,
+        Self::QuoteSelection,
         Self::SplitHorizontal,
         Self::SplitVertical,
         Self::NextPane,
@@ -73,6 +77,7 @@ impl KeyAction {
             Self::QueueInput => "queue_input",
             Self::SaveOrSteer => "save_or_steer",
             Self::ToggleExpand => "toggle_expand",
+            Self::ToggleTaskMap => "toggle_task_map",
             Self::HistorySearch => "history_search",
             Self::StashDraft => "stash_draft",
             Self::ComposerUndo => "composer_undo",
@@ -83,6 +88,7 @@ impl KeyAction {
             Self::TranscriptTop => "transcript_top",
             Self::TranscriptBottom => "transcript_bottom",
             Self::CopyTranscript => "copy_transcript",
+            Self::QuoteSelection => "quote_selection",
             Self::SplitHorizontal => "split_horizontal",
             Self::SplitVertical => "split_vertical",
             Self::NextPane => "next_pane",
@@ -102,6 +108,7 @@ impl KeyAction {
             Self::QueueInput => "Queue message / save queued edit",
             Self::SaveOrSteer => "Interrupt and send / save session when idle",
             Self::ToggleExpand => "Expand latest response",
+            Self::ToggleTaskMap => "Expand or collapse task map",
             Self::HistorySearch => "Search input history",
             Self::StashDraft => "Stash composer draft",
             Self::ComposerUndo => "Undo composer edit",
@@ -112,6 +119,7 @@ impl KeyAction {
             Self::TranscriptTop => "Jump to oldest transcript message",
             Self::TranscriptBottom => "Jump to latest transcript message",
             Self::CopyTranscript => "Copy complete visible transcript",
+            Self::QuoteSelection => "Quote selection into the composer",
             Self::SplitHorizontal => "Split pane horizontally",
             Self::SplitVertical => "Split pane vertically",
             Self::NextPane => "Focus next pane",
@@ -131,6 +139,7 @@ impl KeyAction {
             Self::QueueInput => &["alt+enter"],
             Self::SaveOrSteer => &["ctrl+s"],
             Self::ToggleExpand => &["ctrl+o"],
+            Self::ToggleTaskMap => &["ctrl+x t"],
             Self::HistorySearch => &["ctrl+x ctrl+r"],
             Self::StashDraft => &["ctrl+x s"],
             Self::ComposerUndo => &["ctrl+x u"],
@@ -144,6 +153,7 @@ impl KeyAction {
             Self::TranscriptTop => &["ctrl+home"],
             Self::TranscriptBottom => &["ctrl+end"],
             Self::CopyTranscript => &["ctrl+x c"],
+            Self::QuoteSelection => &["alt+q"],
             Self::SplitHorizontal => &["ctrl+x h"],
             Self::SplitVertical => &["ctrl+x v"],
             Self::NextPane => &["ctrl+x n"],
@@ -412,7 +422,7 @@ impl KeyChord {
             .first()
             .is_some_and(|stroke| stroke.is_ctrl_char('r'))
         {
-            anyhow::bail!("Ctrl+R is permanently reserved for Diff");
+            anyhow::bail!("Ctrl+R is reserved for previous sessions");
         }
         Ok(Self(strokes))
     }
@@ -539,8 +549,8 @@ impl Keymap {
                     (true, Some(stroke)) if chord.0[1] == stroke => {
                         return KeyResolution::Action(*action);
                     }
-                    // An unmatched Ctrl+R remains the fixed Diff shortcut;
-                    // only an explicit Ctrl+R second stroke may consume it.
+                    // An unmatched Ctrl+R stays with the input loop, which opens
+                    // previous sessions. It is not an alias for a plain second stroke.
                     (true, Some(stroke))
                         if held_control.is_none()
                             && !stroke.is_ctrl_char('r')

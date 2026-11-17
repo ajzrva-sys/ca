@@ -1,16 +1,15 @@
-# ca — Complete Feature Spec (1:1 Cursor Agent TUI clone)
+# ca — Historical feature inventory
 
-> Historical parity inventory, not current implementation truth. Several status sections and paths are stale. Use `docs/.INDEX.md`, `CONTINUITY.md`, `ARCHITECTURE.md`, and `PARITY.md`; verify every behavior against primary source/tests and read-only oracle evidence before acting.
+> Historical inventory, not current implementation truth, and not a requirement to match Cursor Agent. Several status sections and paths are stale. Use `docs/.INDEX.md`, `CONTINUITY.md`, and `ARCHITECTURE.md`. Verify behavior against primary source and tests.
 
 ## Architecture Overview
 
-`ca` replicates the Cursor Agent CLI TUI in Rust. Source: `~/project/ca/`. Binary: `~/.local/bin/ca`.
+`ca` is a local agent harness written in Rust. Source: this checkout. Binary: `~/.local/bin/ca`.
 Config: `~/.config/ca/config.toml`. Sessions: `~/.local/share/ca/sessions/`.
 
 **Stack:** ratatui 0.29, crossterm 0.28, tokio, reqwest, serde, pulldown-cmark 0.12.
 
-The entire TUI of cursor-agent is ~458 ink/React components in `1683.index.js` (1MB). All rendering is local.
-Only the LLM agent worker goes to the network (we replace `agentn.global.api5.cursor.sh` with local OpenAI-compatible APIs).
+Rendering stays local. Provider calls use configurable APIs. The old inventory below compared the TUI with a Cursor bundle. That comparison is not the product goal.
 
 ---
 

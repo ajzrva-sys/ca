@@ -1825,6 +1825,10 @@ pub fn validate_route_preset_for_config(
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
+    /// Propose a reviewable executable task map for ordinary interactive work.
+    /// Off unless the user turns it on. A normal message stays a chat turn.
+    #[serde(default = "default_automatic_task_breakdown")]
+    pub automatic_task_breakdown: bool,
     /// Ordinary tasks delegate useful independent work without a special mode.
     #[serde(default = "default_keep_awake")]
     pub proactive_delegation: bool,
@@ -1859,6 +1863,13 @@ pub struct AgentConfig {
     pub subagent_output_bytes: usize,
     #[serde(default)]
     pub modes: HashMap<String, CustomModeConfig>,
+    /// Absent keeps the current in-process child path. `isolated` fails until
+    /// this platform has a native worker qualification. This is not a model argument.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child_execution: Option<crate::execution_grant::ChildExecutionMode>,
+    /// Cheaper model for compaction. Unset uses the session model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compaction_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -1867,6 +1878,24 @@ pub enum ToolDiscoveryMode {
     #[default]
     Eager,
     Lazy,
+}
+
+impl ToolDiscoveryMode {
+    pub const ALL: [Self; 2] = [Self::Eager, Self::Lazy];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Eager => "Eager",
+            Self::Lazy => "Lazy",
+        }
+    }
+
+    pub const fn config_value(self) -> &'static str {
+        match self {
+            Self::Eager => "eager",
+            Self::Lazy => "lazy",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -1915,6 +1944,9 @@ fn default_max_turns() -> usize {
 fn default_keep_awake() -> bool {
     true
 }
+fn default_automatic_task_breakdown() -> bool {
+    false
+}
 fn default_idle_inhibition() -> bool {
     // FreeBSD has no native idle-inhibition backend. An explicit request still
     // reports unavailability; ordinary runs do not request an unsupported feature.
@@ -1951,6 +1983,7 @@ fn default_subagent_output() -> usize {
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
+            automatic_task_breakdown: false,
             proactive_delegation: true,
             review_changes: true,
             max_turns: default_max_turns(),
@@ -1967,6 +2000,8 @@ impl Default for AgentConfig {
             subagent_runtime_secs: default_subagent_runtime(),
             subagent_output_bytes: default_subagent_output(),
             modes: HashMap::new(),
+            child_execution: None,
+            compaction_model: None,
         }
     }
 }
@@ -2463,6 +2498,65 @@ impl std::fmt::Debug for ConfigStore {
     }
 }
 
+#[derive(serde::Deserialize)]
+struct ProviderFilterDocument {
+    #[serde(default)]
+    provider_filter: crate::provider_filter::ProviderFilterConfig,
+}
+
+fn parse_provider_filter_document(
+    raw: &str,
+) -> anyhow::Result<crate::provider_filter::ProviderFilterConfig> {
+    if raw.trim().is_empty() {
+        return Ok(crate::provider_filter::ProviderFilterConfig::default());
+    }
+    let document: ProviderFilterDocument = toml::from_str(raw)?;
+    Ok(document.provider_filter)
+}
+
+fn canonical_filter_table(
+    config: &crate::provider_filter::ProviderFilterConfig,
+) -> anyhow::Result<toml_edit::Table> {
+    let text = toml::to_string(config)?;
+    let document: toml_edit::DocumentMut = text.parse()?;
+    Ok(document.as_table().clone())
+}
+
+fn patch_changed_table(
+    live: &mut toml_edit::Table,
+    before: &toml_edit::Table,
+    after: &toml_edit::Table,
+) {
+    let mut keys = std::collections::BTreeSet::new();
+    keys.extend(before.iter().map(|(key, _)| key.to_string()));
+    keys.extend(after.iter().map(|(key, _)| key.to_string()));
+    for key in keys {
+        let old = before.get(&key).cloned();
+        let new = after.get(&key).cloned();
+        match (old, new) {
+            (Some(old), Some(new)) if old.to_string() == new.to_string() => {}
+            (Some(old), Some(new)) if old.as_table().is_some() && new.as_table().is_some() => {
+                if live.get(&key).and_then(toml_edit::Item::as_table).is_none() {
+                    live[&key] = toml_edit::table();
+                }
+                let nested_before = old.as_table().expect("canonical before table").clone();
+                let nested_after = new.as_table().expect("canonical after table").clone();
+                let nested = live[&key]
+                    .as_table_mut()
+                    .expect("provider filter child is a table");
+                patch_changed_table(nested, &nested_before, &nested_after);
+            }
+            (_, Some(new)) => {
+                live[&key] = new;
+            }
+            (Some(_), None) => {
+                live.remove(&key);
+            }
+            (None, None) => {}
+        }
+    }
+}
+
 impl ConfigStore {
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self {
@@ -2880,6 +2974,8 @@ impl ConfigStore {
         for (id, base_url) in [
             ("mimo", "https://api.xiaomimimo.com/v1"),
             ("openai-codex", "https://chatgpt.com/backend-api/codex"),
+            ("openai-chatgpt", "https://api.openai.com/v1"),
+            ("xai-oauth", "https://api.x.ai/v1"),
             ("deepseek", "https://api.deepseek.com/v1"),
             ("openai", "https://api.openai.com/v1"),
         ] {
@@ -2904,11 +3000,24 @@ impl ConfigStore {
                 codex.api_key_source = ProviderApiKeySource::Hidden;
             }
         }
+        if let Some(xai) = entries.iter_mut().find(|entry| entry.id == "xai-oauth") {
+            if xai.configured && crate::xai_oauth::XaiOauthStore::default().signed_in() {
+                xai.connected = true;
+                xai.api_key_source = ProviderApiKeySource::Hidden;
+            }
+        }
         entries.sort_by_key(|entry| {
-            ["mimo", "openai-codex", "deepseek", "openai"]
-                .iter()
-                .position(|id| *id == entry.id)
-                .unwrap_or(usize::MAX)
+            [
+                "mimo",
+                "openai-codex",
+                "openai-chatgpt",
+                "xai-oauth",
+                "deepseek",
+                "openai",
+            ]
+            .iter()
+            .position(|id| *id == entry.id)
+            .unwrap_or(usize::MAX)
         });
         Ok(entries)
     }
@@ -3334,6 +3443,101 @@ impl ConfigStore {
             *value.decor_mut() = decoration;
         } else {
             table["status_indicators"] = toml_edit::value(enabled);
+        }
+        let updated = document.to_string();
+        let config: CaConfig = toml::from_str(&updated)?;
+        config.ui.validate()?;
+        self.atomic_write(&updated)
+    }
+
+    pub fn update_filter_preview(&self, enabled: bool) -> anyhow::Result<()> {
+        let raw = self.raw_text()?;
+        let mut document = raw.parse::<toml_edit::DocumentMut>()?;
+        if !document.contains_key("ui") {
+            document["ui"] = toml_edit::Item::Table(toml_edit::Table::new());
+        }
+        let table = document["ui"]
+            .as_table_mut()
+            .ok_or_else(|| anyhow::anyhow!("ui must be a TOML table"))?;
+        if let Some(value) = table
+            .get_mut("filter_preview")
+            .and_then(toml_edit::Item::as_value_mut)
+        {
+            let decoration = value.decor().clone();
+            *value = toml_edit::Value::from(enabled);
+            *value.decor_mut() = decoration;
+        } else {
+            table["filter_preview"] = toml_edit::value(enabled);
+        }
+        let updated = document.to_string();
+        let config: CaConfig = toml::from_str(&updated)?;
+        config.ui.validate()?;
+        self.atomic_write(&updated)
+    }
+
+    pub fn update_nested_value(
+        &self,
+        path: &[&str],
+        value: impl Into<toml_edit::Value>,
+    ) -> anyhow::Result<()> {
+        if path.len() < 2 {
+            anyhow::bail!("setting path is incomplete");
+        }
+        let value = value.into();
+        let raw = self.raw_text()?;
+        let mut document = raw.parse::<toml_edit::DocumentMut>()?;
+        {
+            let mut item = document.as_item_mut();
+            for key in &path[..path.len() - 1] {
+                if item.as_table().is_none_or(|table| !table.contains_key(key)) {
+                    let Some(table) = item.as_table_mut() else {
+                        anyhow::bail!("setting path is not a table");
+                    };
+                    table.insert(key, toml_edit::Item::Table(toml_edit::Table::new()));
+                }
+                item = item
+                    .as_table_mut()
+                    .and_then(|table| table.get_mut(key))
+                    .ok_or_else(|| anyhow::anyhow!("setting path is not a table"))?;
+                if !item.is_table() {
+                    anyhow::bail!("{key} must be a TOML table");
+                }
+            }
+            let key = path[path.len() - 1];
+            let Some(table) = item.as_table_mut() else {
+                anyhow::bail!("setting path is not a table");
+            };
+            if let Some(existing) = table.get_mut(key).and_then(toml_edit::Item::as_value_mut) {
+                let decoration = existing.decor().clone();
+                *existing = value;
+                *existing.decor_mut() = decoration;
+            } else {
+                table.insert(key, toml_edit::value(value));
+            }
+        }
+        let updated = document.to_string();
+        let config: CaConfig = toml::from_str(&updated)?;
+        config.ui.validate()?;
+        self.atomic_write(&updated)
+    }
+
+    pub fn remove_nested_key(&self, path: &[&str]) -> anyhow::Result<()> {
+        if path.len() < 2 {
+            anyhow::bail!("setting path is incomplete");
+        }
+        let raw = self.raw_text()?;
+        let mut document = raw.parse::<toml_edit::DocumentMut>()?;
+        {
+            let mut item = document.as_item_mut();
+            for key in &path[..path.len() - 1] {
+                let Some(next) = item.as_table_mut().and_then(|table| table.get_mut(key)) else {
+                    return Ok(());
+                };
+                item = next;
+            }
+            if let Some(table) = item.as_table_mut() {
+                table.remove(path[path.len() - 1]);
+            }
         }
         let updated = document.to_string();
         let config: CaConfig = toml::from_str(&updated)?;
@@ -4109,6 +4313,76 @@ impl ConfigStore {
             let _ = std::fs::remove_file(&temp);
         }
         result
+    }
+
+    /// Read `[provider_filter]` without installing it or creating a missing file.
+    pub fn read_provider_filter(
+        &self,
+    ) -> anyhow::Result<crate::provider_filter::ProviderFilterConfig> {
+        if !self.path.is_file() {
+            return Ok(crate::provider_filter::ProviderFilterConfig::default());
+        }
+        let raw = std::fs::read_to_string(&self.path)?;
+        parse_provider_filter_document(&raw)
+    }
+
+    /// Publish only the filter keys that differ from `expected`.
+    /// A changed on-disk filter table keeps the draft unwritten.
+    /// This does not install the filter into the current process.
+    pub fn save_provider_filter_edits(
+        &self,
+        expected: &crate::provider_filter::ProviderFilterConfig,
+        draft: &crate::provider_filter::ProviderFilterConfig,
+    ) -> anyhow::Result<()> {
+        if !self.writes_enabled {
+            anyhow::bail!(
+                "This profile does not permit saving settings for the next launch. The draft was kept."
+            );
+        }
+        if let Some((_, message)) = draft.configuration_errors().into_iter().next() {
+            anyhow::bail!("{message} The draft was kept.");
+        }
+        if expected == draft {
+            return Ok(());
+        }
+        let raw = if self.path.is_file() {
+            std::fs::read_to_string(&self.path)?
+        } else {
+            String::new()
+        };
+        let on_disk = if raw.trim().is_empty() {
+            crate::provider_filter::ProviderFilterConfig::default()
+        } else {
+            parse_provider_filter_document(&raw)?
+        };
+        if &on_disk != expected {
+            anyhow::bail!(
+                "Filter settings changed on disk; reload them, then save again to replace the saved copy. The draft was kept."
+            );
+        }
+        let mut document: toml_edit::DocumentMut = if raw.trim().is_empty() {
+            toml_edit::DocumentMut::new()
+        } else {
+            raw.parse()?
+        };
+        let before = canonical_filter_table(expected)?;
+        let after = canonical_filter_table(draft)?;
+        if !document.as_table().contains_key("provider_filter") {
+            document["provider_filter"] = toml_edit::table();
+        }
+        let live = document["provider_filter"]
+            .as_table_mut()
+            .ok_or_else(|| anyhow::anyhow!("provider_filter must be a TOML table"))?;
+        patch_changed_table(live, &before, &after);
+        let updated = document.to_string();
+        let _: CaConfig = toml::from_str(&updated)?;
+        let written = parse_provider_filter_document(&updated)?;
+        if &written != draft {
+            anyhow::bail!(
+                "Filter settings could not be published unchanged. Retry the save. The draft was kept."
+            );
+        }
+        self.atomic_write(&updated)
     }
 
     fn raw_text(&self) -> anyhow::Result<String> {
@@ -5296,6 +5570,7 @@ mod config_store_tests {
     use std::sync::{Arc, Mutex};
 
     fn assert_semantic_agent_defaults(agent: &AgentConfig) {
+        assert!(!agent.automatic_task_breakdown);
         assert!(agent.proactive_delegation);
         assert!(agent.review_changes);
         assert_eq!(agent.max_turns, 100);
@@ -5315,10 +5590,18 @@ mod config_store_tests {
     #[test]
     fn legacy_agent_defaults_delegate_and_review_but_explicit_choices_survive() {
         let legacy: AgentConfig = toml::from_str("").unwrap();
-        assert!(legacy.proactive_delegation && legacy.review_changes);
+        assert!(
+            !legacy.automatic_task_breakdown
+                && legacy.proactive_delegation
+                && legacy.review_changes
+        );
         let explicit: AgentConfig =
-            toml::from_str("proactive_delegation = false\nreview_changes = false\n").unwrap();
-        assert!(!explicit.proactive_delegation && !explicit.review_changes);
+            toml::from_str("automatic_task_breakdown = false\nproactive_delegation = false\nreview_changes = false\n").unwrap();
+        assert!(
+            !explicit.automatic_task_breakdown
+                && !explicit.proactive_delegation
+                && !explicit.review_changes
+        );
     }
 
     #[derive(Default)]
@@ -6226,7 +6509,7 @@ model = "mimo-v2.5"
     }
 
     #[test]
-    fn provider_manager_always_includes_four_first_class_connection_rows() {
+    fn provider_manager_always_includes_first_class_connection_rows() {
         let temp = tempfile::tempdir().unwrap();
         let config_path = temp.path().join("config.toml");
         std::fs::write(
@@ -6246,7 +6529,14 @@ model = "auto"
                 .iter()
                 .map(|entry| entry.id.as_str())
                 .collect::<Vec<_>>(),
-            ["mimo", "openai-codex", "deepseek", "openai"]
+            [
+                "mimo",
+                "openai-codex",
+                "openai-chatgpt",
+                "xai-oauth",
+                "deepseek",
+                "openai"
+            ]
         );
         assert!(entries.iter().all(|entry| !entry.configured));
         assert!(entries.iter().all(|entry| !entry.connected));
@@ -9332,5 +9622,105 @@ open_editor = "ctrl+k"
             crate::agent::ProviderProtocol::ChatCompletions
         );
         assert!(legacy.google.is_none());
+    }
+
+    #[test]
+    fn provider_filter_save_patches_one_key_and_keeps_legacy_representation() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        let original = r#"# keep this comment
+trusted_workspaces = []
+
+[defaults]
+provider = "fixture"
+model = "fixture-model"
+
+# legacy phrase list
+[provider_filter]
+enabled = false
+phrases = ["Alpha"]
+urls = ["http://stop.example/a"]
+obfuscate = true
+
+[provider_filter.hide]
+words = ["HiddenWord"]
+"#;
+        std::fs::write(&path, original).unwrap();
+        let store = ConfigStore::new(&path);
+        let expected = store.read_provider_filter().unwrap();
+        assert_eq!(expected.phrases, vec!["Alpha".to_string()]);
+        assert!(expected.obfuscate);
+        let unchanged = expected.clone();
+        store
+            .save_provider_filter_edits(&expected, &unchanged)
+            .unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+
+        let mut draft = expected.clone();
+        draft.placeholder_images = true;
+        draft.hide.filenames = true;
+        store.save_provider_filter_edits(&expected, &draft).unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(saved.contains("# keep this comment"), "{saved}");
+        assert!(saved.contains("# legacy phrase list"), "{saved}");
+        assert!(
+            saved.contains("phrases = [\"Alpha\"]") || saved.contains("phrases = ['Alpha']"),
+            "{saved}"
+        );
+        assert!(saved.contains("http://stop.example/a"), "{saved}");
+        assert!(saved.contains("obfuscate = true"), "{saved}");
+        assert!(
+            saved.contains("words = [\"HiddenWord\"]") || saved.contains("words = ['HiddenWord']"),
+            "{saved}"
+        );
+        assert!(saved.contains("placeholder_images = true"), "{saved}");
+        assert!(saved.contains("filenames = true"), "{saved}");
+        assert!(saved.contains("model = \"fixture-model\""), "{saved}");
+        let loaded = store.read_provider_filter().unwrap();
+        assert!(loaded.placeholder_images);
+        assert!(loaded.hide.filenames);
+        assert_eq!(loaded.phrases, expected.phrases);
+        assert_eq!(loaded.urls, expected.urls);
+
+        let mut conflicted = draft.clone();
+        conflicted.hide.words.push("Beta".into());
+        std::fs::write(
+            &path,
+            saved.replace("words = [\"HiddenWord\"]", "words = [\"Changed\"]"),
+        )
+        .unwrap();
+        let error = store
+            .save_provider_filter_edits(&draft, &conflicted)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("changed on disk"), "{error}");
+        assert!(error.contains("draft was kept"), "{error}");
+        let after_conflict = std::fs::read_to_string(&path).unwrap();
+        assert!(!after_conflict.contains("Beta"), "{after_conflict}");
+
+        let mut invalid = loaded.clone();
+        invalid.trip_file = Some(std::path::PathBuf::from("relative-trip"));
+        let before_invalid = std::fs::read_to_string(&path).unwrap();
+        let error = store
+            .save_provider_filter_edits(&store.read_provider_filter().unwrap(), &invalid)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("trip_file"), "{error}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before_invalid);
+        let errors = invalid.configuration_errors();
+        assert!(
+            errors.iter().any(|(field, _)| field == "trip_file"),
+            "{errors:?}"
+        );
+
+        let bare = ConfigStore::for_profile(&path, crate::runtime::ActiveProfile::Bare);
+        let current = bare.read_provider_filter().unwrap();
+        let mut next = current.clone();
+        next.enabled = !next.enabled;
+        let error = bare
+            .save_provider_filter_edits(&current, &next)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("does not permit"), "{error}");
     }
 }

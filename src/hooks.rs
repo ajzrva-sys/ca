@@ -81,6 +81,12 @@ pub enum HookEvent {
     PostCompact,
     SubagentStart,
     SubagentStop,
+    PermissionDenied,
+    Stop,
+    StopFailure,
+    StopCancelled,
+    Notification,
+    SessionEnd,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -558,6 +564,12 @@ impl HookEvent {
             Self::PostCompact => "post_compact",
             Self::SubagentStart => "subagent_start",
             Self::SubagentStop => "subagent_stop",
+            Self::PermissionDenied => "permission_denied",
+            Self::Stop => "stop",
+            Self::StopFailure => "stop_failure",
+            Self::StopCancelled => "stop_cancelled",
+            Self::Notification => "notification",
+            Self::SessionEnd => "session_end",
         }
     }
 
@@ -574,7 +586,18 @@ impl HookEvent {
             "pre_compact" => Some(Self::PreCompact),
             "post_compact" => Some(Self::PostCompact),
             "subagent_start" => Some(Self::SubagentStart),
-            "subagent_stop" => Some(Self::SubagentStop),
+            "subagent_stop" | "subagent_end" | "SubagentStop" => Some(Self::SubagentStop),
+            "beforeShellExecution" | "beforeMCPExecution" | "beforeReadFile" | "PreToolUse" => {
+                Some(Self::PreToolUse)
+            }
+            "afterShellExecution" | "afterFileEdit" | "PostToolUse" => Some(Self::PostToolUse),
+            "permission_denied" | "PermissionDenied" => Some(Self::PermissionDenied),
+            "stop" | "Stop" => Some(Self::Stop),
+            "stop_failure" | "StopFailure" => Some(Self::StopFailure),
+            "stop_cancelled" | "StopCancelled" => Some(Self::StopCancelled),
+            "notification" | "Notification" => Some(Self::Notification),
+            "session_end" | "SessionEnd" => Some(Self::SessionEnd),
+            "beforeSubmitPrompt" => Some(Self::BeforeSubmitPrompt),
             _ => None,
         }
     }
@@ -658,6 +681,47 @@ pub enum HookOutcome {
     },
 }
 
+async fn post_https_hook(
+    url: &str,
+    payload: &[u8],
+    config: &HookConfig,
+    results: &Arc<Mutex<HashMap<(usize, HookEvent), HookSafeResult>>>,
+    key: (usize, HookEvent),
+    started: std::time::Instant,
+) -> HookOutcome {
+    let client = match reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(config.timeout_secs.max(1)))
+        .build()
+    {
+        Ok(client) => client,
+        Err(_) => {
+            finish_without_process(results, key, HookSafeStatus::Failed, started);
+            return HookOutcome::Failed {
+                fail_closed: config.fail_closed,
+            };
+        }
+    };
+    let response = client
+        .post(url)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(payload.to_vec())
+        .send()
+        .await;
+    match response {
+        Ok(response) if response.status().is_success() => {
+            finish_without_process(results, key, HookSafeStatus::Succeeded, started);
+            HookOutcome::Allowed { context: None }
+        }
+        _ => {
+            finish_without_process(results, key, HookSafeStatus::Failed, started);
+            HookOutcome::Failed {
+                fail_closed: config.fail_closed,
+            }
+        }
+    }
+}
+
 async fn execute_single_hook_async(
     index: usize,
     event: HookEvent,
@@ -687,6 +751,10 @@ async fn execute_single_hook_async(
         }
     };
 
+    if let Some(url) = crate::parity_backend::https_hook_url(&config.command) {
+        return post_https_hook(url, &payload_json, config, &results, key, started).await;
+    }
+
     let temporary_directory =
         std::env::temp_dir().join(format!("ca-hook-{}", uuid::Uuid::new_v4()));
     if std::fs::create_dir(&temporary_directory).is_err() {
@@ -707,6 +775,8 @@ async fn execute_single_hook_async(
             read_only_roots: Vec::new(),
             temporary_directory: temporary_directory.clone(),
             network_allowed: false,
+            host_credentials: true,
+            proxy_port: None,
             hide_other_processes: false,
         },
     ) {
@@ -1152,10 +1222,21 @@ mod tests {
             HookEvent::PostCompact,
             HookEvent::SubagentStart,
             HookEvent::SubagentStop,
+            HookEvent::PermissionDenied,
+            HookEvent::Stop,
+            HookEvent::StopFailure,
+            HookEvent::StopCancelled,
+            HookEvent::Notification,
+            HookEvent::SessionEnd,
         ] {
             let s = event.as_str();
             assert_eq!(HookEvent::parse(s), Some(*event));
         }
+        assert_eq!(
+            HookEvent::parse("beforeShellExecution"),
+            Some(HookEvent::PreToolUse)
+        );
+        assert!(crate::parity_backend::https_hook_url("https://hooks.example.com/ca").is_some());
         assert_eq!(HookEvent::parse("unknown"), None);
     }
 

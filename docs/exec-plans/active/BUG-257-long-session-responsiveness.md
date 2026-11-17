@@ -1,6 +1,8 @@
+Do not start this plan unless the task names it. The continuation is [AGT-271](AGT-271-task-first-economic-delegation.md).
+
 # BUG-257 — Long-session responsiveness and bounded failure recovery
 
-Status: ACTIVE — implementation complete; duration/network validation and installation pending
+Status: HELD — implementation complete; duration/network validation and installation pending
 Owner/session: Codex, 2026-10-04
 
 ## Goal

@@ -31,6 +31,8 @@ pub(crate) async fn run(
         read_only_roots: vec!["/opt/homebrew".into()],
         temporary_directory: "/Users/ca-runner/harness-probe/tmp".into(),
         network_allowed: false,
+        host_credentials: true,
+        proxy_port: None,
         hide_other_processes: true,
     })?;
     profile.push_str("(allow file-read* (literal \"/opt/ca-harness/worker\"))\n");

@@ -2,14 +2,14 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&preview, 100, 30),\nrender_to_text(&preview, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
+  Try one of these, or ask anything:
     ┌ Run workflow ────────────────────────────────────────────────────────────────────────────┐
     │Release readiness (release-check)                                                         │
     │2 steps · .ca/workflows/release.toml · digest 0123456789ab                                │
     │                                                                                          │
     │- inspect · ready · mimo/mimo-v2.5 · tools: read_file · retries: 1                        │
-    │    evidence: assistant output                                                            │
+  / │    evidence: assistant output                                                            │
     │    output: inspection                                                                    │
     │- verify · after inspect · current model · tools: no tools · retries: 0                   │
     │    evidence: assistant output                                                            │
@@ -27,13 +27,13 @@ expression: "wide_narrow(render_to_text(&preview, 100, 30),\nrender_to_text(&pre
     │                                                                                          │
     │                                                                                          │
     │                                                                                          │
-    │                                                                                          │
 ╭───│                                                                                          │───╮
-│› ▌└──────────────────────────────────────────────────────────────────────────────────────────┘   │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
-/ commands
+│› A│                                                                                          │   │
+╰───└──────────────────────────────────────────────────────────────────────────────────────────┘───╯
+ca · model auto
+/ commands · Ctrl+\ dashboard · ↑ history
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
  ┌ Run workflow ──────────────────────────────────────────┐
  │Release readiness (release-check)                       │
  │2 steps · .ca/workflows/release.toml · digest           │
@@ -52,8 +52,8 @@ expression: "wide_narrow(render_to_text(&preview, 100, 30),\nrender_to_text(&pre
  │                                                        │
  │                                                        │
  │                                                        │
- │                                                        │
 ╭│                                                        │╮
 ││                                                        ││
-╰└────────────────────────────────────────────────────────┘╯
-/ commands
+╰│                                                        │╯
+c└────────────────────────────────────────────────────────┘
+/ commands · Ctrl+\ dashboard · ↑ history

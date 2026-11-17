@@ -3,6 +3,15 @@ use crate::agent::registry::{ToolOrigin, ToolProfile, ToolRegistry};
 use std::collections::{HashMap, HashSet};
 
 const MAX_TOOL_NAME_BYTES: usize = 128;
+pub const CODING_SCHEMA_OMITTED: [&str; 7] = [
+    "email_accounts",
+    "email_list",
+    "email_read",
+    "email_draft",
+    "email_send",
+    "email_reply",
+    "generate_image",
+];
 pub const TRANSPARENT_MECHANISTIC_TOOL_NAMES: [&str; 8] = [
     "git_status",
     "git_diff",
@@ -192,7 +201,12 @@ pub struct ToolSelectionConstraints {
     pub memory_generation_enabled: bool,
     pub automation_proposals_enabled: bool,
     pub email_enabled: bool,
+    /// Normal profiles can drive the local browser. Bare, scheduled, and role
+    /// runs leave it off.
+    pub browser_enabled: bool,
     pub allowed_names: Option<HashSet<String>>,
+    /// Omit email_* and generate_image from the schema sent on a coding turn.
+    pub coding_schema: bool,
 }
 
 impl Default for ToolSelectionConstraints {
@@ -213,7 +227,9 @@ impl Default for ToolSelectionConstraints {
             memory_generation_enabled: false,
             automation_proposals_enabled: false,
             email_enabled: false,
+            browser_enabled: true,
             allowed_names: None,
+            coding_schema: false,
         }
     }
 }
@@ -403,6 +419,7 @@ fn resolve(
     }
 
     if !constraints.skills_enabled {
+        selected.remove("skill_search");
         selected.remove("activate_skill");
         selected.remove("skill_view");
         selected.remove("skill_manage");
@@ -495,8 +512,15 @@ fn resolve(
             selected.remove(name);
         }
     }
-    if !policy.explicitly_enables("browser") {
+    if constraints.coding_schema {
+        for name in CODING_SCHEMA_OMITTED {
+            selected.remove(name);
+        }
+    }
+    if !constraints.browser_enabled {
         selected.remove("browser");
+        selected.remove("browser_exec");
+        selected.remove("browser_vault");
     }
     if let Some(allowed) = &constraints.allowed_names {
         selected.retain(|name| allowed.contains(name));
@@ -516,7 +540,10 @@ fn resolve(
             "skill_view" => constraints.skill_view_ids.as_deref(),
             _ => None,
         };
-        if let Some(ids) = skill_ids {
+        // Discovery returns exact IDs on demand; do not repeat the entire
+        // unrelated catalog in every activation/view schema. The execution
+        // registry still validates exact availability, scope and digest.
+        if let Some(ids) = skill_ids.filter(|_| !selected.contains("skill_search")) {
             let field = if spec.name.as_str() == "skill_view" {
                 "instance_id"
             } else {
@@ -1025,7 +1052,7 @@ mod tests {
         let empty = resolve_tools(
             ToolRegistry::builtins(),
             ToolProfile::Main,
-            &ToolSelectionPolicy::default(),
+            &ToolSelectionPolicy::default().excluding("skill_search"),
             &ToolSelectionConstraints {
                 skill_activation_ids: Some(Vec::new()),
                 skill_view_ids: Some(Vec::new()),
@@ -1039,7 +1066,7 @@ mod tests {
         let available = resolve_tools(
             ToolRegistry::builtins(),
             ToolProfile::Main,
-            &ToolSelectionPolicy::default(),
+            &ToolSelectionPolicy::default().excluding("skill_search"),
             &ToolSelectionConstraints {
                 skill_activation_ids: Some(vec!["workspace:review".into()]),
                 skill_view_ids: Some(Vec::new()),
@@ -1057,6 +1084,38 @@ mod tests {
             serde_json::json!(["workspace:review"])
         );
         assert!(!names(&available).contains(&"skill_view"));
+    }
+
+    #[test]
+    fn demand_skill_search_omits_bulk_identifier_enums_and_respects_disabled_skills() {
+        let constraints = ToolSelectionConstraints {
+            skill_activation_ids: Some(vec!["UNRELATED_SKILL_ID_CANARY".into()]),
+            skill_view_ids: Some(vec!["UNRELATED_INSTANCE_ID_CANARY".into()]),
+            ..Default::default()
+        };
+        let resolved = resolve_tools(
+            ToolRegistry::builtins(),
+            ToolProfile::Main,
+            &ToolSelectionPolicy::default(),
+            &constraints,
+        )
+        .unwrap();
+        assert!(names(&resolved).contains(&"skill_search"));
+        let definitions = serde_json::to_string(resolved.definitions()).unwrap();
+        assert!(!definitions.contains("UNRELATED_SKILL_ID_CANARY"));
+        assert!(!definitions.contains("UNRELATED_INSTANCE_ID_CANARY"));
+        let disabled = resolve_tools(
+            ToolRegistry::builtins(),
+            ToolProfile::Main,
+            &ToolSelectionPolicy::default(),
+            &ToolSelectionConstraints {
+                skills_enabled: false,
+                ..constraints
+            },
+        )
+        .unwrap();
+        assert!(!names(&disabled).contains(&"skill_search"));
+        assert!(!names(&disabled).contains(&"activate_skill"));
     }
 
     #[test]
@@ -1348,30 +1407,33 @@ mod tests {
     }
 
     #[test]
-    fn browser_requires_explicit_selection_and_exclusion_still_wins() {
-        let hidden = resolve_tools(
+    fn browser_is_available_on_the_main_profile_unless_excluded_or_disabled() {
+        let available = resolve_tools(
             ToolRegistry::builtins(),
             ToolProfile::Main,
             &ToolSelectionPolicy::default(),
             &ToolSelectionConstraints::default(),
         )
         .unwrap();
-        assert!(!names(&hidden).contains(&"browser"));
+        assert!(names(&available).contains(&"browser"));
 
-        let included = resolve_tools(
+        let disabled = ToolSelectionConstraints {
+            browser_enabled: false,
+            ..ToolSelectionConstraints::default()
+        };
+        let hidden = resolve_tools(
             ToolRegistry::builtins(),
             ToolProfile::Main,
-            &ToolSelectionPolicy::from_cli(None, vec!["Browser".into()], Vec::new()).unwrap(),
-            &ToolSelectionConstraints::default(),
+            &ToolSelectionPolicy::default(),
+            &disabled,
         )
         .unwrap();
-        assert!(names(&included).contains(&"browser"));
+        assert!(!names(&hidden).contains(&"browser"));
 
         let excluded = resolve_tools(
             ToolRegistry::builtins(),
             ToolProfile::Main,
-            &ToolSelectionPolicy::from_cli(None, vec!["browser".into()], vec!["browser".into()])
-                .unwrap(),
+            &ToolSelectionPolicy::from_cli(None, vec![], vec!["browser".into()]).unwrap(),
             &ToolSelectionConstraints::default(),
         )
         .unwrap();

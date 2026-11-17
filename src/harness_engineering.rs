@@ -411,6 +411,8 @@ pub(crate) async fn run_gate(
         read_only_roots,
         temporary_directory: temporary.path().into(),
         network_allowed: false,
+        host_credentials: true,
+        proxy_port: None,
         hide_other_processes: true,
     };
     let prepared = crate::sandbox::SandboxBackend::new(crate::sandbox::SandboxMode::Required)

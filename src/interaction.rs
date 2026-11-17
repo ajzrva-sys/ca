@@ -442,6 +442,13 @@ impl InteractionState {
             }
             return Some(self.resolution(InteractionOutcome::Cancelled));
         }
+        if self.parks_on_escape()
+            && ((code == KeyCode::Tab && modifiers.is_empty())
+                || (code == KeyCode::BackTab && modifiers.contains(KeyModifiers::SHIFT)))
+        {
+            self.step_choice(code == KeyCode::Tab);
+            return None;
+        }
 
         if self.is_editor_mode() {
             return self.handle_editor_key(code, modifiers);
@@ -498,6 +505,26 @@ impl InteractionState {
             .choices
             .iter()
             .position(|choice| choice.resolved_value() == value)
+    }
+
+    pub fn parks_on_escape(&self) -> bool {
+        !self.other_editing() && !self.is_editor_mode()
+    }
+
+    pub fn step_choice(&mut self, forward: bool) {
+        let count = self.visible_count();
+        if count == 0 {
+            return;
+        }
+        if forward {
+            self.selected_index = (self.selected_index + 1) % count;
+        } else {
+            self.selected_index = if self.selected_index == 0 {
+                count - 1
+            } else {
+                self.selected_index - 1
+            };
+        }
     }
 
     fn is_editor_mode(&self) -> bool {

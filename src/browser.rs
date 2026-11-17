@@ -55,6 +55,12 @@ pub enum BrowserError {
     InvalidSelector,
     #[error("the browser text is missing or too large")]
     InvalidText,
+    #[error(
+        "the browser key must be Enter, Tab, Escape, Backspace, an arrow, PageUp, PageDown, Home, End, or Space"
+    )]
+    InvalidKey,
+    #[error("scroll needs a selector, or one of up, down, top, or bottom")]
+    InvalidScroll,
     #[error("the destination path is missing, already exists, or cannot be written safely")]
     InvalidDestination,
     #[error("the screenshot exceeded its safe size or was not a valid image")]
@@ -67,7 +73,7 @@ pub enum BrowserError {
 
 struct RunningBrowser {
     owner: crate::jobs::JobOwner,
-    child: Child,
+    child: Option<Child>,
     process_group: Option<i32>,
     _profile: tempfile::TempDir,
     downloads: PathBuf,
@@ -80,6 +86,7 @@ struct BrowserManagerInner {
     running: Mutex<Option<RunningBrowser>>,
     executable: Option<PathBuf>,
     runtime_limit: Duration,
+    session: Mutex<Option<String>>,
 }
 
 #[derive(Clone)]
@@ -99,6 +106,7 @@ impl BrowserManager {
                 running: Mutex::new(None),
                 executable: None,
                 runtime_limit: MAX_RUNTIME,
+                session: Mutex::new(None),
             }),
         }
     }
@@ -110,6 +118,7 @@ impl BrowserManager {
                 running: Mutex::new(None),
                 executable: Some(executable),
                 runtime_limit,
+                session: Mutex::new(None),
             }),
         }
     }
@@ -168,16 +177,51 @@ impl BrowserManager {
                 Ok(ToolExecutionResult::Success("Navigation completed".into()))
             }
             BrowserAction::Snapshot => browser.snapshot().await.map(ToolExecutionResult::Success),
+            BrowserAction::Controls => browser.controls().await.map(ToolExecutionResult::Success),
+            BrowserAction::Html => {
+                let selector = validated_selector(args.selector.as_deref())?;
+                browser
+                    .html(selector)
+                    .await
+                    .map(ToolExecutionResult::Success)
+            }
+            BrowserAction::Scroll => {
+                browser
+                    .scroll(args.selector.as_deref(), args.text.as_deref())
+                    .await?;
+                Ok(ToolExecutionResult::Success("Scrolled".into()))
+            }
             BrowserAction::Click => {
                 let selector = validated_selector(args.selector.as_deref())?;
                 browser.click(selector).await?;
                 Ok(ToolExecutionResult::Success("Element clicked".into()))
+            }
+            BrowserAction::ClickText => {
+                let text = validated_type_text(args.text.as_deref())?;
+                browser.click_text(text).await?;
+                Ok(ToolExecutionResult::Success(format!("Clicked {text}")))
+            }
+            BrowserAction::ClickAt => {
+                let (x, y) = validated_click_at(args.text.as_deref())?;
+                browser.click_at(x, y).await?;
+                Ok(ToolExecutionResult::Success(format!("Clicked at {x},{y}")))
             }
             BrowserAction::Type => {
                 let selector = validated_selector(args.selector.as_deref())?;
                 let text = validated_type_text(args.text.as_deref())?;
                 browser.type_text(selector, text).await?;
                 Ok(ToolExecutionResult::Success("Element value updated".into()))
+            }
+            BrowserAction::Press => {
+                let label = args.text.as_deref().unwrap_or("key");
+                let key = validated_key(args.text.as_deref())?;
+                browser.press(key).await?;
+                Ok(ToolExecutionResult::Success(format!("Pressed {label}")))
+            }
+            BrowserAction::Js => {
+                let expression = validated_js(args.text.as_deref())?;
+                let value = browser.js(expression).await?;
+                Ok(ToolExecutionResult::Success(value))
             }
             BrowserAction::Screenshot => {
                 let path = required_destination(args.path.as_deref())?;
@@ -215,6 +259,7 @@ impl BrowserManager {
             BrowserAction::Close => {
                 let mut browser = slot.take().expect("checked running browser");
                 browser.terminate().await;
+                *self.inner.session.lock().await = None;
                 Ok(ToolExecutionResult::Success("Browser closed".into()))
             }
         }
@@ -233,17 +278,92 @@ impl BrowserManager {
             }
             return Err(BrowserError::WrongOwner);
         }
-        let executable = self
-            .inner
-            .executable
-            .clone()
-            .or_else(discover_browser_executable)
-            .ok_or(BrowserError::Unavailable)?;
-        let browser = RunningBrowser::launch(executable, owner).await?;
+        let browser = if self.inner.executable.is_none() {
+            if let Some(endpoint) = configured_cdp_endpoint() {
+                RunningBrowser::connect_remote(&endpoint, owner).await?
+            } else {
+                let executable = discover_browser_executable().ok_or(BrowserError::Unavailable)?;
+                RunningBrowser::launch(executable, owner).await?
+            }
+        } else {
+            let executable = self
+                .inner
+                .executable
+                .clone()
+                .ok_or(BrowserError::Unavailable)?;
+            RunningBrowser::launch(executable, owner).await?
+        };
         *slot = Some(browser);
         Ok(ToolExecutionResult::Success(
             "Ephemeral browser started with external network blocked".into(),
         ))
+    }
+
+    pub async fn capture_image(
+        &self,
+        context: &ToolContext,
+    ) -> Result<crate::image_content::ModelImage, BrowserError> {
+        let mut slot = self.inner.running.lock().await;
+        let browser = slot.as_mut().ok_or(BrowserError::NotRunning)?;
+        if browser.owner != context.job_owner {
+            return Err(BrowserError::WrongOwner);
+        }
+        let bytes = browser.screenshot().await?;
+        crate::image_content::normalize_encoded_image(bytes)
+            .map_err(|_| BrowserError::InvalidScreenshot)
+    }
+
+    pub async fn fill_login(
+        &self,
+        username: &str,
+        password: &str,
+        context: &ToolContext,
+    ) -> Result<u64, BrowserError> {
+        let username = serde_json::to_string(username).map_err(|_| BrowserError::Protocol)?;
+        let password = serde_json::to_string(password).map_err(|_| BrowserError::Protocol)?;
+        let expression = format!(
+            "(/* ca-browser-fill-login */() => {{ const username = {username}; const password = {password}; let filled = 0; for (const input of Array.from(document.querySelectorAll('input'))) {{ const type = String(input.getAttribute('type') || 'text').toLowerCase(); const hint = String((input.name || '') + ' ' + (input.id || '') + ' ' + (input.getAttribute('autocomplete') || '')).toLowerCase(); if (type === 'password') {{ input.focus(); input.value = password; input.dispatchEvent(new Event('input', {{bubbles:true}})); filled += 1; }} else if ((type === 'email' || type === 'text') && /user|email|login|identifier/.test(hint)) {{ input.focus(); input.value = username; input.dispatchEvent(new Event('input', {{bubbles:true}})); filled += 1; }} }} return String(filled); }})()"
+        );
+        let mut slot = self.inner.running.lock().await;
+        let browser = slot.as_mut().ok_or(BrowserError::NotRunning)?;
+        if browser.owner != context.job_owner {
+            return Err(BrowserError::WrongOwner);
+        }
+        let value = browser.evaluate_value(&expression).await?;
+        value
+            .as_str()
+            .ok_or(BrowserError::Protocol)?
+            .parse::<u64>()
+            .map_err(|_| BrowserError::Protocol)
+    }
+
+    pub async fn claim_session(&self, name: Option<&str>) -> Result<(), String> {
+        let name = name.unwrap_or("").trim();
+        if name.chars().count() > 64 || name.chars().any(char::is_control) {
+            return Err("browser session name is invalid".into());
+        }
+        let mut session = self.inner.session.lock().await;
+        if let Some(current) = session.as_deref() {
+            if current != name {
+                return Err(format!(
+                    "browser session {current} is already open; reuse that name or close the browser"
+                ));
+            }
+        } else {
+            *session = Some(name.to_string());
+        }
+        Ok(())
+    }
+
+    pub async fn page_origin(&self, context: &ToolContext) -> Result<String, BrowserError> {
+        let result = self
+            .execute(&json!({"action":"js","text":"location.origin"}), context)
+            .await;
+        if result.is_success() {
+            Ok(result.model_text().trim().to_string())
+        } else {
+            Err(BrowserError::Protocol)
+        }
     }
 
     pub async fn shutdown(&self) {
@@ -358,8 +478,37 @@ impl RunningBrowser {
         };
         let mut browser = Self {
             owner,
-            child,
+            child: Some(child),
             process_group,
+            _profile: profile,
+            downloads,
+            socket,
+            next_id: 1,
+            started: Instant::now(),
+        };
+        browser.request("Page.enable", json!({})).await?;
+        browser.request("Runtime.enable", json!({})).await?;
+        browser.request("Network.enable", json!({})).await?;
+        browser.set_network_blocked(true).await?;
+        Ok(browser)
+    }
+
+    async fn connect_remote(
+        endpoint: &str,
+        owner: crate::jobs::JobOwner,
+    ) -> Result<Self, BrowserError> {
+        let socket_url = configured_socket_url(endpoint).await?;
+        let socket = open_socket(socket_url.as_str()).await?;
+        let profile = tempfile::Builder::new()
+            .prefix("ca-browser-remote-")
+            .tempdir()
+            .map_err(|_| BrowserError::Start)?;
+        let downloads = profile.path().join("downloads");
+        std::fs::create_dir(&downloads).map_err(|_| BrowserError::Start)?;
+        let mut browser = Self {
+            owner,
+            child: None,
+            process_group: None,
             _profile: profile,
             downloads,
             socket,
@@ -528,6 +677,117 @@ impl RunningBrowser {
         Ok(format!("{header}{body}{marker}"))
     }
 
+    async fn controls(&mut self) -> Result<String, BrowserError> {
+        let value = self
+            .evaluate_value(CONTROLS_EXPRESSION)
+            .await?
+            .as_str()
+            .ok_or(BrowserError::Protocol)?
+            .to_string();
+        bounded_controls(&value)
+    }
+
+    async fn html(&mut self, selector: &str) -> Result<String, BrowserError> {
+        let selector = serde_json::to_string(selector).map_err(|_| BrowserError::Protocol)?;
+        let expression = format!(
+            "(/* ca-browser-html */() => {{ const element = document.querySelector({selector}); if (!element) return false; const html = element.outerHTML || ''; const captured = html.slice(0, 8000); return {{ html: captured, truncated: html.length > captured.length }}; }})()"
+        );
+        let value = self.evaluate_value(&expression).await?;
+        if value.as_bool() == Some(false) {
+            return Err(BrowserError::MissingElement);
+        }
+        let html = value
+            .get("html")
+            .and_then(Value::as_str)
+            .ok_or(BrowserError::Protocol)?;
+        let truncated = value
+            .get("truncated")
+            .and_then(Value::as_bool)
+            .ok_or(BrowserError::Protocol)?;
+        let safe = crate::terminal_text::sanitize_terminal_text(html);
+        let body = bounded_utf8(&safe, 8 * 1024);
+        let marker = if truncated || body.len() < safe.len() {
+            "\n[… element HTML truncated …]"
+        } else {
+            ""
+        };
+        Ok(format!("{body}{marker}"))
+    }
+
+    async fn scroll(
+        &mut self,
+        selector: Option<&str>,
+        direction: Option<&str>,
+    ) -> Result<(), BrowserError> {
+        let expression = if let Some(selector) = selector {
+            let selector = validated_selector(Some(selector))?;
+            let selector = serde_json::to_string(selector).map_err(|_| BrowserError::Protocol)?;
+            format!(
+                "(/* ca-browser-scroll */() => {{ const element = document.querySelector({selector}); if (!element) return false; element.scrollIntoView({{block:'center', inline:'nearest'}}); return true; }})()"
+            )
+        } else {
+            let direction = validated_scroll(direction)?;
+            let movement = match direction {
+                "up" => "window.scrollBy(0, -Math.round(window.innerHeight * 0.8))",
+                "down" => "window.scrollBy(0, Math.round(window.innerHeight * 0.8))",
+                "top" => "window.scrollTo(0, 0)",
+                "bottom" => "window.scrollTo(0, document.body ? document.body.scrollHeight : 0)",
+                _ => return Err(BrowserError::InvalidScroll),
+            };
+            format!("(/* ca-browser-scroll */() => {{ {movement}; return true; }})()")
+        };
+        self.evaluate_boolean(&expression).await
+    }
+
+    async fn press(&mut self, key: &str) -> Result<(), BrowserError> {
+        let key = serde_json::to_string(key).map_err(|_| BrowserError::Protocol)?;
+        let expression = format!(
+            "(/* ca-browser-press */() => {{ const key = {key}; const target = document.activeElement || document.body; if (!target) return false; const init = {{ key, bubbles: true, cancelable: true }}; target.dispatchEvent(new KeyboardEvent('keydown', init)); target.dispatchEvent(new KeyboardEvent('keyup', init)); if (key === 'Enter' && target.form && typeof target.form.requestSubmit === 'function') target.form.requestSubmit(); return true; }})()"
+        );
+        self.evaluate_boolean(&expression).await
+    }
+
+    async fn click_text(&mut self, text: &str) -> Result<(), BrowserError> {
+        let text = serde_json::to_string(text).map_err(|_| BrowserError::Protocol)?;
+        let expression = format!(
+            "(/* ca-browser-click-text */() => {{ const needle = String({text}).replace(/\\s+/g, ' ').trim().toLowerCase(); const nodes = Array.from(document.querySelectorAll('a,button,input,summary,[role=\"button\"]')); const element = nodes.find((node) => String(node.innerText || node.value || node.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim().toLowerCase().includes(needle)); if (!element) return false; element.click(); return true; }})()"
+        );
+        self.evaluate_boolean(&expression).await
+    }
+
+    async fn click_at(&mut self, x: u32, y: u32) -> Result<(), BrowserError> {
+        let point = json!({"x": x, "y": y});
+        self.request(
+            "Input.dispatchMouseEvent",
+            json!({"type":"mouseMoved","x":point["x"],"y":point["y"]}),
+        )
+        .await?;
+        self.request(
+            "Input.dispatchMouseEvent",
+            json!({"type":"mousePressed","x":point["x"],"y":point["y"],"button":"left","clickCount":1}),
+        )
+        .await?;
+        self.request(
+            "Input.dispatchMouseEvent",
+            json!({"type":"mouseReleased","x":point["x"],"y":point["y"],"button":"left","clickCount":1}),
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn js(&mut self, expression: &str) -> Result<String, BrowserError> {
+        let expression = serde_json::to_string(expression).map_err(|_| BrowserError::Protocol)?;
+        let wrapped = format!(
+            "(/* ca-browser-js */() => {{ const value = eval({expression}); const text = typeof value === 'string' ? value : JSON.stringify(value); return String(text == null ? '' : text).slice(0, 16000); }})()"
+        );
+        let value = self.evaluate_value(&wrapped).await?;
+        let text = value.as_str().ok_or(BrowserError::Protocol)?;
+        Ok(bounded_utf8(
+            &crate::terminal_text::sanitize_terminal_text(text),
+            16 * 1024,
+        ))
+    }
+
     async fn click(&mut self, selector: &str) -> Result<(), BrowserError> {
         let selector = serde_json::to_string(selector).map_err(|_| BrowserError::Protocol)?;
         let expression = format!(
@@ -545,18 +805,22 @@ impl RunningBrowser {
         self.evaluate_boolean(&expression).await
     }
 
-    async fn evaluate_boolean(&mut self, expression: &str) -> Result<(), BrowserError> {
+    async fn evaluate_value(&mut self, expression: &str) -> Result<Value, BrowserError> {
         let result = self
             .request(
                 "Runtime.evaluate",
                 json!({"expression":expression,"returnByValue":true}),
             )
             .await?;
-        match result
+        result
             .get("result")
             .and_then(|result| result.get("value"))
-            .and_then(Value::as_bool)
-        {
+            .cloned()
+            .ok_or(BrowserError::Protocol)
+    }
+
+    async fn evaluate_boolean(&mut self, expression: &str) -> Result<(), BrowserError> {
+        match self.evaluate_value(expression).await?.as_bool() {
             Some(true) => Ok(()),
             Some(false) => Err(BrowserError::MissingElement),
             None => Err(BrowserError::Protocol),
@@ -633,21 +897,28 @@ impl RunningBrowser {
     async fn terminate(&mut self) {
         let _ = self.socket.send(Message::Close(None)).await;
         terminate_process_group(self.process_group);
-        let _ = self.child.start_kill();
-        let _ = tokio::time::timeout(Duration::from_secs(2), self.child.wait()).await;
+        if let Some(child) = self.child.as_mut() {
+            let _ = child.start_kill();
+            let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+        }
     }
 }
 
 impl Drop for RunningBrowser {
     fn drop(&mut self) {
         terminate_process_group(self.process_group);
-        let _ = self.child.start_kill();
+        if let Some(child) = self.child.as_mut() {
+            let _ = child.start_kill();
+        }
     }
 }
 
 fn valid_action_shape(args: &BrowserArgs) -> bool {
     match args.action {
-        BrowserAction::Start | BrowserAction::Snapshot | BrowserAction::Close => {
+        BrowserAction::Start
+        | BrowserAction::Snapshot
+        | BrowserAction::Controls
+        | BrowserAction::Close => {
             args.url.is_none()
                 && args.selector.is_none()
                 && args.text.is_none()
@@ -659,10 +930,24 @@ fn valid_action_shape(args: &BrowserArgs) -> bool {
                 && args.text.is_none()
                 && args.path.is_none()
         }
-        BrowserAction::Click => {
+        BrowserAction::Click | BrowserAction::Html => {
             args.url.is_none()
                 && args.selector.is_some()
                 && args.text.is_none()
+                && args.path.is_none()
+        }
+        BrowserAction::Scroll => {
+            args.url.is_none()
+                && args.path.is_none()
+                && args.selector.is_some() != args.text.is_some()
+        }
+        BrowserAction::Press
+        | BrowserAction::Js
+        | BrowserAction::ClickText
+        | BrowserAction::ClickAt => {
+            args.url.is_none()
+                && args.selector.is_none()
+                && args.text.is_some()
                 && args.path.is_none()
         }
         BrowserAction::Type => {
@@ -730,6 +1015,184 @@ fn validated_selector(value: Option<&str>) -> Result<&str, BrowserError> {
         Ok(value)
     }
 }
+
+fn validated_scroll(value: Option<&str>) -> Result<&'static str, BrowserError> {
+    match value {
+        Some("up") => Ok("up"),
+        Some("down") => Ok("down"),
+        Some("top") => Ok("top"),
+        Some("bottom") => Ok("bottom"),
+        _ => Err(BrowserError::InvalidScroll),
+    }
+}
+
+fn validated_js(value: Option<&str>) -> Result<&str, BrowserError> {
+    let value = value.ok_or(BrowserError::InvalidText)?;
+    if value.is_empty() || value.len() > 8 * 1024 || value.chars().any(char::is_control) {
+        Err(BrowserError::InvalidText)
+    } else {
+        Ok(value)
+    }
+}
+
+fn validated_click_at(value: Option<&str>) -> Result<(u32, u32), BrowserError> {
+    let value = value.ok_or(BrowserError::InvalidText)?;
+    let mut parts = value.split_whitespace();
+    let x = parts
+        .next()
+        .and_then(|part| part.parse::<u32>().ok())
+        .ok_or(BrowserError::InvalidText)?;
+    let y = parts
+        .next()
+        .and_then(|part| part.parse::<u32>().ok())
+        .ok_or(BrowserError::InvalidText)?;
+    if parts.next().is_some() || x > 4000 || y > 4000 {
+        return Err(BrowserError::InvalidText);
+    }
+    Ok((x, y))
+}
+
+fn validated_key(value: Option<&str>) -> Result<&'static str, BrowserError> {
+    match value {
+        Some("Enter") => Ok("Enter"),
+        Some("Tab") => Ok("Tab"),
+        Some("Escape") => Ok("Escape"),
+        Some("Backspace") => Ok("Backspace"),
+        Some("ArrowUp") => Ok("ArrowUp"),
+        Some("ArrowDown") => Ok("ArrowDown"),
+        Some("ArrowLeft") => Ok("ArrowLeft"),
+        Some("ArrowRight") => Ok("ArrowRight"),
+        Some("PageUp") => Ok("PageUp"),
+        Some("PageDown") => Ok("PageDown"),
+        Some("Home") => Ok("Home"),
+        Some("End") => Ok("End"),
+        Some("Space") => Ok(" "),
+        _ => Err(BrowserError::InvalidKey),
+    }
+}
+
+fn bounded_controls(raw: &str) -> Result<String, BrowserError> {
+    if raw.len() > MAX_DOM_RESULT_BYTES {
+        return Err(BrowserError::Protocol);
+    }
+    let value: Value = serde_json::from_str(raw).map_err(|_| BrowserError::Protocol)?;
+    let controls = value
+        .get("controls")
+        .and_then(Value::as_array)
+        .ok_or(BrowserError::Protocol)?;
+    if controls.len() > 40 {
+        return Err(BrowserError::Protocol);
+    }
+    let mut lines = Vec::new();
+    for item in controls {
+        let selector = item.get("selector").and_then(Value::as_str).unwrap_or("");
+        let tag = item.get("tag").and_then(Value::as_str).unwrap_or("");
+        if selector.is_empty()
+            || selector.len() > MAX_SELECTOR_BYTES
+            || tag.is_empty()
+            || tag.len() > 32
+            || selector.chars().any(char::is_control)
+            || tag.chars().any(char::is_control)
+        {
+            continue;
+        }
+        let kind = item
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or(tag)
+            .chars()
+            .filter(|ch| !ch.is_control())
+            .take(32)
+            .collect::<String>();
+        let text = crate::terminal_text::sanitize_terminal_text(
+            item.get("text").and_then(Value::as_str).unwrap_or(""),
+        );
+        let text = bounded_utf8(&text, 80);
+        let options = item
+            .get("options")
+            .and_then(Value::as_array)
+            .map(|options| {
+                options
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .take(20)
+                    .map(|option| {
+                        bounded_utf8(&crate::terminal_text::sanitize_terminal_text(option), 60)
+                    })
+                    .filter(|option| !option.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let mut line = format!("{tag} {kind} {selector}");
+        if !text.is_empty() {
+            line.push_str(" \"");
+            line.push_str(&text);
+            line.push('"');
+        }
+        if !options.is_empty() {
+            line.push_str(" options: ");
+            line.push_str(&options.join(", "));
+        }
+        lines.push(line);
+    }
+    let omitted = value
+        .get("omitted")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        .min(10_000);
+    let mut output = format!("Controls: {}\n", lines.len());
+    output.push_str(&lines.join("\n"));
+    if omitted > 0 {
+        output.push_str(&format!("\n[… {omitted} controls not returned …]"));
+    }
+    Ok(output)
+}
+
+const CONTROLS_EXPRESSION: &str = r#"(/* ca-browser-controls */() => {
+  const nodes = Array.from(document.querySelectorAll('a[href],button,input,select,textarea,[role="button"]'));
+  const controls = [];
+  function selectorFor(element) {
+    if (element.id && /^[A-Za-z][\w:.-]{0,80}$/.test(element.id)) {
+      const byId = '#' + CSS.escape(element.id);
+      if (document.querySelectorAll(byId).length === 1) return byId;
+    }
+    const parts = [];
+    let current = element;
+    for (let depth = 0; current && current.nodeType === 1 && depth < 6; depth += 1) {
+      if (current.id && /^[A-Za-z][\w:.-]{0,80}$/.test(current.id)) {
+        parts.unshift('#' + CSS.escape(current.id));
+        break;
+      }
+      let part = current.tagName.toLowerCase();
+      const parent = current.parentElement;
+      if (parent) {
+        const same = Array.from(parent.children).filter((child) => child.tagName === current.tagName);
+        if (same.length > 1) part += ':nth-of-type(' + (same.indexOf(current) + 1) + ')';
+      }
+      parts.unshift(part);
+      current = current.parentElement;
+    }
+    const selector = parts.join(' > ');
+    return selector.length > 300 ? '' : selector;
+  }
+  for (const element of nodes) {
+    if (controls.length >= 40) break;
+    const selector = selectorFor(element);
+    if (!selector) continue;
+    const tag = element.tagName.toLowerCase();
+    const kind = String(element.getAttribute('type') || (tag === 'a' ? 'link' : tag)).slice(0, 32);
+    const text = String(element.innerText || element.getAttribute('value') || element.getAttribute('aria-label') || element.getAttribute('placeholder') || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+    const options = [];
+    if (tag === 'select') {
+      for (const option of Array.from(element.options || []).slice(0, 20)) {
+        const label = String(option.label || option.text || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+        if (label) options.push(label);
+      }
+    }
+    controls.push({ tag, kind, selector, text, options });
+  }
+  return JSON.stringify({ omitted: Math.max(0, nodes.length - controls.length), controls });
+})()"#;
 
 fn validated_type_text(value: Option<&str>) -> Result<&str, BrowserError> {
     let value = value.ok_or(BrowserError::InvalidText)?;
@@ -831,6 +1294,97 @@ async fn wait_for_devtools_port(child: &mut Child, profile: &Path) -> Result<u16
         }
         tokio::time::sleep(Duration::from_millis(40)).await;
     }
+}
+
+fn configured_cdp_endpoint() -> Option<String> {
+    if let Some(value) = crate::run_environment::var_os("CA_BROWSER_CDP_URL") {
+        let value = value.to_string_lossy().trim().to_string();
+        if !value.is_empty() {
+            return Some(value);
+        }
+    }
+    let path = crate::runtime::RuntimePaths::discover()
+        .ok()?
+        .config_root
+        .join("browser.toml");
+    let text = std::fs::read_to_string(path).ok()?;
+    let value: toml::Value = toml::from_str(&text).ok()?;
+    value
+        .get("cdp_url")
+        .and_then(toml::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+async fn open_socket(url: &str) -> Result<CdpSocket, BrowserError> {
+    let mut websocket_config = WebSocketConfig::default();
+    websocket_config.max_message_size = Some(MAX_CDP_MESSAGE_BYTES);
+    websocket_config.max_frame_size = Some(MAX_CDP_MESSAGE_BYTES);
+    websocket_config.write_buffer_size = 16 * 1024;
+    websocket_config.max_write_buffer_size = MAX_CDP_MESSAGE_BYTES;
+    match tokio::time::timeout(
+        START_TIMEOUT,
+        tokio_tungstenite::connect_async_with_config(url, Some(websocket_config), false),
+    )
+    .await
+    {
+        Ok(Ok((socket, _))) => Ok(socket),
+        _ => Err(BrowserError::Start),
+    }
+}
+
+async fn configured_socket_url(endpoint: &str) -> Result<reqwest::Url, BrowserError> {
+    let parsed = reqwest::Url::parse(endpoint).map_err(|_| BrowserError::Start)?;
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(BrowserError::Start);
+    }
+    match parsed.scheme() {
+        "ws" | "wss" => Ok(parsed),
+        "http" | "https" => page_socket_from_http(&parsed).await,
+        _ => Err(BrowserError::Start),
+    }
+}
+
+async fn page_socket_from_http(base: &reqwest::Url) -> Result<reqwest::Url, BrowserError> {
+    let mut list = base.clone();
+    list.set_path("/json/list");
+    list.set_query(None);
+    list.set_fragment(None);
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(START_TIMEOUT)
+        .build()
+        .map_err(|_| BrowserError::Start)?;
+    let response = client
+        .get(list)
+        .send()
+        .await
+        .map_err(|_| BrowserError::Start)?;
+    if !response.status().is_success() {
+        return Err(BrowserError::Start);
+    }
+    let body = response.bytes().await.map_err(|_| BrowserError::Protocol)?;
+    if body.len() > MAX_TARGET_LIST_BYTES {
+        return Err(BrowserError::Protocol);
+    }
+    let targets: Value = serde_json::from_slice(&body).map_err(|_| BrowserError::Protocol)?;
+    let socket = targets
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|target| target.get("type").and_then(Value::as_str) == Some("page"))
+        .and_then(|target| target.get("webSocketDebuggerUrl"))
+        .and_then(Value::as_str)
+        .ok_or(BrowserError::Protocol)?;
+    let parsed = reqwest::Url::parse(socket).map_err(|_| BrowserError::Protocol)?;
+    if !matches!(parsed.scheme(), "ws" | "wss")
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
+        return Err(BrowserError::Protocol);
+    }
+    Ok(parsed)
 }
 
 async fn discover_page_socket(port: u16) -> Result<reqwest::Url, BrowserError> {
@@ -1083,6 +1637,12 @@ mod tests {
                                 "capturedBytes":text.len(),
                                 "totalBytes":text.len() + 9
                             }}})
+                        } else if expression.contains("ca-browser-controls") {
+                            json!({"result":{"value":"{\"omitted\":1,\"controls\":[{\"tag\":\"button\",\"kind\":\"submit\",\"selector\":\"#accept\",\"text\":\"Accept\",\"options\":[]},{\"tag\":\"select\",\"kind\":\"select\",\"selector\":\"#court\",\"text\":\"Court\",\"options\":[\"Civil\"]}]}"}})
+                        } else if expression.contains("ca-browser-js") {
+                            json!({"result":{"value":"ready"}})
+                        } else if expression.contains("ca-browser-html") {
+                            json!({"result":{"value":{"html":"<button id=\"accept\">Accept</button>","truncated":false}}})
                         } else {
                             if expression.contains("new Promise") && !navigation_delay.is_zero() {
                                 tokio::time::sleep(navigation_delay).await;
@@ -1155,6 +1715,16 @@ mod tests {
             validated_type_text(Some(&"x".repeat(MAX_TYPE_TEXT_BYTES + 1))).unwrap_err(),
             BrowserError::InvalidText
         );
+        assert_eq!(validated_scroll(Some("down")).unwrap(), "down");
+        assert_eq!(
+            validated_scroll(Some("sideways")).unwrap_err(),
+            BrowserError::InvalidScroll
+        );
+        assert_eq!(validated_key(Some("Space")).unwrap(), " ");
+        assert_eq!(
+            validated_key(Some("F1")).unwrap_err(),
+            BrowserError::InvalidKey
+        );
         assert_eq!(
             required_destination(Some("relative.png")).unwrap_err(),
             BrowserError::InvalidDestination
@@ -1168,6 +1738,14 @@ mod tests {
             json!({"action":"start"}),
             json!({"action":"navigate","url":"https://example.com"}),
             json!({"action":"click","selector":"#go"}),
+            json!({"action":"html","selector":"#accept"}),
+            json!({"action":"scroll","text":"down"}),
+            json!({"action":"scroll","selector":"#accept"}),
+            json!({"action":"press","text":"Enter"}),
+            json!({"action":"controls"}),
+            json!({"action":"click_text","text":"Accept"}),
+            json!({"action":"click_at","text":"12 40"}),
+            json!({"action":"js","text":"document.title"}),
             json!({"action":"type","selector":"#q","text":"hello"}),
             json!({"action":"screenshot","path":"/tmp/shot.png"}),
             json!({"action":"download","url":"https://example.com/a","path":"/tmp/a"}),
@@ -1180,6 +1758,10 @@ mod tests {
             json!({"action":"start","url":"https://example.com"}),
             json!({"action":"navigate"}),
             json!({"action":"click","selector":"#go","text":"extra"}),
+            json!({"action":"scroll"}),
+            json!({"action":"scroll","selector":"#accept","text":"down"}),
+            json!({"action":"press"}),
+            json!({"action":"html"}),
             json!({"action":"type","selector":"#q"}),
             json!({"action":"screenshot"}),
             json!({"action":"download","url":"https://example.com/a"}),
@@ -1280,6 +1862,46 @@ mod tests {
             )
             .await
             .is_success());
+        let controls = manager
+            .execute(&json!({"action":"controls"}), &offline)
+            .await;
+        assert!(controls.is_success(), "{}", controls.model_text());
+        assert!(controls.model_text().contains("#accept"));
+        assert!(controls.model_text().contains("Civil"));
+        assert!(controls.model_text().contains("1 controls not returned"));
+        let html = manager
+            .execute(&json!({"action":"html","selector":"#accept"}), &offline)
+            .await;
+        assert!(html.model_text().contains("<button"));
+        assert!(manager
+            .execute(&json!({"action":"scroll","selector":"#accept"}), &offline)
+            .await
+            .is_success());
+        assert!(manager
+            .execute(&json!({"action":"scroll","text":"down"}), &offline)
+            .await
+            .is_success());
+        let pressed = manager
+            .execute(&json!({"action":"press","text":"Enter"}), &offline)
+            .await;
+        assert_eq!(pressed.model_text(), "Pressed Enter");
+        let script = crate::browser_exec::run_script(
+            &manager,
+            "# Open the portal and accept terms\ncontrols\njs document.title\nclick text Accept\n",
+            None,
+            &offline,
+        )
+        .await;
+        assert!(script.is_success(), "{}", script.model_text());
+        assert!(script.model_text().contains("#accept"));
+        assert!(script.model_text().contains("ready"));
+        assert_eq!(
+            crate::browser_exec::step_label_from_arguments(
+                &json!({"code":"# Open the portal and accept terms\npage\n"}).to_string()
+            )
+            .as_deref(),
+            Some("Open the portal and accept terms")
+        );
 
         let screenshot = root.path().join("screenshot.png");
         let saved = manager

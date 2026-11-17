@@ -84,7 +84,8 @@ async fn probe_provider_with_timeout(
         }
     };
     let mut usage_span = usage.map(|recorder| recorder.begin());
-    let client = AgentClient::with_request_store(provider.clone(), &config, &model, request_store);
+    let client = AgentClient::with_request_store(provider.clone(), &config, &model, request_store)
+        .without_provider_filter();
     let messages = [ChatMessage {
         role: "user".into(),
         content: crate::image_content::ModelContent::text(PROBE_PROMPT),
@@ -192,7 +193,9 @@ fn status_for_error(error: ProviderError) -> ProviderCheckStatus {
         | ProviderError::UnresolvedToolCall { .. }
         | ProviderError::Protocol(_)
         | ProviderError::StreamAnomaly(_) => ProviderCheckStatus::InvalidResponse,
-        ProviderError::FilterStopped { .. } => ProviderCheckStatus::FilterStopped,
+        ProviderError::FilterStopped { .. } | ProviderError::PrivacyBlocked { .. } => {
+            ProviderCheckStatus::FilterStopped
+        }
     }
 }
 
@@ -330,6 +333,38 @@ mod tests {
         let rendered = snapshot.render_text();
         assert!(rendered.contains(PROBE_PROMPT));
         assert!(!rendered.contains("sentinel-secret"));
+    }
+
+    #[test]
+    fn probe_reaches_the_provider_when_the_process_filter_would_stop_the_reply() {
+        let config = crate::provider_filter::ProviderFilterConfig {
+            enabled: true,
+            phrases: vec!["discard-me".into()],
+            hide: crate::provider_filter::FilterHide {
+                filenames: true,
+                ..crate::provider_filter::FilterHide::default()
+            },
+            ..crate::provider_filter::ProviderFilterConfig::default()
+        };
+        let filter = crate::provider_filter::ProviderFilter::compile(&config).unwrap();
+        assert!(filter.prepare_request(b"discard-me").is_err());
+        crate::provider_filter::with_test_filter(&config, || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async {
+                let (base_url, _captured) = one_shot_server("200 OK", complete_stream()).await;
+                let result = probe_provider(request("safe", base_url, "sentinel-secret")).await;
+                assert_eq!(
+                    result.status,
+                    ProviderCheckStatus::Working {
+                        model: "test-model".into()
+                    }
+                );
+                assert!(!crate::provider_filter::process_current().is_tripped());
+            });
+        });
     }
 
     #[tokio::test]

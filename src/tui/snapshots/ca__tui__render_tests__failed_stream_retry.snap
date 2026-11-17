@@ -2,7 +2,6 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
  › Inspect the provider stream
 
@@ -27,13 +26,13 @@ I decoded part of the response before the connection failed.
 
 
 
-
+│ Authentication rejected for mimo (HTTP 401). Run /provider setup mimo, then /retry
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                                                                   │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
-Authentication rejected for mimo (HTTP 401). Run /provider setup mimo, then /retry
+│› Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto · 2 messages
+/ commands · Ctrl+\ dashboard · ↑ history
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
 
  › Inspect the provider stream
 
@@ -51,9 +50,10 @@ I decoded part of the response before the connection failed.
 
 
 
-
-
+│ Authentication rejected for mimo (HTTP 401). Run
+│ /provider setup mimo, then /retry
 ╭──────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                           │
-╰──────────────────────────────────────────── agent · auto ╯
-Authentication rejected for mimo (HTTP 401). Run /provider …
+│› Ask anything…                                           │
+╰──────────────────────────────────────────────────────────╯
+ca · model auto · 2 messages
+/ commands · Ctrl+\ dashboard · ↑ history

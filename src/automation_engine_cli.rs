@@ -285,6 +285,9 @@ fn make_invocation(
     profile: &crate::runtime::ActiveProfile,
 ) -> Result<Invocation, String> {
     let operation = match operation {
+        EngineOperation::FileMove { .. } => {
+            return Err("Private file moves are admitted by the ca conversation".into())
+        }
         EngineOperation::Workflow {
             config_path,
             request,
@@ -309,6 +312,9 @@ fn make_invocation(
     credentials.dedup();
     validate_credential_env(&credentials)?;
     let (workspace, resource_binding, resources) = match &operation {
+        EngineOperation::FileMove { .. } => {
+            return Err("Private file moves require their conversation binding".into())
+        }
         EngineOperation::Workflow {
             config_path,
             request,
@@ -686,6 +692,9 @@ async fn start(
         executable.clone(),
     ];
     match &invocation.operation {
+        EngineOperation::FileMove { .. } => {
+            return Err("Private file moves require their conversation binding".into())
+        }
         EngineOperation::Workflow { config_path, .. } => {
             if invocation.allow_network {
                 roots.extend(
@@ -732,6 +741,8 @@ async fn start(
             read_only_roots,
             temporary_directory: temporary.path().into(),
             network_allowed: invocation.allow_network,
+            host_credentials: true,
+            proxy_port: None,
             hide_other_processes: false,
         },
     )

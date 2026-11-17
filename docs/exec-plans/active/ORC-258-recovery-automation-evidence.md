@@ -1,6 +1,8 @@
+Do not start this plan unless the task names it. The continuation is [AGT-271](AGT-271-task-first-economic-delegation.md).
+
 # ORC-258 — Recovery and automation evidence
 
-Status: ACTIVE — source and integrated/signed TUI gates pass; actual duration, selected model and install remain open
+Status: HELD — source and integrated/signed TUI gates pass; actual duration, selected model and install remain open
 Updated: 2026-10-06 01:34 UTC
 Companion plans: `ORC-258-oracle-informed-improvements.md` and
 `AUT-231-codex-style-local-automations.md`.

@@ -252,11 +252,18 @@ pub struct ComposerViewport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImageChipSource {
+    Clipboard,
+    File { name: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AtomicKind {
     Reference,
     File,
     Folder { outside_workspace: bool },
     LargePaste { payload: std::sync::Arc<str> },
+    Image { source: ImageChipSource },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -373,6 +380,33 @@ impl PastePreviewHit {
     }
 }
 
+/// Action painted on a queued follow-up row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueueRowAction {
+    SendNow,
+    Edit,
+    Cancel,
+}
+
+/// One clickable chip painted on a queued follow-up row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QueueActionHit {
+    pub id: uuid::Uuid,
+    pub action: QueueRowAction,
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+}
+
+impl QueueActionHit {
+    pub fn contains(self, column: u16, row: u16) -> bool {
+        self.width > 0
+            && row == self.y
+            && column >= self.x
+            && column < self.x.saturating_add(self.width)
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ComposerUiState {
     pub preferred_column: Option<usize>,
@@ -387,6 +421,10 @@ pub struct ComposerUiState {
     /// First visible payload line for each large-paste element index.
     pub paste_preview_scroll: std::collections::HashMap<usize, usize>,
     pub paste_preview_hit: std::cell::RefCell<PastePreviewHit>,
+    /// Chips painted on the current frame's queued rows.
+    pub queue_action_hits: std::cell::RefCell<Vec<QueueActionHit>>,
+    /// Chip under the left button, waiting for release.
+    pub queue_click: Option<QueueActionHit>,
 }
 
 impl ComposerUiState {
@@ -528,6 +566,20 @@ impl ComposerUiState {
             .retain(|element| element.range != *range);
     }
 
+    /// Replace one element's text without dropping it, and shift later elements.
+    pub fn retarget_element(&mut self, old: &Range<usize>, new_len: usize) {
+        let delta = new_len as isize - old.end.saturating_sub(old.start) as isize;
+        for element in &mut self.atomic_elements {
+            if &element.range == old {
+                element.range.end = element.range.start.saturating_add(new_len);
+            } else if element.range.start >= old.end {
+                element.range.start = shift_signed(element.range.start, delta);
+                element.range.end = shift_signed(element.range.end, delta);
+            }
+        }
+        self.sort_elements();
+    }
+
     pub fn expanded_text(&self, input: &str) -> String {
         let mut result = input.to_string();
         for element in self.atomic_elements.iter().rev() {
@@ -554,6 +606,8 @@ impl ComposerUiState {
         self.hit_map.borrow_mut().clear();
         self.paste_preview_scroll.clear();
         *self.paste_preview_hit.borrow_mut() = PastePreviewHit::default();
+        self.queue_action_hits.borrow_mut().clear();
+        self.queue_click = None;
     }
 
     /// Scroll the draft viewport without moving the caret. Returns true if moved.
@@ -646,7 +700,7 @@ pub fn path_shaped(token: &str) -> bool {
         || token.starts_with('/')
 }
 
-/// List exactly one parent directory without recursion or symlink following.
+/// List one directory without recursion, classifying valid links by their targets.
 #[cfg(test)]
 pub fn discover_path_completions(
     token: &str,
@@ -726,7 +780,15 @@ fn discover_path_completions_inner(
         let Ok(file_type) = entry.file_type() else {
             continue;
         };
-        if file_type.is_symlink() || (!file_type.is_file() && !file_type.is_dir()) {
+        let file_type = if file_type.is_symlink() {
+            let Ok(metadata) = std::fs::metadata(entry.path()) else {
+                continue;
+            };
+            metadata.file_type()
+        } else {
+            file_type
+        };
+        if !file_type.is_file() && !file_type.is_dir() {
             continue;
         }
         let is_dir = file_type.is_dir();
@@ -821,6 +883,18 @@ fn shift_offset(offset: usize, removed_len: usize, inserted_len: usize) -> usize
         offset.saturating_add(inserted_len - removed_len)
     } else {
         offset.saturating_sub(removed_len - inserted_len)
+    }
+}
+
+pub fn image_chip_label(index: usize) -> String {
+    format!("[Image #{}]", index + 1)
+}
+
+fn shift_signed(offset: usize, delta: isize) -> usize {
+    if delta >= 0 {
+        offset.saturating_add(delta as usize)
+    } else {
+        offset.saturating_sub(delta.unsigned_abs())
     }
 }
 
@@ -936,12 +1010,10 @@ mod tests {
     }
 
     #[test]
-    fn path_completion_lists_one_level_and_skips_symlinks() {
+    fn path_completion_lists_one_level() {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir(root.path().join("src")).unwrap();
         std::fs::write(root.path().join("spec.md"), "x").unwrap();
-        #[cfg(unix)]
-        std::os::unix::fs::symlink("spec.md", root.path().join("symlink.md")).unwrap();
         let result = discover_path_completions("s", root.path(), 4);
         assert_eq!(result.generation, 4);
         assert_eq!(
@@ -951,6 +1023,54 @@ mod tests {
                 .map(|entry| entry.display.as_str())
                 .collect::<Vec<_>>(),
             ["src/", "spec.md"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_completion_follows_valid_symlinks_and_preserves_link_paths() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let volume = root.path().join("volume");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(volume.join("ca")).unwrap();
+        std::fs::write(volume.join("notes.txt"), "unchanged").unwrap();
+        symlink(&volume, home.join("projects")).unwrap();
+        symlink(volume.join("notes.txt"), home.join("project-notes.txt")).unwrap();
+        symlink(volume.join("missing"), home.join("project-missing")).unwrap();
+        symlink("project-loop", home.join("project-loop")).unwrap();
+
+        let result = discover_path_completions("./project", &home, 7);
+        assert!(result.error.is_none());
+        assert_eq!(result.generation, 7);
+        assert_eq!(
+            result
+                .entries
+                .iter()
+                .map(|entry| (entry.replacement.as_str(), entry.is_dir))
+                .collect::<Vec<_>>(),
+            [("./projects/", true), ("./project-notes.txt", false)]
+        );
+
+        let children = discover_path_completions("./projects/", &home, 8);
+        assert_eq!(
+            children
+                .entries
+                .iter()
+                .map(|entry| entry.replacement.as_str())
+                .collect::<Vec<_>>(),
+            ["./projects/ca/", "./projects/notes.txt"]
+        );
+        let absolute = home.join("projects").to_string_lossy().into_owned();
+        let result = discover_path_completions(&absolute, &home, 9);
+        assert_eq!(result.entries.len(), 1);
+        assert_eq!(result.entries[0].replacement, format!("{absolute}/"));
+        assert!(result.entries[0].is_dir);
+        assert_eq!(
+            std::fs::read_to_string(volume.join("notes.txt")).unwrap(),
+            "unchanged"
         );
     }
 

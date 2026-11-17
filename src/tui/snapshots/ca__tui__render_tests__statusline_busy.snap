@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&busy, 100, 30), render_to_text(&busy, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
 
            ┌ Statusline ────────────────────────────────────────────────────────────────┐
            │Custom status: enabled · refresh 5s                                         │
@@ -27,13 +27,13 @@ expression: "wide_narrow(render_to_text(&busy, 100, 30), render_to_text(&busy, 6
            │Saving… controls locked                                                     │
            │                                                                            │
            │                                                                            │
-           │                                                                            │
-╭──────────└────────────────────────────────────────────────────────────────────────────┘──────────╮
-│› ▌Ask anything…                                                                                   │
-╰─────────────────────────────────────────────────────────────────────────────────────────── agent ╯
-model mimo-v2.5-pro · tests green · / commands
+╭──────────│                                                                            │──────────╮
+│› Ask anyt└────────────────────────────────────────────────────────────────────────────┘          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model mimo-v2.5-pro · tests green
+/ commands · Ctrl+\ dashboard · ↑ history
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
  ┌ Statusline ────────────────────────────────────────────┐
  │Custom status: enabled · refresh 5s                     │
  │last: tests green                                       │
@@ -52,8 +52,8 @@ model mimo-v2.5-pro · tests green · / commands
  │ [off] History hint                                     │
  │ [ 4] Commands hint                                     │
  │Saving… controls locked                                 │
- │                                                        │
 ╭│                                                        │╮
 ││                                                        ││
-╰└────────────────────────────────────────────────────────┘╯
-model mimo-v2.5-pro · tests green · / commands
+╰│                                                        │╯
+c└────────────────────────────────────────────────────────┘
+/ commands · Ctrl+\ dashboard · ↑ history

@@ -2,58 +2,58 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
-
-
-
-            ┌──────────────────────────────────────────────────────────────────────────┐
-            │ Configuration                                                            │
-            │                                                                          │
-            │> no-such-setting                                                         │
-            │                                                                          │
-            │  No matching settings                                                    │
-            │                                                                          │
-            │Enter open/edit · Esc close · ↑↓ navigate · type to filter                │
-            │                                                                          │
-            │                                                                          │
-            │                                                                          │
-            │                                                                          │
-            │                                                                          │
-            │                                                                          │
-            │                                                                          │
-            │                                                                          │
-            │                                                                          │
-            │                                                                          │
-            │                                                                          │
-            └──────────────────────────────────────────────────────────────────────────┘
-
-╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                                                                   │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
-/ commands
+ ┌────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │Settings                                                                                     [x]│
+ │ no-such-setting                                                                                │
+ │                                                                                                │
+ │No matching settings                                                                            │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+ │                                                                                                │
+╭│                                                                                                │╮
+││Tip · / searches settings                                                                       ││
+╰│↑↓/j/k nav  g/G top/btm  Enter open  / search  F2/Esc close                                     │╯
+c└────────────────────────────────────────────────────────────────────────────────────────────────┘
+/ commands · Ctrl+\ dashboard · ↑ history
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
 
-  ┌──────────────────────────────────────────────────────┐
-  │ Configuration                                        │
-  │                                                      │
-  │> no-such-setting                                     │
-  │                                                      │
-  │  No matching settings                                │
-  │                                                      │
-  │Enter open/edit · Esc close · ↑↓ navigate · type to fi│
-  │                                                      │
-  │                                                      │
-  │                                                      │
-  │                                                      │
-  │                                                      │
-  │                                                      │
-  │                                                      │
-  │                                                      │
-  │                                                      │
-  │                                                      │
-╭─│                                                      │─╮
-│›└──────────────────────────────────────────────────────┘ │
-╰──────────────────────────────────────────── agent · auto ╯
-/ commands
+ ┌────────────────────────────────────────────────────────┐
+ │Settings                                             [x]│
+ │ no-such-setting                                        │
+ │                                                        │
+ │No matching settings                                    │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+ │                                                        │
+╭│                                                        │╮
+││Tip · / searches settings                               ││
+╰│↑↓/j/k nav  g/G top/btm  Enter open  / search  F2/Esc c…│╯
+c└────────────────────────────────────────────────────────┘
+/ commands · Ctrl+\ dashboard · ↑ history

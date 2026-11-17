@@ -1415,7 +1415,8 @@ fn repeatable_headless_skill_activation_is_exact_and_precedes_provider_io() {
         .unwrap();
     assert_eq!(output.status.code(), Some(0));
     let requests = metadata_server.join().unwrap();
-    assert!(requests[0].contains("Deploy carefully"));
+    assert!(!requests[0].contains("Deploy carefully"));
+    assert!(requests[0].contains("When skill_search is available"));
     assert!(!requests[0].contains("SKILL-BODY-CLI"));
 
     let (base_url, server) = start_fake_provider(vec![text_sse("done")]);

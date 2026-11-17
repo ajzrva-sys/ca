@@ -22,16 +22,30 @@ struct Key {
     ),
     stream: Option<(usize, usize, usize, u64)>,
     expanded: Vec<TranscriptBlockKey>,
+    density: crate::tui::transcript::TranscriptDensity,
+    expanded_runs: Vec<String>,
     user_prompt_scroll: Vec<(usize, usize)>,
     flags: (bool, bool, bool, bool),
     annotations: (usize, usize, usize),
     history: Option<crate::app::SessionHistoryState>,
     agent_focus: Option<crate::app::AgentActivityFocusState>,
     agent_clock: Option<i64>,
+    window_start: usize,
+    scrollback_selection: Option<usize>,
 }
 
 impl Key {
-    fn for_state(state: &AppState, width: u16, focused: bool) -> Self {
+    fn for_state(state: &AppState, width: u16, height: u16, focused: bool) -> Self {
+        let last_user = state
+            .messages
+            .iter()
+            .rposition(|message| message.role == Role::User);
+        let window = transcript_message_window(
+            state.messages.len(),
+            height,
+            state.transcript_scroll.bottom_offset(),
+            last_user,
+        );
         Self {
             revision: state.transcript_cache.revision.get(),
             identity: (state.pane_id, state.current_session.as_ref().map(|s| s.id)),
@@ -54,6 +68,8 @@ impl Key {
                 )
             }),
             expanded: state.expanded_blocks.clone(),
+            density: state.transcript_scroll.density(),
+            expanded_runs: state.transcript_scroll.expanded_run_ids(),
             user_prompt_scroll: {
                 let mut pairs: Vec<(usize, usize)> = state
                     .user_prompt_scroll
@@ -88,6 +104,9 @@ impl Key {
                         )
                 })
                 .then(|| state.agent_activity_now.timestamp()),
+            window_start: window.start,
+            scrollback_selection: (state.composer_focus == crate::app::ComposerFocus::Scrollback)
+                .then_some(state.transcript_selection),
         }
     }
 
@@ -98,6 +117,10 @@ impl Key {
             && self.focused == next.focused
             && self.flags == next.flags
             && self.expanded == next.expanded
+            && self.density == next.density
+            && self.expanded_runs == next.expanded_runs
+            && self.window_start == next.window_start
+            && self.scrollback_selection == next.scrollback_selection
     }
 }
 
@@ -117,10 +140,13 @@ struct Layout {
     headers: Vec<ActivityHeaderLine>,
     user_prompt_cards: Vec<crate::tui::render::UserPromptCardSpan>,
     links: Vec<crate::markdown::MarkdownLink>,
+    selectable_blocks: Vec<crate::tui::transcript::SelectableBlock>,
+    content_lines: u32,
     bytes: usize,
     fallback: (u16, ratatui::buffer::Buffer),
     _active_surface: crate::cache_memory::Essential,
     cache_epoch: Option<u64>,
+    omitted_earlier: usize,
 }
 
 fn line_bytes(line: &Line<'_>) -> usize {
@@ -212,11 +238,14 @@ impl Layout {
             headers: content.activity_headers,
             user_prompt_cards: content.user_prompt_cards,
             links: content.links,
+            selectable_blocks: content.selectable,
+            content_lines: u32::try_from(content.lines.len()).unwrap_or(u32::MAX),
             bytes: 0,
             fallback: (top, fallback),
             _active_surface: surface,
             cache_epoch: ACTIVE_MEMO
                 .with(|slot| slot.borrow().as_ref().map(|context| context.expected)),
+            omitted_earlier: content.omitted_earlier,
         };
         layout.bytes = layout.blocks.values().map(|block| block.bytes).sum();
         let first_visible = layout
@@ -443,7 +472,7 @@ impl TranscriptCache {
             return 0;
         }
         self.maintain();
-        let key = Key::for_state(state, area.width, focused);
+        let key = Key::for_state(state, area.width, area.height, focused);
         let mut inner = self.inner.borrow_mut();
         if let Some(result) = inner.worker.as_ref().and_then(|rx| match rx.try_recv() {
             Ok(result) => Some(Some(result)),
@@ -473,6 +502,7 @@ impl TranscriptCache {
         let offset = state.transcript_scroll.bottom_offset();
         let mut controls = Vec::new();
         append_conversation_controls(&mut controls, state, area.width, true);
+        append_private_move_progress(&mut controls, state, area.width);
         let control_rows = controls
             .iter()
             .map(|line| {
@@ -491,7 +521,7 @@ impl TranscriptCache {
             !layout.has_view(top, area.height)
         });
         if (inner.key.as_ref() != Some(&key) || missing_view) && inner.worker.is_none() {
-            let build = snapshot(state, area.width, focused);
+            let build = snapshot(state, area.width, focused, area.height);
             let worker_payload =
                 crate::cache_memory::Essential::new("active transcript worker buffers");
             worker_payload.set(state.memory_observer.history_estimate());
@@ -539,11 +569,22 @@ impl TranscriptCache {
         }
         inner.clock = inner.clock.saturating_add(1);
         let base_rows = inner.layout.as_ref().map_or(0, Layout::rows);
-        let maximum = base_rows
+        let paint_maximum = base_rows
             .saturating_add(control_rows)
             .saturating_sub(area.height);
-        let scroll =
-            maximum.saturating_sub(state.transcript_scroll.observe_rendered_maximum(maximum));
+        let omitted_rows = u16::try_from(
+            inner
+                .layout
+                .as_ref()
+                .map(|layout| layout.omitted_earlier.saturating_mul(2))
+                .unwrap_or(0),
+        )
+        .unwrap_or(u16::MAX);
+        let virtual_maximum = paint_maximum.saturating_add(omitted_rows);
+        let followed = state
+            .transcript_scroll
+            .observe_rendered_maximum(virtual_maximum);
+        let scroll = paint_maximum.saturating_sub(followed.min(paint_maximum));
         if let Some(layout) = &inner.layout {
             layout.draw(frame, area, scroll, inner.clock);
             let targets = layout
@@ -597,6 +638,12 @@ impl TranscriptCache {
             state
                 .transcript_scroll
                 .set_user_prompt_hit_targets(user_targets);
+            state
+                .transcript_scroll
+                .set_blocks(layout.selectable_blocks.clone());
+            state
+                .transcript_scroll
+                .set_content_lines(layout.content_lines);
             if state.terminal_hyperlinks_supported {
                 apply_hyperlinks(frame.buffer_mut(), area, &layout.links, &state.workspace);
             }
@@ -635,7 +682,17 @@ fn snapshot(
     state: &AppState,
     width: u16,
     focused: bool,
+    viewport_rows: u16,
 ) -> impl FnOnce() -> ConversationContent + Send + 'static {
+    let window = transcript_message_window(
+        state.messages.len(),
+        viewport_rows,
+        state.transcript_scroll.bottom_offset(),
+        state
+            .messages
+            .iter()
+            .rposition(|message| message.role == Role::User),
+    );
     let theme = active_theme(state);
     let auto = state.theme_manager.is_none() && state.terminal_theme_auto;
     macro_rules! capture {
@@ -646,7 +703,7 @@ fn snapshot(
                 $(copy.$field = $field;)*
                 copy.ui_theme = theme; copy.terminal_theme_auto = auto;
                 copy.cursor_blink_visible = true;
-                conversation_content(&copy, width, true, focused)
+                conversation_content(&copy, width, true, focused, Some(window))
             }
         }};
     }
@@ -667,6 +724,8 @@ fn snapshot(
         show_transcript_timestamps,
         show_assistant_footers,
         expanded_blocks,
+        composer_focus,
+        transcript_selection,
         user_prompt_scroll,
         workspace,
         command_presentations,
@@ -841,6 +900,8 @@ mod tests {
                     activity_headers: Vec::new(),
                     user_prompt_cards: Vec::new(),
                     links: Vec::new(),
+                    omitted_earlier: 0,
+                    selectable: Vec::new(),
                 },
                 width,
                 0,
@@ -870,6 +931,7 @@ mod tests {
     fn composer_and_blink_reuse_layout_and_expansion_invalidates_it() {
         let mut state = crate::tui::test_support::test_state();
         state.messages.push(crate::app::Message {
+            retrieved_spans: Some(Vec::new()),
             role: crate::app::Role::Assistant,
             content: "history ".repeat(1000),
             thinking: None,
@@ -893,6 +955,7 @@ mod tests {
         let mut state = crate::tui::test_support::test_state();
         state.messages = (0..4096)
             .map(|index| crate::app::Message {
+                retrieved_spans: Some(Vec::new()),
                 role: crate::app::Role::Assistant,
                 content: format!("Row {index}: **Unicode** 你好 `code` and normal text."),
                 thinking: None,
@@ -943,6 +1006,8 @@ mod tests {
             activity_headers: Vec::new(),
             user_prompt_cards: Vec::new(),
             links: Vec::new(),
+            omitted_earlier: 0,
+            selectable: Vec::new(),
         };
         let layout = Layout::build(build(lines.clone()), 80, 0, 24, 0, BTreeMap::new());
         let first = layout.blocks[&0].clone();
@@ -974,6 +1039,7 @@ mod tests {
     async fn bug257_workers_keep_history_visible_and_discard_other_session_results() {
         let mut state = crate::tui::test_support::test_state();
         let message = |text: &str| crate::app::Message {
+            retrieved_spans: Some(Vec::new()),
             role: crate::app::Role::Assistant,
             content: text.into(),
             thinking: None,
@@ -1018,6 +1084,7 @@ mod tests {
         for width in [60, 100] {
             let mut state = crate::tui::test_support::test_state();
             state.messages.push(crate::app::Message {
+                retrieved_spans: Some(Vec::new()),
                 role: crate::app::Role::Assistant,
                 content: "**Memory** renders Unicode 你好 and `code`.\n".repeat(100),
                 thinking: None,
@@ -1075,6 +1142,8 @@ mod tests {
             activity_headers: Vec::new(),
             user_prompt_cards: Vec::new(),
             links: Vec::new(),
+            omitted_earlier: 0,
+            selectable: Vec::new(),
         };
         let layout = Layout::build(content, 80, 0, 20, 0, BTreeMap::new());
         let ticket = layout.blocks[&0].ticket.as_ref().unwrap();
@@ -1088,6 +1157,7 @@ mod tests {
         let mut state = crate::tui::test_support::test_state();
         state.transcript_cache.async_build.set(true);
         state.messages.push(crate::app::Message {
+            retrieved_spans: Some(Vec::new()),
             role: crate::app::Role::Assistant,
             content: "Streaming snapshot remains visible ".repeat(2048),
             thinking: None,
@@ -1112,5 +1182,122 @@ mod tests {
                 "compatible snapshots must display before streaming stops"
             );
         }
+    }
+
+    fn mixed_fold_calls() -> Vec<crate::tui::transcript::ToolFoldCall> {
+        use crate::tui::transcript::{ToolFoldCall, ToolFoldKind};
+        vec![
+            ToolFoldCall {
+                id: "read-1".into(),
+                kind: ToolFoldKind::Read,
+            },
+            ToolFoldCall {
+                id: "read-2".into(),
+                kind: ToolFoldKind::Read,
+            },
+            ToolFoldCall {
+                id: "read-3".into(),
+                kind: ToolFoldKind::Read,
+            },
+            ToolFoldCall {
+                id: "search-1".into(),
+                kind: ToolFoldKind::Search,
+            },
+            ToolFoldCall {
+                id: "search-2".into(),
+                kind: ToolFoldKind::Search,
+            },
+            ToolFoldCall {
+                id: "edit-1".into(),
+                kind: ToolFoldKind::Edit {
+                    added: 8,
+                    removed: 1,
+                },
+            },
+            ToolFoldCall {
+                id: "edit-2".into(),
+                kind: ToolFoldKind::Edit {
+                    added: 4,
+                    removed: 3,
+                },
+            },
+            ToolFoldCall {
+                id: "command-1".into(),
+                kind: ToolFoldKind::Command,
+            },
+        ]
+    }
+
+    fn layout_folded(
+        calls: &[crate::tui::transcript::ToolFoldCall],
+        density: crate::tui::transcript::TranscriptDensity,
+        expanded: &std::collections::BTreeSet<String>,
+    ) -> Layout {
+        let lines = crate::tui::transcript::fold_tool_run(calls, density, expanded)
+            .into_iter()
+            .map(|row| Line::from(row.text))
+            .collect();
+        Layout::build(
+            ConversationContent {
+                lines,
+                activity_headers: Vec::new(),
+                user_prompt_cards: Vec::new(),
+                links: Vec::new(),
+                omitted_earlier: 0,
+                selectable: Vec::new(),
+            },
+            100,
+            0,
+            24,
+            0,
+            BTreeMap::new(),
+        )
+    }
+
+    #[test]
+    fn folded_run_is_measured_after_folding_and_reads_stay_folded() {
+        use crate::tui::transcript::TranscriptDensity;
+        let calls = mixed_fold_calls();
+        let expanded = std::collections::BTreeSet::new();
+        let default_rows = layout_folded(&calls, TranscriptDensity::Default, &expanded).rows();
+        let detailed_rows = layout_folded(&calls, TranscriptDensity::Detailed, &expanded).rows();
+        assert!(default_rows < detailed_rows);
+        let detailed =
+            crate::tui::transcript::fold_tool_run(&calls, TranscriptDensity::Detailed, &expanded);
+        assert!(detailed.len() < calls.len());
+        assert_eq!(
+            detailed
+                .iter()
+                .filter(|row| row.text.starts_with("Explored"))
+                .count(),
+            1
+        );
+        assert!(detailed.iter().all(|row| row.text != "Read file"));
+        assert_eq!(PAYLOAD_BUDGET, 16 * 1024 * 1024);
+        assert_eq!(BLOCK_LINES, 128);
+    }
+
+    #[test]
+    fn cache_key_changes_when_density_or_expanded_runs_change() {
+        use crate::tui::transcript::TranscriptDensity;
+        let state = crate::tui::test_support::test_state();
+        let base = Key::for_state(&state, 80, 24, true);
+        state
+            .transcript_scroll
+            .set_density(TranscriptDensity::Detailed);
+        let detailed = Key::for_state(&state, 80, 24, true);
+        assert_ne!(base, detailed);
+        assert_eq!(detailed.density, TranscriptDensity::Detailed);
+        state
+            .transcript_scroll
+            .set_density(TranscriptDensity::Default);
+        state.transcript_scroll.expand_run("run-1");
+        let expanded = Key::for_state(&state, 80, 24, true);
+        assert_ne!(base, expanded);
+        assert_ne!(detailed, expanded);
+        assert_eq!(expanded.expanded_runs, vec!["run-1".to_string()]);
+        assert_eq!(expanded.density, TranscriptDensity::Default);
+        state.transcript_scroll.collapse_run("run-1");
+        assert_eq!(Key::for_state(&state, 80, 24, true), base);
     }
 }

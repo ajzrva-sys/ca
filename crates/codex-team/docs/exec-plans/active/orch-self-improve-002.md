@@ -1,6 +1,8 @@
+Do not start this plan unless the task names it. The continuation is [AGT-271](../../../../docs/exec-plans/active/AGT-271-task-first-economic-delegation.md).
+
 # ORCH-SELF-IMPROVE-002 — Autonomous Learning Fabric
 
-Status: ACTIVE
+Status: HELD
 Owner: codex-team
 Created: 2026-08-21
 

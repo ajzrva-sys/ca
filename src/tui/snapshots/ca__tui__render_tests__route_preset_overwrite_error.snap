@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "render_to_text(&overwrite, 80, 24)"
 ---
- ca v0.0.0 │ /workspace/ca                                          [Dashboard]
+
 
 
 
@@ -21,8 +21,8 @@ expression: "render_to_text(&overwrite, 80, 24)"
      │                                                                    │
      │                                                                    │
      └────────────────────────────────────────────────────────────────────┘
-
 ╭──────────────────────────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                                               │
-╰──────────────────────────────────────────────────────────────── agent · auto ╯
-/ commands
+│› Ask anything…                                                               │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ca · model auto
+/ commands · Ctrl+\ dashboard · ↑ history

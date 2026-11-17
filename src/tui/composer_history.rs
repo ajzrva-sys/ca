@@ -1,5 +1,5 @@
 //! Bounded, process-only draft history. Large paste and image data stay shared.
-use super::{AtomicKind, HistoryDraft};
+use super::{AtomicKind, HistoryDraft, ImageChipSource};
 use sha2::{Digest, Sha256};
 use std::collections::{HashSet, VecDeque};
 use std::time::{Duration, Instant};
@@ -74,6 +74,16 @@ fn stamp(draft: &HistoryDraft) -> [u8; 32] {
                 hash.update([3]);
                 hash.update((payload.as_ptr() as usize).to_le_bytes());
                 hash.update(payload.len().to_le_bytes());
+            }
+            AtomicKind::Image { source } => {
+                hash.update([4]);
+                match source {
+                    ImageChipSource::Clipboard => hash.update([0]),
+                    ImageChipSource::File { name } => {
+                        hash.update([1]);
+                        hash.update(name.as_bytes());
+                    }
+                }
             }
         }
     }

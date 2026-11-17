@@ -65,6 +65,9 @@ pub struct WorkflowStep {
     pub output: Option<String>,
     #[serde(default = "default_evidence")]
     pub evidence: Vec<WorkflowEvidenceGate>,
+    /// Run this step only when a dependency output contains the word.
+    #[serde(default)]
+    pub when: Option<String>,
 }
 
 impl std::fmt::Debug for WorkflowStep {
@@ -143,6 +146,13 @@ pub struct LoadedWorkflow {
     pub definition: WorkflowDefinition,
     pub relative_path: String,
     pub digest: String,
+    pub pause_before_run: bool,
+    /// How many completed steps this run may finish before it pauses.
+    pub agent_budget: u64,
+}
+
+fn default_agent_budget() -> u64 {
+    crate::parity_backend::WORKFLOW_MAX_BUDGET
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -510,7 +520,7 @@ pub fn load_workflow(
         return Err(WorkflowError::DefinitionTooLarge);
     }
     let extension = path.extension().and_then(|value| value.to_str());
-    if !matches!(extension, Some("toml" | "json")) {
+    if !matches!(extension, Some("toml" | "json" | "script")) {
         return Err(WorkflowError::InvalidFile);
     }
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
@@ -523,14 +533,28 @@ pub fn load_workflow(
         return Err(WorkflowError::DefinitionTooLarge);
     }
     let text = std::str::from_utf8(&bytes).map_err(|_| WorkflowError::InvalidUtf8)?;
-    let definition = match extension {
-        Some("toml") => {
-            toml::from_str(text).map_err(|error| WorkflowError::Parse(error.to_string()))?
-        }
-        Some("json") => {
-            serde_json::from_str(text).map_err(|error| WorkflowError::Parse(error.to_string()))?
-        }
-        _ => unreachable!(),
+    let (definition, pause_before_run, agent_budget) = if extension == Some("script") {
+        let plan =
+            crate::parity_backend::parse_workflow_script(text).map_err(WorkflowError::Parse)?;
+        let stem = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("script");
+        (
+            definition_from_script(stem, &plan)?,
+            plan.paused,
+            plan.budget,
+        )
+    } else {
+        let definition = match extension {
+            Some("toml") => {
+                toml::from_str(text).map_err(|error| WorkflowError::Parse(error.to_string()))?
+            }
+            Some("json") => serde_json::from_str(text)
+                .map_err(|error| WorkflowError::Parse(error.to_string()))?,
+            _ => unreachable!(),
+        };
+        (definition, false, default_agent_budget())
     };
     let definition = WorkflowDefinition::validate(definition)?;
     if BUILTIN_WORKFLOW_IDS.contains(&definition.id.as_str()) {
@@ -546,6 +570,8 @@ pub fn load_workflow(
         definition,
         relative_path,
         digest: hex_digest(&bytes),
+        pause_before_run,
+        agent_budget,
     })
 }
 
@@ -754,6 +780,8 @@ pub async fn prepare_builtin_workflow(
         relative_path: format!("builtin:{}", definition.id),
         digest: hex_digest(&bytes),
         definition,
+        pause_before_run: false,
+        agent_budget: default_agent_budget(),
     })
 }
 
@@ -782,6 +810,8 @@ pub fn builtin_template(id: &str) -> Result<LoadedWorkflow, String> {
         relative_path: format!("builtin:{}", definition.id),
         digest: hex_digest(&bytes),
         definition,
+        pause_before_run: false,
+        agent_budget: default_agent_budget(),
     })
 }
 
@@ -822,6 +852,53 @@ fn validate_optional_markdown_path(path: Option<&str>) -> Result<Option<String>,
     Ok(Some(path.to_string()))
 }
 
+fn definition_from_script(
+    id: &str,
+    plan: &crate::parity_backend::ScriptPlan,
+) -> Result<WorkflowDefinition, WorkflowError> {
+    let mut steps = Vec::new();
+    let mut anchor = None;
+    let mut group = Vec::new();
+    let mut in_group = false;
+    for (index, plan_step) in plan.steps.iter().enumerate() {
+        let step_id = format!("phase-{index}");
+        let depends = if plan_step.parallel {
+            if !in_group {
+                in_group = true;
+                group.clear();
+            }
+            anchor.clone().map(|id| vec![id]).unwrap_or_default()
+        } else if in_group {
+            in_group = false;
+            let depends = group.clone();
+            group.clear();
+            depends
+        } else {
+            anchor.clone().map(|id| vec![id]).unwrap_or_default()
+        };
+        if plan_step.parallel {
+            group.push(step_id.clone());
+        } else {
+            anchor = Some(step_id.clone());
+        }
+        let mut step = step(
+            &step_id,
+            &[],
+            format!("{}\n\n{}", plan_step.phase, plan_step.prompt),
+        );
+        step.depends_on = depends;
+        step.when = plan_step.when_word.clone();
+        steps.push(step);
+    }
+    WorkflowDefinition {
+        version: 1,
+        id: id.to_string(),
+        title: id.to_string(),
+        steps,
+    }
+    .validate()
+}
+
 fn step(id: &str, depends_on: &[&str], prompt: impl Into<String>) -> WorkflowStep {
     WorkflowStep {
         id: id.into(),
@@ -836,6 +913,7 @@ fn step(id: &str, depends_on: &[&str], prompt: impl Into<String>) -> WorkflowSte
         retry: WorkflowRetryPolicy::default(),
         output: None,
         evidence: vec![WorkflowEvidenceGate::AssistantOutput],
+        when: None,
     }
 }
 
@@ -1437,6 +1515,9 @@ pub struct WorkflowStepState {
     pub output: Option<String>,
     #[serde(default)]
     pub error: Option<String>,
+    /// Assistant text from the last successful attempt, used by `when`.
+    #[serde(default)]
+    pub last_text: String,
 }
 
 impl std::fmt::Debug for WorkflowStepState {
@@ -1482,6 +1563,12 @@ pub struct WorkflowRun {
     pub steps: Vec<WorkflowStepState>,
     pub started_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Completed step ids, oldest first. A resumed run continues from here.
+    #[serde(default)]
+    pub journal: Vec<String>,
+    /// Completed steps that pause the run while later steps remain.
+    #[serde(default = "default_agent_budget")]
+    pub agent_budget: u64,
 }
 
 impl std::fmt::Debug for WorkflowRun {
@@ -1524,8 +1611,12 @@ impl WorkflowRun {
                 .then(|| loaded.definition.clone()),
             default_provider,
             default_model,
-            status: WorkflowRunStatus::Running,
-            pause_reason: None,
+            status: if loaded.pause_before_run {
+                WorkflowRunStatus::Paused
+            } else {
+                WorkflowRunStatus::Running
+            },
+            pause_reason: loaded.pause_before_run.then_some(WorkflowPauseReason::User),
             current_step: None,
             provider_attempts: 0,
             steps: loaded
@@ -1543,10 +1634,13 @@ impl WorkflowRun {
                     output_name: step.output.clone(),
                     output: None,
                     error: None,
+                    last_text: String::new(),
                 })
                 .collect(),
             started_at: now,
             updated_at: now,
+            journal: Vec::new(),
+            agent_budget: loaded.agent_budget,
         }
     }
 
@@ -1565,6 +1659,8 @@ impl WorkflowRun {
             definition,
             relative_path: self.definition_path.clone(),
             digest: hex_digest(&bytes),
+            pause_before_run: false,
+            agent_budget: default_agent_budget(),
         };
         if loaded.digest != self.definition_digest {
             return Err(WorkflowError::StateMismatch);
@@ -1663,10 +1759,62 @@ impl WorkflowRun {
         fork
     }
 
+    pub fn close_unmatched_branches(&mut self, definition: &WorkflowDefinition) {
+        if self.ensure_shape(definition).is_err() {
+            return;
+        }
+        while let Some(ready) = self.ready_step(definition) {
+            let Some(word) = ready.when.clone() else {
+                break;
+            };
+            if self.branch_matches(&ready.depends_on, &word) {
+                break;
+            }
+            let id = ready.id.clone();
+            let Some(state) = self.step_state_mut(&id) else {
+                break;
+            };
+            state.status = WorkflowStepStatus::Succeeded;
+            state.output = Some(String::new());
+            state.error = None;
+            self.journal.push(format!("skipped {id}"));
+            if self.journal.len() > 128 {
+                let extra = self.journal.len() - 128;
+                self.journal.drain(0..extra);
+            }
+        }
+    }
+
+    fn branch_matches(&self, depends_on: &[String], word: &str) -> bool {
+        let word = word.to_ascii_lowercase();
+        depends_on.iter().any(|id| {
+            self.step_state(id)
+                .is_some_and(|state| state.last_text.to_ascii_lowercase().contains(&word))
+        })
+    }
+
+    fn ready_step<'a>(&self, definition: &'a WorkflowDefinition) -> Option<&'a WorkflowStep> {
+        for step in &definition.steps {
+            let state = self.step_state(&step.id)?;
+            if state.status != WorkflowStepStatus::Pending {
+                continue;
+            }
+            let ready = step.depends_on.iter().all(|id| {
+                self.step_state(id)
+                    .is_some_and(|state| state.status == WorkflowStepStatus::Succeeded)
+            });
+            if ready {
+                return Some(step);
+            }
+        }
+        None
+    }
+
     pub fn next_ready<'a>(
-        &self,
+        &mut self,
         definition: &'a WorkflowDefinition,
     ) -> Result<Option<&'a WorkflowStep>, WorkflowError> {
+        self.close_unmatched_branches(definition);
         self.ensure_shape(definition)?;
         for step in &definition.steps {
             let state = self.step_state(&step.id).expect("shape checked");
@@ -1808,10 +1956,16 @@ impl WorkflowRun {
         }
         let state = self.step_state_mut(&step_id).expect("shape checked");
         state.status = WorkflowStepStatus::Succeeded;
+        state.last_text = output.clone();
         state.output = step.output.as_ref().map(|_| output);
         state.error = None;
         self.current_step = None;
         self.updated_at = now;
+        self.journal.push(format!("completed {step_id}"));
+        if self.journal.len() > 128 {
+            let extra = self.journal.len() - 128;
+            self.journal.drain(0..extra);
+        }
         if self
             .steps
             .iter()
@@ -1819,6 +1973,15 @@ impl WorkflowRun {
         {
             self.status = WorkflowRunStatus::Complete;
             return Ok(WorkflowStepCompletion::WorkflowComplete);
+        }
+        let completed = self
+            .steps
+            .iter()
+            .filter(|step| step.status == WorkflowStepStatus::Succeeded)
+            .count() as u64;
+        if completed >= self.agent_budget.max(1) {
+            self.status = WorkflowRunStatus::Paused;
+            self.pause_reason = Some(WorkflowPauseReason::User);
         }
         Ok(WorkflowStepCompletion::StepComplete)
     }
@@ -2387,6 +2550,7 @@ mod tests {
                     retry: WorkflowRetryPolicy::default(),
                     output: Some("inspection".into()),
                     evidence: default_evidence(),
+                    when: None,
                 },
                 WorkflowStep {
                     id: "verify".into(),
@@ -2401,6 +2565,7 @@ mod tests {
                     },
                     output: Some("verification".into()),
                     evidence: default_evidence(),
+                    when: None,
                 },
             ],
         }
@@ -2413,7 +2578,117 @@ mod tests {
             definition: definition(),
             relative_path: ".ca/workflows/release.toml".into(),
             digest: "abc".into(),
+            pause_before_run: false,
+            agent_budget: default_agent_budget(),
         }
+    }
+
+    #[test]
+    fn a_script_budget_keeps_later_phases_and_resume_continues() {
+        let plan = crate::parity_backend::parse_workflow_script(
+            "budget 1\nphase Look\nagent read\nphase Later\nagent write",
+        )
+        .unwrap();
+        let definition = definition_from_script("demo", &plan).unwrap();
+        assert_eq!(definition.steps.len(), 2);
+        let mut loaded = loaded();
+        loaded.agent_budget = 1;
+        loaded.pause_before_run = true;
+        let paused = WorkflowRun::start(&loaded, "mimo".into(), "mimo-v2.5".into(), Utc::now());
+        assert_eq!(paused.status, WorkflowRunStatus::Paused);
+        assert_eq!(paused.pause_reason, Some(WorkflowPauseReason::User));
+        loaded.pause_before_run = false;
+        let mut run = WorkflowRun::start(&loaded, "mimo".into(), "mimo-v2.5".into(), Utc::now());
+        let now = Utc::now();
+        run.begin_step(
+            &loaded.definition,
+            "inspect",
+            "mimo".into(),
+            "mimo-v2.5".into(),
+            now,
+        )
+        .unwrap();
+        let completion = run
+            .complete_step(&loaded.definition, "inspected", now)
+            .unwrap();
+        assert_eq!(completion, WorkflowStepCompletion::StepComplete);
+        assert_eq!(run.status, WorkflowRunStatus::Paused);
+        assert_eq!(run.journal, vec!["completed inspect".to_string()]);
+        run.resume(now).unwrap();
+        assert_eq!(run.status, WorkflowRunStatus::Running);
+        run.begin_step(
+            &loaded.definition,
+            "verify",
+            "mimo".into(),
+            "mimo-v2.5".into(),
+            now,
+        )
+        .unwrap();
+        let completion = run
+            .complete_step(&loaded.definition, "verified", now)
+            .unwrap();
+        assert_eq!(completion, WorkflowStepCompletion::WorkflowComplete);
+        assert_eq!(run.journal.len(), 2);
+        let plan = crate::parity_backend::parse_workflow_script(
+            "budget 4\nphase Look\nagent read\nparallel\nphase Left\nagent left\nphase Right\nagent right\njoin\nwhen missing\nphase After\nagent finish",
+        )
+        .unwrap();
+        let branched = definition_from_script("branch", &plan).unwrap();
+        assert!(
+            branched.steps[1].depends_on.is_empty()
+                || branched.steps[1].depends_on == branched.steps[2].depends_on
+        );
+        assert_eq!(branched.steps[1].depends_on, branched.steps[2].depends_on);
+        assert!(branched.steps[3].depends_on.len() == 2);
+        let loaded = LoadedWorkflow {
+            definition: branched,
+            relative_path: "branch.script".into(),
+            digest: "branch".into(),
+            pause_before_run: false,
+            agent_budget: 4,
+        };
+        let mut run = WorkflowRun::start(&loaded, "mimo".into(), "mimo".into(), Utc::now());
+        let now = Utc::now();
+        let first = run
+            .next_ready(&loaded.definition)
+            .unwrap()
+            .unwrap()
+            .id
+            .clone();
+        run.begin_step(
+            &loaded.definition,
+            &first,
+            "mimo".into(),
+            "mimo".into(),
+            now,
+        )
+        .unwrap();
+        run.complete_step(&loaded.definition, "looked", now)
+            .unwrap();
+        let left = run
+            .next_ready(&loaded.definition)
+            .unwrap()
+            .unwrap()
+            .id
+            .clone();
+        run.begin_step(&loaded.definition, &left, "mimo".into(), "mimo".into(), now)
+            .unwrap();
+        run.complete_step(&loaded.definition, "left side", now)
+            .unwrap();
+        let next = run
+            .next_ready(&loaded.definition)
+            .unwrap()
+            .unwrap()
+            .id
+            .clone();
+        assert_ne!(next, "phase-3");
+        run.begin_step(&loaded.definition, &next, "mimo".into(), "mimo".into(), now)
+            .unwrap();
+        run.complete_step(&loaded.definition, "right side", now)
+            .unwrap();
+        assert!(run.next_ready(&loaded.definition).unwrap().is_none());
+        assert!(run.journal.iter().any(|line| line.starts_with("skipped")));
+        let _ = loaded;
     }
 
     #[test]
@@ -2453,6 +2728,7 @@ mod tests {
                 retry: WorkflowRetryPolicy::default(),
                 output: None,
                 evidence: default_evidence(),
+                when: None,
             })
             .collect();
         assert_eq!(
@@ -2597,6 +2873,7 @@ mod tests {
                 retry: WorkflowRetryPolicy::default(),
                 output: Some(format!("output-{index}")),
                 evidence: default_evidence(),
+                when: None,
             })
             .collect();
         loaded.definition = loaded.definition.validate().unwrap();

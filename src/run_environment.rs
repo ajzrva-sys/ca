@@ -330,6 +330,8 @@ pub async fn evaluate_direnv(
                 read_only_roots: Vec::new(),
                 temporary_directory: temporary.path().to_path_buf(),
                 network_allowed: false,
+                host_credentials: true,
+                proxy_port: None,
                 hide_other_processes: true,
             },
         )

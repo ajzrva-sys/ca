@@ -13,8 +13,10 @@ use crate::config::{
 pub enum FirstPartyProvider {
     OpenAiDirect,
     OpenAiCodex,
+    OpenAiChatGpt,
     Mimo,
     DeepSeek,
+    Xai,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +35,9 @@ enum FirstPartyModel {
     Mimo25Pro,
     Mimo26Pro,
     DeepSeekV4,
+    Grok45,
+    Grok46,
+    Grok47,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,7 +130,9 @@ impl FirstPartyContract {
     pub const fn is_openai(self) -> bool {
         matches!(
             self.family,
-            FirstPartyProvider::OpenAiDirect | FirstPartyProvider::OpenAiCodex
+            FirstPartyProvider::OpenAiDirect
+                | FirstPartyProvider::OpenAiCodex
+                | FirstPartyProvider::OpenAiChatGpt
         )
     }
 
@@ -140,7 +147,8 @@ impl FirstPartyContract {
     }
 
     pub const fn includes_encrypted_reasoning(self) -> bool {
-        self.is_openai() && matches!(self.protocol, ProviderProtocol::OpenAiResponses)
+        matches!(self.protocol, ProviderProtocol::OpenAiResponses)
+            && (self.is_openai() || matches!(self.family, FirstPartyProvider::Xai))
     }
 
     pub(crate) const fn tool_call_format(self) -> Option<ToolCallFormat> {
@@ -159,6 +167,9 @@ impl FirstPartyContract {
                 | FirstPartyModel::OpenAi6Astra
                 | FirstPartyModel::OpenAi61Sol
                 | FirstPartyModel::Mimo25
+                | FirstPartyModel::Grok45
+                | FirstPartyModel::Grok46
+                | FirstPartyModel::Grok47
         )
     }
 
@@ -190,7 +201,9 @@ impl FirstPartyContract {
         match (self.family, self.protocol, effort) {
             (_, ProviderProtocol::OpenAiResponses, None) => Ok(None),
             (
-                FirstPartyProvider::OpenAiDirect | FirstPartyProvider::OpenAiCodex,
+                FirstPartyProvider::OpenAiDirect
+                | FirstPartyProvider::OpenAiCodex
+                | FirstPartyProvider::OpenAiChatGpt,
                 ProviderProtocol::OpenAiResponses,
                 effort,
             ) => Ok(effort),
@@ -215,6 +228,22 @@ impl FirstPartyContract {
             (FirstPartyProvider::DeepSeek, ProviderProtocol::OpenAiResponses, Some(_)) => {
                 Ok(Some(ReasoningEffort::High))
             }
+            (
+                FirstPartyProvider::Xai,
+                ProviderProtocol::OpenAiResponses,
+                Some(ReasoningEffort::None | ReasoningEffort::Minimal),
+            ) => Err("xAI Responses does not support disabling reasoning"),
+            (
+                FirstPartyProvider::Xai,
+                ProviderProtocol::OpenAiResponses,
+                Some(ReasoningEffort::XHigh | ReasoningEffort::Max),
+            ) if self.model == FirstPartyModel::Grok45 => Ok(Some(ReasoningEffort::High)),
+            (
+                FirstPartyProvider::Xai,
+                ProviderProtocol::OpenAiResponses,
+                Some(ReasoningEffort::Max),
+            ) => Ok(Some(ReasoningEffort::XHigh)),
+            (FirstPartyProvider::Xai, ProviderProtocol::OpenAiResponses, effort) => Ok(effort),
             _ => Ok(effort),
         }
     }
@@ -223,7 +252,9 @@ impl FirstPartyContract {
         let (context_window_tokens, reasoning_efforts, default_reasoning_effort) =
             match (self.family, self.protocol) {
                 (
-                    FirstPartyProvider::OpenAiDirect | FirstPartyProvider::OpenAiCodex,
+                    FirstPartyProvider::OpenAiDirect
+                    | FirstPartyProvider::OpenAiCodex
+                    | FirstPartyProvider::OpenAiChatGpt,
                     ProviderProtocol::OpenAiResponses,
                 ) => (
                     1_050_000,
@@ -254,6 +285,24 @@ impl FirstPartyContract {
                 (FirstPartyProvider::DeepSeek, ProviderProtocol::OpenAiResponses) => (
                     1_000_000,
                     vec![ReasoningEffort::High, ReasoningEffort::Max],
+                    Some(ReasoningEffort::High),
+                ),
+                (FirstPartyProvider::Xai, ProviderProtocol::OpenAiResponses) => (
+                    500_000,
+                    if self.model == FirstPartyModel::Grok45 {
+                        vec![
+                            ReasoningEffort::Low,
+                            ReasoningEffort::Medium,
+                            ReasoningEffort::High,
+                        ]
+                    } else {
+                        vec![
+                            ReasoningEffort::Low,
+                            ReasoningEffort::Medium,
+                            ReasoningEffort::High,
+                            ReasoningEffort::XHigh,
+                        ]
+                    },
                     Some(ReasoningEffort::High),
                 ),
                 _ => (0, Vec::new(), None),
@@ -319,6 +368,11 @@ impl FirstPartyContract {
                 request_format: PromptCacheRequestFormat::ProviderManaged,
                 usage_format: PromptCacheUsageFormat::OpenAiDetails,
             },
+            FirstPartyProvider::OpenAiChatGpt => PromptCacheContractMetadata {
+                id: "openai_chatgpt_v1",
+                request_format: PromptCacheRequestFormat::ProviderManaged,
+                usage_format: PromptCacheUsageFormat::OpenAiDetails,
+            },
             FirstPartyProvider::Mimo => PromptCacheContractMetadata {
                 id: "mimo_v1",
                 request_format: PromptCacheRequestFormat::ProviderManaged,
@@ -335,6 +389,11 @@ impl FirstPartyContract {
                 id: "deepseek_v1",
                 request_format: PromptCacheRequestFormat::ProviderManaged,
                 usage_format: PromptCacheUsageFormat::HitMiss,
+            },
+            FirstPartyProvider::Xai => PromptCacheContractMetadata {
+                id: "xai_v1",
+                request_format: PromptCacheRequestFormat::OpenAiResponsesExplicit,
+                usage_format: PromptCacheUsageFormat::OpenAiDetails,
             },
         }
     }
@@ -445,17 +504,23 @@ pub fn resolve(
 ) -> Option<FirstPartyContract> {
     let family = route_family(provider_id, provider)?;
     let model = match family {
-        FirstPartyProvider::OpenAiDirect | FirstPartyProvider::OpenAiCodex
+        FirstPartyProvider::OpenAiDirect
+        | FirstPartyProvider::OpenAiCodex
+        | FirstPartyProvider::OpenAiChatGpt
             if matches!(model, "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna") =>
         {
             FirstPartyModel::OpenAi56
         }
-        FirstPartyProvider::OpenAiDirect | FirstPartyProvider::OpenAiCodex
+        FirstPartyProvider::OpenAiDirect
+        | FirstPartyProvider::OpenAiCodex
+        | FirstPartyProvider::OpenAiChatGpt
             if model == "gpt-6-astra" =>
         {
             FirstPartyModel::OpenAi6Astra
         }
-        FirstPartyProvider::OpenAiDirect | FirstPartyProvider::OpenAiCodex
+        FirstPartyProvider::OpenAiDirect
+        | FirstPartyProvider::OpenAiCodex
+        | FirstPartyProvider::OpenAiChatGpt
             if model == "gpt-6.1-sol" =>
         {
             FirstPartyModel::OpenAi61Sol
@@ -468,6 +533,9 @@ pub fn resolve(
         {
             FirstPartyModel::DeepSeekV4
         }
+        FirstPartyProvider::Xai if model == "grok-4.5" => FirstPartyModel::Grok45,
+        FirstPartyProvider::Xai if model == "grok-4.6" => FirstPartyModel::Grok46,
+        FirstPartyProvider::Xai if model == "grok-4.7" => FirstPartyModel::Grok47,
         _ => return None,
     };
     Some(FirstPartyContract {
@@ -487,11 +555,19 @@ pub fn route_family(provider_id: &str, provider: &ProviderConfig) -> Option<Firs
         {
             FirstPartyProvider::OpenAiCodex
         }
+        "openai-chatgpt"
+            if exact_https_endpoint(&provider.base_url, "api.openai.com", &["/v1"]) =>
+        {
+            FirstPartyProvider::OpenAiChatGpt
+        }
         "mimo" if official_mimo_endpoint(&provider.base_url) => FirstPartyProvider::Mimo,
         "deepseek"
             if exact_https_endpoint(&provider.base_url, "api.deepseek.com", &["/", "/v1"]) =>
         {
             FirstPartyProvider::DeepSeek
+        }
+        "xai" | "xai-oauth" if exact_https_endpoint(&provider.base_url, "api.x.ai", &["/v1"]) => {
+            FirstPartyProvider::Xai
         }
         _ => return None,
     };
@@ -514,13 +590,14 @@ pub fn built_in_model_profile(
 
 fn protocol_supported(family: FirstPartyProvider, protocol: ProviderProtocol) -> bool {
     match family {
-        FirstPartyProvider::OpenAiDirect | FirstPartyProvider::OpenAiCodex => {
-            protocol == ProviderProtocol::OpenAiResponses
-        }
+        FirstPartyProvider::OpenAiDirect
+        | FirstPartyProvider::OpenAiCodex
+        | FirstPartyProvider::OpenAiChatGpt => protocol == ProviderProtocol::OpenAiResponses,
         FirstPartyProvider::Mimo | FirstPartyProvider::DeepSeek => matches!(
             protocol,
             ProviderProtocol::ChatCompletions | ProviderProtocol::OpenAiResponses
         ),
+        FirstPartyProvider::Xai => protocol == ProviderProtocol::OpenAiResponses,
     }
 }
 
@@ -579,6 +656,39 @@ mod tests {
             models: Vec::new(),
             timeout: ProviderTimeoutConfig::default(),
         }
+    }
+
+    #[test]
+    fn chatgpt_plan_exact_openai_route_is_not_codex() {
+        let plan = provider(
+            "https://api.openai.com/v1",
+            ProviderProtocol::OpenAiResponses,
+        );
+        assert_eq!(
+            route_family("openai-chatgpt", &plan),
+            Some(FirstPartyProvider::OpenAiChatGpt)
+        );
+        assert_ne!(
+            route_family("openai-chatgpt", &plan),
+            Some(FirstPartyProvider::OpenAiCodex)
+        );
+        let openai =
+            crate::provider_connect::FirstClassProvider::OpenAi.candidate(String::new(), None);
+        assert_eq!(
+            route_family("openai", &openai),
+            Some(FirstPartyProvider::OpenAiDirect)
+        );
+        let codex =
+            crate::provider_connect::FirstClassProvider::OpenAiCodex.candidate(String::new(), None);
+        assert_eq!(
+            route_family("openai-chatgpt", &codex),
+            None,
+            "SIWC must not match the Codex backend"
+        );
+        assert_eq!(
+            route_family("openai-codex", &codex),
+            Some(FirstPartyProvider::OpenAiCodex)
+        );
     }
 
     #[test]
@@ -827,6 +937,91 @@ mod tests {
             vec![ReasoningEffort::High, ReasoningEffort::Max]
         );
         assert_eq!(deepseek_responses.image_input_support(), Some(false));
+
+        let grok = resolve(
+            "xai",
+            &provider("https://api.x.ai/v1", ProviderProtocol::OpenAiResponses),
+            "grok-4.7",
+        )
+        .unwrap();
+        assert!(grok.includes_encrypted_reasoning());
+        let profile = grok.model_profile();
+        assert_eq!(profile.context_window_tokens, Some(500_000));
+        assert_eq!(profile.supports_tools, Some(true));
+        assert_eq!(profile.image_input_support(), Some(true));
+        assert_eq!(
+            profile.default_reasoning_effort,
+            Some(ReasoningEffort::High)
+        );
+        assert_eq!(
+            profile.reasoning_efforts,
+            vec![
+                ReasoningEffort::Low,
+                ReasoningEffort::Medium,
+                ReasoningEffort::High,
+                ReasoningEffort::XHigh
+            ]
+        );
+        assert_eq!(
+            grok.responses_reasoning_effort(Some(ReasoningEffort::None)),
+            Err("xAI Responses does not support disabling reasoning")
+        );
+        assert_eq!(
+            grok.responses_reasoning_effort(Some(ReasoningEffort::Max)),
+            Ok(Some(ReasoningEffort::XHigh))
+        );
+        let grok_45 = resolve(
+            "xai",
+            &provider("https://api.x.ai/v1/", ProviderProtocol::OpenAiResponses),
+            "grok-4.5",
+        )
+        .unwrap();
+        assert_eq!(
+            grok_45.model_profile().reasoning_efforts,
+            vec![
+                ReasoningEffort::Low,
+                ReasoningEffort::Medium,
+                ReasoningEffort::High
+            ]
+        );
+        assert_eq!(
+            grok_45.responses_reasoning_effort(Some(ReasoningEffort::XHigh)),
+            Ok(Some(ReasoningEffort::High))
+        );
+        assert!(resolve(
+            "xai",
+            &provider("https://api.x.ai/v1", ProviderProtocol::OpenAiResponses),
+            "grok-4.3"
+        )
+        .is_none());
+        assert!(resolve(
+            "xai",
+            &provider(
+                "https://api.x.ai.evil/v1",
+                ProviderProtocol::OpenAiResponses
+            ),
+            "grok-4.7"
+        )
+        .is_none());
+        assert!(resolve(
+            "xai",
+            &provider("https://api.x.ai/v1", ProviderProtocol::ChatCompletions),
+            "grok-4.7"
+        )
+        .is_none());
+        assert!(resolve(
+            "grok",
+            &provider("https://api.x.ai/v1", ProviderProtocol::OpenAiResponses),
+            "grok-4.7"
+        )
+        .is_none());
+        assert!(resolve(
+            "xai-oauth",
+            &provider("https://api.x.ai/v1", ProviderProtocol::OpenAiResponses),
+            "grok-4.7"
+        )
+        .unwrap()
+        .includes_encrypted_reasoning());
     }
 
     #[test]
@@ -1029,6 +1224,15 @@ mod tests {
                 "deepseek-v4-flash",
                 "deepseek_v1",
                 PromptCacheRequestFormat::ProviderManaged,
+                PromptCacheUsageFormat::OpenAiDetails,
+            ),
+            (
+                "xai",
+                "https://api.x.ai/v1",
+                ProviderProtocol::OpenAiResponses,
+                "grok-4.7",
+                "xai_v1",
+                PromptCacheRequestFormat::OpenAiResponsesExplicit,
                 PromptCacheUsageFormat::OpenAiDetails,
             ),
         ];

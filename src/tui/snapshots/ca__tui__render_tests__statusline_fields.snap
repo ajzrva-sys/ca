@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(rendered, render_to_text(&state, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
 
            ┌ Statusline ────────────────────────────────────────────────────────────────┐
            │Custom status: enabled · refresh 5s                                         │
@@ -27,13 +27,13 @@ expression: "wide_narrow(rendered, render_to_text(&state, 60, 24))"
            │Space toggle · Shift+↑/↓ reorder · e enable custom                          │
            │Shift+T test · Enter save · Esc cancel                                      │
            │Custom status succeeded                                                     │
-           │                                                                            │
-╭──────────└────────────────────────────────────────────────────────────────────────────┘──────────╮
-│› ▌Ask anything…                                                                                   │
-╰─────────────────────────────────────────────────────────────────────────────────────────── agent ╯
-model mimo-v2.5-pro · tests green · / commands
+╭──────────│                                                                            │──────────╮
+│› Ask anyt└────────────────────────────────────────────────────────────────────────────┘          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model mimo-v2.5-pro · tests green
+/ commands · Ctrl+\ dashboard · ↑ history
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
  ┌ Statusline ────────────────────────────────────────────┐
  │Custom status: enabled · refresh 5s                     │
  │last: tests green                                       │
@@ -52,8 +52,8 @@ model mimo-v2.5-pro · tests green · / commands
  │ [off] History hint                                     │
  │ [ 4] Commands hint                                     │
  │Space toggle · ⇧↑↓ reorder · e custom                   │
- │⇧T test · Enter save · Esc cancel                       │
-╭│Custom status succeeded                                 │╮
-││                                                        ││
-╰└────────────────────────────────────────────────────────┘╯
-model mimo-v2.5-pro · tests green · / commands
+╭│⇧T test · Enter save · Esc cancel                       │╮
+││Custom status succeeded                                 ││
+╰│                                                        │╯
+c└────────────────────────────────────────────────────────┘
+/ commands · Ctrl+\ dashboard · ↑ history

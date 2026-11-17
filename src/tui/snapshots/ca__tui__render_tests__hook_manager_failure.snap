@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&failed, 100, 30), render_to_text(&failed, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
 
 
       ┌ Hooks ───────────────────────────────────────────────────────────────────────────────┐
@@ -27,13 +27,13 @@ expression: "wide_narrow(render_to_text(&failed, 100, 30), render_to_text(&faile
       │                                                                                      │
       │                                                                                      │
       │                                                                                      │
-      │                                                                                      │
-╭─────└──────────────────────────────────────────────────────────────────────────────────────┘─────╮
-│› ▌Ask anything…                                                                                   │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
-/ commands
+╭─────│                                                                                      │─────╮
+│› Ask└──────────────────────────────────────────────────────────────────────────────────────┘     │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto
+/ commands · Ctrl+\ dashboard · ↑ history
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
  ┌ Hooks ─────────────────────────────────────────────────┐
  │> type to filter…                                       │
  │3 hooks · network denied by OS sandbox                  │
@@ -52,8 +52,8 @@ expression: "wide_narrow(render_to_text(&failed, 100, 30), render_to_text(&faile
  │Space toggle · ⇧T test · ⇧R reload · Esc close          │
  │                                                        │
  │                                                        │
- │                                                        │
 ╭│                                                        │╮
 ││                                                        ││
-╰└────────────────────────────────────────────────────────┘╯
-/ commands
+╰│                                                        │╯
+c└────────────────────────────────────────────────────────┘
+/ commands · Ctrl+\ dashboard · ↑ history

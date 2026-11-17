@@ -186,6 +186,7 @@ impl LoopObservation {
             return Self::Other;
         }
         let resolved = crate::app::ResolvedToolResult {
+            output_source: None,
             tool_id: String::new(),
             output: result.model_text().to_string(),
             status: if result.is_success() {
@@ -199,11 +200,15 @@ impl LoopObservation {
             command_observation: result.command_observation().cloned(),
         };
         let call = crate::app::ToolCall {
+            observation: None,
+            output_source: None,
+            arguments_retrieved_spans: Vec::new(),
             id: String::new(),
             name: tool_name.to_string(),
             arguments: tool_arguments.to_string(),
             status: crate::app::ToolStatus::Running,
             output: None,
+            started_at: None,
         };
         Self::from_resolved(&call, &resolved)
     }
@@ -793,6 +798,9 @@ mod tests {
     #[test]
     fn successful_mutation_receipt_marks_edit_as_changed() {
         let call = crate::app::ToolCall {
+            observation: None,
+            output_source: None,
+            arguments_retrieved_spans: Vec::new(),
             id: "call-1".into(),
             name: "edit_file".into(),
             arguments: serde_json::json!({
@@ -803,8 +811,10 @@ mod tests {
             .to_string(),
             status: crate::app::ToolStatus::Running,
             output: None,
+            started_at: None,
         };
         let result = crate::app::ResolvedToolResult {
+            output_source: None,
             tool_id: call.id.clone(),
             output: "updated".into(),
             status: crate::app::ResolvedToolStatus::Done,

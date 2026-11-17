@@ -5278,6 +5278,569 @@ fn bounded(value: &str, max_chars: usize) -> String {
     value.chars().take(max_chars).collect()
 }
 
+/// Admission of one mechanical `ListTrackedFiles` packet. No provider call and no graph child.
+#[cfg_attr(not(test), allow(dead_code))]
+pub struct TaskPacketAdmission {
+    mechanical: bool,
+    executor_name: &'static str,
+    provider_request_count: u32,
+    ai_graph_child: bool,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl TaskPacketAdmission {
+    pub fn is_mechanical(&self) -> bool {
+        self.mechanical
+    }
+
+    pub fn executor(&self) -> &str {
+        self.executor_name
+    }
+
+    pub fn provider_requests(&self) -> u32 {
+        self.provider_request_count
+    }
+
+    pub fn creates_ai_graph_child(&self) -> bool {
+        self.ai_graph_child
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn admit_task_packet(operation: MechanisticActionV1) -> TaskPacketAdmission {
+    match operation {
+        MechanisticActionV1::ListTrackedFiles {
+            prefix: None,
+            max_entries: 20,
+        } => TaskPacketAdmission {
+            mechanical: true,
+            executor_name: "codex-team",
+            provider_request_count: 0,
+            ai_graph_child: false,
+        },
+        _ => TaskPacketAdmission {
+            mechanical: false,
+            executor_name: "",
+            provider_request_count: 0,
+            ai_graph_child: false,
+        },
+    }
+}
+
+/// Why the previous attempt stopped. Only `Quality` may spend one stronger route.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttemptFailure {
+    Quality,
+    Cancelled,
+    Denied,
+    Unknown,
+    MissingCredentials,
+    Exhausted,
+    AmbiguousMutation,
+}
+
+/// The attempt that just failed. Admission copies it and does not re-read the child.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub struct PriorAttempt {
+    pub provider: String,
+    pub model: String,
+    pub cost: u64,
+    pub failure: AttemptFailure,
+    pub diagnostic: String,
+}
+
+/// One bounded task packet. Route eligibility is decided before cost ranking.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub struct PacketRoute {
+    pub provider: String,
+    pub model: String,
+    pub tools: Vec<String>,
+    pub efforts: Vec<String>,
+    /// Lower is cheaper. Compared only among routes that already passed the filters.
+    pub cost: u64,
+}
+
+#[derive(Clone, Debug)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub struct TaskPacket {
+    pub operation: Option<MechanisticActionV1>,
+    /// Empty means no allowlist. A non-empty list drops other routes before ranking.
+    pub allowed_routes: Vec<(String, String)>,
+    pub explicit_route: Option<(String, String)>,
+    pub required_tools: Vec<String>,
+    pub effort: Option<String>,
+    pub assembled_context_bytes: usize,
+    pub context_bound: usize,
+    pub candidates: Vec<PacketRoute>,
+    /// Selected guidance. Admission copies the bytes and does not read them again.
+    pub guidance: Vec<GuidanceSnapshot>,
+    pub task_inputs: String,
+    /// Name the host asked the existing manager for. Absent means no local definition.
+    pub requested_definition: Option<String>,
+    /// Definitions the existing manager already returned. Suggestions are not grants.
+    pub managed_definitions: Vec<ManagedDefinition>,
+    /// When set, one useful quality failure may select the next higher-cost route.
+    pub economic_policy: bool,
+    pub prior_attempt: Option<PriorAttempt>,
+    /// Budget still available for the next route's cost. Not a second budget ledger.
+    pub remaining_budget: u64,
+    /// Host grants captured before this admission. Escalation must copy them unchanged.
+    pub grant_fingerprint: String,
+    /// The one stronger attempt has already been spent.
+    pub stronger_attempt_used: bool,
+    /// Verification digest for an economic packet. Empty when economic policy is off.
+    pub contract_digest: String,
+}
+
+/// Bytes selected before admission. The snapshot keeps its own copy.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub struct GuidanceSnapshot {
+    pub name: String,
+    pub bytes: String,
+}
+
+/// A local definition as returned by the existing manager.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub struct ManagedDefinition {
+    pub name: String,
+    pub suggested_effort: Option<String>,
+    pub suggested_tools: Vec<String>,
+    pub body: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub struct TypedPacketAdmission {
+    mechanical: bool,
+    executor_name: String,
+    provider_request_count: u32,
+    ai_graph_child: bool,
+    denial: Option<&'static str>,
+    provider: Option<String>,
+    model: Option<String>,
+    effort: Option<String>,
+    guidance: Vec<GuidanceSnapshot>,
+    guidance_digest: String,
+    task_inputs: String,
+    stronger_attempt: bool,
+    diagnostic: String,
+    grant_fingerprint: String,
+    attempts_used: u8,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl TypedPacketAdmission {
+    pub fn is_mechanical(&self) -> bool {
+        self.mechanical
+    }
+
+    pub fn is_denied(&self) -> bool {
+        self.denial.is_some()
+    }
+
+    pub fn denial(&self) -> Option<&str> {
+        self.denial
+    }
+
+    pub fn executor(&self) -> &str {
+        &self.executor_name
+    }
+
+    pub fn provider_requests(&self) -> u32 {
+        self.provider_request_count
+    }
+
+    pub fn creates_ai_graph_child(&self) -> bool {
+        self.ai_graph_child
+    }
+
+    pub fn selected_provider(&self) -> Option<&str> {
+        self.provider.as_deref()
+    }
+
+    pub fn selected_model(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
+
+    pub fn frozen_effort(&self) -> Option<&str> {
+        self.effort.as_deref()
+    }
+
+    pub fn guidance(&self) -> &[GuidanceSnapshot] {
+        &self.guidance
+    }
+
+    pub fn guidance_digest(&self) -> &str {
+        &self.guidance_digest
+    }
+
+    pub fn task_inputs(&self) -> &str {
+        &self.task_inputs
+    }
+
+    pub fn is_stronger_attempt(&self) -> bool {
+        self.stronger_attempt
+    }
+
+    pub fn diagnostic(&self) -> &str {
+        &self.diagnostic
+    }
+
+    pub fn grant_fingerprint(&self) -> &str {
+        &self.grant_fingerprint
+    }
+
+    pub fn attempts_used(&self) -> u8 {
+        self.attempts_used
+    }
+}
+
+fn route_key_matches(route: &PacketRoute, key: &(String, String)) -> bool {
+    route.provider == key.0 && route.model == key.1
+}
+
+fn route_is_eligible(packet: &TaskPacket, route: &PacketRoute) -> bool {
+    if !packet.allowed_routes.is_empty()
+        && !packet
+            .allowed_routes
+            .iter()
+            .any(|allowed| route_key_matches(route, allowed))
+    {
+        return false;
+    }
+    if !packet
+        .required_tools
+        .iter()
+        .all(|tool| route.tools.iter().any(|have| have == tool))
+    {
+        return false;
+    }
+    if let Some(effort) = packet.effort.as_deref() {
+        if !route.efforts.iter().any(|supported| supported == effort) {
+            return false;
+        }
+    }
+    true
+}
+
+fn guidance_digest(guidance: &[GuidanceSnapshot]) -> String {
+    let mut hasher = Sha256::new();
+    for guide in guidance {
+        hasher.update(guide.name.as_bytes());
+        hasher.update([0]);
+        hasher.update(guide.bytes.as_bytes());
+        hasher.update([0]);
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+fn frozen_guidance(packet: &TaskPacket) -> Vec<GuidanceSnapshot> {
+    let mut guidance = packet.guidance.clone();
+    if let Some(name) = packet.requested_definition.as_deref() {
+        if let Some(definition) = packet
+            .managed_definitions
+            .iter()
+            .find(|definition| definition.name == name)
+        {
+            guidance.push(GuidanceSnapshot {
+                name: definition.name.clone(),
+                bytes: definition.body.clone(),
+            });
+        }
+    }
+    guidance
+}
+
+fn accounted_context_bytes(packet: &TaskPacket, guidance: &[GuidanceSnapshot]) -> usize {
+    packet.assembled_context_bytes
+        + packet.task_inputs.len()
+        + guidance
+            .iter()
+            .map(|guide| guide.bytes.len())
+            .sum::<usize>()
+}
+
+const MAX_FAILED_CHECK_BYTES: usize = 1024;
+
+fn bounded_diagnostic(text: &str) -> String {
+    if text.len() <= MAX_FAILED_CHECK_BYTES {
+        return text.to_string();
+    }
+    let mut end = MAX_FAILED_CHECK_BYTES;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_string()
+}
+
+fn with_freeze(mut admission: TypedPacketAdmission, packet: &TaskPacket) -> TypedPacketAdmission {
+    let guidance = frozen_guidance(packet);
+    admission.guidance_digest = guidance_digest(&guidance);
+    admission.guidance = guidance;
+    admission.task_inputs = packet.task_inputs.clone();
+    admission.effort = packet.effort.clone();
+    admission.grant_fingerprint = packet.grant_fingerprint.clone();
+    if admission.diagnostic.is_empty() {
+        if let Some(prior) = &packet.prior_attempt {
+            admission.diagnostic = bounded_diagnostic(&prior.diagnostic);
+        }
+    }
+    admission
+}
+
+fn denied(packet: &TaskPacket, reason: &'static str) -> TypedPacketAdmission {
+    with_freeze(
+        TypedPacketAdmission {
+            mechanical: false,
+            executor_name: String::new(),
+            provider_request_count: 0,
+            ai_graph_child: false,
+            denial: Some(reason),
+            provider: None,
+            model: None,
+            effort: None,
+            guidance: Vec::new(),
+            guidance_digest: String::new(),
+            task_inputs: String::new(),
+            stronger_attempt: false,
+            diagnostic: String::new(),
+            grant_fingerprint: String::new(),
+            attempts_used: 0,
+        },
+        packet,
+    )
+}
+
+fn ai_admission(packet: &TaskPacket, route: &PacketRoute) -> TypedPacketAdmission {
+    with_freeze(
+        TypedPacketAdmission {
+            mechanical: false,
+            executor_name: format!("{}/{}", route.provider, route.model),
+            provider_request_count: 1,
+            ai_graph_child: true,
+            denial: None,
+            provider: Some(route.provider.clone()),
+            model: Some(route.model.clone()),
+            effort: None,
+            guidance: Vec::new(),
+            guidance_digest: String::new(),
+            task_inputs: String::new(),
+            stronger_attempt: false,
+            diagnostic: String::new(),
+            grant_fingerprint: String::new(),
+            attempts_used: 0,
+        },
+        packet,
+    )
+}
+
+fn stronger_admission(packet: &TaskPacket, route: &PacketRoute) -> TypedPacketAdmission {
+    let mut admission = ai_admission(packet, route);
+    admission.stronger_attempt = true;
+    admission.attempts_used = 1;
+    admission
+}
+
+fn mechanical_packet_admission(packet: &TaskPacket) -> TypedPacketAdmission {
+    with_freeze(
+        TypedPacketAdmission {
+            mechanical: true,
+            executor_name: "codex-team".to_string(),
+            provider_request_count: 0,
+            ai_graph_child: false,
+            denial: None,
+            provider: None,
+            model: None,
+            effort: None,
+            guidance: Vec::new(),
+            guidance_digest: String::new(),
+            task_inputs: String::new(),
+            stronger_attempt: false,
+            diagnostic: String::new(),
+            grant_fingerprint: String::new(),
+            attempts_used: 0,
+        },
+        packet,
+    )
+}
+
+/// Admit one typed packet. Allowlist, tools, and effort are applied before cost.
+/// An explicit route that survives those filters wins over a cheaper eligible route.
+/// Effort is taken from the route's effort list, not from the model name.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn admit_typed_task_packet(packet: &TaskPacket) -> TypedPacketAdmission {
+    let guidance = frozen_guidance(packet);
+    if accounted_context_bytes(packet, &guidance) > packet.context_bound {
+        return denied(packet, "context_bound");
+    }
+    if let Some(name) = packet.requested_definition.as_deref() {
+        if !packet
+            .managed_definitions
+            .iter()
+            .any(|definition| definition.name == name)
+        {
+            return denied(packet, "unknown_definition");
+        }
+    }
+    if matches!(
+        packet.operation,
+        Some(MechanisticActionV1::ListTrackedFiles {
+            prefix: None,
+            max_entries: 20,
+        })
+    ) {
+        return mechanical_packet_admission(packet);
+    }
+    if let Some(admission) = admit_stronger_attempt(packet) {
+        return admission;
+    }
+    let eligible: Vec<&PacketRoute> = packet
+        .candidates
+        .iter()
+        .filter(|route| route_is_eligible(packet, route))
+        .collect();
+    if let Some(explicit) = &packet.explicit_route {
+        return match eligible
+            .iter()
+            .find(|route| route_key_matches(route, explicit))
+        {
+            Some(route) => ai_admission(packet, route),
+            None => denied(packet, "explicit_route"),
+        };
+    }
+    match eligible.iter().min_by_key(|route| route.cost) {
+        Some(route) => ai_admission(packet, route),
+        None => denied(packet, "no_eligible_route"),
+    }
+}
+
+/// One stronger route after a useful quality failure. `None` means this packet is not escalating.
+fn admit_stronger_attempt(packet: &TaskPacket) -> Option<TypedPacketAdmission> {
+    if !packet.economic_policy {
+        return None;
+    }
+    let prior = packet.prior_attempt.as_ref()?;
+    if packet.stronger_attempt_used {
+        return Some(denied(packet, "stronger_attempt"));
+    }
+    if prior.failure != AttemptFailure::Quality {
+        return Some(denied(packet, "not_quality_failure"));
+    }
+    let mut stronger: Vec<&PacketRoute> = packet
+        .candidates
+        .iter()
+        .filter(|route| route_is_eligible(packet, route) && route.cost > prior.cost)
+        .collect();
+    if let Some(explicit) = &packet.explicit_route {
+        stronger.retain(|route| route_key_matches(route, explicit));
+        if stronger.is_empty() {
+            return Some(denied(packet, "explicit_route"));
+        }
+    }
+    stronger.sort_by_key(|route| route.cost);
+    let Some(route) = stronger.first().copied() else {
+        return Some(denied(packet, "no_stronger_route"));
+    };
+    if packet.remaining_budget < route.cost {
+        return Some(denied(packet, "budget"));
+    }
+    Some(stronger_admission(packet, route))
+}
+
+/// A spawn task that is an exact bounded tracked-file list. Other tasks stay on the existing child path.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn packet_for_spawn_task(task: &str, context: &str) -> Option<TaskPacket> {
+    let max_entries = task.strip_prefix("mechanistic:list_tracked_files:")?;
+    let max_entries = max_entries.parse().ok()?;
+    Some(TaskPacket {
+        operation: Some(MechanisticActionV1::ListTrackedFiles {
+            prefix: None,
+            max_entries,
+        }),
+        allowed_routes: Vec::new(),
+        explicit_route: None,
+        required_tools: Vec::new(),
+        effort: None,
+        assembled_context_bytes: context.len(),
+        context_bound: usize::MAX,
+        candidates: Vec::new(),
+        guidance: Vec::new(),
+        task_inputs: context.to_string(),
+        requested_definition: None,
+        managed_definitions: Vec::new(),
+        economic_policy: false,
+        prior_attempt: None,
+        remaining_budget: 0,
+        grant_fingerprint: String::new(),
+        stronger_attempt_used: false,
+        contract_digest: String::new(),
+    })
+}
+
+/// Packet for the one stronger attempt. Grants are the caller's fingerprint, not a new grant.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn economic_retry_packet(
+    candidates: Vec<PacketRoute>,
+    prior: PriorAttempt,
+    remaining_budget: u64,
+    grant_fingerprint: impl Into<String>,
+    stronger_attempt_used: bool,
+) -> TaskPacket {
+    TaskPacket {
+        operation: None,
+        allowed_routes: Vec::new(),
+        explicit_route: None,
+        required_tools: Vec::new(),
+        effort: None,
+        assembled_context_bytes: 0,
+        context_bound: usize::MAX,
+        candidates,
+        guidance: Vec::new(),
+        task_inputs: String::new(),
+        requested_definition: None,
+        managed_definitions: Vec::new(),
+        economic_policy: true,
+        prior_attempt: Some(prior),
+        remaining_budget,
+        grant_fingerprint: grant_fingerprint.into(),
+        stronger_attempt_used,
+        contract_digest: String::new(),
+    }
+}
+
+/// Run one already-admitted mechanical action on the shared codex-team engine.
+/// A non-mechanical admission or any provider request is refused.
+#[cfg_attr(not(test), allow(dead_code))]
+pub async fn dispatch_admitted_mechanical(
+    workspace: &crate::workspace::WorkspaceContext,
+    admission: &TypedPacketAdmission,
+    operation: MechanisticActionV1,
+) -> ToolExecutionResult {
+    if !admission.is_mechanical()
+        || admission.provider_requests() != 0
+        || admission.creates_ai_graph_child()
+        || admission.executor() != "codex-team"
+    {
+        return ToolExecutionResult::Failure(
+            "mechanical dispatch requires a codex-team admission with zero provider requests"
+                .into(),
+        );
+    }
+    execute_native_actions(
+        workspace,
+        vec![operation],
+        MechanisticRequestPurposeV1::AutomaticPreflight,
+        false,
+        Duration::from_secs(30),
+    )
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     #[tokio::test]
@@ -6073,5 +6636,340 @@ mod tests {
             message: "bad path".into(),
             retryable: true,
         }));
+    }
+
+    #[test]
+    fn mechanical_task_packet_admits_without_a_provider_request() {
+        let admission = admit_task_packet(MechanisticActionV1::ListTrackedFiles {
+            prefix: None,
+            max_entries: 20,
+        });
+        assert!(admission.is_mechanical());
+        assert_eq!(admission.executor(), "codex-team");
+        assert_eq!(admission.provider_requests(), 0);
+        assert!(!admission.creates_ai_graph_child());
+    }
+
+    fn route(
+        provider: &str,
+        model: &str,
+        tools: &[&str],
+        efforts: &[&str],
+        cost: u64,
+    ) -> PacketRoute {
+        PacketRoute {
+            provider: provider.to_string(),
+            model: model.to_string(),
+            tools: tools.iter().map(|tool| (*tool).to_string()).collect(),
+            efforts: efforts.iter().map(|effort| (*effort).to_string()).collect(),
+            cost,
+        }
+    }
+
+    fn ai_packet(candidates: Vec<PacketRoute>) -> TaskPacket {
+        TaskPacket {
+            operation: None,
+            allowed_routes: Vec::new(),
+            explicit_route: None,
+            required_tools: Vec::new(),
+            effort: None,
+            assembled_context_bytes: 10,
+            context_bound: 100,
+            candidates,
+            guidance: Vec::new(),
+            task_inputs: String::new(),
+            requested_definition: None,
+            managed_definitions: Vec::new(),
+            economic_policy: false,
+            prior_attempt: None,
+            remaining_budget: 0,
+            grant_fingerprint: String::new(),
+            stronger_attempt_used: false,
+            contract_digest: String::new(),
+        }
+    }
+
+    fn quality_prior(cost: u64) -> PriorAttempt {
+        PriorAttempt {
+            provider: "cheap".into(),
+            model: "small".into(),
+            cost,
+            failure: AttemptFailure::Quality,
+            diagnostic: "host check failed: expected fixed".into(),
+        }
+    }
+
+    fn escalation(candidates: Vec<PacketRoute>, budget: u64) -> TaskPacket {
+        let mut packet = ai_packet(candidates);
+        packet.economic_policy = true;
+        packet.prior_attempt = Some(quality_prior(1));
+        packet.remaining_budget = budget;
+        packet.grant_fingerprint = "grant-v1".into();
+        packet
+    }
+
+    #[test]
+    fn allowed_route_filters_before_cheaper_disallowed_route() {
+        let mut packet = ai_packet(vec![
+            route("deepseek", "deepseek-v4-pro", &[], &[], 1),
+            route("openai", "gpt-5.6-sol", &[], &[], 5),
+        ]);
+        packet.allowed_routes = vec![("openai".into(), "gpt-5.6-sol".into())];
+        let admission = admit_typed_task_packet(&packet);
+        assert!(!admission.is_denied());
+        assert_eq!(admission.selected_provider(), Some("openai"));
+        assert_eq!(admission.selected_model(), Some("gpt-5.6-sol"));
+        assert!(admission.creates_ai_graph_child());
+        assert_eq!(admission.provider_requests(), 1);
+    }
+
+    #[test]
+    fn incompatible_tool_is_not_ranked() {
+        let mut packet = ai_packet(vec![
+            route("cheap", "small", &[], &[], 1),
+            route("capable", "large", &["shell"], &[], 9),
+        ]);
+        packet.required_tools = vec!["shell".into()];
+        let admission = admit_typed_task_packet(&packet);
+        assert_eq!(admission.selected_provider(), Some("capable"));
+        assert_eq!(admission.selected_model(), Some("large"));
+    }
+
+    #[test]
+    fn unsupported_effort_is_not_inferred_from_model_name() {
+        let mut packet = ai_packet(vec![route("openai", "reasoning-high", &[], &["low"], 1)]);
+        packet.effort = Some("high".into());
+        let admission = admit_typed_task_packet(&packet);
+        assert!(admission.is_denied());
+        assert_eq!(admission.denial(), Some("no_eligible_route"));
+        assert!(admission.selected_provider().is_none());
+        assert!(!admission.creates_ai_graph_child());
+        assert_eq!(admission.provider_requests(), 0);
+    }
+
+    #[test]
+    fn assembled_context_over_bound_is_denied() {
+        let mut packet = ai_packet(vec![route("openai", "gpt-5.6-sol", &[], &[], 1)]);
+        packet.assembled_context_bytes = 101;
+        packet.context_bound = 100;
+        let admission = admit_typed_task_packet(&packet);
+        assert!(admission.is_denied());
+        assert_eq!(admission.denial(), Some("context_bound"));
+        assert!(!admission.creates_ai_graph_child());
+    }
+
+    #[test]
+    fn explicit_route_precedes_cheaper_eligible_route() {
+        let mut packet = ai_packet(vec![
+            route("cheap", "small", &["shell"], &["low"], 1),
+            route("openai", "gpt-5.6-sol", &["shell"], &["low"], 8),
+        ]);
+        packet.required_tools = vec!["shell".into()];
+        packet.effort = Some("low".into());
+        packet.explicit_route = Some(("openai".into(), "gpt-5.6-sol".into()));
+        let admission = admit_typed_task_packet(&packet);
+        assert_eq!(admission.selected_provider(), Some("openai"));
+        assert_eq!(admission.selected_model(), Some("gpt-5.6-sol"));
+    }
+
+    #[test]
+    fn explicit_incompatible_route_does_not_fall_through() {
+        let mut packet = ai_packet(vec![
+            route("cheap", "small", &["shell"], &[], 1),
+            route("openai", "gpt-5.6-sol", &[], &[], 8),
+        ]);
+        packet.required_tools = vec!["shell".into()];
+        packet.explicit_route = Some(("openai".into(), "gpt-5.6-sol".into()));
+        let admission = admit_typed_task_packet(&packet);
+        assert!(admission.is_denied());
+        assert_eq!(admission.denial(), Some("explicit_route"));
+        assert_ne!(admission.selected_provider(), Some("cheap"));
+        assert!(!admission.creates_ai_graph_child());
+    }
+
+    #[test]
+    fn admission_freezes_guidance_context_and_route() {
+        let mut packet = ai_packet(vec![
+            route("cheap", "small", &[], &["low"], 1),
+            route("openai", "gpt-5.6-sol", &[], &["low"], 8),
+        ]);
+        packet.effort = Some("low".into());
+        packet.explicit_route = Some(("openai".into(), "gpt-5.6-sol".into()));
+        packet.task_inputs = "src/a.rs".into();
+        packet.guidance = vec![GuidanceSnapshot {
+            name: "procedure".into(),
+            bytes: "guide-v1".into(),
+        }];
+        let admission = admit_typed_task_packet(&packet);
+        packet.guidance[0].bytes = "guide-v2".into();
+        packet.task_inputs = "src/other.rs".into();
+        packet.explicit_route = Some(("cheap".into(), "small".into()));
+        packet.effort = Some("high".into());
+        assert_eq!(admission.guidance()[0].bytes, "guide-v1");
+        assert_eq!(admission.task_inputs(), "src/a.rs");
+        assert_eq!(admission.selected_provider(), Some("openai"));
+        assert_eq!(admission.selected_model(), Some("gpt-5.6-sol"));
+        assert_eq!(admission.frozen_effort(), Some("low"));
+        assert_ne!(admission.guidance_digest(), "");
+    }
+
+    #[test]
+    fn guidance_bytes_count_toward_context_bound() {
+        let mut packet = ai_packet(vec![route("openai", "gpt-5.6-sol", &[], &[], 1)]);
+        packet.assembled_context_bytes = 0;
+        packet.context_bound = 4;
+        packet.task_inputs = "abcd".into();
+        packet.guidance = vec![GuidanceSnapshot {
+            name: "procedure".into(),
+            bytes: "e".into(),
+        }];
+        let admission = admit_typed_task_packet(&packet);
+        assert!(admission.is_denied());
+        assert_eq!(admission.denial(), Some("context_bound"));
+        assert!(!admission.creates_ai_graph_child());
+    }
+
+    #[test]
+    fn definition_suggestion_does_not_widen_host_grants() {
+        let mut packet = ai_packet(vec![route("cheap", "small", &[], &["low"], 1)]);
+        packet.requested_definition = Some("reviewer".into());
+        packet.managed_definitions = vec![ManagedDefinition {
+            name: "reviewer".into(),
+            suggested_effort: Some("high".into()),
+            suggested_tools: vec!["shell".into()],
+            body: "host-owned procedure".into(),
+        }];
+        let admission = admit_typed_task_packet(&packet);
+        assert!(!admission.is_denied());
+        assert_eq!(admission.selected_provider(), Some("cheap"));
+        assert_eq!(admission.frozen_effort(), None);
+        assert_eq!(admission.guidance()[0].bytes, "host-owned procedure");
+        assert_eq!(admission.provider_requests(), 1);
+    }
+
+    #[test]
+    fn unknown_definition_is_denied() {
+        let mut packet = ai_packet(vec![route("cheap", "small", &["shell"], &[], 1)]);
+        packet.requested_definition = Some("missing".into());
+        let admission = admit_typed_task_packet(&packet);
+        assert!(admission.is_denied());
+        assert_eq!(admission.denial(), Some("unknown_definition"));
+        assert!(admission.selected_provider().is_none());
+        assert!(!admission.creates_ai_graph_child());
+    }
+
+    #[test]
+    fn stronger_attempt_uses_the_next_eligible_route_and_keeps_grants() {
+        let mut packet = escalation(
+            vec![
+                route("cheap", "small", &["shell"], &["low"], 1),
+                route("mid", "medium", &[], &[], 4),
+                route("capable", "large", &["shell"], &["low"], 9),
+            ],
+            9,
+        );
+        packet.required_tools = vec!["shell".into()];
+        packet.effort = Some("low".into());
+        let admission = admit_typed_task_packet(&packet);
+        assert!(!admission.is_denied());
+        assert!(admission.is_stronger_attempt());
+        assert_eq!(admission.selected_provider(), Some("capable"));
+        assert_eq!(admission.selected_model(), Some("large"));
+        assert_eq!(admission.grant_fingerprint(), "grant-v1");
+        assert_eq!(admission.diagnostic(), "host check failed: expected fixed");
+        assert_eq!(admission.attempts_used(), 1);
+        assert_eq!(admission.provider_requests(), 1);
+        let mut pinned = packet.clone();
+        pinned.explicit_route = Some(("cheap".into(), "small".into()));
+        let pinned = admit_typed_task_packet(&pinned);
+        assert!(pinned.is_denied());
+        assert_eq!(pinned.denial(), Some("explicit_route"));
+        assert_eq!(pinned.grant_fingerprint(), "grant-v1");
+        assert!(!pinned.creates_ai_graph_child());
+    }
+
+    #[test]
+    fn useful_quality_failure_with_no_remaining_budget_is_denied() {
+        let packet = escalation(
+            vec![
+                route("cheap", "small", &[], &[], 1),
+                route("capable", "large", &[], &[], 5),
+            ],
+            4,
+        );
+        let admission = admit_typed_task_packet(&packet);
+        assert!(admission.is_denied());
+        assert_eq!(admission.denial(), Some("budget"));
+        assert_eq!(admission.grant_fingerprint(), "grant-v1");
+        assert_eq!(admission.diagnostic(), "host check failed: expected fixed");
+        assert!(!admission.is_stronger_attempt());
+        assert_eq!(admission.provider_requests(), 0);
+        assert!(!admission.creates_ai_graph_child());
+    }
+
+    #[test]
+    fn cancellation_denial_unknown_credentials_and_ambiguous_mutation_do_not_escalate() {
+        for failure in [
+            AttemptFailure::Cancelled,
+            AttemptFailure::Denied,
+            AttemptFailure::Unknown,
+            AttemptFailure::MissingCredentials,
+            AttemptFailure::Exhausted,
+            AttemptFailure::AmbiguousMutation,
+        ] {
+            let mut packet = escalation(
+                vec![
+                    route("cheap", "small", &[], &[], 1),
+                    route("capable", "large", &[], &[], 5),
+                ],
+                5,
+            );
+            packet.prior_attempt.as_mut().unwrap().failure = failure;
+            let admission = admit_typed_task_packet(&packet);
+            assert!(admission.is_denied(), "{failure:?}");
+            assert_eq!(admission.denial(), Some("not_quality_failure"));
+            assert_eq!(admission.grant_fingerprint(), "grant-v1");
+            assert!(!admission.creates_ai_graph_child());
+            assert_eq!(admission.provider_requests(), 0);
+        }
+    }
+
+    #[test]
+    fn a_second_stronger_attempt_is_denied() {
+        let mut packet = escalation(
+            vec![
+                route("cheap", "small", &[], &[], 1),
+                route("capable", "large", &[], &[], 5),
+            ],
+            5,
+        );
+        packet.stronger_attempt_used = true;
+        let admission = admit_typed_task_packet(&packet);
+        assert!(admission.is_denied());
+        assert_eq!(admission.denial(), Some("stronger_attempt"));
+        assert_eq!(admission.grant_fingerprint(), "grant-v1");
+        assert_eq!(admission.provider_requests(), 0);
+        let mut no_higher = escalation(vec![route("cheap", "small", &[], &[], 1)], 5);
+        no_higher.prior_attempt.as_mut().unwrap().cost = 1;
+        let admission = admit_typed_task_packet(&no_higher);
+        assert_eq!(admission.denial(), Some("no_stronger_route"));
+    }
+
+    #[test]
+    fn economic_policy_off_still_admits_the_cheapest_route() {
+        let mut packet = escalation(
+            vec![
+                route("cheap", "small", &[], &[], 1),
+                route("capable", "large", &[], &[], 9),
+            ],
+            9,
+        );
+        packet.economic_policy = false;
+        let admission = admit_typed_task_packet(&packet);
+        assert!(!admission.is_denied());
+        assert!(!admission.is_stronger_attempt());
+        assert_eq!(admission.selected_provider(), Some("cheap"));
+        assert_eq!(admission.attempts_used(), 0);
+        assert_eq!(admission.provider_requests(), 1);
     }
 }

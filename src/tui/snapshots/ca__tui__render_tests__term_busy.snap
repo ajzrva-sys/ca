@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
 
       ┌ Durable terminals ───────────────────────────────────────────────────────────────────┐
       │tmux 3.5a · 2 sessions                                                                │
@@ -27,13 +27,13 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
       │                                                                                      │
       │                                                                                      │
       │Working… controls locked                                                              │
-      │                                                                                      │
 ╭─────│                                                                                      │─────╮
-│› ▌As└──────────────────────────────────────────────────────────────────────────────────────┘     │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
-/ commands
+│› Ask│                                                                                      │     │
+╰─────└──────────────────────────────────────────────────────────────────────────────────────┘─────╯
+ca · model auto
+/ commands · Ctrl+\ dashboard · ↑ history
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
  ┌ Durable terminals ─────────────────────────────────────┐
  │tmux 3.5a · 2 sessions                                  │
  │>                                                       │
@@ -52,8 +52,8 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
  │                                                        │
  │                                                        │
  │                                                        │
- │Working… controls locked                                │
-╭│                                                        │╮
+╭│Working… controls locked                                │╮
 ││                                                        ││
-╰└────────────────────────────────────────────────────────┘╯
-/ commands
+╰│                                                        │╯
+c└────────────────────────────────────────────────────────┘
+/ commands · Ctrl+\ dashboard · ↑ history

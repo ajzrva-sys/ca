@@ -1,6 +1,8 @@
+Do not start this plan unless the task names it. The continuation is [AGT-271](AGT-271-task-first-economic-delegation.md).
+
 # REL-156 — Reproducible Release Baseline
 
-Status: ACTIVE
+Status: HELD
 Owner/session: current Codex session
 Last updated: 2026-08-23
 

@@ -64,6 +64,11 @@ pub struct SandboxPolicy {
     pub read_only_roots: Vec<PathBuf>,
     pub temporary_directory: PathBuf,
     pub network_allowed: bool,
+    /// Ordinary network jobs may use the host Keychain, SSH agent, and VCS
+    /// credential files. Admitted children keep a network allow without them.
+    pub host_credentials: bool,
+    /// When set, outbound network is TCP to this localhost proxy port only.
+    pub proxy_port: Option<u16>,
     /// Deny process enumeration and sysctl inspection to sandboxed children.
     /// Process creation remains available so compilers and test runners work.
     pub hide_other_processes: bool,
@@ -83,6 +88,10 @@ pub enum SandboxError {
     InvalidPath(String),
     #[error("process executable is outside sandbox-readable locations: {0}")]
     ExecutableOutsidePolicy(String),
+    #[error("Privacy keeps project sources read-only for shell commands. Native isolation is required; use read_file and the native edit_file, apply_patch, or write_file tools.")]
+    ProtectedSourceUnavailable,
+    #[error("Privacy cannot isolate this shell command's writable temporary directory from project sources; use native file tools.")]
+    ProtectedTemporaryDirectory,
     #[cfg(target_os = "freebsd")]
     #[error("native FreeBSD sandbox policy could not be prepared: {0}")]
     NativePolicy(String),
@@ -264,6 +273,53 @@ impl SandboxBackend {
         })
     }
 
+    /// Shell-derived edits cannot be translated against the provider's source
+    /// projection. Protect original sources in the OS, independently of command
+    /// spelling and ordinary broader grants.
+    pub(crate) fn prepare_process_with_read_only_paths(
+        &self,
+        program: &Path,
+        arguments: &[String],
+        policy: &SandboxPolicy,
+        denied_paths: &[PathBuf],
+        protected_paths: &[PathBuf],
+    ) -> Result<PreparedProcess, SandboxError> {
+        if protected_paths.is_empty() {
+            return self.prepare_process_with_denied_paths(
+                program,
+                arguments,
+                policy,
+                denied_paths,
+            );
+        }
+        if self.mode != SandboxMode::Required || !self.is_available() {
+            return Err(SandboxError::ProtectedSourceUnavailable);
+        }
+        let mut protected_policy = policy.clone();
+        let mut canonical = Vec::new();
+        for workspace in protected_paths {
+            canonical.push(protect_source_roots(&mut protected_policy, workspace)?);
+        }
+        let mut prepared = self.prepare_process_with_denied_paths(
+            program,
+            arguments,
+            &protected_policy,
+            denied_paths,
+        )?;
+        #[cfg(target_os = "freebsd")]
+        if self.use_native_freebsd() {
+            // The jail receives the filtered writable roots and explicit
+            // read-only source mounts; it has no broad writable ancestor.
+            return Ok(prepared);
+        }
+        let profile = prepared
+            .arguments
+            .get_mut(1)
+            .ok_or(SandboxError::ProtectedSourceUnavailable)?;
+        append_write_denied_path_rules(profile, &canonical)?;
+        Ok(prepared)
+    }
+
     #[cfg(target_os = "freebsd")]
     fn prepare_freebsd(
         &self,
@@ -287,6 +343,72 @@ impl SandboxBackend {
         .map_err(|error| SandboxError::NativePolicy(error.to_string()))?;
         Ok(PreparedProcess { program, arguments })
     }
+}
+
+/// Canonicalize the longest existing prefix so future output directories and
+/// symlinked roots cannot hide overlap with a protected source tree.
+fn canonical_policy_path(path: &Path) -> Result<PathBuf, SandboxError> {
+    if !path.is_absolute() {
+        return Err(SandboxError::InvalidPath(path.display().to_string()));
+    }
+    let mut prefix = path;
+    let mut tail = Vec::new();
+    loop {
+        if let Ok(mut resolved) = prefix.canonicalize() {
+            for component in tail.into_iter().rev() {
+                resolved.push(component);
+            }
+            return Ok(resolved);
+        }
+        let component = prefix
+            .file_name()
+            .ok_or_else(|| SandboxError::InvalidPath(path.display().to_string()))?;
+        tail.push(component.to_os_string());
+        prefix = prefix
+            .parent()
+            .ok_or_else(|| SandboxError::InvalidPath(path.display().to_string()))?;
+    }
+}
+
+pub(crate) fn protect_source_roots(
+    policy: &mut SandboxPolicy,
+    workspace: &Path,
+) -> Result<PathBuf, SandboxError> {
+    let workspace = workspace
+        .canonicalize()
+        .map_err(|_| SandboxError::InvalidPath(workspace.display().to_string()))?;
+    let temporary = canonical_policy_path(&policy.temporary_directory)?;
+    if temporary.starts_with(&workspace) || workspace.starts_with(&temporary) {
+        return Err(SandboxError::ProtectedTemporaryDirectory);
+    }
+    let mut roots = Vec::new();
+    for root in &policy.roots {
+        let root = canonical_policy_path(root)?;
+        if !root.starts_with(&workspace) && !workspace.starts_with(&root) && !roots.contains(&root)
+        {
+            roots.push(root);
+        }
+    }
+    policy.roots = roots;
+    if !policy.read_only_roots.contains(&workspace) {
+        policy.read_only_roots.push(workspace.clone());
+    }
+    Ok(workspace)
+}
+
+fn append_write_denied_path_rules(
+    profile: &mut String,
+    protected_paths: &[PathBuf],
+) -> Result<(), SandboxError> {
+    for root in protected_paths {
+        for path in sandbox_path_aliases(root) {
+            let literal = sandbox_literal(&path)?;
+            profile.push_str(&format!(
+                "(deny file-write* (literal \"{literal}\") (subpath \"{literal}\"))\n"
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn sandbox_profile(policy: &SandboxPolicy) -> Result<String, SandboxError> {
@@ -373,13 +495,19 @@ pub(crate) fn sandbox_profile(policy: &SandboxPolicy) -> Result<String, SandboxE
          (regex #\"^/(private/)?var/folders/.*/T/ca-privilege-[^/]+(/|$)\"))\n",
     );
     if policy.network_allowed {
-        profile.push_str("(allow network*)\n");
-        append_credential_rules(
-            &mut profile,
-            user_keychains_directory(),
-            ssh_agent_socket_directory(),
-            user_home_directory(),
-        )?;
+        if let Some(port) = policy.proxy_port {
+            profile.push_str(&crate::network_broker::proxy_only_rules(port));
+        } else {
+            profile.push_str("(allow network*)\n");
+        }
+        if policy.host_credentials {
+            append_credential_rules(
+                &mut profile,
+                user_keychains_directory(),
+                ssh_agent_socket_directory(),
+                user_home_directory(),
+            )?;
+        }
     } else {
         profile.push_str("(deny network*)\n");
     }
@@ -528,6 +656,175 @@ mod tests {
     use super::*;
 
     #[test]
+    fn privacy_removes_broad_ancestors_and_source_descendants_from_writable_roots() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("project");
+        let output = root.path().join("output");
+        let temp = root.path().join("temporary");
+        for path in [&workspace, &output, &temp] {
+            std::fs::create_dir(path).unwrap();
+        }
+        let mut policy = SandboxPolicy {
+            roots: vec![
+                PathBuf::from("/"),
+                root.path().to_path_buf(),
+                workspace.clone(),
+                workspace.join("future"),
+                output.clone(),
+            ],
+            read_only_roots: vec![PathBuf::from("/")],
+            temporary_directory: temp,
+            network_allowed: false,
+            host_credentials: true,
+            proxy_port: None,
+            hide_other_processes: false,
+        };
+        let protected = protect_source_roots(&mut policy, &workspace).unwrap();
+        assert_eq!(policy.roots, vec![output.canonicalize().unwrap()]);
+        assert!(policy.read_only_roots.contains(&protected));
+        assert!(policy.read_only_roots.contains(&PathBuf::from("/")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn privacy_resolves_symlinked_writable_source_roots() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("project");
+        let temp = root.path().join("temporary");
+        std::fs::create_dir(&workspace).unwrap();
+        std::fs::create_dir(&temp).unwrap();
+        let alias = root.path().join("source-link");
+        std::os::unix::fs::symlink(&workspace, &alias).unwrap();
+        let mut policy = SandboxPolicy {
+            roots: vec![alias.join("future")],
+            read_only_roots: vec![],
+            temporary_directory: temp,
+            network_allowed: false,
+            host_credentials: true,
+            proxy_port: None,
+            hide_other_processes: false,
+        };
+        protect_source_roots(&mut policy, &workspace).unwrap();
+        assert!(policy.roots.is_empty());
+    }
+
+    #[test]
+    fn privacy_refuses_missing_native_isolation_even_for_policy_only_mode() {
+        let backend = SandboxBackend::with_executable(
+            SandboxMode::Required,
+            PathBuf::from("/definitely/missing/sandbox-exec"),
+        );
+        let policy = SandboxPolicy {
+            roots: vec![PathBuf::from("/")],
+            read_only_roots: vec![],
+            temporary_directory: PathBuf::from("/tmp/output"),
+            network_allowed: false,
+            host_credentials: true,
+            proxy_port: None,
+            hide_other_processes: false,
+        };
+        let error = backend
+            .prepare_process_with_read_only_paths(
+                Path::new("/bin/sh"),
+                &["-c".into(), "true".into()],
+                &policy,
+                &[],
+                &[PathBuf::from("/project")],
+            )
+            .unwrap_err();
+        assert_eq!(error, SandboxError::ProtectedSourceUnavailable);
+        assert!(error.to_string().contains("native edit_file"));
+        let backend = SandboxBackend::new(SandboxMode::Off);
+        assert_eq!(
+            backend
+                .prepare_process_with_read_only_paths(
+                    Path::new("/bin/sh"),
+                    &[],
+                    &policy,
+                    &[],
+                    &[PathBuf::from("/project")]
+                )
+                .unwrap_err(),
+            SandboxError::ProtectedSourceUnavailable
+        );
+    }
+
+    #[test]
+    fn privacy_write_denial_is_last_and_does_not_deny_source_reads() {
+        let mut profile = sandbox_profile(&SandboxPolicy {
+            roots: vec![PathBuf::from("/")],
+            read_only_roots: vec![],
+            temporary_directory: PathBuf::from("/tmp/job"),
+            network_allowed: true,
+            host_credentials: true,
+            proxy_port: None,
+            hide_other_processes: false,
+        })
+        .unwrap();
+        append_write_denied_path_rules(&mut profile, &[PathBuf::from("/tmp/protected")]).unwrap();
+        let last = "(deny file-write* (literal \"/private/tmp/protected\") (subpath \"/private/tmp/protected\"))\n";
+        assert!(profile.ends_with(last));
+        assert!(!profile.contains("(deny file-read* file-write* (literal \"/tmp/protected\")"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn privacy_native_sandbox_reads_protected_source_and_denies_opaque_write() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("project");
+        let output = root.path().join("output");
+        let temp = root.path().join("temporary");
+        for path in [&workspace, &output, &temp] {
+            std::fs::create_dir(path).unwrap();
+        }
+        let source = workspace.join("source.txt");
+        std::fs::write(&source, "protected-original").unwrap();
+        let policy = SandboxPolicy {
+            roots: vec![PathBuf::from("/"), root.path().to_path_buf(), output],
+            read_only_roots: vec![PathBuf::from("/")],
+            temporary_directory: temp,
+            network_allowed: false,
+            host_credentials: true,
+            proxy_port: None,
+            hide_other_processes: false,
+        };
+        let backend = SandboxBackend::new(SandboxMode::Required);
+        let execute = |command: &str| {
+            let prepared = backend
+                .prepare_process_with_read_only_paths(
+                    Path::new("/bin/sh"),
+                    &[
+                        "-c".into(),
+                        command.into(),
+                        "privacy-test".into(),
+                        source.to_string_lossy().into_owned(),
+                    ],
+                    &policy,
+                    &[],
+                    std::slice::from_ref(&workspace),
+                )
+                .unwrap();
+            std::process::Command::new(prepared.program)
+                .args(prepared.arguments)
+                .output()
+                .unwrap()
+        };
+        let read = execute("cat \"$1\"");
+        assert!(
+            read.status.success(),
+            "{}",
+            String::from_utf8_lossy(&read.stderr)
+        );
+        assert_eq!(read.stdout, b"protected-original");
+        let write = execute("printf changed > \"$1\"");
+        assert!(!write.status.success());
+        assert_eq!(
+            std::fs::read_to_string(source).unwrap(),
+            "protected-original"
+        );
+    }
+
+    #[test]
     fn required_backend_fails_when_capability_is_missing() {
         let backend = SandboxBackend::with_executable(
             SandboxMode::Required,
@@ -538,6 +835,8 @@ mod tests {
             read_only_roots: Vec::new(),
             temporary_directory: PathBuf::from("/tmp/job"),
             network_allowed: false,
+            host_credentials: true,
+            proxy_port: None,
             hide_other_processes: false,
         };
         assert_eq!(
@@ -557,6 +856,8 @@ mod tests {
                 read_only_roots: Vec::new(),
                 temporary_directory: PathBuf::from("/tmp/job"),
                 network_allowed: false,
+                host_credentials: true,
+                proxy_port: None,
                 hide_other_processes: true,
             },
         );
@@ -584,6 +885,8 @@ mod tests {
                     read_only_roots: Vec::new(),
                     temporary_directory: PathBuf::from("/tmp/job"),
                     network_allowed: false,
+                    host_credentials: true,
+                    proxy_port: None,
                     hide_other_processes: false,
                 },
             )
@@ -603,6 +906,8 @@ mod tests {
                     read_only_roots: Vec::new(),
                     temporary_directory: PathBuf::from("/tmp/job"),
                     network_allowed: false,
+                    host_credentials: true,
+                    proxy_port: None,
                     hide_other_processes: false,
                 },
             )
@@ -645,6 +950,8 @@ mod tests {
             read_only_roots: Vec::new(),
             temporary_directory: PathBuf::from("/tmp/job"),
             network_allowed: false,
+            host_credentials: true,
+            proxy_port: None,
             hide_other_processes: false,
         })
         .unwrap();
@@ -668,6 +975,8 @@ mod tests {
             read_only_roots: vec![PathBuf::from("/")],
             temporary_directory: PathBuf::from("/tmp/ca-job-private"),
             network_allowed: false,
+            host_credentials: true,
+            proxy_port: None,
             hide_other_processes: false,
         })
         .unwrap();
@@ -688,6 +997,8 @@ mod tests {
             read_only_roots: vec![executable.clone()],
             temporary_directory: root.path().join("tmp"),
             network_allowed: false,
+            host_credentials: true,
+            proxy_port: None,
             hide_other_processes: false,
         })
         .unwrap();
@@ -722,6 +1033,8 @@ mod tests {
             read_only_roots: vec![PathBuf::from("/opt/homebrew")],
             temporary_directory: PathBuf::from("/tmp/job"),
             network_allowed: false,
+            host_credentials: true,
+            proxy_port: None,
             hide_other_processes: true,
         })
         .unwrap();
@@ -745,6 +1058,8 @@ mod tests {
             read_only_roots: Vec::new(),
             temporary_directory: PathBuf::from("/tmp/job"),
             network_allowed: false,
+            host_credentials: true,
+            proxy_port: None,
             hide_other_processes: false,
         })
         .unwrap();
@@ -766,6 +1081,8 @@ mod tests {
             read_only_roots: Vec::new(),
             temporary_directory: PathBuf::from("/tmp/job"),
             network_allowed: true,
+            host_credentials: true,
+            proxy_port: None,
             hide_other_processes: true,
         })
         .unwrap();
@@ -785,6 +1102,8 @@ mod tests {
             read_only_roots: Vec::new(),
             temporary_directory: PathBuf::from("/tmp/job"),
             network_allowed: false,
+            host_credentials: true,
+            proxy_port: None,
             hide_other_processes: true,
         })
         .unwrap();
@@ -832,6 +1151,8 @@ mod tests {
             read_only_roots: Vec::new(),
             temporary_directory: PathBuf::from("/tmp/job"),
             network_allowed: false,
+            host_credentials: true,
+            proxy_port: None,
             hide_other_processes: false,
         })
         .unwrap();
@@ -840,5 +1161,45 @@ mod tests {
         assert!(!profile.contains("Library/Keychains"));
         assert!(!profile.contains(".config/gh"));
         assert!(!profile.contains(".git-credentials"));
+    }
+
+    #[test]
+    fn admitted_child_network_profile_omits_host_credentials() {
+        let profile = sandbox_profile(&SandboxPolicy {
+            roots: vec![PathBuf::from("/tmp/workspace")],
+            read_only_roots: Vec::new(),
+            temporary_directory: PathBuf::from("/tmp/job"),
+            network_allowed: true,
+            host_credentials: false,
+            proxy_port: Some(9),
+            hide_other_processes: true,
+        })
+        .unwrap();
+        assert!(profile.contains("localhost:9"));
+        assert!(profile.contains("(deny network*)"));
+        assert!(!profile.contains("(allow network*)"));
+        assert!(!profile.contains("com.apple.securityd"));
+        assert!(!profile.contains("Library/Keychains"));
+        assert!(!profile.contains(".ssh"));
+        assert!(!profile.contains(".config/gh"));
+        assert!(!profile.contains(".gitconfig"));
+        assert!(!profile.contains(".git-credentials"));
+    }
+
+    #[test]
+    fn ordinary_network_profile_keeps_host_credentials() {
+        let profile = sandbox_profile(&SandboxPolicy {
+            roots: vec![PathBuf::from("/tmp/workspace")],
+            read_only_roots: Vec::new(),
+            temporary_directory: PathBuf::from("/tmp/job"),
+            network_allowed: true,
+            host_credentials: true,
+            proxy_port: None,
+            hide_other_processes: false,
+        })
+        .unwrap();
+        assert!(profile.contains("(allow network*)"));
+        assert!(profile.contains("com.apple.securityd"));
+        assert!(profile.contains(".git-credentials"));
     }
 }

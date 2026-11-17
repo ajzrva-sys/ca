@@ -485,6 +485,8 @@ async fn verify_installed(
 
 #[cfg(test)]
 pub async fn promote(vault: LearningVault, id: &str, repository: &Path) -> Result<Promotion> {
+    let (_, cycle) = load_harness_cycle(&vault, id)?;
+    cycle.require_confirmation()?;
     let resources = crate::harness_automation::compatibility_resources(&vault, repository)?;
     promote_owned(vault, id, repository, resources.last()).await
 }
@@ -544,6 +546,7 @@ async fn run(
 ) -> Result<Promotion> {
     let _worker = vault.acquire_worker_lock()?;
     let (plan, mut cycle) = load_harness_cycle(&vault, id)?;
+    cycle.require_confirmation()?;
     running(&vault, id)?;
     let repository = repository.canonicalize()?;
     let lease_root = publication_lease_root(&vault)?;
@@ -927,6 +930,7 @@ mod tests {
                     elapsed_millis: 1,
                 })
                 .collect();
+            state.confirmation_accepted = true;
             state.decide(&plan)
         })
         .unwrap();
@@ -1051,6 +1055,7 @@ mod tests {
                     elapsed_millis: 1,
                 })
                 .collect();
+            state.confirmation_accepted = true;
             state.decide(&plan)
         })
         .unwrap();

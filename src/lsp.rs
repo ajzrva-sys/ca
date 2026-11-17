@@ -660,6 +660,8 @@ impl LspManager {
                     read_only_roots: Vec::new(),
                     temporary_directory: temporary_directory.clone(),
                     network_allowed: false,
+                    host_credentials: true,
+                    proxy_port: None,
                     hide_other_processes: false,
                 },
             )
@@ -766,6 +768,45 @@ impl LspManager {
             .unwrap_or_else(|poison| poison.into_inner())
             .clear();
     }
+}
+
+pub fn translate_lsp_call(
+    arguments: &serde_json::Value,
+) -> Result<(String, serde_json::Value), String> {
+    let operation = arguments
+        .get("operation")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("operation is required")?;
+    let tool = match operation {
+        "go_to_definition" => "lsp_definition",
+        "find_references" => "lsp_references",
+        "hover" => "lsp_hover",
+        "go_to_implementation" => "lsp_implementation",
+        "document_symbol" | "workspace_symbol" => "lsp_symbols",
+        other => return Err(format!("unknown lsp operation {other}")),
+    };
+    let needs_position = matches!(
+        tool,
+        "lsp_definition" | "lsp_references" | "lsp_hover" | "lsp_implementation"
+    );
+    if needs_position {
+        for key in ["file_path", "line", "character"] {
+            if arguments.get(key).is_none() {
+                return Err(format!("{key} is required"));
+            }
+        }
+    }
+    let mut translated = arguments.clone();
+    if let Some(object) = translated.as_object_mut() {
+        if let Some(path) = object.remove("file_path") {
+            object.insert("path".into(), path);
+        }
+        if let Some(character) = object.remove("character") {
+            object.insert("column".into(), character);
+        }
+        object.remove("operation");
+    }
+    Ok((tool.to_string(), translated))
 }
 
 pub fn is_lsp_tool(name: &str) -> bool {
@@ -1955,6 +1996,31 @@ while True:
             LspServerPhase::Lazy
         );
         assert!(process_is_gone(pid));
+    }
+
+    #[tokio::test]
+    async fn lsp_hover_operation_uses_the_existing_hover_handler() {
+        let fixture = FakeFixture::new();
+        let manager = fixture.manager("normal", "unused", 5);
+        let arguments = json!({
+            "operation": "hover",
+            "server": "fake",
+            "file_path": fixture.source,
+            "line": 1,
+            "character": 3
+        });
+        let (tool, translated) = translate_lsp_call(&arguments).unwrap();
+        assert_eq!(tool, "lsp_hover");
+        let result = manager.execute(&tool, &translated).await;
+        assert!(result.is_success(), "{}", result.model_text());
+        assert!(
+            result.model_text().contains("safe hover"),
+            "{}",
+            result.model_text()
+        );
+        assert!(
+            translate_lsp_call(&json!({"operation":"hover","file_path":"a.rs","line":1})).is_err()
+        );
     }
 
     #[tokio::test]

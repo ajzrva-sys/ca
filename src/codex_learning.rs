@@ -1,4 +1,4 @@
-//! Continuous local learning from native, Codex, Hermes, and MiMoCode sessions.
+//! Continuous local learning from native, Codex, Hermes, MiMoCode, and Grok sessions.
 //!
 //! Archive text is untrusted evidence. The persistent index deliberately stores
 //! identities, digests, revisions, and counts but never transcript bodies.
@@ -44,6 +44,7 @@ const MAX_RECALL_MESSAGE_BYTES: usize = 256 * 1024;
 const MAX_MIMOCODE_MESSAGES_PER_SESSION: usize = 4_096;
 const MAX_MIMOCODE_PARTS_PER_MESSAGE: usize = 4_096;
 const MAX_HERMES_MESSAGES_PER_SESSION: usize = 4_096;
+const MAX_GROK_MESSAGES_PER_SESSION: usize = 4_096;
 const MAX_STATE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_EXCERPT_CHARS: usize = 240;
 const UNSTABLE_ARCHIVE_FILE: &str = "archive file changed during scan";
@@ -1420,6 +1421,7 @@ fn autonomous_harvest_claimed(
         paths.home.join(".codex/archived_sessions"),
         paths.home.join(".hermes/state.db"),
         paths.home.join(".local/share/mimocode/mimocode.db"),
+        grok_sessions_dir(&paths.home),
     ]
     .into_iter()
     .filter(|path| path.is_dir() || (path.is_file() && is_learning_database_path(path)))
@@ -1500,14 +1502,16 @@ fn autonomous_harvest_claimed(
             now,
         )?;
         if let Err(error) = learning.queue_supervised_intent(run_id, &corpus, now) {
-            let _ = learning.finish_without_changes(
-                run_id,
-                crate::learning::MaintenanceRunStatus::Failed,
-                &error,
-                None,
-                now,
-            );
-            return Err(error);
+            let status = if error == crate::learning::SUPERVISED_QUEUE_FULL {
+                crate::learning::MaintenanceRunStatus::Skipped
+            } else {
+                crate::learning::MaintenanceRunStatus::Failed
+            };
+            let _ = learning.finish_without_changes(run_id, status, &error, None, now);
+            if status == crate::learning::MaintenanceRunStatus::Failed {
+                return Err(error);
+            }
+            continue;
         }
         if let Some(review) = &review {
             let selected_sessions = corpus.session_ids().into_iter().collect::<BTreeSet<_>>();
@@ -1735,6 +1739,8 @@ fn background_sandbox_policy(
         read_only_roots,
         temporary_directory: state_root,
         network_allowed: false,
+        host_credentials: true,
+        proxy_port: None,
         hide_other_processes: true,
     })
 }
@@ -2096,6 +2102,8 @@ fn coverage_source_counts(
                 "MiMo"
             } else if is_hermes_database_path(&source.canonical_root) {
                 "Hermes"
+            } else if is_grok_sessions_root(&source.canonical_root) {
+                "Grok"
             } else if path.contains("/.codex/") || path.ends_with("/.codex") {
                 "Codex"
             } else {
@@ -2569,6 +2577,7 @@ impl ArchiveLearningStore {
             self.paths.home.join(".codex/archived_sessions"),
             self.paths.home.join(".hermes/state.db"),
             self.paths.home.join(".local/share/mimocode/mimocode.db"),
+            grok_sessions_dir(&self.paths.home),
         ]
         .into_iter()
         .filter(|path| path.is_dir() || (path.is_file() && is_learning_database_path(path)))
@@ -2590,7 +2599,8 @@ impl ArchiveLearningStore {
         }
         if self.load_state()?.sources.is_empty() {
             return Err(
-                "source discovery found no CA, Codex, Hermes, or MiMo learning archives".into(),
+                "source discovery found no CA, Codex, Hermes, MiMo, or Grok learning archives"
+                    .into(),
             );
         }
         // add_sources performs a complete combined sync. Tell the caller not
@@ -5572,6 +5582,7 @@ pub(crate) fn discover_recall_projection(
         ("Codex", paths.home.join(".codex/archived_sessions")),
         ("Hermes", paths.home.join(".hermes/state.db")),
         ("MiMo", paths.home.join(".local/share/mimocode/mimocode.db")),
+        ("Grok", grok_sessions_dir(&paths.home)),
     ];
     let mut batch = RecallProjectionBatch::default();
     for (source, root) in roots {
@@ -5628,6 +5639,9 @@ fn scan_recall_root(root: &Path) -> Result<RootScan, String> {
         } else {
             scan_mimocode_database_canonical(&canonical_root, None, true)
         };
+    }
+    if is_grok_sessions_root(&canonical_root) {
+        return scan_grok_sessions_canonical(&canonical_root, true);
     }
     if is_native_session_root(&canonical_root)? {
         scan_native_session_root_with_mode(&canonical_root, true)
@@ -5712,6 +5726,9 @@ fn scan_root_cached(
         } else {
             scan_mimocode_database_canonical(&canonical_root, cache, false)
         };
+    }
+    if is_grok_sessions_root(&canonical_root) {
+        return scan_grok_sessions_canonical(&canonical_root, false);
     }
     if is_native_session_root(&canonical_root)? {
         return scan_native_session_root(&canonical_root);
@@ -8574,7 +8591,7 @@ impl LearningCoverageStatus {
 }
 
 fn render_coverage_source_counts(counts: &BTreeMap<&'static str, usize>) -> String {
-    let rendered = ["CA", "Codex", "Hermes", "MiMo", "Other"]
+    let rendered = ["CA", "Codex", "Hermes", "MiMo", "Grok", "Other"]
         .into_iter()
         .filter_map(|label| {
             counts
@@ -8788,6 +8805,507 @@ fn is_hermes_database_path(path: &Path) -> bool {
 
 fn is_learning_database_path(path: &Path) -> bool {
     is_mimocode_database_path(path) || is_hermes_database_path(path)
+}
+
+fn grok_sessions_dir(home: &Path) -> PathBuf {
+    configured_grok_sessions_dir().unwrap_or_else(|| home.join(".grok").join("sessions"))
+}
+
+fn configured_grok_sessions_dir() -> Option<PathBuf> {
+    let value = std::env::var_os("GROK_HOME")?;
+    let home = PathBuf::from(value);
+    if home.is_absolute() && home.is_dir() {
+        Some(home.join("sessions"))
+    } else {
+        None
+    }
+}
+
+fn is_grok_sessions_root(path: &Path) -> bool {
+    let named = path.file_name().and_then(|name| name.to_str()) == Some("sessions")
+        && path
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            == Some(".grok");
+    if named {
+        return true;
+    }
+    configured_grok_sessions_dir().is_some_and(|configured| {
+        configured == path || fs::canonicalize(&configured).ok().as_deref() == Some(path)
+    })
+}
+
+fn scan_grok_sessions_canonical(
+    canonical_root: &Path,
+    complete_history: bool,
+) -> Result<RootScan, String> {
+    let mut files = Vec::new();
+    let mut bytes = 0u64;
+    let mut seen_files = 0usize;
+    for group in list_grok_dir(canonical_root)? {
+        if !grok_owner_dir(&group) {
+            continue;
+        }
+        let Ok(children) = list_grok_dir(&group) else {
+            continue;
+        };
+        for session_dir in children {
+            if !grok_owner_dir(&session_dir) {
+                continue;
+            }
+            let updates = session_dir.join("updates.jsonl");
+            let Some(metadata) = grok_owner_file(&updates) else {
+                continue;
+            };
+            seen_files = seen_files.saturating_add(1);
+            if !complete_history && seen_files > MAX_FILES {
+                return Err(format!("archive scan exceeds {MAX_FILES} files"));
+            }
+            bytes = bytes
+                .checked_add(metadata.len())
+                .ok_or_else(|| "Grok source size overflowed".to_string())?;
+            if let Some(summary) = grok_owner_file(&session_dir.join("summary.json")) {
+                bytes = bytes
+                    .checked_add(summary.len())
+                    .ok_or_else(|| "Grok source size overflowed".to_string())?;
+            }
+            if !complete_history && source_byte_budget_exceeded(bytes) {
+                return Err(format!("archive source exceeds {MAX_SOURCE_BYTES} bytes"));
+            }
+            if let Some(file) =
+                scan_grok_session(canonical_root, &group, &session_dir, complete_history)?
+            {
+                files.push(file);
+            }
+        }
+    }
+    files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    let mut revision_hasher = Sha256::new();
+    revision_hasher.update(b"ca.grok-root.v1\0");
+    for file in &files {
+        revision_hasher.update(file.relative_path.to_string_lossy().as_bytes());
+        revision_hasher.update([0]);
+        revision_hasher.update(file.revision_sha256.as_bytes());
+        revision_hasher.update([0]);
+    }
+    Ok(RootScan {
+        canonical_root: canonical_root.to_path_buf(),
+        root_revision: encode_hex(&revision_hasher.finalize()),
+        files,
+        bytes,
+    })
+}
+
+fn list_grok_dir(path: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut paths = Vec::new();
+    let entries = fs::read_dir(path).map_err(|_| {
+        format!(
+            "Grok sessions directory could not be read: {}",
+            path.display()
+        )
+    })?;
+    for entry in entries {
+        match entry {
+            Ok(entry) => paths.push(entry.path()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return Err("Grok sessions entry could not be read".into()),
+        }
+    }
+    paths.sort();
+    Ok(paths)
+}
+
+fn grok_owner_dir(path: &Path) -> bool {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return false;
+    };
+    metadata.file_type().is_dir()
+        && !metadata.file_type().is_symlink()
+        && validate_owner_controlled(&metadata, "Grok session directory").is_ok()
+}
+
+fn grok_owner_file(path: &Path) -> Option<fs::Metadata> {
+    let metadata = fs::symlink_metadata(path).ok()?;
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        return None;
+    }
+    validate_owner_controlled(&metadata, "Grok session file").ok()?;
+    Some(metadata)
+}
+
+fn scan_grok_session(
+    canonical_root: &Path,
+    group: &Path,
+    session_dir: &Path,
+    complete_history: bool,
+) -> Result<Option<ScannedFile>, String> {
+    let Some(session_name) = session_dir.file_name().and_then(|name| name.to_str()) else {
+        return Ok(None);
+    };
+    let Some(session_id) = grok_session_id(session_name) else {
+        return Ok(None);
+    };
+    let updates_path = session_dir.join("updates.jsonl");
+    let Some(updates_metadata) = grok_owner_file(&updates_path) else {
+        return Ok(None);
+    };
+    if !complete_history && updates_metadata.len() > MAX_FILE_BYTES {
+        return Err(format!(
+            "archive file exceeds {MAX_FILE_BYTES} bytes: {}",
+            updates_path.display()
+        ));
+    }
+    let summary_path = session_dir.join("summary.json");
+    let summary_metadata = grok_owner_file(&summary_path);
+    let summary = grok_summary(&summary_path);
+    let Some(workspace_path) = grok_workspace(group, summary.as_ref()) else {
+        return Ok(None);
+    };
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    }
+    let file = match options.open(&updates_path) {
+        Ok(file) => file,
+        Err(_) => return Ok(None),
+    };
+    let opened = match file.metadata() {
+        Ok(metadata) => metadata,
+        Err(_) => return Ok(None),
+    };
+    if !opened.file_type().is_file()
+        || opened.file_type().is_symlink()
+        || validate_owner_controlled(&opened, "Grok session file").is_err()
+    {
+        return Ok(None);
+    }
+    if !complete_history && opened.len() > MAX_FILE_BYTES {
+        return Err(format!(
+            "archive file exceeds {MAX_FILE_BYTES} bytes: {}",
+            updates_path.display()
+        ));
+    }
+    let snapshot_len = opened.len();
+    let mut modified = modified_nanos(&opened)?;
+    let mut size = snapshot_len;
+    if let Some(summary_metadata) = summary_metadata.as_ref() {
+        if let Ok(summary_modified) = modified_nanos(summary_metadata) {
+            modified = modified.max(summary_modified);
+        }
+        size = size.saturating_add(summary_metadata.len());
+    }
+    let mut reader = BufReader::with_capacity(64 * 1024, file.take(snapshot_len));
+    let mut hasher = Sha256::new();
+    let mut transcript = GrokTranscript::new(session_id.clone());
+    let mut malformed_records = 0usize;
+    let mut unknown_records = 0usize;
+    let mut oversized_records = 0usize;
+    loop {
+        let line = read_bounded_line(&mut reader, &mut hasher)?;
+        let Some(line) = line else { break };
+        let Some(line) = line else {
+            oversized_records = oversized_records.saturating_add(1);
+            continue;
+        };
+        let value: Value = match serde_json::from_slice(&line) {
+            Ok(value) => value,
+            Err(_) => {
+                malformed_records = malformed_records.saturating_add(1);
+                continue;
+            }
+        };
+        if value.get("method").and_then(Value::as_str) != Some("session/update") {
+            continue;
+        }
+        let Some(update) = value
+            .pointer("/params/update")
+            .filter(|update| update.is_object())
+        else {
+            malformed_records = malformed_records.saturating_add(1);
+            continue;
+        };
+        let timestamp = grok_line_timestamp(&value);
+        let role = match update.get("sessionUpdate").and_then(Value::as_str) {
+            Some("user_message_chunk") => Some(EvidenceRole::User),
+            Some("agent_message_chunk") => Some(EvidenceRole::Assistant),
+            Some(
+                "agent_thought_chunk"
+                | "tool_call"
+                | "tool_call_update"
+                | "plan"
+                | "available_commands"
+                | "available_commands_update"
+                | "current_mode_update"
+                | "turn_completed",
+            ) => None,
+            _ => {
+                unknown_records = unknown_records.saturating_add(1);
+                continue;
+            }
+        };
+        let Some(role) = role else { continue };
+        let text = update
+            .get("content")
+            .map(grok_visible_text)
+            .unwrap_or_default();
+        if !text.is_empty() {
+            transcript.push(role, text, timestamp);
+        }
+    }
+    if reader.get_ref().limit() != 0 {
+        return Ok(None);
+    }
+    transcript.flush();
+    let mut incomplete_messages = 0usize;
+    if !complete_history && transcript.committed.len() > MAX_GROK_MESSAGES_PER_SESSION {
+        let extra = transcript.committed.len() - MAX_GROK_MESSAGES_PER_SESSION;
+        incomplete_messages = incomplete_messages.saturating_add(extra);
+        transcript.committed.drain(0..extra);
+    }
+    if transcript.committed.is_empty() {
+        return Ok(None);
+    }
+    let skipped_sensitive = transcript.skipped_sensitive;
+    let committed = transcript.committed;
+    let workspace_digest = digest_text(&format!(
+        "ca.codex-workspace.v1\0{}",
+        workspace_path.to_string_lossy()
+    ));
+    let mut revision_hasher = Sha256::new();
+    revision_hasher.update(b"ca.grok-session.v1\0");
+    revision_hasher.update(session_id.as_bytes());
+    revision_hasher.update([0]);
+    revision_hasher.update(workspace_digest.as_bytes());
+    for message in &committed {
+        revision_hasher.update(message.index.id.as_bytes());
+        revision_hasher.update([0]);
+        revision_hasher.update(message.index.content_sha256.as_bytes());
+        revision_hasher.update([0]);
+    }
+    let relative_path = updates_path
+        .strip_prefix(canonical_root)
+        .map_err(|_| "Grok session escaped its source root".to_string())?
+        .to_path_buf();
+    let messages = committed.iter().map(|item| item.index.clone()).collect();
+    Ok(Some(ScannedFile {
+        source_id: Uuid::nil(),
+        relative_path,
+        revision_sha256: encode_hex(&revision_hasher.finalize()),
+        size,
+        modified_nanos: modified,
+        session_id,
+        title: summary.as_ref().and_then(grok_title),
+        parent_id: summary.as_ref().and_then(grok_parent_id),
+        workspace_digest,
+        workspace_path,
+        root_thread_digest: digest_text("unresolved"),
+        messages,
+        materialized_messages: committed,
+        malformed_records,
+        unknown_records,
+        oversized_records,
+        skipped_sensitive,
+        incomplete_messages,
+    }))
+}
+
+struct GrokTranscript {
+    session_id: String,
+    pending: Option<(EvidenceRole, Vec<String>, Option<String>)>,
+    committed: Vec<MaterializedMessage>,
+    skipped_sensitive: usize,
+    ordinal: u64,
+}
+
+impl GrokTranscript {
+    fn new(session_id: String) -> Self {
+        Self {
+            session_id,
+            pending: None,
+            committed: Vec::new(),
+            skipped_sensitive: 0,
+            ordinal: 0,
+        }
+    }
+
+    fn push(&mut self, role: EvidenceRole, text: String, timestamp: Option<String>) {
+        if let Some((pending_role, parts, _)) = self.pending.as_mut() {
+            if *pending_role == role {
+                parts.push(text);
+                return;
+            }
+        }
+        self.flush();
+        self.pending = Some((role, vec![text], timestamp));
+    }
+
+    fn flush(&mut self) {
+        let Some((role, parts, timestamp)) = self.pending.take() else {
+            return;
+        };
+        let text = parts.concat();
+        if text.trim().is_empty() {
+            return;
+        }
+        self.ordinal = self.ordinal.saturating_add(1);
+        match materialize_grok_message(&self.session_id, self.ordinal, role, &text, timestamp) {
+            Some(message) => self.committed.push(message),
+            None => self.skipped_sensitive = self.skipped_sensitive.saturating_add(1),
+        }
+    }
+}
+
+fn materialize_grok_message(
+    session_id: &str,
+    ordinal: u64,
+    role: EvidenceRole,
+    text: &str,
+    timestamp: Option<String>,
+) -> Option<MaterializedMessage> {
+    let visible = text.trim();
+    if visible.is_empty() || secret_shaped(visible) {
+        return None;
+    }
+    let recall_text = crate::learning::sanitized_recall_text(visible, MAX_RECALL_MESSAGE_BYTES)?;
+    let text = crate::learning::sanitized_learning_text(visible)?;
+    let content_sha256 = digest_text(&text);
+    let role_label = match role {
+        EvidenceRole::User => "user",
+        EvidenceRole::Assistant => "assistant",
+    };
+    let id = digest_text(&format!(
+        "ca.grok-message.v1\0{session_id}\0{ordinal}\0{role_label}\0{content_sha256}"
+    ));
+    Some(MaterializedMessage {
+        index: IndexedMessage {
+            id,
+            content_sha256,
+            fork_content_sha256: None,
+            role,
+            sanitized_bytes: text.len(),
+            timestamp,
+        },
+        text,
+        recall_text,
+        recall_actions: Vec::new(),
+    })
+}
+
+fn grok_session_id(name: &str) -> Option<String> {
+    if name.is_empty() || name.len() > 256 || name.starts_with('.') {
+        return None;
+    }
+    Some(format!("grok:{name}"))
+}
+
+fn grok_parent_id(summary: &Value) -> Option<String> {
+    let parent = summary
+        .get("parent_session_id")
+        .and_then(Value::as_str)?
+        .trim();
+    if parent.is_empty() || parent.len() > 256 || parent.contains(['/', '\\', '\0']) {
+        return None;
+    }
+    Some(format!("grok:{parent}"))
+}
+
+fn grok_title(summary: &Value) -> Option<String> {
+    ["generated_title", "session_summary"]
+        .into_iter()
+        .find_map(|key| {
+            let title = summary.get(key).and_then(Value::as_str)?;
+            let clean = crate::learning::sanitized_learning_text(title)?;
+            let clean: String = clean.chars().take(240).collect();
+            (!clean.is_empty()).then_some(clean)
+        })
+}
+
+fn grok_summary(path: &Path) -> Option<Value> {
+    let metadata = grok_owner_file(path)?;
+    if metadata.len() > MAX_LINE_BYTES as u64 {
+        return None;
+    }
+    let bytes = fs::read(path).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn grok_workspace(group: &Path, summary: Option<&Value>) -> Option<PathBuf> {
+    if let Some(path) = grok_cwd_override(group) {
+        return Some(path);
+    }
+    if let Some(name) = group.file_name().and_then(|name| name.to_str()) {
+        if let Some(decoded) = percent_decode_utf8(name) {
+            if let Ok(path) = normalize_workspace(Path::new(&decoded)) {
+                return Some(path);
+            }
+        }
+    }
+    let cwd = summary
+        .and_then(|summary| summary.pointer("/info/cwd"))
+        .and_then(Value::as_str)?;
+    normalize_workspace(Path::new(cwd)).ok()
+}
+
+fn grok_cwd_override(group: &Path) -> Option<PathBuf> {
+    let path = group.join(".cwd");
+    let metadata = grok_owner_file(&path)?;
+    if metadata.len() > 4_096 {
+        return None;
+    }
+    let text = fs::read_to_string(path).ok()?;
+    let line = text.lines().next()?.trim();
+    normalize_workspace(Path::new(line)).ok()
+}
+
+fn percent_decode_utf8(value: &str) -> Option<String> {
+    percent_encoding::percent_decode_str(value)
+        .decode_utf8()
+        .ok()
+        .map(|decoded| decoded.into_owned())
+}
+
+fn grok_line_timestamp(value: &Value) -> Option<String> {
+    match value.get("timestamp")? {
+        Value::Number(number) => number.as_i64().map(|stamp| stamp.to_string()),
+        Value::String(text) => {
+            let text = text.trim();
+            if text.is_empty() {
+                None
+            } else if text.parse::<i64>().is_ok() || DateTime::parse_from_rfc3339(text).is_ok() {
+                Some(text.to_string())
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn grok_visible_text(content: &Value) -> String {
+    let mut parts = Vec::new();
+    grok_collect_text(content, &mut parts);
+    parts.concat()
+}
+
+fn grok_collect_text(value: &Value, parts: &mut Vec<String>) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                grok_collect_text(item, parts);
+            }
+        }
+        Value::Object(map) if map.get("type").and_then(Value::as_str) == Some("text") => {
+            let Some(text) = map.get("text").and_then(Value::as_str) else {
+                return;
+            };
+            parts.push(text.to_string());
+        }
+        _ => {}
+    }
 }
 
 fn validate_source_file(metadata: &fs::Metadata) -> Result<(), String> {
@@ -10742,6 +11260,7 @@ mod tests {
     #[test]
     fn current_conversation_excludes_tools_thinking_and_incomplete_assistant_work() {
         let message = |role, content: &str, tool_calls| crate::app::Message {
+            retrieved_spans: Some(Vec::new()),
             role,
             content: content.into(),
             tool_calls,
@@ -11532,6 +12051,7 @@ mod tests {
             "test",
             vec![
                 crate::app::Message {
+                    retrieved_spans: Some(Vec::new()),
                     role: crate::app::Role::User,
                     content: "check the transfer again".into(),
                     tool_calls: None,
@@ -11540,14 +12060,19 @@ mod tests {
                     timestamp: now,
                 },
                 crate::app::Message {
+                    retrieved_spans: Some(Vec::new()),
                     role: crate::app::Role::Assistant,
                     content: "transfer is healthy".into(),
                     tool_calls: Some(vec![crate::app::ToolCall {
+                        observation: None,
+                        output_source: None,
+                        arguments_retrieved_spans: Vec::new(),
                         id: "safe-action".into(),
                         name: "shell".into(),
                         arguments: r#"{"command":"ssh bsd check-rsync","cwd":"/tmp/work"}"#.into(),
                         status: crate::app::ToolStatus::Done,
                         output: Some("private host output".into()),
+                        started_at: None,
                     }]),
                     thinking: Some("private reasoning".into()),
                     response_items: Vec::new(),
@@ -11598,6 +12123,7 @@ mod tests {
         let now = Utc::now();
         let messages = (0..130)
             .map(|index| crate::app::Message {
+                retrieved_spans: Some(Vec::new()),
                 role: if index % 2 == 0 {
                     crate::app::Role::User
                 } else {
@@ -11646,6 +12172,7 @@ mod tests {
             "test",
             vec![
                 crate::app::Message {
+                    retrieved_spans: Some(Vec::new()),
                     role: crate::app::Role::User,
                     content: "native request".into(),
                     tool_calls: None,
@@ -11654,6 +12181,7 @@ mod tests {
                     timestamp: now,
                 },
                 crate::app::Message {
+                    retrieved_spans: Some(Vec::new()),
                     role: crate::app::Role::Assistant,
                     content: "native conclusion".into(),
                     tool_calls: None,
@@ -11705,6 +12233,7 @@ mod tests {
             "test",
             vec![
                 crate::app::Message {
+                    retrieved_spans: Some(Vec::new()),
                     role: crate::app::Role::User,
                     content: "repeat this workflow".into(),
                     tool_calls: None,
@@ -11713,6 +12242,7 @@ mod tests {
                     timestamp: now,
                 },
                 crate::app::Message {
+                    retrieved_spans: Some(Vec::new()),
                     role: crate::app::Role::Assistant,
                     content: "workflow complete".into(),
                     tool_calls: None,
@@ -11774,6 +12304,7 @@ models = ["gpt-5.6-terra"]
             "test",
             vec![
                 crate::app::Message {
+                    retrieved_spans: Some(Vec::new()),
                     role: crate::app::Role::User,
                     content: "repeat the registered workflow".into(),
                     tool_calls: None,
@@ -11782,6 +12313,7 @@ models = ["gpt-5.6-terra"]
                     timestamp: now,
                 },
                 crate::app::Message {
+                    retrieved_spans: Some(Vec::new()),
                     role: crate::app::Role::Assistant,
                     content: "registered workflow complete".into(),
                     tool_calls: None,
@@ -11845,6 +12377,7 @@ models = ["gpt-5.6-terra"]
             "test",
             vec![
                 crate::app::Message {
+                    retrieved_spans: Some(Vec::new()),
                     role: crate::app::Role::User,
                     content: "keep this session".into(),
                     tool_calls: None,
@@ -11853,6 +12386,7 @@ models = ["gpt-5.6-terra"]
                     timestamp: now,
                 },
                 crate::app::Message {
+                    retrieved_spans: Some(Vec::new()),
                     role: crate::app::Role::Assistant,
                     content: "kept session complete".into(),
                     tool_calls: None,
@@ -11869,6 +12403,7 @@ models = ["gpt-5.6-terra"]
             "test",
             vec![
                 crate::app::Message {
+                    retrieved_spans: Some(Vec::new()),
                     role: crate::app::Role::User,
                     content: "delete this session".into(),
                     tool_calls: None,
@@ -11877,6 +12412,7 @@ models = ["gpt-5.6-terra"]
                     timestamp: now,
                 },
                 crate::app::Message {
+                    retrieved_spans: Some(Vec::new()),
                     role: crate::app::Role::Assistant,
                     content: "removed session complete".into(),
                     tool_calls: None,
@@ -11971,6 +12507,7 @@ models = ["gpt-5.6-terra"]
             "test",
             vec![
                 crate::app::Message {
+                    retrieved_spans: Some(Vec::new()),
                     role: crate::app::Role::User,
                     content: "completed request".into(),
                     tool_calls: None,
@@ -11979,6 +12516,7 @@ models = ["gpt-5.6-terra"]
                     timestamp: now,
                 },
                 crate::app::Message {
+                    retrieved_spans: Some(Vec::new()),
                     role: crate::app::Role::Assistant,
                     content: "completed conclusion".into(),
                     tool_calls: None,
@@ -11987,6 +12525,7 @@ models = ["gpt-5.6-terra"]
                     timestamp: now,
                 },
                 crate::app::Message {
+                    retrieved_spans: Some(Vec::new()),
                     role: crate::app::Role::User,
                     content: "unfinished private request".into(),
                     tool_calls: None,
@@ -12004,6 +12543,7 @@ models = ["gpt-5.6-terra"]
             "test",
             vec![
                 crate::app::Message {
+                    retrieved_spans: Some(Vec::new()),
                     role: crate::app::Role::User,
                     content: "private email body".into(),
                     tool_calls: None,
@@ -12012,14 +12552,19 @@ models = ["gpt-5.6-terra"]
                     timestamp: now,
                 },
                 crate::app::Message {
+                    retrieved_spans: Some(Vec::new()),
                     role: crate::app::Role::Assistant,
                     content: "private email conclusion".into(),
                     tool_calls: Some(vec![crate::app::ToolCall {
+                        observation: None,
+                        output_source: None,
+                        arguments_retrieved_spans: Vec::new(),
                         id: "email".into(),
                         name: "email_send".into(),
                         arguments: "{}".into(),
                         status: crate::app::ToolStatus::Done,
                         output: Some("private email output".into()),
+                        started_at: None,
                     }]),
                     thinking: None,
                     response_items: Vec::new(),
@@ -12976,6 +13521,7 @@ models = ["gpt-5.6-terra"]
         let now = Utc::now();
         let messages = vec![
             crate::app::Message {
+                retrieved_spans: Some(Vec::new()),
                 role: crate::app::Role::User,
                 content: "Across projects, preserve deterministic evidence.".into(),
                 tool_calls: None,
@@ -12984,6 +13530,7 @@ models = ["gpt-5.6-terra"]
                 timestamp: now,
             },
             crate::app::Message {
+                retrieved_spans: Some(Vec::new()),
                 role: crate::app::Role::Assistant,
                 content: "Understood.".into(),
                 tool_calls: None,
@@ -13800,6 +14347,7 @@ models = ["gpt-5.6-terra"]
                 "test",
                 vec![
                     crate::app::Message {
+                        retrieved_spans: Some(Vec::new()),
                         role: crate::app::Role::User,
                         content: request.into(),
                         tool_calls: None,
@@ -13808,14 +14356,19 @@ models = ["gpt-5.6-terra"]
                         timestamp: now,
                     },
                     crate::app::Message {
+                        retrieved_spans: Some(Vec::new()),
                         role: crate::app::Role::Assistant,
                         content: "The transfer state was reported.".into(),
                         tool_calls: Some(vec![crate::app::ToolCall {
+                            observation: None,
+                            output_source: None,
+                            arguments_retrieved_spans: Vec::new(),
                             id: Uuid::new_v4().to_string(),
                             name: "shell".into(),
                             arguments: r#"{"command":"ssh bsd check-rsync"}"#.into(),
                             status: crate::app::ToolStatus::Done,
                             output: Some("private host output".into()),
+                            started_at: None,
                         }]),
                         thinking: Some("private reasoning".into()),
                         response_items: Vec::new(),
@@ -14643,5 +15196,294 @@ models = ["gpt-5.6-terra"]
             render_coverage_source_counts(&counts),
             "CA 115 · Codex 872 · Hermes 4 · MiMo 600"
         );
+    }
+
+    #[test]
+    fn grok_sessions_root_is_the_grok_sessions_directory() {
+        assert!(is_grok_sessions_root(Path::new("/tmp/.grok/sessions")));
+        if configured_grok_sessions_dir().is_none() {
+            assert!(!is_grok_sessions_root(Path::new("/tmp/project/sessions")));
+        }
+    }
+
+    #[test]
+    fn grok_sessions_keep_user_and_assistant_text() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = crate::runtime::RuntimePaths::from_home(temp.path());
+        let store =
+            ArchiveLearningStore::new(&paths, &crate::runtime::ActiveProfile::Default).unwrap();
+        let missing = store.ensure_standard_sources().unwrap_err();
+        assert!(missing.contains("Grok"));
+
+        let root = paths.home.join(".grok/sessions");
+        let session = root
+            .join("%2Ftmp%2Fca-grok-work")
+            .join("0190a0e0-0000-7000-8000-000000000001");
+        let summary = serde_json::json!({
+            "generated_title": "Grok folder review",
+            "session_summary": "fallback summary",
+            "created_at": "2026-09-29T14:52:44Z",
+            "updated_at": "2026-09-29T14:54:53Z",
+            "last_active_at": "2026-09-29T14:54:52Z",
+            "parent_session_id": "0190a0e0-0000-7000-8000-000000000002",
+            "info": {"id": "0190a0e0-0000-7000-8000-000000000001", "cwd": "/tmp/ca-grok-work"}
+        });
+        write_owned(
+            &session.join("summary.json"),
+            &serde_json::to_string(&summary).unwrap(),
+        );
+        let mut updates = String::new();
+        updates.push_str(&grok_update(
+            "user_message_chunk",
+            serde_json::json!({"type": "text", "text": "keep the user "}),
+        ));
+        updates.push_str(&grok_update(
+            "user_message_chunk",
+            serde_json::json!({
+                "type": "image",
+                "text": "hidden image caption",
+                "mimeType": "image/png",
+                "uri": "data:image/png;base64,aaaa"
+            }),
+        ));
+        updates.push_str(&grok_update(
+            "user_message_chunk",
+            serde_json::json!({"type": "text", "text": "request", "_meta": {"ignored": true}}),
+        ));
+        updates.push_str(&grok_update(
+            "agent_thought_chunk",
+            serde_json::json!({"type": "text", "text": "hidden chain of thought"}),
+        ));
+        updates.push_str(&format!(
+            "{}\n",
+            serde_json::json!({
+                "timestamp": 1790000001,
+                "method": "session/update",
+                "params": {
+                    "sessionId": "0190a0e0-0000-7000-8000-000000000001",
+                    "update": {
+                        "sessionUpdate": "tool_call",
+                        "toolCallId": "call-1",
+                        "title": "hidden tool transcript",
+                        "rawInput": {"command": "hidden tool transcript"},
+                        "rawOutput": "hidden tool transcript"
+                    }
+                }
+            })
+        ));
+        updates.push_str(&grok_update(
+            "plan",
+            serde_json::json!({"type": "text", "text": "hidden plan body"}),
+        ));
+        updates.push_str(&grok_update(
+            "available_commands_update",
+            serde_json::json!({"type": "text", "text": "hidden command list"}),
+        ));
+        updates.push_str(&format!(
+            "{}\n",
+            serde_json::json!({
+                "timestamp": 1790000002,
+                "method": "_x.ai/session/update",
+                "params": {
+                    "update": {
+                        "sessionUpdate": "user_message_chunk",
+                        "content": {"type": "text", "text": "hidden private update"}
+                    }
+                }
+            })
+        ));
+        updates.push_str(&grok_update(
+            "agent_message_chunk",
+            serde_json::json!({"type": "text", "text": "keep the "}),
+        ));
+        updates.push_str(&grok_update(
+            "agent_message_chunk",
+            serde_json::json!([
+                {"type": "image", "uri": "data:image/png;base64,bbbb"},
+                {"type": "text", "text": "assistant answer"}
+            ]),
+        ));
+        write_owned(&session.join("updates.jsonl"), &updates);
+        write_owned(&session.join("chat_history.jsonl"), "hidden chat history\n");
+        write_owned(
+            &session.join("rewind_points.jsonl"),
+            "hidden rewind point\n",
+        );
+        write_owned(&session.join("feedback.jsonl"), "hidden feedback\n");
+        write_owned(
+            &session.join("tool_definitions.json"),
+            "hidden tool definition\n",
+        );
+        write_owned(
+            &session
+                .join("subagents")
+                .join("child")
+                .join("updates.jsonl"),
+            "hidden subagent transcript\n",
+        );
+        let thought_only = root
+            .join("%2Ftmp%2Fca-grok-work")
+            .join("0190a0e0-0000-7000-8000-000000000003");
+        write_owned(
+            &thought_only.join("updates.jsonl"),
+            &grok_update(
+                "agent_thought_chunk",
+                serde_json::json!({"type": "text", "text": "hidden chain of thought"}),
+            ),
+        );
+        let cwd_session = root
+            .join("too-long-slug")
+            .join("0190a0e0-0000-7000-8000-000000000004");
+        write_owned(
+            &root.join("too-long-slug").join(".cwd"),
+            "/tmp/ca-grok-from-cwd\n",
+        );
+        write_owned(
+            &cwd_session.join("summary.json"),
+            &serde_json::json!({"session_summary": "Slug workspace"}).to_string(),
+        );
+        write_owned(
+            &cwd_session.join("updates.jsonl"),
+            &format!(
+                "{}{}",
+                grok_update(
+                    "user_message_chunk",
+                    serde_json::json!({"type": "text", "text": "cwd workspace marker"}),
+                ),
+                grok_update(
+                    "agent_message_chunk",
+                    serde_json::json!({"type": "text", "text": "cwd workspace answer"}),
+                ),
+            ),
+        );
+
+        assert!(store.ensure_standard_sources().unwrap());
+        assert!(!store.ensure_standard_sources().unwrap());
+        let state = store.load_state().unwrap();
+        assert_eq!(state.sources.len(), 1);
+        assert!(state.sources[0].canonical_root.ends_with(".grok/sessions"));
+        assert_eq!(state.files.len(), 2);
+        assert_eq!(
+            state
+                .files
+                .values()
+                .map(|file| file.messages.len())
+                .sum::<usize>(),
+            4
+        );
+        let ids = state
+            .files
+            .values()
+            .flat_map(|file| file.messages.iter().map(|message| message.id.clone()))
+            .collect::<Vec<_>>();
+        let counts = coverage_source_counts(&state, &ids);
+        assert_eq!(counts.get("Grok").copied(), Some(4));
+        assert!(render_coverage_source_counts(&counts).contains("Grok 4"));
+        let persisted = fs::read_to_string(&store.state_path).unwrap();
+        for hidden in [
+            "keep the user request",
+            "keep the assistant answer",
+            "hidden chain of thought",
+            "hidden tool transcript",
+            "hidden image caption",
+            "hidden plan body",
+            "hidden command list",
+            "hidden private update",
+            "hidden chat history",
+            "hidden rewind point",
+            "hidden feedback",
+            "hidden tool definition",
+            "hidden subagent transcript",
+            "cwd workspace marker",
+        ] {
+            assert!(
+                !persisted.contains(hidden),
+                "{hidden} leaked into learning state"
+            );
+        }
+
+        let scan = scan_root(&root).unwrap();
+        assert_eq!(scan.files.len(), 2);
+        let primary = scan
+            .files
+            .iter()
+            .find(|file| file.session_id.ends_with("000000000001"))
+            .unwrap();
+        assert_eq!(primary.workspace_path, PathBuf::from("/tmp/ca-grok-work"));
+        assert_eq!(primary.title.as_deref(), Some("Grok folder review"));
+        assert_eq!(
+            primary.parent_id.as_deref(),
+            Some("grok:0190a0e0-0000-7000-8000-000000000002")
+        );
+        assert_eq!(
+            primary
+                .materialized_messages
+                .iter()
+                .map(|message| (message.index.role, message.text.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (EvidenceRole::User, "keep the user request"),
+                (EvidenceRole::Assistant, "keep the assistant answer"),
+            ]
+        );
+        let slug = scan
+            .files
+            .iter()
+            .find(|file| file.session_id.ends_with("000000000004"))
+            .unwrap();
+        assert_eq!(slug.workspace_path, PathBuf::from("/tmp/ca-grok-from-cwd"));
+        assert_eq!(slug.title.as_deref(), Some("Slug workspace"));
+        for file in &scan.files {
+            for message in &file.materialized_messages {
+                assert!(!message.text.contains("hidden"));
+                assert!(!message.recall_text.contains("hidden"));
+            }
+        }
+
+        let recall = discover_recall_projection(&paths);
+        assert!(recall.source_errors.is_empty());
+        let recalled = recall
+            .sessions
+            .iter()
+            .find(|session| session.title.as_deref() == Some("Grok folder review"))
+            .unwrap();
+        assert_eq!(recalled.source, "Grok");
+        assert_eq!(
+            recalled
+                .messages
+                .iter()
+                .map(|message| (message.role, message.text.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("user", "keep the user request"),
+                ("assistant", "keep the assistant answer"),
+            ]
+        );
+    }
+
+    fn grok_update(kind: &str, content: Value) -> String {
+        format!(
+            "{}\n",
+            serde_json::json!({
+                "timestamp": 1790000000,
+                "method": "session/update",
+                "params": {
+                    "sessionId": "0190a0e0-0000-7000-8000-000000000001",
+                    "update": {"sessionUpdate": kind, "content": content}
+                }
+            })
+        )
+    }
+
+    fn write_owned(path: &Path, contents: &str) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, contents).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
     }
 }

@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
  ┌ Multi-run · isolated candidates ───────────────────────────────────────────────────────────────┐
  │judged · 2 candidates · cost estimate shown per route when configured                           │
  │Candidate worktrees and branches remain user-owned; nothing is merged or attached.              │
@@ -27,13 +27,13 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
  │                                                                                                │
  │                                                                                                │
  │                                                                                                │
- │                                                                                                │
 ╭│                                                                                                │╮
 ││                                                                                                ││
-╰└────────────────────────────────────────────────────────────────────────────────────────────────┘╯
-/ commands
+╰│                                                                                                │╯
+c└────────────────────────────────────────────────────────────────────────────────────────────────┘
+/ commands · Ctrl+\ dashboard · ↑ history
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
+
  ┌ Multi-run · isolated candidates ───────────────────────┐
  │judged · 2 candidates · cost estimate shown per route   │
  │when configured                                         │
@@ -52,8 +52,8 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
  │Shift+R refresh · Shift+F fusion proposal · Esc close   │
  │Multi-run judgment ready                                │
  │                                                        │
- │                                                        │
 ╭│                                                        │╮
 ││                                                        ││
-╰└────────────────────────────────────────────────────────┘╯
-/ commands
+╰│                                                        │╯
+c└────────────────────────────────────────────────────────┘
+/ commands · Ctrl+\ dashboard · ↑ history

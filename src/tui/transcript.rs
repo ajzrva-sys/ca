@@ -1,10 +1,11 @@
+#![allow(dead_code)]
 //! Process-local, bottom-relative transcript viewport state.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::Modifier;
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use unicode_width::UnicodeWidthStr;
 
 const MAX_SELECTABLE_CELLS: usize = 200_000;
@@ -76,6 +77,271 @@ impl UserPromptHitTarget {
     }
 }
 
+/// How many tool rows a consecutive run collapses into before layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum TranscriptDensity {
+    /// One summary row for the whole run. Reads and searches stay inside it.
+    #[default]
+    Default,
+    /// One row per non-exploration tool. Reads and searches still fold.
+    Detailed,
+}
+
+/// Kind of one call inside a consecutive tool run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub enum ToolFoldKind {
+    Read,
+    Search,
+    Edit {
+        added: u32,
+        removed: u32,
+    },
+    Command,
+    #[allow(dead_code)]
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolFoldCall {
+    pub id: String,
+    pub kind: ToolFoldKind,
+}
+
+/// One transcript row after folding, before the block layout measures it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FoldedToolRow {
+    pub run_id: String,
+    pub text: String,
+    pub summary: bool,
+}
+
+/// Screen placement of the user prompt pinned to the viewport top.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StickyPromptPlacement {
+    pub prompt_row: usize,
+    /// Rows relative to the viewport top. Negative means the next prompt is pushing it off.
+    pub offset: i32,
+}
+
+/// Fold one consecutive tool run. An expanded run id shows every call.
+/// Reads and searches fold at every density, including detailed.
+pub fn fold_tool_run(
+    calls: &[ToolFoldCall],
+    density: TranscriptDensity,
+    expanded: &BTreeSet<String>,
+) -> Vec<FoldedToolRow> {
+    if calls.is_empty() {
+        return Vec::new();
+    }
+    let run_id = tool_run_id(calls);
+    if expanded.contains(&run_id) {
+        return calls
+            .iter()
+            .map(|call| FoldedToolRow {
+                run_id: run_id.clone(),
+                text: individual_tool_label(call),
+                summary: false,
+            })
+            .collect();
+    }
+    match density {
+        TranscriptDensity::Default => vec![FoldedToolRow {
+            run_id,
+            text: tool_run_summary(calls),
+            summary: true,
+        }],
+        TranscriptDensity::Detailed => fold_detailed_run(calls, &run_id),
+    }
+}
+
+/// Pin the current user prompt at the viewport top until the next prompt reaches it.
+/// `prompt_rows` are indexes into `row_heights`.
+pub fn sticky_prompt_placement(
+    row_heights: &[u32],
+    prompt_rows: &[usize],
+    viewport_top: u32,
+) -> Option<StickyPromptPlacement> {
+    let starts = row_starts(row_heights);
+    let mut prompts: Vec<usize> = prompt_rows
+        .iter()
+        .copied()
+        .filter(|row| *row < row_heights.len())
+        .collect();
+    prompts.sort_unstable();
+    prompts.dedup();
+    let position = prompts
+        .iter()
+        .rposition(|row| starts[*row] <= viewport_top)?;
+    let prompt_row = prompts[position];
+    let height = row_heights[prompt_row];
+    let offset = prompts.get(position + 1).map_or(0, |next| {
+        let gap = starts[*next].saturating_sub(viewport_top);
+        if gap >= height {
+            0
+        } else {
+            -i32::try_from(height.saturating_sub(gap)).unwrap_or(i32::MIN)
+        }
+    });
+    Some(StickyPromptPlacement { prompt_row, offset })
+}
+
+fn tool_run_id(calls: &[ToolFoldCall]) -> String {
+    calls
+        .iter()
+        .find(|call| !call.id.is_empty())
+        .map(|call| call.id.clone())
+        .unwrap_or_default()
+}
+
+fn is_exploration(kind: ToolFoldKind) -> bool {
+    matches!(kind, ToolFoldKind::Read | ToolFoldKind::Search)
+}
+
+fn fold_detailed_run(calls: &[ToolFoldCall], run_id: &str) -> Vec<FoldedToolRow> {
+    let mut rows = Vec::new();
+    let mut index = 0;
+    while index < calls.len() {
+        if is_exploration(calls[index].kind) {
+            let start = index;
+            index += 1;
+            while index < calls.len() && is_exploration(calls[index].kind) {
+                index += 1;
+            }
+            rows.push(FoldedToolRow {
+                run_id: run_id.to_string(),
+                text: tool_run_summary(&calls[start..index]),
+                summary: true,
+            });
+        } else {
+            rows.push(FoldedToolRow {
+                run_id: run_id.to_string(),
+                text: individual_tool_label(&calls[index]),
+                summary: false,
+            });
+            index += 1;
+        }
+    }
+    rows
+}
+
+fn individual_tool_label(call: &ToolFoldCall) -> String {
+    match call.kind {
+        ToolFoldKind::Read => "Read file".to_string(),
+        ToolFoldKind::Search => "Searched".to_string(),
+        ToolFoldKind::Edit { added, removed } => format!("Edited file +{added} -{removed}"),
+        ToolFoldKind::Command => "Ran command".to_string(),
+        ToolFoldKind::Other => "Ran tool".to_string(),
+    }
+}
+
+fn count_phrase(count: usize, singular: &str, plural: &str) -> String {
+    if count == 1 {
+        format!("1 {singular}")
+    } else {
+        format!("{count} {plural}")
+    }
+}
+
+fn tool_run_summary(calls: &[ToolFoldCall]) -> String {
+    let mut files = 0usize;
+    let mut searches = 0usize;
+    let mut edits = 0usize;
+    let mut added = 0u64;
+    let mut removed = 0u64;
+    let mut commands = 0usize;
+    let mut others = 0usize;
+    for call in calls {
+        match call.kind {
+            ToolFoldKind::Read => files += 1,
+            ToolFoldKind::Search => searches += 1,
+            ToolFoldKind::Edit {
+                added: plus,
+                removed: minus,
+            } => {
+                edits += 1;
+                added += u64::from(plus);
+                removed += u64::from(minus);
+            }
+            ToolFoldKind::Command => commands += 1,
+            ToolFoldKind::Other => others += 1,
+        }
+    }
+    let mut clauses = Vec::new();
+    if files > 0 || searches > 0 {
+        let mut parts = Vec::new();
+        if files > 0 {
+            parts.push(count_phrase(files, "file", "files"));
+        }
+        if searches > 0 {
+            parts.push(count_phrase(searches, "search", "searches"));
+        }
+        clauses.push(format!("Explored {}", parts.join(", ")));
+    }
+    if let Some(clause) = activity_clause(edits, commands, added, removed) {
+        clauses.push(clause);
+    }
+    if others > 0 {
+        let tools = count_phrase(others, "tool", "tools");
+        clauses.push(format!("Ran {tools}"));
+    }
+    join_summary_clauses(&clauses)
+}
+
+fn activity_clause(edits: usize, commands: usize, added: u64, removed: u64) -> Option<String> {
+    if edits == 0 && commands == 0 {
+        return None;
+    }
+    let mut parts = Vec::new();
+    if edits > 0 {
+        parts.push(format!("Edited {}", count_phrase(edits, "file", "files")));
+    }
+    if commands > 0 {
+        let phrase = count_phrase(commands, "command", "commands");
+        if edits > 0 {
+            parts.push(format!("ran {phrase}"));
+        } else {
+            parts.push(format!("Ran {phrase}"));
+        }
+    }
+    let mut clause = parts.join(", ");
+    if edits > 0 {
+        clause.push_str(&format!(" +{added} -{removed}"));
+    }
+    Some(clause)
+}
+
+fn join_summary_clauses(clauses: &[String]) -> String {
+    let Some(first) = clauses.first() else {
+        return "Ran tools".to_string();
+    };
+    let mut text = first.clone();
+    for clause in &clauses[1..] {
+        text.push_str(", ");
+        text.push_str(&lowercase_first(clause));
+    }
+    text
+}
+
+fn lowercase_first(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_lowercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+fn row_starts(row_heights: &[u32]) -> Vec<u32> {
+    let mut starts = Vec::with_capacity(row_heights.len().saturating_add(1));
+    let mut cursor = 0u32;
+    starts.push(0);
+    for height in row_heights {
+        cursor = cursor.saturating_add(*height);
+        starts.push(cursor);
+    }
+    starts
+}
+
 impl SelectableFrame {
     fn contains_screen(&self, x: u16, y: u16) -> bool {
         self.area.contains(Position::new(x, y))
@@ -137,6 +403,25 @@ pub struct TranscriptScrollState {
     selection: RefCell<Option<VisibleSelection>>,
     activity_hit_targets: RefCell<Vec<ActivityHitTarget>>,
     user_prompt_hit_targets: RefCell<Vec<UserPromptHitTarget>>,
+    density: std::cell::Cell<TranscriptDensity>,
+    expanded_runs: RefCell<BTreeSet<String>>,
+    selectable_blocks: RefCell<Vec<SelectableBlock>>,
+    content_lines: std::cell::Cell<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectableBlock {
+    pub kind: SelectableKind,
+    pub first_line: usize,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelectableKind {
+    User(usize),
+    Assistant(usize),
+    Thinking(usize),
+    ToolRun(String),
 }
 
 impl TranscriptScrollState {
@@ -180,6 +465,32 @@ impl TranscriptScrollState {
     pub fn latest(&mut self) {
         self.bottom_offset.set(0);
         self.unseen_messages = 0;
+    }
+
+    pub fn set_blocks(&self, blocks: Vec<SelectableBlock>) {
+        *self.selectable_blocks.borrow_mut() = blocks;
+    }
+
+    pub fn blocks(&self) -> Vec<SelectableBlock> {
+        self.selectable_blocks.borrow().clone()
+    }
+
+    pub fn set_content_lines(&self, lines: u32) {
+        self.content_lines.set(lines);
+    }
+
+    pub fn reveal_line(&self, line: u32, viewport_rows: u16) {
+        let total = self.content_lines.get();
+        let maximum = self.measured_maximum.get();
+        if total == 0 || maximum == 0 {
+            return;
+        }
+        let from_bottom =
+            total.saturating_sub(line.saturating_add(u32::from(viewport_rows.max(1))));
+        let offset = u16::try_from(u64::from(from_bottom) * u64::from(maximum) / u64::from(total))
+            .unwrap_or(maximum)
+            .min(maximum);
+        self.bottom_offset.set(offset);
     }
 
     pub fn observe_tail(&mut self, messages: usize, stream_bytes: usize) {
@@ -291,6 +602,28 @@ impl TranscriptScrollState {
             .iter()
             .copied()
             .find(|target| target.contains(x, y))
+    }
+
+    pub fn density(&self) -> TranscriptDensity {
+        self.density.get()
+    }
+
+    pub fn set_density(&self, density: TranscriptDensity) {
+        self.density.set(density);
+    }
+
+    pub fn expanded_run_ids(&self) -> Vec<String> {
+        self.expanded_runs.borrow().iter().cloned().collect()
+    }
+
+    pub fn expand_run(&self, run_id: &str) {
+        if !run_id.is_empty() {
+            self.expanded_runs.borrow_mut().insert(run_id.to_string());
+        }
+    }
+
+    pub fn collapse_run(&self, run_id: &str) {
+        self.expanded_runs.borrow_mut().remove(run_id);
     }
 
     pub fn activity_key_for_click_release(
@@ -707,5 +1040,136 @@ mod tests {
         }
         assert!(state.selection_limit_exceeded());
         assert!(state.finish_selection(99, 99).is_none());
+    }
+
+    fn read_call(id: &str) -> ToolFoldCall {
+        ToolFoldCall {
+            id: id.to_string(),
+            kind: ToolFoldKind::Read,
+        }
+    }
+
+    fn search_call(id: &str) -> ToolFoldCall {
+        ToolFoldCall {
+            id: id.to_string(),
+            kind: ToolFoldKind::Search,
+        }
+    }
+
+    fn edit_call(id: &str, added: u32, removed: u32) -> ToolFoldCall {
+        ToolFoldCall {
+            id: id.to_string(),
+            kind: ToolFoldKind::Edit { added, removed },
+        }
+    }
+
+    fn command_call(id: &str) -> ToolFoldCall {
+        ToolFoldCall {
+            id: id.to_string(),
+            kind: ToolFoldKind::Command,
+        }
+    }
+
+    fn mixed_tool_run() -> Vec<ToolFoldCall> {
+        vec![
+            read_call("read-1"),
+            read_call("read-2"),
+            read_call("read-3"),
+            search_call("search-1"),
+            search_call("search-2"),
+            edit_call("edit-1", 8, 1),
+            edit_call("edit-2", 4, 3),
+            command_call("command-1"),
+        ]
+    }
+
+    #[test]
+    fn default_density_folds_a_long_mixed_run_into_fewer_rows() {
+        let calls = mixed_tool_run();
+        let collapsed = std::collections::BTreeSet::new();
+        let default_rows = fold_tool_run(&calls, TranscriptDensity::Default, &collapsed);
+        let detailed_rows = fold_tool_run(&calls, TranscriptDensity::Detailed, &collapsed);
+        assert_eq!(default_rows.len(), 1);
+        assert!(default_rows.len() < detailed_rows.len());
+        assert_eq!(default_rows[0].run_id, "read-1");
+        assert_eq!(
+            default_rows[0].text,
+            "Explored 3 files, 2 searches, edited 2 files, ran 1 command +12 -4"
+        );
+        assert_eq!(
+            fold_tool_run(
+                &[
+                    read_call("read-1"),
+                    read_call("read-2"),
+                    read_call("read-3"),
+                    search_call("search-1"),
+                    search_call("search-2"),
+                ],
+                TranscriptDensity::Default,
+                &collapsed,
+            )[0]
+            .text,
+            "Explored 3 files, 2 searches"
+        );
+        assert_eq!(
+            fold_tool_run(
+                &[
+                    edit_call("edit-1", 8, 1),
+                    edit_call("edit-2", 4, 3),
+                    command_call("command-1"),
+                ],
+                TranscriptDensity::Default,
+                &collapsed,
+            )[0]
+            .text,
+            "Edited 2 files, ran 1 command +12 -4"
+        );
+        let mut expanded = std::collections::BTreeSet::new();
+        expanded.insert(default_rows[0].run_id.clone());
+        assert_eq!(
+            fold_tool_run(&calls, TranscriptDensity::Default, &expanded).len(),
+            calls.len()
+        );
+    }
+
+    #[test]
+    fn detailed_density_still_folds_reads_and_searches() {
+        let calls = mixed_tool_run();
+        let rows = fold_tool_run(
+            &calls,
+            TranscriptDensity::Detailed,
+            &std::collections::BTreeSet::new(),
+        );
+        assert!(rows.len() < calls.len());
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[0].text, "Explored 3 files, 2 searches");
+        assert!(rows.iter().all(|row| row.text != "Read file"));
+        assert!(rows.iter().all(|row| row.text != "Searched"));
+        assert_eq!(rows[1].text, "Edited file +8 -1");
+        assert_eq!(rows[2].text, "Edited file +4 -3");
+        assert_eq!(rows[3].text, "Ran command");
+    }
+
+    #[test]
+    fn sticky_prompt_pins_first_turn_until_the_next_prompt_reaches_the_top() {
+        let mut heights = vec![4u32];
+        heights.extend(std::iter::repeat_n(2, 24));
+        heights.push(4);
+        heights.extend(std::iter::repeat_n(2, 24));
+        let prompts = [0usize, 25];
+        let second_top: u32 = heights[..25].iter().sum();
+        assert_eq!(second_top, 52);
+
+        let stuck = sticky_prompt_placement(&heights, &prompts, 20).unwrap();
+        assert_eq!(stuck.prompt_row, 0);
+        assert_eq!(stuck.offset, 0);
+
+        let still_first = sticky_prompt_placement(&heights, &prompts, second_top - 1).unwrap();
+        assert_eq!(still_first.prompt_row, 0);
+        assert!(still_first.offset < 0);
+
+        let displaced = sticky_prompt_placement(&heights, &prompts, second_top).unwrap();
+        assert_eq!(displaced.prompt_row, 25);
+        assert_eq!(displaced.offset, 0);
     }
 }

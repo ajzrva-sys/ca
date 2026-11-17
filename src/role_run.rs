@@ -425,6 +425,8 @@ async fn run_role(cli: RoleRunCli) -> i32 {
                 memory_generation_enabled: capabilities.memory,
                 automation_proposals_enabled: false,
                 email_enabled: capabilities.email,
+                browser_enabled: capabilities.browser,
+                coding_schema: crate::git_status::head_readable(request.workspace()),
                 allowed_names: Some(allowed_names),
             },
             tool_profile: crate::agent::registry::ToolProfile::Main,

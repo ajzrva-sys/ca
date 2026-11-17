@@ -6,9 +6,9 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
 │ Queued messages                                                                                  │
 │                                                                                                  │
 │   Queued · Run the focused tests                                                                 │
-│ ▸ Queued · Then review the narrow layout                                                         │
+│ ▸ Queued · Then review the narrow layout                               [Send now] [edit] [cancel]│
 │                                                                                                  │
-│Enter/e edit · Delete/d remove · Shift+↑↓ reorder · Esc close                                     │
+│s/Ctrl+S send now · Enter/e edit · Delete/d cancel · Shift+↑↓ reorder · Esc close                 │
 │                                                                                                  │
 │                                                                                                  │
 │                                                                                                  │
@@ -37,9 +37,9 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
 │ Queued messages                                          │
 │                                                          │
 │   Queued · Run the focused tests                         │
-│ ▸ Queued · Then review the narrow layout                 │
+│ ▸ Queued · Then review the na… [Send now] [edit] [cancel]│
 │                                                          │
-│Enter edit · Del remove · Shift+↑↓ move · Esc             │
+│s send · Enter edit · Del cancel · Esc                    │
 │                                                          │
 │                                                          │
 │                                                          │

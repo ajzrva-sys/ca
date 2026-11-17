@@ -151,16 +151,10 @@ pub(crate) fn model_path(model: &str) -> Result<String, ProviderError> {
     Ok(format!("models/{id}:streamGenerateContent?alt=sse"))
 }
 pub(crate) fn sent_prefix(body: &[u8]) -> Result<String, ProviderError> {
-    let mut value: Value = serde_json::from_slice(body)
-        .map_err(|_| ProviderError::Protocol("Google request is invalid JSON".into()))?;
-    value
-        .as_object_mut()
-        .ok_or_else(|| ProviderError::Protocol("Google request is not an object".into()))?
-        .remove("generationConfig");
-    Ok(crate::provider_replay::prefix_digest(&value))
+    crate::provider_replay::google_prefix(body, None)
 }
 
-pub(crate) type LoweredContent = (Vec<u8>, Vec<String>, Vec<usize>);
+pub(crate) type LoweredContent = (Vec<u8>, Vec<String>, Vec<usize>, Vec<(usize, String)>);
 
 pub(crate) fn body(
     request: &PreparedModelRequest,
@@ -172,6 +166,7 @@ pub(crate) fn body(
     let mut calls = BTreeMap::new();
     let mut wire_ids = BTreeMap::new();
     let mut replay = Vec::new();
+    let mut privacy_prefixes = Vec::new();
     let mut diagnostics = Vec::new();
     let mut declarations = Vec::new();
     for tool in &request.tools {
@@ -238,7 +233,7 @@ pub(crate) fn body(
                     if let ProviderResponseItem::NativeContent {
                         source: origin,
                         model,
-                        prefix_sha256: _,
+                        prefix_sha256,
                         content,
                     } = item
                     {
@@ -259,6 +254,10 @@ pub(crate) fn body(
                             return Err(ProviderError::EventTooLarge { limit: MAX_BYTES });
                         }
                         validate_parts(message, content)?;
+                        if source.privacy_policy_digest.is_some() && item.opaque_source().is_some()
+                        {
+                            privacy_prefixes.push((contents.len(), prefix_sha256.clone()));
+                        }
                         for (part, call) in content
                             .iter()
                             .filter_map(|part| part.get("functionCall"))
@@ -342,7 +341,7 @@ pub(crate) fn body(
     }
     let bytes = serde_json::to_vec(&value)
         .map_err(|_| ProviderError::Protocol("Google request serialization failed".into()))?;
-    Ok((bytes, diagnostics, replay))
+    Ok((bytes, diagnostics, replay, privacy_prefixes))
 }
 fn user_parts(message: &ChatMessage) -> Vec<Value> {
     message
@@ -773,6 +772,7 @@ mod tests {
                 id: "local-one".into(),
                 call_type: "function".into(),
                 function: FunctionCall {
+                    arguments_retrieved_spans: Vec::new(),
                     name: "read_file".into(),
                     arguments: r#"{"path":"one"}"#.into(),
                 },
@@ -781,6 +781,7 @@ mod tests {
                 id: "local-two".into(),
                 call_type: "function".into(),
                 function: FunctionCall {
+                    arguments_retrieved_spans: Vec::new(),
                     name: "read_file".into(),
                     arguments: r#"{"path":"two"}"#.into(),
                 },
@@ -800,7 +801,7 @@ mod tests {
             result.tool_call_id = Some(id.into());
             request.messages.push(result);
         }
-        let (bytes, diagnostics, indices) =
+        let (bytes, diagnostics, indices, _) =
             body(&request, &source(), crate::tool_schema::Policy::Compatible).unwrap();
         let sent: Value = serde_json::from_slice(&bytes).unwrap();
         assert!(diagnostics.is_empty());
@@ -815,7 +816,7 @@ mod tests {
             .get("id")
             .is_none());
         request.model = "gemini-other".into();
-        let (bytes, diagnostics, indices) =
+        let (bytes, diagnostics, indices, _) =
             body(&request, &source(), crate::tool_schema::Policy::Compatible).unwrap();
         assert!(!diagnostics.is_empty());
         assert!(indices.is_empty());
@@ -823,6 +824,84 @@ mod tests {
             .unwrap()
             .contains("thoughtSignature"));
     }
+    #[test]
+    fn google_native_image_replay_uses_placeholders_without_mutating_stored_state() {
+        let mut request = request();
+        let args = json!({"path":"input.txt","inlineData":{"mimeType":"image/png","data":"AuthoredArgumentCanary"}});
+        let parts = vec![
+            json!({"text":"issued thought","thought":true,"thoughtSignature":"OtherSignatureCanary"}),
+            json!({"inlineData":{"mimeType":"image/png","data":"NativeImageCanary"},"thoughtSignature":"ImageSignatureCanary"}),
+            json!({"inline_data":{"mime_type":"image/jpeg","data":"NativeImageCanarySnake"}}),
+            json!({"fileData":{"mimeType":"image/png","fileUri":"https://private.invalid/native-image.png"}}),
+            json!({"file_data":{"mime_type":"image/webp","file_uri":"https://private.invalid/native-snake.webp"}}),
+            json!({"functionCall":{"name":"read_file","args":args,"id":"wire-image"},"thoughtSignature":"CallSignatureCanary"}),
+        ];
+        let mut assistant = message("assistant", "");
+        assistant.tool_calls = Some(vec![ToolCallMsg {
+            id: "local-image".into(),
+            call_type: "function".into(),
+            function: FunctionCall {
+                arguments_retrieved_spans: Vec::new(),
+                name: "read_file".into(),
+                arguments: args.to_string(),
+            },
+        }]);
+        assistant.response_items = vec![ProviderResponseItem::NativeContent {
+            source: source(),
+            model: request.model.clone(),
+            prefix_sha256: "digest".into(),
+            content: parts.clone(),
+        }];
+        request.messages.push(assistant);
+        let mut result = message("tool", "result");
+        result.tool_call_id = Some("local-image".into());
+        request.messages.push(result);
+        let canonical = serde_json::to_vec(&request.messages).unwrap();
+        let (bytes, _, indices, _) =
+            body(&request, &source(), crate::tool_schema::Policy::Compatible).unwrap();
+        let bindings = crate::provider_replay::ReplayBindings {
+            google_parts: indices,
+            ..Default::default()
+        };
+        for enabled in [false, true] {
+            let filter = crate::provider_filter::ProviderFilter::compile(
+                &crate::provider_filter::ProviderFilterConfig {
+                    enabled,
+                    page_stand_in: crate::provider_filter::PageStandIn::Latin,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let (wire, diagnostics) =
+                crate::provider_replay::prepare_outbound(&bytes, &bindings, &filter).unwrap();
+            let sent: Value = serde_json::from_slice(&wire).unwrap();
+            let sent_parts = sent["contents"][1]["parts"].as_array().unwrap();
+            assert_eq!(sent_parts[0], parts[0]);
+            assert_eq!(sent_parts[5], parts[5]);
+            assert_eq!(sent_parts[5]["functionCall"]["args"], args);
+            if enabled {
+                for part in &sent_parts[1..5] {
+                    assert_eq!(*part, json!({"text":"[image]"}));
+                }
+                let sent_text = String::from_utf8(wire).unwrap();
+                for excluded in [
+                    "NativeImageCanary",
+                    "ImageSignatureCanary",
+                    "private.invalid",
+                ] {
+                    assert!(!sent_text.contains(excluded), "{excluded}");
+                }
+                assert!(sent_text.contains("AuthoredArgumentCanary"));
+                assert_eq!(diagnostics.len(), 1);
+                assert!(diagnostics[0].contains("image replay signature omitted"));
+            } else {
+                assert_eq!(*sent_parts, parts);
+                assert!(diagnostics.is_empty());
+            }
+            assert_eq!(serde_json::to_vec(&request.messages).unwrap(), canonical);
+        }
+    }
+
     #[test]
     fn google_images_instructions_schema_loss_and_strict_rejection() {
         let mut request = request();
@@ -832,7 +911,7 @@ mod tests {
             .unwrap();
         request.messages[1].content = ModelContent::multimodal("look", &[image]);
         request.tools.push(ToolDef{def_type:"function".into(),function:ToolFunction{name:"example".into(),description:"example".into(),parameters:json!({"type":"object","properties":{"value":{"type":"integer","minimum":1}},"additionalProperties":false})}});
-        let (bytes, losses, _) =
+        let (bytes, losses, _, _) =
             body(&request, &source(), crate::tool_schema::Policy::Compatible).unwrap();
         let sent: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(

@@ -3,19 +3,10 @@ source: src/tui/render_tests.rs
 expression: "wide_narrow(wide, narrow)"
 ---
 === CACHE CHECKING ===
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
  › Apply the approved system change
 
 
-  Approve tool [1/1] — run_privileged
-    Program: "/usr/bin/id"
-    argv[0]: "space value"
-    argv[1]: "$(literal);&|"
-    cwd: "/Users/example/project"
-    Filesystem authority: system-wide · Network: OS-denied
-    Invocation digest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  [y] authorize once  [n/Esc] deny
 
 
 
@@ -32,34 +23,25 @@ expression: "wide_narrow(wide, narrow)"
 
 
 
-
+│ Checking administrator authorization…
+┌ Approval ────────────────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                  │
+│  Approve tool [1/1] — run_privileged                                                             │
+│    Program: "/usr/bin/id"                                                                        │
+│    argv[0]: "space value"                                                                        │
+│    argv[1]: "$(literal);&|"                                                                      │
+│    cwd: "/Users/example/project"                                                                 │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                                                                   │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
-Checking administrator authorization…
+│› Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto · 1 messages
+[y] run · [n] deny · [e] edit
 === MASKED INPUT ===
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
  › Apply the approved system change
 
 
-  Approve tool [1/1] — run_privileged
-    Program: "/usr/bin/id"
-    argv[0]: "space value"
-    argv[1]: "$(literal);&|"
-    cwd: "/Users/example/project"
-    Filesystem authority: system-wide · Network: OS-denied
-    Invocation digest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  [y] authoriz┌ Input required ──────────────────────────────────────────────────────┐
-              │Administrator password                                                │
-              │One keyboard-only attempt for invocation                              │
-              │aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa      │
-              │                                                                      │
-              │  Secret:                                                             │
-              │  ••••••••••••••••••••••••••                                          │
-              │                                                                      │
-              │Enter submit · Esc cancel                                             │
-              └──────────────────────────────────────────────────────────────────────┘
 
 
 
@@ -68,24 +50,33 @@ Checking administrator authorization…
 
 
 
+
+
+
+
+
+
+
+
+│ Administrator authentication required (Esc cancels)
+┌ Input required ──────────────────────────────────────────────────────────────────────────────────┐
+│Administrator password                                                                            │
+│One keyboard-only attempt for invocation                                                          │
+│aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa                                  │
+│                                                                                                  │
+│  Secret:                                                                                         │
+│  ••••••••••••••••••••••••••                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                                                                   │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
-Administrator authentication required (Esc cancels)
+│› Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto · 1 messages
+Enter submit · Esc cancel
 === CANCELLATION ===
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
  › Apply the approved system change
 
 
-  Approve tool [1/1] — run_privileged
-    Program: "/usr/bin/id"
-    argv[0]: "space value"
-    argv[1]: "$(literal);&|"
-    cwd: "/Users/example/project"
-    Filesystem authority: system-wide · Network: OS-denied
-    Invocation digest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  [y] authorize once  [n/Esc] deny
 
 
 
@@ -102,25 +93,25 @@ Administrator authentication required (Esc cancels)
 
 
 
-
+│ Cancelling administrator authentication…
+┌ Approval ────────────────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                  │
+│  Approve tool [1/1] — run_privileged                                                             │
+│    Program: "/usr/bin/id"                                                                        │
+│    argv[0]: "space value"                                                                        │
+│    argv[1]: "$(literal);&|"                                                                      │
+│    cwd: "/Users/example/project"                                                                 │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                                                                   │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
-Cancelling administrator authentication…
+│› Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto · 1 messages
+[y] run · [n] deny · [e] edit
 === AUTH FAILURE ===
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
  › Apply the approved system change
 
 
-  Approve tool [1/1] — run_privileged
-    Program: "/usr/bin/id"
-    argv[0]: "space value"
-    argv[1]: "$(literal);&|"
-    cwd: "/Users/example/project"
-    Filesystem authority: system-wide · Network: OS-denied
-    Invocation digest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  [y] authorize once  [n/Esc] deny
 
 
 
@@ -137,25 +128,25 @@ Cancelling administrator authentication…
 
 
 
-
+│ Administrator authentication failed · Esc dismiss
+┌ Approval ────────────────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                  │
+│  Approve tool [1/1] — run_privileged                                                             │
+│    Program: "/usr/bin/id"                                                                        │
+│    argv[0]: "space value"                                                                        │
+│    argv[1]: "$(literal);&|"                                                                      │
+│    cwd: "/Users/example/project"                                                                 │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                                                                   │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
-Administrator authentication failed
+│› Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto · 1 messages
+[y] run · [n] deny · [e] edit
 === EXECUTION ===
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
  › Apply the approved system change
 
 
-  Approve tool [1/1] — run_privileged
-    Program: "/usr/bin/id"
-    argv[0]: "space value"
-    argv[1]: "$(literal);&|"
-    cwd: "/Users/example/project"
-    Filesystem authority: system-wide · Network: OS-denied
-    Invocation digest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  [y] authorize once  [n/Esc] deny
 
 
 
@@ -172,25 +163,25 @@ Administrator authentication failed
 
 
 
-
+│ Executing approved administrator command…
+┌ Approval ────────────────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                  │
+│  Approve tool [1/1] — run_privileged                                                             │
+│    Program: "/usr/bin/id"                                                                        │
+│    argv[0]: "space value"                                                                        │
+│    argv[1]: "$(literal);&|"                                                                      │
+│    cwd: "/Users/example/project"                                                                 │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                                                                   │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
-Executing approved administrator command…
+│› Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto · 1 messages
+[y] run · [n] deny · [e] edit
 === COMPLETION ===
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
  › Apply the approved system change
 
 
-  Approve tool [1/1] — run_privileged
-    Program: "/usr/bin/id"
-    argv[0]: "space value"
-    argv[1]: "$(literal);&|"
-    cwd: "/Users/example/project"
-    Filesystem authority: system-wide · Network: OS-denied
-    Invocation digest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  [y] authorize once  [n/Esc] deny
 
 
 
@@ -207,28 +198,26 @@ Executing approved administrator command…
 
 
 
-
+│ Administrator command completed
+┌ Approval ────────────────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                  │
+│  Approve tool [1/1] — run_privileged                                                             │
+│    Program: "/usr/bin/id"                                                                        │
+│    argv[0]: "space value"                                                                        │
+│    argv[1]: "$(literal);&|"                                                                      │
+│    cwd: "/Users/example/project"                                                                 │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                                                                   │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
-Administrator command completed
+│› Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto · 1 messages
+[y] run · [n] deny · [e] edit
 -- narrow --
 === CACHE CHECKING ===
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
 
  › Apply the approved system change
 
 
-  Approve tool [1/1] — run_privileged
-    Program: "/usr/bin/id"
-    argv[0]: "space value"
-    argv[1]: "$(literal);&|"
-    cwd: "/Users/example/project"
-    Filesystem authority: system-wide · Network: OS-denied
-    Invocation digest:
-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-aaaa
-  [y] authorize once  [n/Esc] deny
 
 
 
@@ -240,57 +229,57 @@ aaaa
 
 
 
+
+│ Checking administrator authorization…
+┌ Approval ────────────────────────────────────────────────┐
+│                                                          │
+│  Approve tool [1/1] — run_privileged                     │
+│    Program: "/usr/bin/id"                                │
+│    argv[0]: "space value"                                │
+│    argv[1]: "$(literal);&|"                              │
+│    cwd: "/Users/example/project"                         │
+└──────────────────────────────────────────────────────────┘
 ╭──────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                           │
-╰──────────────────────────────────────────── agent · auto ╯
-Checking administrator authorization…
+│› Ask anything…                                           │
+╰──────────────────────────────────────────────────────────╯
+ca · model auto · 1 messages
+[y] run · [n] deny · [e] edit
 === MASKED INPUT ===
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
 
  › Apply the approved system change
 
 
-  Approve tool [1/1] — run_privileged
-    Program: "/usr/bin/id"
-    argv[0]: "space value"
-    argv[1]: "$(literal);&|"
-    cwd: "/Users/example/project"
-  ┌ Input required ──────────────────────────────────────┐
-  │Administrator password                                │
-aa│One keyboard-only attempt for invocation              │aa
-aa│aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa│
-  │aaaaaaaaaa                                            │
-  │                                                      │
-  │  Secret:                                             │
-  │  ••••••••••••••••••••••••••                          │
-  │                                                      │
-  └──────────────────────────────────────────────────────┘
 
 
 
 
 
 
+
+
+
+
+
+
+│ Administrator authentication required (Esc cancels)
+┌ Input required ──────────────────────────────────────────┐
+│Administrator password                                    │
+│One keyboard-only attempt for invocation                  │
+│aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa│
+│aaaaaa                                                    │
+│                                                          │
+│  Secret:                                                 │
+└──────────────────────────────────────────────────────────┘
 ╭──────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                           │
-╰──────────────────────────────────────────── agent · auto ╯
-Administrator authentication required (Esc cancels)
+│› Ask anything…                                           │
+╰──────────────────────────────────────────────────────────╯
+ca · model auto · 1 messages
+Enter submit · Esc cancel
 === CANCELLATION ===
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
 
  › Apply the approved system change
 
 
-  Approve tool [1/1] — run_privileged
-    Program: "/usr/bin/id"
-    argv[0]: "space value"
-    argv[1]: "$(literal);&|"
-    cwd: "/Users/example/project"
-    Filesystem authority: system-wide · Network: OS-denied
-    Invocation digest:
-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-aaaa
-  [y] authorize once  [n/Esc] deny
 
 
 
@@ -302,26 +291,26 @@ aaaa
 
 
 
+
+│ Cancelling administrator authentication…
+┌ Approval ────────────────────────────────────────────────┐
+│                                                          │
+│  Approve tool [1/1] — run_privileged                     │
+│    Program: "/usr/bin/id"                                │
+│    argv[0]: "space value"                                │
+│    argv[1]: "$(literal);&|"                              │
+│    cwd: "/Users/example/project"                         │
+└──────────────────────────────────────────────────────────┘
 ╭──────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                           │
-╰──────────────────────────────────────────── agent · auto ╯
-Cancelling administrator authentication…
+│› Ask anything…                                           │
+╰──────────────────────────────────────────────────────────╯
+ca · model auto · 1 messages
+[y] run · [n] deny · [e] edit
 === AUTH FAILURE ===
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
 
  › Apply the approved system change
 
 
-  Approve tool [1/1] — run_privileged
-    Program: "/usr/bin/id"
-    argv[0]: "space value"
-    argv[1]: "$(literal);&|"
-    cwd: "/Users/example/project"
-    Filesystem authority: system-wide · Network: OS-denied
-    Invocation digest:
-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-aaaa
-  [y] authorize once  [n/Esc] deny
 
 
 
@@ -333,26 +322,26 @@ aaaa
 
 
 
+
+│ Administrator authentication failed · Esc dismiss
+┌ Approval ────────────────────────────────────────────────┐
+│                                                          │
+│  Approve tool [1/1] — run_privileged                     │
+│    Program: "/usr/bin/id"                                │
+│    argv[0]: "space value"                                │
+│    argv[1]: "$(literal);&|"                              │
+│    cwd: "/Users/example/project"                         │
+└──────────────────────────────────────────────────────────┘
 ╭──────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                           │
-╰──────────────────────────────────────────── agent · auto ╯
-Administrator authentication failed
+│› Ask anything…                                           │
+╰──────────────────────────────────────────────────────────╯
+ca · model auto · 1 messages
+[y] run · [n] deny · [e] edit
 === EXECUTION ===
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
 
  › Apply the approved system change
 
 
-  Approve tool [1/1] — run_privileged
-    Program: "/usr/bin/id"
-    argv[0]: "space value"
-    argv[1]: "$(literal);&|"
-    cwd: "/Users/example/project"
-    Filesystem authority: system-wide · Network: OS-denied
-    Invocation digest:
-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-aaaa
-  [y] authorize once  [n/Esc] deny
 
 
 
@@ -364,26 +353,26 @@ aaaa
 
 
 
+
+│ Executing approved administrator command…
+┌ Approval ────────────────────────────────────────────────┐
+│                                                          │
+│  Approve tool [1/1] — run_privileged                     │
+│    Program: "/usr/bin/id"                                │
+│    argv[0]: "space value"                                │
+│    argv[1]: "$(literal);&|"                              │
+│    cwd: "/Users/example/project"                         │
+└──────────────────────────────────────────────────────────┘
 ╭──────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                           │
-╰──────────────────────────────────────────── agent · auto ╯
-Executing approved administrator command…
+│› Ask anything…                                           │
+╰──────────────────────────────────────────────────────────╯
+ca · model auto · 1 messages
+[y] run · [n] deny · [e] edit
 === COMPLETION ===
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
 
  › Apply the approved system change
 
 
-  Approve tool [1/1] — run_privileged
-    Program: "/usr/bin/id"
-    argv[0]: "space value"
-    argv[1]: "$(literal);&|"
-    cwd: "/Users/example/project"
-    Filesystem authority: system-wide · Network: OS-denied
-    Invocation digest:
-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-aaaa
-  [y] authorize once  [n/Esc] deny
 
 
 
@@ -395,7 +384,18 @@ aaaa
 
 
 
+
+│ Administrator command completed
+┌ Approval ────────────────────────────────────────────────┐
+│                                                          │
+│  Approve tool [1/1] — run_privileged                     │
+│    Program: "/usr/bin/id"                                │
+│    argv[0]: "space value"                                │
+│    argv[1]: "$(literal);&|"                              │
+│    cwd: "/Users/example/project"                         │
+└──────────────────────────────────────────────────────────┘
 ╭──────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                           │
-╰──────────────────────────────────────────── agent · auto ╯
-Administrator command completed
+│› Ask anything…                                           │
+╰──────────────────────────────────────────────────────────╯
+ca · model auto · 1 messages
+[y] run · [n] deny · [e] edit

@@ -26,6 +26,106 @@ const MAX_OPEN_BYTES: usize = 512 * 1024;
 const MAX_JSON_DEPTH: usize = 32;
 const MAX_JSON_NODES: usize = 4_096;
 const MAX_JSON_ITEMS: usize = 256;
+const MAX_MANIFEST_BODY_BYTES: usize = 8 * 1024 * 1024;
+const MAX_MANIFEST_ITEMS: usize = 16_384;
+const MANIFEST_CHUNK_ITEMS: usize = 64;
+
+/// Hashes cover the physical post-filter request without retaining additional
+/// plaintext. A complete manifest is emitted only after every ordered chunk.
+struct BodyManifest {
+    chunks: Vec<Value>,
+    summary: Value,
+}
+
+fn body_manifest(body: &[u8], attempt: usize) -> BodyManifest {
+    let mut summary = serde_json::json!({
+        "attempt": attempt,
+        "body_bytes": body.len(),
+        "body_sha256": format!("{:x}", Sha256::digest(body)),
+        "canonicalization": "serde_json_value_v1",
+        "complete": false,
+        "item_count": 0,
+        "chunk_count": 0,
+    });
+    let rejected = |mut summary: Value, reason: &str| {
+        summary["reason"] = Value::String(reason.into());
+        BodyManifest {
+            chunks: Vec::new(),
+            summary,
+        }
+    };
+    if body.len() > MAX_MANIFEST_BODY_BYTES {
+        return rejected(summary, "body exceeds the 8 MiB manifest bound");
+    }
+    let Ok(value) = serde_json::from_slice::<Value>(body) else {
+        return rejected(summary, "body is not valid JSON");
+    };
+    let mut arrays = Vec::new();
+    let mut total = 0_usize;
+    for field in ["input", "messages"] {
+        if let Some(items) = value.get(field) {
+            let Some(items) = items.as_array() else {
+                return rejected(summary, "conversation field is not an array");
+            };
+            total = total.saturating_add(items.len());
+            arrays.push((field, items));
+        }
+    }
+    if arrays.is_empty() {
+        return rejected(summary, "no input or messages array");
+    }
+    summary["item_count"] = total.into();
+    summary["arrays"] = serde_json::json!(arrays
+        .iter()
+        .map(|(field, items)| { serde_json::json!({"field": field, "item_count": items.len()}) })
+        .collect::<Vec<_>>());
+    if total > MAX_MANIFEST_ITEMS {
+        return rejected(
+            summary,
+            "conversation exceeds the 16384 item manifest bound",
+        );
+    }
+    let mut hashes = Vec::with_capacity(total);
+    for (field, items) in arrays {
+        for (index, item) in items.iter().enumerate() {
+            let bytes = serde_json::to_vec(item).expect("parsed JSON serializes");
+            let kind = item
+                .get("type")
+                .and_then(Value::as_str)
+                .filter(|kind| {
+                    matches!(
+                        *kind,
+                        "message"
+                            | "function_call"
+                            | "function_call_output"
+                            | "custom_tool_call"
+                            | "custom_tool_call_output"
+                            | "reasoning"
+                            | "compaction"
+                    )
+                })
+                .or_else(|| {
+                    item.get("role").and_then(Value::as_str).filter(|role| {
+                        matches!(
+                            *role,
+                            "system" | "developer" | "user" | "assistant" | "tool"
+                        )
+                    })
+                })
+                .unwrap_or("other");
+            hashes.push(serde_json::json!({
+                "field": field, "index": index, "kind": kind, "bytes": bytes.len(),
+                "sha256": format!("{:x}", Sha256::digest(&bytes)),
+            }));
+        }
+    }
+    let chunks = hashes.chunks(MANIFEST_CHUNK_ITEMS).enumerate().map(|(chunk_index, items)| {
+        serde_json::json!({"attempt": attempt, "chunk_index": chunk_index, "items": items})
+    }).collect::<Vec<_>>();
+    summary["chunk_count"] = chunks.len().into();
+    summary["complete"] = true.into();
+    BodyManifest { chunks, summary }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum TraceError {
@@ -717,6 +817,11 @@ impl ProviderTraceRequest {
             self.disable("trace URL redaction failed");
             return;
         };
+        let manifest = body_manifest(body, attempt);
+        for chunk in manifest.chunks {
+            self.emit("request_body_manifest_items", chunk);
+        }
+        self.emit("request_body_manifest", manifest.summary);
         let Some(body) = sanitize_json_bytes(body, &secrets, MAX_REQUEST_BODY_BYTES) else {
             self.disable("trace request-body redaction failed");
             return;
@@ -1261,6 +1366,15 @@ fn redaction_marker(key: &str) -> &'static str {
 }
 
 fn sanitize_raw_frame(bytes: &[u8], secrets: &[&str]) -> Option<Value> {
+    if bytes.len() > MAX_FRAME_BYTES {
+        // A large response.created frame can echo the complete tool catalog.
+        // Never parse a truncated JSON prefix or retain uninspected contents;
+        // keep recording complete outbound requests and decoded events.
+        return Some(serde_json::json!({
+            "marker": "oversized raw provider frame withheld",
+            "bytes": bytes.len(),
+        }));
+    }
     let retained = bytes.len().min(MAX_FRAME_BYTES);
     let slice = &bytes[..retained];
     let omitted = bytes.len().saturating_sub(retained);
@@ -1405,6 +1519,7 @@ impl RequestKind {
             Self::ProjectInit => "project_init",
             Self::Review => "review",
             Self::Subagent => "subagent",
+            Self::Inference => "inference",
             Self::Headless => "headless",
             Self::HeadlessCheck => "headless_check",
             Self::Scripted => "scripted",
@@ -1430,6 +1545,195 @@ impl RequestKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn full_body_manifest_covers_every_large_history_item_and_opaque_ciphertext() {
+        let mut items = (0..600).map(|index| serde_json::json!({
+            "type":"message", "role":"user", "content": format!("record-{index}: {}", "padding ".repeat(300))
+        })).collect::<Vec<_>>();
+        let opaque = serde_json::json!({"type":"compaction","id":"comp1","encrypted_content":"opaque ciphertext remains byte exact"});
+        items.push(opaque.clone());
+        items.push(serde_json::json!({"type":"message","role":"user","content":"LAST-ITEM-MUST-BE-COVERED"}));
+        let body = serde_json::to_vec(&serde_json::json!({"input":items})).unwrap();
+        assert!(body.len() > MAX_REQUEST_BODY_BYTES);
+        let manifest = body_manifest(&body, 2);
+        assert_eq!(manifest.summary["complete"], true);
+        assert_eq!(manifest.summary["attempt"], 2);
+        assert_eq!(manifest.summary["item_count"], 602);
+        assert_eq!(
+            manifest.summary["body_sha256"],
+            format!("{:x}", Sha256::digest(&body))
+        );
+        let hashes = manifest
+            .chunks
+            .iter()
+            .flat_map(|chunk| chunk["items"].as_array().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(hashes.len(), 602);
+        for (index, entry) in hashes.iter().enumerate() {
+            assert_eq!(entry["index"], index);
+            assert_eq!(entry["field"], "input");
+            assert_eq!(
+                entry["sha256"],
+                format!(
+                    "{:x}",
+                    Sha256::digest(serde_json::to_vec(&items[index]).unwrap())
+                )
+            );
+        }
+        assert_eq!(hashes[600]["kind"], "compaction");
+        assert_eq!(hashes[601]["index"], 601);
+        let encoded = serde_json::to_string(&manifest.chunks).unwrap();
+        assert!(!encoded.contains("LAST-ITEM-MUST-BE-COVERED"));
+        assert!(!encoded.contains("opaque ciphertext"));
+    }
+
+    #[test]
+    fn full_body_manifest_bounds_are_explicit_and_never_claim_partial_completion() {
+        let oversized = vec![b' '; MAX_MANIFEST_BODY_BYTES + 1];
+        let over_items = serde_json::to_vec(
+            &serde_json::json!({"input":vec![Value::Null; MAX_MANIFEST_ITEMS + 1]}),
+        )
+        .unwrap();
+        for (body, reason) in [
+            (oversized.as_slice(), "8 MiB"),
+            (over_items.as_slice(), "16384"),
+            (b"invalid JSON".as_slice(), "valid JSON"),
+            (br#"{"input":"not an array"}"#.as_slice(), "not an array"),
+        ] {
+            let manifest = body_manifest(body, 1);
+            assert_eq!(manifest.summary["complete"], false);
+            assert!(manifest.summary["reason"]
+                .as_str()
+                .unwrap()
+                .contains(reason));
+            assert!(manifest.chunks.is_empty());
+            assert_eq!(manifest.summary["chunk_count"], 0);
+        }
+    }
+
+    #[test]
+    fn full_body_manifest_is_emitted_for_the_actual_filtered_attempt_not_display_projection() {
+        let temp = tempfile::tempdir().unwrap();
+        let hub = ProviderTraceHub::new(temp.path().join("traces"), true);
+        let TraceStart::Started(id) = hub.start().unwrap() else {
+            panic!("new trace")
+        };
+        let request = PreparedModelRequest::new(
+            RequestKind::MainTurn,
+            "fixture",
+            "fixture",
+            Vec::new(),
+            Vec::new(),
+            Default::default(),
+        );
+        let trace = hub
+            .begin_request_with_session(&request, "openai_responses", &[], None)
+            .unwrap();
+        let original = br#"{"input":[{"type":"message","role":"user","content":"privateword"},{"type":"compaction","id":"comp1","encrypted_content":"privateword ciphertext"}]}"#;
+        let filter = crate::provider_filter::ProviderFilter::compile(
+            &crate::provider_filter::ProviderFilterConfig {
+                enabled: true,
+                hide: crate::provider_filter::FilterHide {
+                    words: vec!["privateword".into()],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let sent = filter.prepare_request(original).unwrap();
+        assert_ne!(sent, original);
+        trace.attempt_started(
+            1,
+            "POST",
+            "https://example.invalid/responses",
+            &reqwest::header::HeaderMap::new(),
+            &sent,
+        );
+        trace.outcome(1, "completed", None);
+        hub.stop_and_flush(Duration::from_secs(2));
+        let text = hub.open_text(id).unwrap();
+        let records = text
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .collect::<Vec<_>>();
+        let summary = &records
+            .iter()
+            .find(|record| record["event"] == "request_body_manifest")
+            .unwrap()["data"];
+        assert_eq!(summary["complete"], true);
+        assert_eq!(
+            summary["body_sha256"],
+            format!("{:x}", Sha256::digest(&sent))
+        );
+        assert_ne!(
+            summary["body_sha256"],
+            format!("{:x}", Sha256::digest(original))
+        );
+        let entries = &records
+            .iter()
+            .find(|record| record["event"] == "request_body_manifest_items")
+            .unwrap()["data"]["items"];
+        assert_eq!(entries.as_array().unwrap().len(), 2);
+        let value: Value = serde_json::from_slice(&sent).unwrap();
+        assert_eq!(
+            value["input"][1]["encrypted_content"],
+            "privateword ciphertext"
+        );
+        assert_eq!(
+            entries[1]["sha256"],
+            format!(
+                "{:x}",
+                Sha256::digest(serde_json::to_vec(&value["input"][1]).unwrap())
+            )
+        );
+        assert!(!text.contains("privateword ciphertext"));
+    }
+
+    #[test]
+    fn oversized_raw_catalog_frame_keeps_complete_request_tracing_active() {
+        let temp = tempfile::tempdir().unwrap();
+        let hub = ProviderTraceHub::new(temp.path().join("traces"), true);
+        let TraceStart::Started(id) = hub.start().unwrap() else {
+            panic!("trace must start");
+        };
+        let request = PreparedModelRequest::new(
+            RequestKind::MainTurn,
+            "provider",
+            "model",
+            Vec::new(),
+            Vec::new(),
+            crate::agent::client::ChatRequestOptions::default(),
+        );
+        let trace = hub
+            .begin_request_with_session(&request, "test", &[], None)
+            .unwrap();
+        let frame = format!(
+            "data: {{\"tools\":\"{}\",\"password\":\"oversized-secret-canary\"}}",
+            "x".repeat(MAX_FRAME_BYTES)
+        );
+        trace.raw_frame(1, frame.as_bytes());
+        assert!(hub.status().enabled);
+        trace.decoded_event(1, &ProviderEvent::Text("decoded-result".into()));
+        trace.outcome(1, "completed", None);
+        trace.attempt_started(
+            2,
+            "POST",
+            "https://example.invalid/responses",
+            &reqwest::header::HeaderMap::new(),
+            br#"{"input":"next-complete-request"}"#,
+        );
+        trace.outcome(2, "completed", None);
+        hub.stop_and_flush(Duration::from_secs(1));
+        let text = hub.open_text(id).unwrap();
+        assert!(text.contains("oversized raw provider frame withheld"));
+        assert!(text.contains("decoded-result"));
+        assert!(text.contains("next-complete-request"));
+        assert!(!text.contains("oversized-secret-canary"));
+        assert!(!text.contains(&"x".repeat(256)));
+        assert_eq!(text.matches("\"event\":\"request_finished\"").count(), 2);
+    }
 
     fn wait_for_writer(hub: &ProviderTraceHub) {
         for _ in 0..100 {
@@ -1613,6 +1917,7 @@ mod tests {
         assert!(rendered.contains("secret-shaped JSON"));
 
         let item = ProviderEvent::ResponseItem(ProviderResponseItem::ResponsesOutput {
+            privacy_prefix_sha256: None,
             source: crate::agent::stream::ProviderStateSourceV1::for_test(
                 "openai",
                 crate::agent::provider::ProviderProtocol::OpenAiResponses,
@@ -1842,10 +2147,24 @@ mod tests {
                 .push(record["event"].as_str().unwrap());
         }
         assert_eq!(events_by_request.len(), 40);
+        let manifests = records
+            .iter()
+            .filter(|record| record["event"] == "request_body_manifest")
+            .collect::<Vec<_>>();
+        assert_eq!(manifests.len(), 40);
+        for manifest in manifests {
+            assert_eq!(manifest["data"]["attempt"], 1);
+            assert_eq!(manifest["data"]["body_bytes"], 2);
+            assert_eq!(manifest["data"]["complete"], false);
+            assert_eq!(manifest["data"]["item_count"], 0);
+            assert_eq!(manifest["data"]["chunk_count"], 0);
+            assert_eq!(manifest["data"]["reason"], "no input or messages array");
+        }
         assert!(events_by_request.values().all(|events| {
             events.as_slice()
                 == [
                     "request_started",
+                    "request_body_manifest",
                     "attempt_started",
                     "decoded_provider_event",
                     "request_finished",

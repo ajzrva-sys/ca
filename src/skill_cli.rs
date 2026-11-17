@@ -331,6 +331,47 @@ fn install_local(
     Ok(())
 }
 
+pub(crate) fn authored_skill_body(name: &str) -> String {
+    format!(
+        "---\nname: {name}\ndescription: Describe when to use this skill\n---\n\n\
+         ## When to use\n\nDescribe the task that should select this skill.\n\n\
+         ## Prerequisites\n\nName every command or file that must already exist. Do not install missing prerequisites automatically.\n\n\
+         ## Reference\n\nRead the installed reference before acting.\n\n\
+         ## Command\n\nRun the skill script only through normal admission.\n\n\
+         ## Completion\n\nState the artifact or check that shows the skill is done.\n"
+    )
+}
+
+/// Commands named by `Requires the command \`name\`.` lines. Missing commands
+/// are reported; nothing is installed or executed on their behalf.
+#[allow(dead_code)]
+pub(crate) fn missing_prerequisite_commands(guidance: &str) -> Vec<String> {
+    let mut missing = Vec::new();
+    for line in guidance.lines() {
+        let Some(rest) = line.trim().strip_prefix("Requires the command `") else {
+            continue;
+        };
+        let Some(name) = rest.strip_suffix("`.") else {
+            continue;
+        };
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+        {
+            continue;
+        }
+        let found = std::process::Command::new("command")
+            .args(["-v", name])
+            .status()
+            .is_ok_and(|status| status.success());
+        if !found {
+            missing.push(name.to_string());
+        }
+    }
+    missing
+}
+
 fn new_skill(name: &str, destination: &Path, confirm: Option<&str>) -> Result<(), String> {
     if name.is_empty()
         || name.len() > 64
@@ -341,7 +382,7 @@ fn new_skill(name: &str, destination: &Path, confirm: Option<&str>) -> Result<()
     {
         return Err("invalid portable skill name".into());
     }
-    let body = format!("---\nname: {name}\ndescription: Describe when to use this skill\n---\n\nAdd instructions here.\n");
+    let body = authored_skill_body(name);
     let digest = format!("{:x}", sha2::Sha256::digest(body.as_bytes()));
     println!(
         "Preview: create {}/SKILL.md token {}",
@@ -363,4 +404,150 @@ fn new_skill(name: &str, destination: &Path, confirm: Option<&str>) -> Result<()
     }
     println!("Created {}", target.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn workflow_skill(root: &Path, command: &str) {
+        let skill = root.join("iso337-workflow");
+        std::fs::create_dir_all(skill.join("references")).unwrap();
+        std::fs::create_dir_all(skill.join("scripts")).unwrap();
+        let body = format!(
+            "---\nname: iso337-workflow\ndescription: Write a deterministic artifact after reading the guide\n---\n\n\
+             ## When to use\n\nUse when the test asks for the deterministic artifact.\n\n\
+             ## Prerequisites\n\nRequires the command `{command}`.\n\n\
+             ## Reference\n\nRead references/guide.md before running the script.\n\n\
+             ## Command\n\nRun scripts/emit.sh with the artifact path.\n\n\
+             ## Completion\n\nartifact contains exactly iso337-ok.\n"
+        );
+        std::fs::write(skill.join("SKILL.md"), body).unwrap();
+        std::fs::write(
+            skill.join("references/guide.md"),
+            "The artifact text is iso337-ok.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            skill.join("scripts/emit.sh"),
+            "#!/bin/sh\nprintf 'iso337-ok\\n' > \"$1\"\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(skill.join("scripts/emit.sh"))
+                .unwrap()
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(skill.join("scripts/emit.sh"), permissions).unwrap();
+        }
+    }
+
+    #[test]
+    fn authored_skill_names_the_workflow_and_third_party_import_stays_free() {
+        let body = authored_skill_body("example-skill");
+        for heading in [
+            "## When to use",
+            "## Prerequisites",
+            "## Reference",
+            "## Command",
+            "## Completion",
+        ] {
+            assert!(body.contains(heading), "{heading}");
+        }
+        assert!(
+            missing_prerequisite_commands("Requires the command `ca-missing-iso337-tool`.")
+                .contains(&"ca-missing-iso337-tool".to_string())
+        );
+        assert!(missing_prerequisite_commands("Requires the command `true`.").is_empty());
+    }
+
+    #[test]
+    fn installed_skill_runs_after_its_source_checkout_is_removed() {
+        let root = tempfile::tempdir().unwrap();
+        let source_parent = root.path().join("source");
+        let installed = root.path().join("installed");
+        let state = root.path().join("state.json");
+        workflow_skill(&source_parent, "true");
+        let source = source_parent.join("iso337-workflow");
+        install_local(&installed, &state, &source, None).unwrap();
+        assert!(!installed.exists() || std::fs::read_dir(&installed).unwrap().next().is_none());
+        let preview = crate::skills::SkillRegistry::discover_portable(
+            vec![crate::skills::SkillDiscoveryRoot::new(
+                crate::skills::SkillSourceScope::Managed,
+                &source_parent,
+                "preview",
+            )],
+            &[],
+        );
+        let digest = preview
+            .instances()
+            .find(|instance| instance.metadata.name == "iso337-workflow")
+            .unwrap()
+            .content_digest
+            .clone();
+        install_local(&installed, &state, &source, Some("not-the-digest")).unwrap();
+        assert!(!installed.exists() || std::fs::read_dir(&installed).unwrap().next().is_none());
+        install_local(&installed, &state, &source, Some(&digest)).unwrap();
+        let saved: ExactState = serde_json::from_slice(&std::fs::read(&state).unwrap()).unwrap();
+        assert!(saved.records.values().all(|record| !record.enabled));
+        assert!(saved.records.values().any(|record| record.digest == digest));
+        std::fs::remove_dir_all(&source).unwrap();
+        let mut registry = crate::skills::SkillRegistry::discover_portable(
+            vec![crate::skills::SkillDiscoveryRoot::new(
+                crate::skills::SkillSourceScope::Managed,
+                &installed,
+                "managed",
+            )],
+            &[],
+        );
+        registry.apply_exact_state_file(&state);
+        let instance = registry
+            .instances()
+            .find(|instance| instance.metadata.name == "iso337-workflow")
+            .unwrap();
+        assert!(!instance.enabled);
+        assert_eq!(instance.content_digest, digest);
+        let id = instance.instance_id.clone();
+        registry
+            .set_instance_enabled(&id, "stale-digest", true)
+            .unwrap_err();
+        registry.set_instance_enabled(&id, &digest, true).unwrap();
+        let guide = registry.skill_view(&id, "references/guide.md").unwrap();
+        assert!(guide.contains("iso337-ok"));
+        assert!(registry.skill_view(&id, "references/missing.md").is_err());
+        let artifact = root.path().join("artifact.txt");
+        let script = installed
+            .join(&digest[..12])
+            .join("iso337-workflow/scripts/emit.sh");
+        assert!(script.is_file(), "{}", script.display());
+        let status = std::process::Command::new(&script)
+            .arg(&artifact)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert_eq!(std::fs::read_to_string(&artifact).unwrap(), "iso337-ok\n");
+        std::fs::write(script.parent().unwrap().join("../SKILL.md"), "changed").ok();
+        let drifted = crate::skills::SkillRegistry::discover_portable(
+            vec![crate::skills::SkillDiscoveryRoot::new(
+                crate::skills::SkillSourceScope::Managed,
+                &installed,
+                "managed",
+            )],
+            &[],
+        );
+        let drifted = drifted
+            .instances()
+            .find(|instance| instance.metadata.name == "iso337-workflow");
+        if let Some(drifted) = drifted {
+            assert_ne!(drifted.content_digest, digest);
+        }
+        let missing = root.path().join("missing-source");
+        workflow_skill(&missing, "ca-missing-iso337-tool");
+        let guidance = std::fs::read_to_string(missing.join("iso337-workflow/SKILL.md")).unwrap();
+        let missing_commands = missing_prerequisite_commands(&guidance);
+        assert_eq!(missing_commands, vec!["ca-missing-iso337-tool".to_string()]);
+        assert!(!root.path().join("auto-installed").exists());
+    }
 }

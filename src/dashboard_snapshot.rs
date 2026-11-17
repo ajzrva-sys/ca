@@ -235,6 +235,7 @@ mod tests {
         let mut state = AppState::new(crate::context::ShellHistory::new());
         state.session_name = "session".into();
         state.messages.push(crate::app::Message {
+            retrieved_spans: Some(Vec::new()),
             role: Role::Assistant,
             content: "é".repeat(4096),
             tool_calls: None,

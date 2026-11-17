@@ -172,6 +172,7 @@ async fn run_script_with_backend<B: agent::client::ChatBackend + ?Sized>(
                     state.input_cursor = 0;
                     state.input_history.push(input.clone());
                     state.messages.push(Message {
+                        retrieved_spans: Some(Vec::new()),
                         role: Role::User,
                         content: input.clone(),
                         tool_calls: None,
@@ -268,6 +269,7 @@ async fn run_agent_turn<B: agent::client::ChatBackend + ?Sized>(
         let turn = agent::stream::consume_stream(&mut stream, |_| {})
             .await
             .map_err(anyhow::Error::msg)?;
+        let retrieved_spans = turn.retrieved_spans;
         let content = turn.content;
         let reasoning = turn.reasoning;
         let response_items = turn.response_items;
@@ -279,6 +281,7 @@ async fn run_agent_turn<B: agent::client::ChatBackend + ?Sized>(
 
         if tool_calls.is_empty() {
             let message = Message {
+                retrieved_spans: Some(retrieved_spans),
                 role: Role::Assistant,
                 content,
                 tool_calls: None,
@@ -300,6 +303,9 @@ async fn run_agent_turn<B: agent::client::ChatBackend + ?Sized>(
                 serde_json::from_str(&tc.3).unwrap_or(serde_json::json!({}));
             let execution = agent::tools::execute_tool(&tc.2, &args, cwd, 30).await;
             state_tcs.push(ToolCall {
+                observation: None,
+                output_source: None,
+                arguments_retrieved_spans: Vec::new(),
                 id: tc.1.clone(),
                 name: tc.2.clone(),
                 arguments: tc.3.clone(),
@@ -309,10 +315,12 @@ async fn run_agent_turn<B: agent::client::ChatBackend + ?Sized>(
                     ToolStatus::Error
                 },
                 output: Some(execution.model_text().to_string()),
+                started_at: None,
             });
         }
 
         let message = Message {
+            retrieved_spans: Some(retrieved_spans),
             role: Role::Assistant,
             content,
             tool_calls: Some(state_tcs),

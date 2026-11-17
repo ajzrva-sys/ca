@@ -2,7 +2,6 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&expanded, 100, 34),\nrender_to_text(&expanded, 60, 30))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 Splitting the review by feature domain.
 
   ✗ spawn_agent ×4 identical failures
@@ -33,11 +32,11 @@ Splitting the review by feature domain.
 
 
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                                                                   │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
-1 messages · / commands
+│› Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto · 1 messages
+/ commands · Ctrl+\ dashboard · ↑ history
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
 Splitting the review by feature domain.
 
   ✗ spawn_agent ×4 identical failures
@@ -64,6 +63,7 @@ Splitting the review by feature domain.
 
 
 ╭──────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                           │
-╰──────────────────────────────────────────── agent · auto ╯
-1 messages · / commands
+│› Ask anything…                                           │
+╰──────────────────────────────────────────────────────────╯
+ca · model auto · 1 messages
+/ commands · Ctrl+\ dashboard · ↑ history

@@ -95,6 +95,13 @@ impl SourceInputs {
         }
         Ok(())
     }
+    fn model_prompt(&self) -> Result<crate::image_content::ModelContent> {
+        crate::harness_generation::model_prompt_with_fields(
+            self.prompt()?,
+            &["evidence", "target_files", "source_files"],
+        )
+    }
+
     fn prompt(&self) -> Result<String> {
         let target = self
             .shared
@@ -344,7 +351,7 @@ pub async fn generate(
         plan.clone(),
         inputs.shared.provider.clone(),
     )?;
-    let prompt = inputs.prompt()?;
+    let prompt = inputs.model_prompt()?;
     let mut journal = SourceGeneration {
         inputs,
         inputs_digest: digest,
@@ -367,7 +374,7 @@ pub async fn generate(
         .run(async {
             let messages = [ChatMessage {
                 role: "user".into(),
-                content: crate::image_content::ModelContent::text(prompt),
+                content: prompt,
                 tool_calls: None,
                 tool_call_id: None,
                 response_items: vec![],
@@ -520,6 +527,35 @@ pub(crate) mod tests {
         }
         assert!(!hidden.prompt().unwrap().contains("HELD_OUT_SECRET"));
         assert!(hidden.prompt().unwrap().contains("before_digest"));
+        hidden
+            .files
+            .insert("src/private.rs".into(), "PRIVATE_GENERATION_SOURCE".into());
+        hidden
+            .shared
+            .evidence
+            .insert("task:event".into(), "PRIVATE_SOURCE_EVIDENCE".into());
+        let model = hidden.model_prompt().unwrap();
+        let filter = crate::provider_filter::ProviderFilter::compile(
+            &crate::provider_filter::ProviderFilterConfig {
+                enabled: true,
+                page_stand_in: crate::provider_filter::PageStandIn::Latin,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let projected = model.project_retrieved(&filter).unwrap();
+        let sent = projected.as_str().unwrap();
+        assert!(sent.starts_with("Propose one reusable coding-agent source improvement."));
+        assert!(sent.contains("before_digest"));
+        assert!(!sent.contains("PRIVATE_GENERATION_SOURCE"));
+        assert!(!sent.contains("PRIVATE_SOURCE_EVIDENCE"));
+        assert!(
+            sent.contains(&serde_json::to_string(&hidden.shared.baseline_instructions).unwrap())
+        );
+        assert!(model
+            .as_str()
+            .unwrap()
+            .contains("PRIVATE_GENERATION_SOURCE"));
     }
 
     #[test]

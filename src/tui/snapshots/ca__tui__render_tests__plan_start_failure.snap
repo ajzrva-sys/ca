@@ -2,7 +2,6 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(wide, narrow)"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
   ╭────────────────────────────────────────────────────────────────────────────────────────────────╮
   │ Plan · Ready for review                                                                        │
@@ -27,15 +26,13 @@ expression: "wide_narrow(wide, narrow)"
 
 
 
-
+│ Plan save failed: storage unavailable. Execution did not start. · Esc dismiss
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                                                                   │
-╰───────────────────────────────────────────────────────────────────────────────────── plan · auto ╯
-Plan save failed: storage unavailable. Execution did not start.
+│› Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto
+/ commands · Ctrl+\ dashboard · ↑ history
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
-  │ Plan · Ready for review                                │
-  │ Make plan review readable and execution reliable       │
   │ Make completed work visible and keep the next action   │
   │ clear.                                                 │
   │                                                        │
@@ -53,7 +50,10 @@ Plan save failed: storage unavailable. Execution did not start.
   │ Type to Revise · Esc Dismiss · /plan send              │
   ╰────────────────────────────────────────────────────────╯
 
+│ Plan save failed: storage unavailable. Execution did not
+│ start. · Esc dismiss
 ╭──────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                           │
-╰───────────────────────────────────────────── plan · auto ╯
-Plan save failed: storage unavailable. Execution did not st…
+│› Ask anything…                                           │
+╰──────────────────────────────────────────────────────────╯
+ca · model auto
+/ commands · Ctrl+\ dashboard · ↑ history

@@ -434,6 +434,11 @@ pub struct HarnessCycle {
     pub reason: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub abandonment: Option<HarnessAbandonment>,
+    /// New cycles set this. Absent legacy cycles keep their recorded rules.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub requires_confirmation: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub confirmation_accepted: bool,
 }
 impl HarnessCycle {
     pub fn new(plan: &HarnessPlan, now: u64) -> Result<Self> {
@@ -463,7 +468,18 @@ impl HarnessCycle {
             decision: None,
             reason: String::new(),
             abandonment: None,
+            requires_confirmation: true,
+            confirmation_accepted: false,
         })
+    }
+
+    pub fn require_confirmation(&self) -> Result<()> {
+        if self.requires_confirmation && !self.confirmation_accepted {
+            bail!(
+                "confirmation is required before a cycle can decide, activate, promote, or enter guidance"
+            );
+        }
+        Ok(())
     }
     pub fn can_abandon(&self, automatic: bool) -> bool {
         if self.abandonment.is_some() || self.decision.is_some() {
@@ -675,6 +691,7 @@ impl HarnessCycle {
     }
     pub fn decide(&mut self, plan: &HarnessPlan) -> Result<()> {
         self.require_plan(plan)?;
+        self.require_confirmation()?;
         if !self.reservations.is_empty() || !self.active_reservations.is_empty() {
             bail!("unsettled provider charges prevent promotion");
         }
@@ -1123,6 +1140,7 @@ mod tests {
         update_harness_cycle(&vault, &plan.id, |cycle| {
             cycle.candidate_digest = Some("f".repeat(64));
             cycle.stage = HarnessStage::CandidateReady;
+            cycle.confirmation_accepted = true;
             cycle.reserve(&plan, "request", 100)?;
             cycle.settle("request", 50)?;
             Ok(())
@@ -1341,5 +1359,44 @@ mod tests {
         assert_ne!(selected.digest, frozen_digest);
         selected.vm.as_mut().unwrap().profile.template = "../other-vm".into();
         assert!(selected.seal().is_err());
+    }
+
+    #[test]
+    fn confirmation_blocks_decide_until_it_is_accepted() {
+        let plan = plan();
+        let mut cycle = HarnessCycle::new(&plan, 0).unwrap();
+        cycle.stage = HarnessStage::CandidateReady;
+        cycle.requires_confirmation = true;
+        assert!(cycle
+            .decide(&plan)
+            .unwrap_err()
+            .to_string()
+            .contains("confirmation"));
+        cycle.confirmation_accepted = true;
+        // The fixture has no trials, so decide still refuses promotion. The
+        // confirmation gate is no longer the reason.
+        let error = cycle.decide(&plan).unwrap_err().to_string();
+        assert!(!error.contains("confirmation is required"));
+    }
+
+    #[test]
+    fn development_plan_still_requires_repetitions_held_out_cases_and_a_predicted_fix() {
+        let mut plan = plan();
+        plan.repetitions = 2;
+        assert!(plan
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("two held-out"));
+        plan.repetitions = 3;
+        for case in &mut plan.cases {
+            case.held_out = false;
+            case.predicted_fix = false;
+        }
+        assert!(plan
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("two held-out"));
     }
 }

@@ -1,7 +1,7 @@
 # Golden Principles
 
 1. Observable behavior beats implementation resemblance.
-   - Prove Cursor parity with captured interactions and deterministic `ca` fixtures, not copied/minified source.
+   - Prove behavior with deterministic `ca` fixtures. Oracle source stays read-only, and only when a task asks for that comparison.
 
 2. One tool call, one decision, one result.
    - Every provider tool-call ID must resolve exactly once, including denial and execution failure.
@@ -35,3 +35,9 @@
 
 12. Small verified slices beat “full parity” checklists.
     - Close one characterized behavior end-to-end, then update the matrix.
+
+13. Complex work has one living ExecPlan.
+    - Evidence: root `.agent/PLANS.md` was missing from the published snapshot. ISO-337, FLT-321, and `docs/exec-plans/active/BUG-provider-timeout-recovery.md` each recorded that absence. LRN-150 and SEC-158 already use one section list.
+    - Apply: new multi-file or parity work starts from `.agent/PLANS.md` and is linked from `NEXT_STEPS.md`.
+    - Future enforcement: GRD-010 in `docs/QUALITY.md`.
+    - Exception: one owner and a known focused test stay a `NEXT_STEPS.md` entry. `crates/codex-team/` uses its own plan standard.

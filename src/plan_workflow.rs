@@ -273,6 +273,7 @@ pub struct PlanWorkflowDispatch {
     pub participant: String,
     pub route: AgentRoute,
     pub prompt: String,
+    pub(crate) host_prompt: crate::host_instructions::Text,
     pub output_schema: Option<serde_json::Value>,
     pub source_plan: Option<PlanBinding>,
 }
@@ -574,6 +575,7 @@ pub fn apply_action(
             .map(PlanWorkflowState::render_status)
             .ok_or_else(|| "No plan workflow; start one or send the current plan".into());
     }
+    let starting = matches!(&args, PlanWorkflowArgs::Start { .. });
     let mut candidate = work.plan_workflow.clone();
     match args {
         PlanWorkflowArgs::Start {
@@ -785,6 +787,9 @@ pub fn apply_action(
     workflow.updated_at = Utc::now();
     workflow.validate()?;
     let status = workflow.render_status();
+    if starting {
+        work.automatic_task_map = false;
+    }
     work.plan_workflow = candidate;
     Ok(status)
 }
@@ -828,10 +833,14 @@ pub fn next_dispatch(work: &WorkState) -> Result<Option<PlanWorkflowDispatch>, S
                 .into(),
         );
     }
-    let current = work.plan.as_ref().map_or_else(
-        || "No plan has been authored yet.".into(),
-        PlanArtifact::render_document,
-    );
+    let current = if stage.role == WorkflowRole::Author && workflow.cursor == 0 {
+        "New planning task; no prior plan is included.".into()
+    } else {
+        work.plan.as_ref().map_or_else(
+            || "No plan has been authored yet.".into(),
+            PlanArtifact::render_document,
+        )
+    };
     let mut contributions = String::new();
     for previous in workflow.steps.iter().take(workflow.cursor) {
         if previous.participant == stage.participant {
@@ -854,12 +863,32 @@ pub fn next_dispatch(work: &WorkState) -> Result<Option<PlanWorkflowDispatch>, S
             ));
         }
     }
-    let task = match stage.role {
-        WorkflowRole::Author => "Author a complete implementation plan. Return title, full Markdown body, and ordered task titles.",
-        WorkflowRole::Review => "Review the exact current plan. Return verdict accepted or needs_changes and concrete feedback. Acceptance is a plan quality verdict, never user execution authorization.",
-        WorkflowRole::Revise => "Revise the full plan using the feedback. Return title, complete replacement Markdown body, and ordered task titles.",
-        WorkflowRole::Implement => "Implement the current plan using ordinary Agent tools and record validation evidence.",
-    };
+    use crate::host_instructions::{Instruction, Text};
+    let mut prompt = Text::default();
+    prompt.data(&format!(
+        "Plan workflow goal:\n{}\n\nYou are logical participant {} on {}/{}.\n",
+        workflow.goal, stage.participant, stage.route.provider, stage.route.model,
+    ));
+    prompt.instruction(
+        if work.automatic_task_map && stage.role == WorkflowRole::Author {
+            Instruction::AutomaticAuthor
+        } else {
+            Instruction::Workflow(stage.role)
+        },
+    );
+    prompt.data("\n\nStage instruction:\n");
+    prompt.data(&stage.instructions);
+    if matches!(stage.role, WorkflowRole::Author | WorkflowRole::Revise) {
+        prompt.data("\n");
+        prompt.instruction(Instruction::AuthorScope);
+        if work.automatic_task_map {
+            prompt.data("\n");
+            prompt.instruction(Instruction::AutomaticMap);
+        }
+    }
+    prompt.data(&format!(
+        "\n\nCurrent plan:\n{current}\n\nCommitted exchange context:\n{contributions}"
+    ));
     Ok(Some(PlanWorkflowDispatch {
         workflow_id: workflow.id,
         stage_id: stage.id,
@@ -867,12 +896,15 @@ pub fn next_dispatch(work: &WorkState) -> Result<Option<PlanWorkflowDispatch>, S
         role: stage.role,
         participant: stage.participant.clone(),
         route: stage.route.clone(),
-        prompt: format!(
-            "Plan workflow goal:\n{}\n\nYou are logical participant {} on {}/{}.\n{}\n\nStage instruction:\n{}\n\nCurrent plan:\n{}\n\nCommitted exchange context:\n{}",
-            workflow.goal, stage.participant, stage.route.provider, stage.route.model,
-            task, stage.instructions, current, contributions
-        ),
-        output_schema: output_schema(stage.role),
+        prompt: prompt.as_str().into(),
+        host_prompt: prompt,
+        output_schema: if work.automatic_task_map
+            && matches!(stage.role, WorkflowRole::Author | WorkflowRole::Revise)
+        {
+            Some(crate::automatic_tasks::output_schema())
+        } else {
+            output_schema(stage.role)
+        },
         source_plan,
     }))
 }
@@ -891,6 +923,16 @@ pub fn needs_tick(work: &WorkState) -> bool {
         || work.plan_workflow.as_ref().is_some_and(|workflow| {
             workflow.status == WorkflowStatus::Running || active_dispatch(work).is_some()
         })
+}
+
+/// A running or queued plan still has to commit private aliases. The interactive
+/// host must keep the saved-session writer until that send finishes.
+pub fn holds_saved_session_owner(work: &WorkState) -> bool {
+    work.pending_plan_workflow.is_some()
+        || work
+            .plan_workflow
+            .as_ref()
+            .is_some_and(|workflow| workflow.status == WorkflowStatus::Running)
 }
 
 pub fn output_schema(role: WorkflowRole) -> Option<serde_json::Value> {
@@ -951,6 +993,8 @@ struct PlanResult {
     title: String,
     body: String,
     tasks: Vec<String>,
+    #[serde(default)]
+    graph: Option<crate::automatic_tasks::GraphProposal>,
 }
 
 #[derive(Deserialize)]
@@ -1027,6 +1071,14 @@ fn complete_stage_inner(
                 tasks: proposal.tasks,
             })
             .map_err(|error| error.to_string())?;
+            if work.automatic_task_map {
+                crate::automatic_tasks::configure(
+                    work,
+                    proposal
+                        .graph
+                        .ok_or("Automatic task maps require an executable graph")?,
+                )?;
+            }
             let plan = work.plan.as_mut().ok_or("Plan proposal disappeared")?;
             plan.source_plan_id = source_id;
             summary = plan.render_document();
@@ -1321,6 +1373,31 @@ mod tests {
 
     fn proposal(body: &str) -> serde_json::Value {
         serde_json::json!({"title":"Feature plan","body":body,"tasks":["Implement","Validate"]})
+    }
+
+    #[test]
+    fn focused_author_does_not_inherit_an_unrelated_previous_plan() {
+        let mut work = WorkState::default();
+        work.apply_model_mutation(crate::work::WorkMutation::Propose {
+            expected_revision: 0,
+            title: "Old unrelated work".into(),
+            body: Some("UNRELATED_OLD_PLAN_CANARY".into()),
+            tasks: vec!["Old task".into()],
+        })
+        .unwrap();
+        start(&mut work, None, false);
+        let dispatch = next_dispatch(&work).unwrap().unwrap();
+        assert!(dispatch.prompt.contains("Build the requested feature"));
+        assert!(dispatch.prompt.contains("Shared purpose and constraints"));
+        assert!(!dispatch.prompt.contains("UNRELATED_OLD_PLAN_CANARY"));
+        assert!(work
+            .plan
+            .as_ref()
+            .unwrap()
+            .body
+            .as_ref()
+            .unwrap()
+            .contains("UNRELATED_OLD_PLAN_CANARY"));
     }
 
     #[test]
@@ -1814,6 +1891,7 @@ mod tests {
         let turn_id = Uuid::new_v4();
         state.active_agent_turn_id = Some(turn_id);
         state.messages.push(crate::app::Message {
+            retrieved_spans: Some(Vec::new()),
             role: crate::app::Role::User,
             content: "Create a plan to implement the feature".into(),
             tool_calls: None,
@@ -1828,6 +1906,7 @@ mod tests {
             ..Default::default()
         };
         state.messages.push(crate::app::Message {
+            retrieved_spans: Some(Vec::new()),
             role: crate::app::Role::User,
             content: "Implement another feature now".into(),
             tool_calls: None,
@@ -1853,11 +1932,13 @@ mod tests {
         state.active_agent_turn_id = Some(Uuid::new_v4());
         let root = tempfile::tempdir().unwrap();
         let store = crate::session::SessionStore::new(root.path().join("sessions"));
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         crate::plan_workflow_runtime::poll(
             &mut state,
             &crate::CaConfig::default(),
             &store,
             root.path(),
+            &tx,
         )
         .await;
         assert!(state
@@ -1872,6 +1953,29 @@ mod tests {
             .pending_plan_workflow
             .is_none());
         assert!(state.work_state.lock().unwrap().plan_workflow.is_none());
+    }
+
+    #[test]
+    fn running_or_pending_plan_holds_saved_session_owner() {
+        let mut work = WorkState::default();
+        assert!(!holds_saved_session_owner(&work));
+        start(&mut work, None, false);
+        assert!(holds_saved_session_owner(&work));
+        work.plan_workflow.as_mut().unwrap().status = WorkflowStatus::Paused;
+        assert!(!holds_saved_session_owner(&work));
+        work.plan_workflow.as_mut().unwrap().status = WorkflowStatus::Failed;
+        assert!(!holds_saved_session_owner(&work));
+        work.plan_workflow = None;
+        work.pending_plan_workflow = Some(PendingPlanWorkflow {
+            args: PlanWorkflowArgs::Status,
+            source: WorkflowRequestSource {
+                turn_id: Uuid::new_v4(),
+                source_user_message: 0,
+                source_request_sha256: "a".repeat(64),
+                implementation_requested: false,
+            },
+        });
+        assert!(holds_saved_session_owner(&work));
     }
 
     #[test]

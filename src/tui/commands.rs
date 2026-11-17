@@ -116,6 +116,7 @@ pub enum CommandId {
     Name,
     Connect,
     Disconnect,
+    Tools,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -325,6 +326,11 @@ pub enum InputAction {
     DetachTerminal(String),
     KillTerminal(String),
     SaveTheme(crate::ui_settings::UiTheme),
+    SaveCompactMode(bool),
+    SaveStatusIndicators(bool),
+    SaveFilterPreview(bool),
+    SaveSetting(crate::app::SettingWrite),
+    OpenReasoningPicker,
     SaveNotification(crate::ui_settings::NotificationStyle),
     SaveMouse(crate::ui_settings::MouseMode),
     SaveCommandOutput(crate::config::CommandOutputPolicy),
@@ -344,6 +350,10 @@ pub enum InputAction {
     RecordAttachmentFrecency(crate::attachments::FrecencyKey),
     AttachClipboardImage {
         image: crate::image_content::RawClipboardImage,
+        generation: u64,
+    },
+    AttachImageFile {
+        path: std::path::PathBuf,
         generation: u64,
     },
     CycleReasoning,
@@ -1034,8 +1044,8 @@ pub static COMMANDS: &[CommandSpec] = &[
         Filter,
         "filter",
         [],
-        "Show the provider filter, or turn it on for this process",
-        "[on]",
+        "Turn the pre-send review on or off",
+        "[on|off|guide|report|continue]",
         General,
         Always,
         State,
@@ -1425,6 +1435,17 @@ pub static COMMANDS: &[CommandSpec] = &[
         [],
         "View and edit queued messages",
         "",
+        General,
+        Always,
+        State,
+        true
+    ),
+    command!(
+        Tools,
+        "tools",
+        [],
+        "Choose the coding or full tool schema",
+        "[coding|full|status]",
         General,
         Always,
         State,
@@ -2621,10 +2642,10 @@ mod tests {
         );
         let command = find_command("filter").unwrap();
         assert!(command.visible);
-        assert_eq!(command.usage, "[on]");
+        assert_eq!(command.usage, "[on|off|guide|report|continue]");
         assert_eq!(command.availability, CommandAvailability::Always);
         assert_eq!(command.mutation, MutationClass::State);
-        assert!(matching_commands("provider filter", true)
+        assert!(matching_commands("pre-send review", true)
             .iter()
             .any(|command| command.id == CommandId::Filter));
     }

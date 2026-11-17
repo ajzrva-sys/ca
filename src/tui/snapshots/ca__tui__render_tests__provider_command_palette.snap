@@ -2,7 +2,6 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state, 60, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
 
 
 
@@ -17,7 +16,9 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
 
 
 
-  ┌ Commands 1/5 ────────────────────────────────────────────────────────────────────────────────┐
+
+
+  ┌ Commands 1/4 ────────────────────────────────────────────────────────────────────────────────┐
   │▸ /provider [templates|setup|discover|…] Manage provider templates, providers, and models     │
   │  /plan [show|run <request>|send [review|revise]                                              │
   │[agent|provider/model]|graph|pause|resume|cancel|execute                                      │
@@ -26,15 +27,17 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
   │  /errors [dismiss]              View recent safe provider failure categories                 │
   │  /trace [on|off|list|open <id>|delete <id>]                                                  │
   │    Inspect or control persistent provider exchange tracing                                   │
-  │  /filter [on]                   Show the provider filter, or turn it on for this process     │
-  └ ↑↓ select · Tab complete · Enter choose · Esc dismiss ───────────────────────────────────────┘
-╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› /provider▌                                                                                      │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
+╭─└ ↑↓ select · Tab complete · Enter choose · Esc dismiss ───────────────────────────────────────┘─╮
+│› /provider                                                                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto
 ↑↓ select · Tab complete · Enter choose · Esc dismiss
 -- narrow --
- ca v0.0.0 │ /workspace/ca                      [Dashboard]
-  ┌ Commands 1/5 ────────────────────────────────────────┐
+
+
+
+
+  ┌ Commands 1/4 ────────────────────────────────────────┐
   │▸ /provider [templates|setup|discover|…]              │
   │    Manage provider templates, providers, and models  │
   │  /plan [show|run <request>|send [review|revise]      │
@@ -49,11 +52,8 @@ expression: "wide_narrow(render_to_text(&state, 100, 30), render_to_text(&state,
   │  /trace [on|off|list|open <id>|delete <id>]          │
   │    Inspect or control persistent provider exchange   │
   │tracing                                               │
-  │  /filter [on]                                        │
-  │    Show the provider filter, or turn it on for this  │
-  │process                                               │
-  └ ↑↓ select · Tab complete · Enter choose · Esc dismiss┘
-╭──────────────────────────────────────────────────────────╮
-│› /provider▌                                              │
-╰──────────────────────────────────────────── agent · auto ╯
+╭─└ ↑↓ select · Tab complete · Enter choose · Esc dismiss┘─╮
+│› /provider                                               │
+╰──────────────────────────────────────────────────────────╯
+ca · model auto
 ↑↓ select · Tab complete · Enter choose · Esc dismiss

@@ -2,7 +2,7 @@
 source: src/tui/render_tests.rs
 expression: "wide_narrow(wide, render_to_text(&state, 52, 24))"
 ---
- ca v0.0.0 │ /workspace/ca                                                              [Dashboard]
+
 
 
 
@@ -27,13 +27,13 @@ expression: "wide_narrow(wide, render_to_text(&state, 52, 24))"
        │                                                                                    │
        │                                                                                    │
        └────────────────────────────────────────────────────────────────────────────────────┘
-
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│› ▌Ask anything…                                                                                   │
-╰──────────────────────────────────────────────────────────────────────────────────── agent · auto ╯
-/ commands
+│› Ask anything…                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ca · model auto
+/ commands · Ctrl+\ dashboard · ↑ history
 -- narrow --
- ca v0.0.0 │ /workspace/ca              [Dashboard]
+
 
  ┌ Provider authentication ───────────────────────┐
  │                                                │
@@ -52,8 +52,8 @@ expression: "wide_narrow(wide, render_to_text(&state, 52, 24))"
  │cancel                                          │
  │                                                │
  │                                                │
- │                                                │
 ╭│                                                │╮
-│└────────────────────────────────────────────────┘│
-╰──────────────────────────────────── agent · auto ╯
-/ commands
+││                                                ││
+╰└────────────────────────────────────────────────┘╯
+ca · model auto
+/ commands · Ctrl+\ dashboard · ↑ history
