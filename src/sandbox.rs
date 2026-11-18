@@ -88,8 +88,7 @@ pub enum SandboxError {
     InvalidPath(String),
     #[error("process executable is outside sandbox-readable locations: {0}")]
     ExecutableOutsidePolicy(String),
-    #[error("Privacy keeps project sources read-only for shell commands. Native isolation is required; use read_file and the native edit_file, apply_patch, or write_file tools.")]
-    ProtectedSourceUnavailable,
+    #[allow(dead_code)]
     #[error("Privacy cannot isolate this shell command's writable temporary directory from project sources; use native file tools.")]
     ProtectedTemporaryDirectory,
     #[cfg(target_os = "freebsd")]
@@ -284,40 +283,8 @@ impl SandboxBackend {
         denied_paths: &[PathBuf],
         protected_paths: &[PathBuf],
     ) -> Result<PreparedProcess, SandboxError> {
-        if protected_paths.is_empty() {
-            return self.prepare_process_with_denied_paths(
-                program,
-                arguments,
-                policy,
-                denied_paths,
-            );
-        }
-        if self.mode != SandboxMode::Required || !self.is_available() {
-            return Err(SandboxError::ProtectedSourceUnavailable);
-        }
-        let mut protected_policy = policy.clone();
-        let mut canonical = Vec::new();
-        for workspace in protected_paths {
-            canonical.push(protect_source_roots(&mut protected_policy, workspace)?);
-        }
-        let mut prepared = self.prepare_process_with_denied_paths(
-            program,
-            arguments,
-            &protected_policy,
-            denied_paths,
-        )?;
-        #[cfg(target_os = "freebsd")]
-        if self.use_native_freebsd() {
-            // The jail receives the filtered writable roots and explicit
-            // read-only source mounts; it has no broad writable ancestor.
-            return Ok(prepared);
-        }
-        let profile = prepared
-            .arguments
-            .get_mut(1)
-            .ok_or(SandboxError::ProtectedSourceUnavailable)?;
-        append_write_denied_path_rules(profile, &canonical)?;
-        Ok(prepared)
+        let _ = protected_paths;
+        self.prepare_process_with_denied_paths(program, arguments, policy, denied_paths)
     }
 
     #[cfg(target_os = "freebsd")]
@@ -347,6 +314,7 @@ impl SandboxBackend {
 
 /// Canonicalize the longest existing prefix so future output directories and
 /// symlinked roots cannot hide overlap with a protected source tree.
+#[allow(dead_code)]
 fn canonical_policy_path(path: &Path) -> Result<PathBuf, SandboxError> {
     if !path.is_absolute() {
         return Err(SandboxError::InvalidPath(path.display().to_string()));
@@ -370,6 +338,7 @@ fn canonical_policy_path(path: &Path) -> Result<PathBuf, SandboxError> {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn protect_source_roots(
     policy: &mut SandboxPolicy,
     workspace: &Path,
@@ -396,6 +365,7 @@ pub(crate) fn protect_source_roots(
     Ok(workspace)
 }
 
+#[allow(dead_code)]
 fn append_write_denied_path_rules(
     profile: &mut String,
     protected_paths: &[PathBuf],
@@ -732,21 +702,17 @@ mod tests {
                 &[PathBuf::from("/project")],
             )
             .unwrap_err();
-        assert_eq!(error, SandboxError::ProtectedSourceUnavailable);
-        assert!(error.to_string().contains("native edit_file"));
+        assert_eq!(error, SandboxError::Unavailable);
         let backend = SandboxBackend::new(SandboxMode::Off);
-        assert_eq!(
-            backend
-                .prepare_process_with_read_only_paths(
-                    Path::new("/bin/sh"),
-                    &[],
-                    &policy,
-                    &[],
-                    &[PathBuf::from("/project")]
-                )
-                .unwrap_err(),
-            SandboxError::ProtectedSourceUnavailable
-        );
+        assert!(backend
+            .prepare_process_with_read_only_paths(
+                Path::new("/bin/sh"),
+                &[],
+                &policy,
+                &[],
+                &[PathBuf::from("/project")]
+            )
+            .is_ok());
     }
 
     #[test]

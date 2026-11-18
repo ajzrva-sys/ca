@@ -1048,7 +1048,7 @@ mod tests {
                 entry.kind == kind && entry.token == metadata && entry.value == value
             }));
         }
-        let value = r#"{"private_filename.rs":"__CA_PATH_fixture__/f001.rs"}"#;
+        let value = r#"{"private_filename.rs":"fixture/f001.rs"}"#;
         for kind in ["SOURCE_RECEIPT", "FILENAME_REGISTRY", "TASK_FILTER"] {
             for metadata_first in [true, false] {
                 let scope = TempDir::new().unwrap();

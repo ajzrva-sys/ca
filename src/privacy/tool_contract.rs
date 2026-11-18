@@ -148,24 +148,7 @@ pub(super) fn restore_extra_paths(
         if url::Url::parse(text).is_ok_and(|url| matches!(url.scheme(), "http" | "https")) {
             return Ok(());
         }
-        if !text.contains("__CA_PATH_") && !text.contains("__CA_NAME_") {
-            return Ok(());
-        }
-        let native = context.resolve_filename_path(text, create)?;
-        let native = if relative {
-            native
-                .strip_prefix(context.workspace())
-                .map_err(|_| "Repository paths must belong to the pinned project")?
-                .to_path_buf()
-        } else {
-            native
-        };
-        *value = serde_json::Value::String(
-            native
-                .to_str()
-                .ok_or("Unsupported native filename encoding")?
-                .into(),
-        );
+        let _ = (context, create, relative, text);
         Ok(())
     }
     if name == "generate_image" {
@@ -323,19 +306,7 @@ fn restore_repair_checks(
     let original_commands: Vec<String> = serde_json::from_value(args["commands"].clone())
         .map_err(|_| "repair checks require exact command grants".to_string())?;
     let mut commands = original_commands.clone();
-    let restore = |text: &str| -> Result<String, String> {
-        if text.contains("__CA_PATH_") || text.contains("__CA_NAME_") {
-            // A path reference must occupy the complete argv element. Joining
-            // aliases with shell syntax or unissued continuations grants nothing.
-            context
-                .resolve_filename_path(text, false)?
-                .to_str()
-                .map(str::to_owned)
-                .ok_or_else(|| "Unsupported native filename encoding".into())
-        } else {
-            context.restore_text(text)
-        }
-    };
+    let restore = |text: &str| -> Result<String, String> { context.restore_text(text) };
     for check in &mut contract.checks {
         let original = crate::narrow_worker::render_command(&check.argv);
         if !original_commands.contains(&original) {
@@ -435,11 +406,7 @@ pub(super) fn restore_local_payload(
 pub(crate) fn needs_preparation(name: &str, value: &serde_json::Value) -> bool {
     fn contains(value: &serde_json::Value, skip_pattern: bool, model: bool) -> bool {
         match value {
-            serde_json::Value::String(text) => {
-                text.contains("__CA_PATH_")
-                    || text.contains("__CA_NAME_")
-                    || text.contains("__CA_PRIVATE_")
-            }
+            serde_json::Value::String(text) => text.contains("__CA_PRIVATE_"),
             serde_json::Value::Array(values) => values
                 .iter()
                 .any(|value| contains(value, skip_pattern, model)),

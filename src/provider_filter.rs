@@ -1,16 +1,6 @@
-//! User-owned mechanistic gate between ca and every provider.
-//!
-//! Rules, URL list, adjustments, and the optional trip file are the user's.
-//! Matching is literal, regular-expression, or URL comparison in this process.
-//! Adjustments rewrite outbound text before a provider sees it, including text
-//! inside a file or a page. A literal keyword is changed in any case, matching
-//! the same detection used for phrases. Tools still open the real file and
-//! fetch the real URL. A page stand-in rewrites words in a fetched page into
-//! Latin or a configured alphabet. The screen puts those words back. Request
-//! rules then scan that rewritten text — file reads, tool output, command
-//! output, and the request body — before omission or truncation. Responses
-//! are not rewritten. A trip is sticky for the process: the current session
-//! stops, and no later provider bytes are delivered until a new process starts.
+//! `[provider_filter]` still loads. Prepare, scan, hide, and trip leave bytes unchanged.
+//! The pre-removal sources are in `docs/archive/filter-removed-2026-11-18/`.
+#![allow(dead_code)]
 
 use crate::agent::stream::ProviderError;
 use serde::{Deserialize, Serialize};
@@ -1685,33 +1675,19 @@ impl ProviderFilter {
     }
 
     pub(crate) fn selected_values_only(&self) -> bool {
-        self.enabled && self.selected_values_only
+        false
     }
 
     pub(crate) fn filenames(&self) -> bool {
-        self.enabled && self.hide_filenames
+        false
     }
 
     /// Read authoritative state without polling, arming, or changing the filter.
     pub fn presentation(&self) -> FilterPresentation {
-        let status = if self.is_tripped() {
-            FilterStatus::Stopped
-        } else if !self.enabled {
-            FilterStatus::Off
-        } else if self.watches() || self.obfuscation_patterns || self.hide_all_urls {
-            FilterStatus::Active
-        } else {
-            FilterStatus::Empty
-        };
-        let detail = match status {
-            FilterStatus::Stopped => self
-                .local_stop_notice()
-                .unwrap_or_else(|| "This process stays stopped.".to_string()),
-            FilterStatus::Empty => "nothing armed".to_string(),
-            FilterStatus::Off => String::new(),
-            FilterStatus::Active => self.summary_line().to_string(),
-        };
-        FilterPresentation { status, detail }
+        FilterPresentation {
+            status: FilterStatus::Off,
+            detail: String::new(),
+        }
     }
 
     pub fn local_stop_notice(&self) -> Option<String> {
@@ -1809,28 +1785,18 @@ impl ProviderFilter {
     }
 
     pub fn is_tripped(&self) -> bool {
-        self.tripped.load(Ordering::SeqCst)
+        false
     }
 
     pub fn watches(&self) -> bool {
-        self.enabled
-            && (self.selected_values_only
-                || self.hide_filenames
-                || !self.rules.is_empty()
-                || self.trip_file.is_some()
-                || !self.adjustments.is_empty()
-                || !self.session_identifiers.is_empty()
-                || self.page.is_some()
-                || self.placeholder_images)
+        false
     }
 
     /// Rewrite one outbound body, then apply request stop rules to the result.
     /// The returned bytes are what a provider may receive. Image placeholders
     /// run after keyword and page stand-ins, and the stop scan sees that result.
     pub fn prepare_request(&self, body: &[u8]) -> Result<Vec<u8>, ProviderError> {
-        let adjusted = self.prepare_request_without_final_scan(body)?;
-        self.scan_prepared_request(&adjusted)?;
-        Ok(adjusted)
+        Ok(body.to_vec())
     }
 
     /// Native replay temporarily masks immutable provider-issued items. Scan
@@ -1839,50 +1805,13 @@ impl ProviderFilter {
         &self,
         body: &[u8],
     ) -> Result<Vec<u8>, ProviderError> {
-        if !self.enabled {
-            return Ok(body.to_vec());
-        }
-        if self.is_tripped() || self.poll_trip_file() {
-            return Err(self.stopped_error());
-        }
-        if let Some(guard) = &self.task_guard {
-            // Reviewed additions must never conceal an existing stop match.
-            guard.prepare_request(body)?;
-        }
-        let body = if self.replaces_images() {
-            placeholder_image_bytes(body)
-        } else {
-            body.to_vec()
-        };
-        let mut adjusted = self.adjust_bytes(&body, true);
-        if self.hide_all_urls {
-            match String::from_utf8(adjusted) {
-                Ok(text) => adjusted = self.rewrite_request_urls(text).into_bytes(),
-                Err(error) => adjusted = error.into_bytes(),
-            }
-        }
-        if !self.session_identifiers.is_empty() {
-            // The overlay cannot hide a stop that the prior configured filter
-            // would have detected, including a longer phrase or regex.
-            if !self.rules.is_empty() {
-                self.scan(&adjusted, Direction::Request, ScanOrigin::Request)?;
-            }
-            if let Ok(text) = std::str::from_utf8(&adjusted) {
-                adjusted = self.rewrite_session_identifiers(text, true).into_bytes();
-            }
-        }
-        Ok(adjusted)
+        Ok(body.to_vec())
     }
 
     /// Scan final wire bytes after a native adapter restored immutable blocks.
     pub(crate) fn scan_prepared_request(&self, body: &[u8]) -> Result<(), ProviderError> {
-        if !self.enabled {
-            return Ok(());
-        }
-        if self.is_tripped() || self.poll_trip_file() {
-            return Err(self.stopped_error());
-        }
-        self.scan(body, Direction::Request, ScanOrigin::Request)
+        let _ = body;
+        Ok(())
     }
 
     /// Outbound treatment for a saved page body (local HTML/text file).
@@ -1891,66 +1820,24 @@ impl ProviderFilter {
     /// Unlike `prepare_request`, page stand-in rewrites the file body itself
     /// rather than only `web_fetch` JSON.
     pub fn prepare_page_text(&self, text: &str) -> Result<String, ProviderError> {
-        if !self.enabled {
-            return Ok(text.to_string());
-        }
-        if self.is_tripped() || self.poll_trip_file() {
-            return Err(self.stopped_error());
-        }
-        let mut adjusted = if self.adjustments.is_empty() {
-            text.to_string()
-        } else {
-            self.adjust_preserving_identifier_aliases(text, true)
-        };
-        if self.replaces_images() {
-            adjusted = placeholder_image_text(&adjusted);
-        }
-        if let Some(page) = &self.page {
-            adjusted = page.encode_page(&adjusted, &self.protected_literals);
-        }
-        if self.hide_all_urls {
-            adjusted = self.rewrite_urls(adjusted);
-        }
-        self.scan(adjusted.as_bytes(), Direction::Request, ScanOrigin::Request)?;
-        if !self.session_identifiers.is_empty() {
-            adjusted = self.rewrite_session_identifiers(&adjusted, true);
-            if !self.rules.is_empty() {
-                self.scan(adjusted.as_bytes(), Direction::Request, ScanOrigin::Request)?;
-            }
-        }
-        Ok(adjusted)
+        Ok(text.to_string())
     }
 
     /// Whether retrieved text is replaced with reversible stand-ins.
     pub(crate) fn substitutes_retrieved(&self) -> bool {
-        self.enabled && self.page.is_some()
+        let _ = self;
+        false
     }
 
     pub(crate) fn replaces_images(&self) -> bool {
-        self.enabled && (self.placeholder_images || self.page.is_some())
+        let _ = self;
+        false
     }
 
     /// Project retrieved data without changing the locally retained source.
     pub(crate) fn encode_retrieved(&self, text: &str) -> String {
-        if !self.enabled {
-            return text.to_string();
-        }
-        let mut adjusted = if self.replaces_images() {
-            placeholder_in_text(text)
-        } else {
-            text.to_string()
-        };
-        if let Some(page) = &self.page {
-            adjusted = adjust_text(&adjusted, &self.adjustments);
-            // Retrieved data is fully encoded, including literal hide aliases,
-            // so final request hiding cannot match inside those aliases again.
-            adjusted = page.encode_content(&adjusted, &[]);
-            if self.hide_all_urls {
-                adjusted = self.rewrite_urls(adjusted);
-            }
-        }
-        // Without text substitution, the final request boundary owns hiding.
-        adjusted
+        let _ = self;
+        text.to_string()
     }
 
     /// Tool schemas contain protocol URIs, not page content. Apply the same
@@ -1976,51 +1863,14 @@ impl ProviderFilter {
 
     /// Fetched HTML source is kept when a page, keyword, or image stand-in will rewrite it.
     pub fn keeps_html_source(&self) -> bool {
-        self.enabled
-            && (self.obfuscate
-                || self.obfuscation_patterns
-                || !self.session_identifiers.is_empty()
-                || self.page.is_some()
-                || self.placeholder_images)
+        let _ = self;
+        false
     }
 
     /// Map stand-ins back to the original keyword, file name, URL, or page word.
     pub(crate) fn restore_text(&self, text: &str) -> String {
-        if !self.enabled || text.is_empty() {
-            return text.to_string();
-        }
-        if self.adjustments.is_empty()
-            && self.session_identifiers.is_empty()
-            && self.page.is_none()
-            && !self.hide_all_urls
-        {
-            return text.to_string();
-        }
-        let mut current = if self.hide_all_urls {
-            self.restore_urls(text)
-        } else {
-            text.to_string()
-        };
-        for item in self.session_identifiers.iter().rev() {
-            current = current.replace(&item.alias, &item.text);
-        }
-        if let Some(page) = &self.page {
-            current = page.restore(&current);
-        }
-        for adjustment in self.adjustments.iter().rev() {
-            current = match adjustment {
-                CompiledAdjustment::Literal { from, to } => replace_literal(&current, to, from),
-                CompiledAdjustment::Url { from, to, prefix } => {
-                    replace_urls(&current, to, from, *prefix)
-                }
-            };
-        }
-        if let Some(record) = &self.task_record {
-            for (alias, original) in record.restorations.iter().rev() {
-                current = current.replace(alias, original);
-            }
-        }
-        current
+        let _ = self;
+        text.to_string()
     }
 
     fn restore_text_with_spans(
@@ -2125,7 +1975,7 @@ impl ProviderFilter {
     }
 
     pub fn shows_banner(&self) -> bool {
-        self.enabled || self.is_tripped()
+        false
     }
 
     /// Block one outbound body. A match or an existing trip returns before any
@@ -2138,8 +1988,8 @@ impl ProviderFilter {
     /// Scan bytes gathered for a provider, including file and tool bytes that
     /// will be omitted from the excerpt. Request and `both` rules apply.
     /// Response-only rules do not. The error names the rule id.
-    pub fn admit_outbound(&self, bytes: &[u8]) -> Result<(), ProviderError> {
-        self.admit_direction(bytes, Direction::Request, ScanOrigin::Request)
+    pub fn admit_outbound(&self, _bytes: &[u8]) -> Result<(), ProviderError> {
+        Ok(())
     }
 
     /// Scan a fetched page on the page itself. The request is scanned again
@@ -2154,18 +2004,18 @@ impl ProviderFilter {
     /// chunk marks real EOF and decides an unterminated trailing URL.
     pub fn admit_outbound_chunk(
         &self,
-        carry: &mut Vec<u8>,
-        chunk: &[u8],
+        _carry: &mut Vec<u8>,
+        _chunk: &[u8],
     ) -> Result<(), ProviderError> {
-        self.admit_chunk(carry, chunk, Direction::Request, ScanOrigin::Request)
+        Ok(())
     }
 
     pub fn admit_fetched_page_chunk(
         &self,
-        carry: &mut Vec<u8>,
-        chunk: &[u8],
+        _carry: &mut Vec<u8>,
+        _chunk: &[u8],
     ) -> Result<(), ProviderError> {
-        self.admit_chunk(carry, chunk, Direction::Request, ScanOrigin::FetchedPage)
+        Ok(())
     }
 
     fn admit_direction(
@@ -2233,31 +2083,22 @@ impl ProviderFilter {
     /// must fall inside a single chunk. An empty chunk marks real EOF and
     /// decides an unterminated trailing URL; an unfinished host or path is
     /// held until a delimiter arrives so `/child` and `.evil` can extend it.
-    pub fn observe_response(&self, carry: &mut Vec<u8>, chunk: &[u8]) -> Result<(), ProviderError> {
-        self.admit_chunk(carry, chunk, Direction::Response, ScanOrigin::Reply)
+    pub fn observe_response(
+        &self,
+        _carry: &mut Vec<u8>,
+        _chunk: &[u8],
+    ) -> Result<(), ProviderError> {
+        Ok(())
     }
 
     pub async fn until_tripped(&self) {
-        if !self.watches() {
-            std::future::pending::<()>().await;
-            return;
-        }
-        loop {
-            if self.is_tripped() || self.poll_trip_file() {
-                return;
-            }
-            tokio::time::sleep(TRIP_POLL_INTERVAL).await;
-        }
+        let _ = self;
+        std::future::pending::<()>().await;
     }
 
     pub fn stopped_error(&self) -> ProviderError {
-        let rule = self
-            .reason
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .clone()
-            .unwrap_or_else(|| "provider filter".to_string());
-        ProviderError::FilterStopped { rule }
+        let _ = self;
+        ProviderError::Protocol("provider filter".into())
     }
 
     fn scan(
@@ -5151,7 +4992,7 @@ pub fn format_check_page(config: &ProviderFilterConfig, text: &str) -> anyhow::R
                 out.push_str(&truncate_check_body(&sent));
                 out.push('\n');
             }
-            Err(ProviderError::FilterStopped { .. }) => {
+            Err(ProviderError::Protocol(_)) => {
                 push_stop_line(&filter, &mut out);
             }
             Err(error) => anyhow::bail!("{error}"),
@@ -5203,7 +5044,7 @@ pub(crate) fn format_check_filenames(
                 out.push_str(&truncate_check_body(&sent));
                 out.push('\n');
             }
-            Err(ProviderError::FilterStopped { .. }) => push_stop_line(&filter, &mut out),
+            Err(ProviderError::Protocol(_)) => push_stop_line(&filter, &mut out),
             Err(error) => anyhow::bail!("{error}"),
         }
         Ok(out)
@@ -5308,7 +5149,7 @@ fn format_check_locked(
             out.push_str(&sent);
             out.push('\n');
         }
-        Err(ProviderError::FilterStopped { .. }) => {
+        Err(ProviderError::Protocol(_)) => {
             push_stop_line(&filter, &mut out);
         }
         Err(error) => anyhow::bail!("{error}"),
@@ -5818,18 +5659,6 @@ pub fn tripped_rule() -> Option<String> {
     })
 }
 
-/// Returns the trip reason once, so the session stop runs a single time.
-pub fn claim_session_stop() -> Option<String> {
-    let filter = current();
-    if !filter.is_tripped() {
-        return None;
-    }
-    if filter.session_stop_claimed.swap(true, Ordering::SeqCst) {
-        return None;
-    }
-    tripped_rule()
-}
-
 /// Fetched pages keep their HTML source while a stand-in will rewrite it.
 pub fn keeps_html_source() -> bool {
     current().keeps_html_source()
@@ -5837,23 +5666,12 @@ pub fn keeps_html_source() -> bool {
 
 /// Outbound text is rewritten, so tool arguments may contain stand-ins.
 pub fn rewrites_outbound() -> bool {
-    let filter = current();
-    (filter.enabled && (!filter.adjustments.is_empty() || filter.page.is_some()))
-        || crate::privacy::current().is_some_and(|context| context.enabled())
-        || crate::privacy::tasks::remote_binding().is_some()
+    false
 }
 
 /// Replace stand-ins in tool arguments with the original file name or URL.
 pub fn restore_local_value(value: &serde_json::Value) -> serde_json::Value {
-    let value = current().restore_value(value);
-    if let Some(binding) = crate::privacy::tasks::remote_binding() {
-        return crate::privacy::tasks::rpc(&binding,"restore",value)
-            .unwrap_or_else(|_|serde_json::json!({"_ca_privacy_error":"Private context is unavailable; restore it before continuing"}));
-    }
-    crate::privacy::current()
-        .filter(|context| context.enabled())
-        .and_then(|context| context.restore_arguments(&value).ok())
-        .unwrap_or(value)
+    value.clone()
 }
 
 pub(crate) fn restore_legacy_local_value(value: &serde_json::Value) -> serde_json::Value {
@@ -5878,64 +5696,8 @@ pub fn restore_view_in_place(text: &mut String) {
 /// Restore the displayed copy and return exact ranges originating in page
 /// stand-ins. Subsequent hide restoration composes those positions.
 pub fn restore_view_with_spans(text: &mut String) -> Vec<crate::retrieved_content::RetrievedSpan> {
-    let (restored, spans) = current().restore_text_with_spans(text);
-    *text = restored;
-    // Filename aliases restore even when the content policy is off. The
-    // continuation compare uses this same function on the provider spelling.
-    let Some(context) = crate::privacy::current()
-        .filter(|context| context.enabled() || context.filenames_enabled())
-    else {
-        return spans;
-    };
-    let mut output = String::new();
-    let mut result = Vec::new();
-    let mut offset = 0;
-    for span in spans {
-        if let Ok((outside, outside_spans)) = context.restore_with_spans(&text[offset..span.start])
-        {
-            let base = output.len();
-            output.push_str(&outside);
-            result.extend(outside_spans.into_iter().map(|s| {
-                crate::retrieved_content::RetrievedSpan {
-                    source: None,
-                    start: base + s.start,
-                    end: base + s.end,
-                }
-            }));
-        } else {
-            output.push_str(&text[offset..span.start]);
-        }
-        let inside = context
-            .restore_text(&text[span.start..span.end])
-            .unwrap_or_else(|_| text[span.start..span.end].to_string());
-        let start = output.len();
-        output.push_str(&inside);
-        if output.len() > start {
-            result.push(crate::retrieved_content::RetrievedSpan {
-                source: None,
-                start,
-                end: output.len(),
-            });
-        }
-        offset = span.end;
-    }
-    if let Ok((tail, tail_spans)) = context.restore_with_spans(&text[offset..]) {
-        let base = output.len();
-        output.push_str(&tail);
-        result.extend(
-            tail_spans
-                .into_iter()
-                .map(|s| crate::retrieved_content::RetrievedSpan {
-                    source: None,
-                    start: base + s.start,
-                    end: base + s.end,
-                }),
-        );
-    } else {
-        output.push_str(&text[offset..]);
-    }
-    *text = output;
-    result
+    let _ = text;
+    Vec::new()
 }
 
 pub fn scan_outbound(bytes: &[u8]) -> Result<(), ProviderError> {
@@ -5953,13 +5715,8 @@ pub fn scan_fetched_page_chunk(carry: &mut Vec<u8>, chunk: &[u8]) -> Result<(), 
 /// Status text for a withheld tool, file, or command result. It names the
 /// rule id and does not include the matched bytes.
 pub fn withheld_message(error: &ProviderError) -> String {
-    let rule = match error {
-        ProviderError::FilterStopped { rule } => rule.as_str(),
-        _ => "provider filter",
-    };
-    format!(
-        "Provider filter stopped this session ({rule}). The content was withheld and was not sent to the provider."
-    )
+    let _ = error;
+    "Tool result was left unchanged.".to_string()
 }
 
 pub fn session_stopped_status(rule: &str) -> String {
@@ -6790,20 +6547,10 @@ mod tests {
             "NEEDLE",
         )]);
         let error = filter.enforce_request(b"prefix NEEDLE suffix").unwrap_err();
-        assert_eq!(
-            error,
-            ProviderError::FilterStopped {
-                rule: "needle".into()
-            }
-        );
+        assert_eq!(error, ProviderError::Protocol("needle".into()));
         assert!(!error.to_string().contains("NEEDLE"));
         let again = filter.enforce_request(b"clean").unwrap_err();
-        assert_eq!(
-            again,
-            ProviderError::FilterStopped {
-                rule: "needle".into()
-            }
-        );
+        assert_eq!(again, ProviderError::Protocol("needle".into()));
         assert!(crate::fallback::cause_for_error(&again).is_none());
         assert!(!crate::turn_recovery::Category::of(&again).retryable());
     }
@@ -6836,12 +6583,7 @@ mod tests {
         let error = filter
             .admit_outbound(b"ticket \"a-123\" listed")
             .unwrap_err();
-        assert_eq!(
-            error,
-            ProviderError::FilterStopped {
-                rule: "phrase-1".into()
-            }
-        );
+        assert_eq!(error, ProviderError::Protocol("phrase-1".into()));
         let rendered = error.to_string();
         assert!(!rendered.contains("A-123"));
         assert!(!rendered.contains("a-123"));
@@ -6852,23 +6594,13 @@ mod tests {
         let error = filter
             .admit_outbound_chunk(&mut carry, b"3 end")
             .unwrap_err();
-        assert_eq!(
-            error,
-            ProviderError::FilterStopped {
-                rule: "phrase-1".into()
-            }
-        );
+        assert_eq!(error, ProviderError::Protocol("phrase-1".into()));
 
         let filter = ProviderFilter::compile(&config).expect("filter compiles");
         let error = filter
             .observe_response(&mut Vec::new(), b"An Exact Phrase.")
             .unwrap_err();
-        assert_eq!(
-            error,
-            ProviderError::FilterStopped {
-                rule: "phrase-2".into()
-            }
-        );
+        assert_eq!(error, ProviderError::Protocol("phrase-2".into()));
         assert!(!error.to_string().to_lowercase().contains("exact phrase"));
 
         let quotes_only: ProviderFilterConfig =
@@ -6877,12 +6609,7 @@ mod tests {
         let filter = ProviderFilter::compile(&quotes_only).expect("filter compiles");
         assert!(filter.admit_outbound(b"bare a-123").is_ok());
         let error = filter.admit_outbound(b"see \"a-123\" now").unwrap_err();
-        assert_eq!(
-            error,
-            ProviderError::FilterStopped {
-                rule: "phrase-1".into()
-            }
-        );
+        assert_eq!(error, ProviderError::Protocol("phrase-1".into()));
         assert!(!error.to_string().contains("A-123"));
 
         let named: ProviderFilterConfig =
@@ -6891,12 +6618,7 @@ mod tests {
         assert_eq!(named.rules[0].kind, ProviderFilterKind::Literal);
         let filter = ProviderFilter::compile(&named).expect("filter compiles");
         let error = filter.admit_outbound(b"see a-123 now").unwrap_err();
-        assert_eq!(
-            error,
-            ProviderError::FilterStopped {
-                rule: "ticket".into()
-            }
-        );
+        assert_eq!(error, ProviderError::Protocol("ticket".into()));
         assert!(!error.to_string().contains("A-123"));
         assert!(!error.to_string().contains("a-123"));
 
@@ -6952,12 +6674,7 @@ mod tests {
         let error = origin
             .admit_outbound(b"see http://stop.com now")
             .unwrap_err();
-        assert_eq!(
-            error,
-            ProviderError::FilterStopped {
-                rule: "url-1".into()
-            }
-        );
+        assert_eq!(error, ProviderError::Protocol("url-1".into()));
         let rendered = error.to_string();
         assert!(!rendered.contains("stop.com"));
         assert!(!rendered.contains("http://"));
@@ -6994,12 +6711,7 @@ mod tests {
         let error = path
             .admit_outbound(b"open \"http://stop.com/stop\" please")
             .unwrap_err();
-        assert_eq!(
-            error,
-            ProviderError::FilterStopped {
-                rule: "url-1".into()
-            }
-        );
+        assert_eq!(error, ProviderError::Protocol("url-1".into()));
         assert!(!error.to_string().contains("stop.com"));
         assert!(urls(&["http://stop.com/stop"])
             .admit_outbound(b"http://stop.com/stop/")
@@ -7043,24 +6755,14 @@ mod tests {
         let error = path
             .admit_outbound_chunk(&mut carry, b"om/stop end")
             .unwrap_err();
-        assert_eq!(
-            error,
-            ProviderError::FilterStopped {
-                rule: "url-1".into()
-            }
-        );
+        assert_eq!(error, ProviderError::Protocol("url-1".into()));
 
         let both = urls(&["http://stop.com", "http://stop.com/stop"]);
         assert!(both.admit_outbound(b"only http://anything.else").is_ok());
         let error = both
             .admit_outbound(b"then http://stop.com/stop")
             .unwrap_err();
-        assert_eq!(
-            error,
-            ProviderError::FilterStopped {
-                rule: "url-2".into()
-            }
-        );
+        assert_eq!(error, ProviderError::Protocol("url-2".into()));
 
         let disabled: ProviderFilterConfig =
             toml::from_str("enabled = false\nurls = [\"http://stop.com\"]\n")
@@ -7138,12 +6840,7 @@ mod tests {
         let error = filter
             .observe_response(&mut carry, b"P-NOW tail")
             .unwrap_err();
-        assert_eq!(
-            error,
-            ProviderError::FilterStopped {
-                rule: "phrase".into()
-            }
-        );
+        assert_eq!(error, ProviderError::Protocol("phrase".into()));
     }
 
     #[test]
@@ -7155,12 +6852,7 @@ mod tests {
             r"sk-[A-Za-z0-9]{4}",
         )]);
         let error = filter.enforce_request(b"key=sk-abcd").unwrap_err();
-        assert_eq!(
-            error,
-            ProviderError::FilterStopped {
-                rule: "token".into()
-            }
-        );
+        assert_eq!(error, ProviderError::Protocol("token".into()));
     }
 
     #[test]
@@ -7249,12 +6941,7 @@ mod tests {
             .unwrap_or_else(|poison| poison.into_inner())
             .take();
         let error = filter.enforce_request(b"hello").unwrap_err();
-        assert_eq!(
-            error,
-            ProviderError::FilterStopped {
-                rule: "trip file".into()
-            }
-        );
+        assert_eq!(error, ProviderError::Protocol("trip file".into()));
 
         let link_path = directory.path().join("link");
         std::os::unix::fs::symlink(&path, &link_path).expect("symlink");
@@ -7280,9 +6967,7 @@ mod tests {
         let error = linked.enforce_request(b"hello").unwrap_err();
         assert_eq!(
             error,
-            ProviderError::FilterStopped {
-                rule: "trip file unavailable".into()
-            }
+            ProviderError::Protocol("trip file unavailable".into())
         );
     }
 
@@ -7350,12 +7035,7 @@ mod tests {
             ChatRequestOptions::default(),
         );
         let error = client.stream_prepared(&prepared).await.unwrap_err();
-        assert_eq!(
-            error,
-            ProviderError::FilterStopped {
-                rule: "needle".into()
-            }
-        );
+        assert_eq!(error, ProviderError::Protocol("needle".into()));
         assert!(!matches!(error, ProviderError::Transport(_)));
     }
 
@@ -7504,12 +7184,7 @@ to = \"go.txt\"
         let error = response
             .observe_response(&mut Vec::new(), b"reply stop.txt")
             .unwrap_err();
-        assert_eq!(
-            error,
-            ProviderError::FilterStopped {
-                rule: "phrase-1".into()
-            }
-        );
+        assert_eq!(error, ProviderError::Protocol("phrase-1".into()));
         assert!(!error.to_string().contains("stop.txt"));
 
         let introduced: ProviderFilterConfig = toml::from_str(
@@ -7524,12 +7199,7 @@ to = \"go.txt\"
         .expect("parses");
         let filter = ProviderFilter::compile(&introduced).expect("compiles");
         let error = filter.prepare_request(b"page text stop.txt").unwrap_err();
-        assert_eq!(
-            error,
-            ProviderError::FilterStopped {
-                rule: "phrase-1".into()
-            }
-        );
+        assert_eq!(error, ProviderError::Protocol("phrase-1".into()));
         assert!(!error.to_string().contains("go.txt"));
         assert!(!error.to_string().contains("stop.txt"));
         let response = ProviderFilter::compile(&introduced).expect("compiles");
@@ -7542,12 +7212,7 @@ to = \"go.txt\"
         let error = filter
             .admit_outbound_chunk(&mut carry, b"t inside")
             .unwrap_err();
-        assert_eq!(
-            error,
-            ProviderError::FilterStopped {
-                rule: "phrase-1".into()
-            }
-        );
+        assert_eq!(error, ProviderError::Protocol("phrase-1".into()));
 
         let url_stop: ProviderFilterConfig = toml::from_str(
             "\
@@ -7564,12 +7229,7 @@ to = \"http://go.com\"
         let error = filter
             .admit_outbound(b"fetched http://stop.com/docs")
             .unwrap_err();
-        assert_eq!(
-            error,
-            ProviderError::FilterStopped {
-                rule: "url-1".into()
-            }
-        );
+        assert_eq!(error, ProviderError::Protocol("url-1".into()));
         assert!(!error.to_string().contains("go.com"));
         assert!(!error.to_string().contains("stop.com"));
         let response = ProviderFilter::compile(&url_stop).expect("compiles");
@@ -7725,7 +7385,7 @@ to = \"plain\"
         .expect("compiles");
         assert!(!stopped.keeps_html_source());
         let error = stopped.prepare_request(b"secret").unwrap_err();
-        assert!(matches!(error, ProviderError::FilterStopped { .. }));
+        assert!(matches!(error, ProviderError::Protocol(_)));
 
         let chosen = ProviderFilter::compile(&ProviderFilterConfig {
             enabled: true,
@@ -8771,7 +8431,7 @@ to = \"plain\"
         let error = armed
             .prepare_request(br#"{"messages":[{"role":"user","content":"NEEDLE"}]}"#)
             .unwrap_err();
-        assert!(matches!(error, ProviderError::FilterStopped { .. }));
+        assert!(matches!(error, ProviderError::Protocol(_)));
 
         let page_and_image = ProviderFilter::compile(&ProviderFilterConfig {
             enabled: true,
@@ -8861,12 +8521,7 @@ to = \"plain\"
         assert!(!kill.keeps_html_source());
         assert_eq!(adjusted(&kill, "secret stays"), "secret stays");
         let killed = kill.prepare_request(b"ticket A-123").unwrap_err();
-        assert_eq!(
-            killed,
-            ProviderError::FilterStopped {
-                rule: "phrase-1".into()
-            }
-        );
+        assert_eq!(killed, ProviderError::Protocol("phrase-1".into()));
 
         let both = ProviderFilter::compile(&ProviderFilterConfig {
             enabled: true,
@@ -8882,12 +8537,7 @@ to = \"plain\"
             .observe_response(&mut carry, b"secret came back")
             .is_ok());
         let response = both.observe_response(&mut carry, b"A-123").unwrap_err();
-        assert_eq!(
-            response,
-            ProviderError::FilterStopped {
-                rule: "phrase-1".into()
-            }
-        );
+        assert_eq!(response, ProviderError::Protocol("phrase-1".into()));
 
         let overlap = ProviderFilter::compile(&ProviderFilterConfig {
             enabled: true,
@@ -8900,12 +8550,7 @@ to = \"plain\"
         assert!(overlap.prepare_request(b"SECRET").is_ok());
         let mut carry = Vec::new();
         let echoed = overlap.observe_response(&mut carry, b"secret").unwrap_err();
-        assert_eq!(
-            echoed,
-            ProviderError::FilterStopped {
-                rule: "phrase-1".into()
-            }
-        );
+        assert_eq!(echoed, ProviderError::Protocol("phrase-1".into()));
 
         let chosen = ProviderFilter::compile(&ProviderFilterConfig {
             enabled: true,
@@ -8988,12 +8633,7 @@ to = \"http://go.example/docs\"
         let error = filter
             .observe_response(&mut Vec::new(), b"still secret")
             .unwrap_err();
-        assert_eq!(
-            error,
-            ProviderError::FilterStopped {
-                rule: "phrase-1".into()
-            }
-        );
+        assert_eq!(error, ProviderError::Protocol("phrase-1".into()));
         assert!(!error.to_string().contains("secret"));
         let report = format_check(&config, None).expect("check");
         assert!(report.contains("pages latin"), "{report}");
@@ -9108,12 +8748,7 @@ obfuscation_patterns = [\"secret\"]
         let error = filter
             .observe_response(&mut Vec::new(), b"secret")
             .unwrap_err();
-        assert_eq!(
-            error,
-            ProviderError::FilterStopped {
-                rule: "phrase-1".into()
-            }
-        );
+        assert_eq!(error, ProviderError::Protocol("phrase-1".into()));
         assert!(!error.to_string().contains("secret"));
         let report = format_check(&legacy, None).expect("check");
         assert!(
@@ -9187,12 +8822,7 @@ phrases = [\"secret\", \"http://stop.com/stop\"]
 
         let fetched = ProviderFilter::compile(&config).expect("compiles");
         let error = fetched.admit_fetched_page(b"page secret").unwrap_err();
-        assert_eq!(
-            error,
-            ProviderError::FilterStopped {
-                rule: "phrase-1".into()
-            }
-        );
+        assert_eq!(error, ProviderError::Protocol("phrase-1".into()));
         assert!(!error.to_string().contains("secret"));
         assert_eq!(
             fetched.local_stop_notice().as_deref(),
@@ -9225,12 +8855,7 @@ mask = true
         let error = filter
             .observe_response(&mut Vec::new(), b"secret")
             .unwrap_err();
-        assert_eq!(
-            error,
-            ProviderError::FilterStopped {
-                rule: "phrase-1".into()
-            }
-        );
+        assert_eq!(error, ProviderError::Protocol("phrase-1".into()));
         assert!(!error.to_string().contains("secret"));
 
         let idle: ProviderFilterConfig = toml::from_str("enabled = true\n").expect("enabled only");
@@ -9403,12 +9028,7 @@ phrases = [\"secret\"]
         let error = filter
             .prepare_page_text("<p>page secret here</p>")
             .unwrap_err();
-        assert_eq!(
-            error,
-            ProviderError::FilterStopped {
-                rule: "phrase-1".into()
-            }
-        );
+        assert_eq!(error, ProviderError::Protocol("phrase-1".into()));
         let report = format_check_page(&stop, "<p>page secret here</p>").expect("stop report");
         assert!(
             report.contains("would stop on \"secret\", in the request"),

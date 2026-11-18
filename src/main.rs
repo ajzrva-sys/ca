@@ -8,6 +8,7 @@ mod agy295_tests;
 mod app;
 mod approval;
 mod approval_amend;
+mod approval_display;
 mod attachments;
 mod automatic_review;
 mod automatic_tasks;
@@ -31,6 +32,7 @@ mod changes;
 mod chatgpt_plan_auth;
 mod chatgpt_shim_query;
 mod child_mediation;
+mod child_resume;
 mod codex_auth;
 mod codex_learning;
 mod command_mutations;
@@ -45,6 +47,7 @@ mod crash_report;
 mod credential_paths;
 mod dashboard_presence;
 mod dashboard_snapshot;
+mod device_paths;
 mod direct_check;
 mod doctor;
 #[allow(dead_code)]
@@ -54,6 +57,8 @@ mod execute_code;
 mod execution_grant;
 mod external_runtime;
 mod fallback;
+#[cfg(test)]
+mod filter_removed;
 mod filter_review;
 mod foreign_import;
 mod foreign_knowledge;
@@ -107,6 +112,7 @@ mod image_content;
 mod image_reencode;
 mod inference;
 mod inference_artifacts;
+mod instruction_proximity;
 mod interaction;
 mod isolated_worker;
 mod jobs;
@@ -123,7 +129,6 @@ mod loop_guard;
 mod lsp;
 mod markdown;
 mod mcp;
-#[allow(dead_code)]
 mod mcp_elicit;
 mod mcp_oauth;
 mod mechanistic_delegation;
@@ -144,6 +149,7 @@ mod panes;
 #[allow(dead_code)]
 mod parity_backend;
 mod path_lock;
+mod path_lookup;
 mod permission;
 mod personality_preferences;
 mod personality_questionnaire;
@@ -160,6 +166,7 @@ mod privilege;
 mod proactive_delegation;
 mod process_watch;
 mod project_init;
+mod prompt_cache_warm;
 mod prompt_commands;
 mod prompt_stash;
 #[allow(dead_code)]
@@ -250,6 +257,7 @@ mod turn_recovery;
 mod ui_settings;
 mod undo;
 mod usage;
+mod verify_drive;
 mod voice;
 mod web_fetch;
 mod work;
@@ -260,6 +268,7 @@ pub mod workspace_materialization;
 mod worktree;
 mod worktree_setup;
 mod write_access;
+mod write_baseline;
 mod xai_media;
 mod xai_oauth;
 
@@ -321,6 +330,7 @@ async fn tokio_main() {
         LaunchArgs::Plugin(cli) => plugin::run_cli(cli).await,
         LaunchArgs::Pricing(cli) => pricing::run_cli(cli).await,
         LaunchArgs::Skill(cli) => skill_cli::run_cli(cli),
+        LaunchArgs::Verify(cli) => verify_drive::run_cli(cli),
         LaunchArgs::Memory(cli) => memory_benchmark_cli::run(cli).await,
         LaunchArgs::Learn(cli) => codex_learning::run_cli(cli).await,
         LaunchArgs::Audit(cli) => security_audit::run_cli(cli),
@@ -1463,6 +1473,7 @@ enum LaunchArgs {
     Plugin(plugin::PluginCliArgs),
     Pricing(pricing::PricingCliArgs),
     Skill(skill_cli::SkillCliArgs),
+    Verify(verify_drive::VerifyCliArgs),
     Memory(memory_benchmark_cli::MemoryCli),
     Learn(codex_learning::LearnCliArgs),
     Audit(security_audit::AuditCliArgs),
@@ -1603,6 +1614,7 @@ where
                 | "plugin"
                 | "pricing"
                 | "skill"
+                | "verify"
                 | "memory"
                 | "learn"
                 | "audit"
@@ -1651,6 +1663,9 @@ where
     }
     if command.as_deref() == Some("skill") {
         return skill_cli::parse_args(service_args).map(LaunchArgs::Skill);
+    }
+    if command.as_deref() == Some("verify") {
+        return verify_drive::parse_args(service_args).map(LaunchArgs::Verify);
     }
     if command.as_deref() == Some("memory") {
         let mut memory_args = service_args;
@@ -2665,187 +2680,9 @@ async fn run_doctor(cli: &CliArgs) -> i32 {
 }
 
 fn run_filter_check(cli: FilterCheckCliArgs) -> i32 {
-    provider_filter::suspend_install();
-    let paths = match runtime::RuntimePaths::discover() {
-        Ok(paths) => paths.for_profile(&cli.active_profile),
-        Err(error) => {
-            eprintln!("ca filter check: {error}");
-            return 1;
-        }
-    };
-    let config = match ConfigStore::for_profile(
-        paths.config_file.clone(),
-        cli.active_profile.clone(),
-    )
-    .load()
-    {
-        Ok(config) => config,
-        Err(error) => {
-            eprintln!("ca filter check: {error}");
-            return 1;
-        }
-    };
-    let mut filter_config = config.provider_filter;
-    if let Err(error) = provider_filter::apply_cli_overlay(
-        &mut filter_config,
-        &cli.hide,
-        cli.hide_urls,
-        cli.pages.as_deref(),
-    ) {
-        eprintln!("ca filter check: {error}");
-        return 1;
-    }
-    if cli.filenames {
-        filter_config.enabled = true;
-        filter_config.hide.filenames = true;
-    }
-    if filter_config.enabled && filter_config.hide.filenames {
-        let Some(workspace) = cli.workspace.as_deref() else {
-            eprintln!("ca filter check: filename preview requires --workspace PATH");
-            return 1;
-        };
-        let file_text = if let Some(path) = &cli.file {
-            match std::fs::read(path) {
-                Ok(bytes) if bytes.len() <= 8 * 1024 * 1024 => match String::from_utf8(bytes) {
-                    Ok(text) => Some(text),
-                    Err(_) => {
-                        eprintln!("ca filter check: preview file is not UTF-8 text");
-                        return 1;
-                    }
-                },
-                Ok(_) => {
-                    eprintln!("ca filter check: preview file exceeds 8 MiB");
-                    return 1;
-                }
-                Err(_) => {
-                    eprintln!("ca filter check: preview file is unavailable");
-                    return 1;
-                }
-            }
-        } else {
-            None
-        };
-        return match provider_filter::format_check_filenames(
-            &filter_config,
-            workspace,
-            file_text.as_deref().or(cli.text.as_deref()),
-            cli.file.is_some(),
-        ) {
-            Ok(report) => {
-                print!("{report}");
-                0
-            }
-            Err(error) => {
-                eprintln!("ca filter check: {error}");
-                1
-            }
-        };
-    }
-    if cli.workspace.is_some() {
-        eprintln!("ca filter check: --workspace requires enabled filename aliases or --filenames");
-        return 1;
-    }
-    let privacy = match std::env::current_dir()
-        .map_err(|_| "Current workspace is unavailable".to_string())
-        .and_then(|workspace| {
-            privacy::Context::open(
-                paths.profile_data_dir(&cli.active_profile),
-                workspace,
-                uuid::Uuid::new_v4(),
-                None,
-            )
-        }) {
-        Ok(context) => context,
-        Err(error) => {
-            eprintln!("ca filter check: {error}");
-            return 1;
-        }
-    };
-    if privacy.enabled() {
-        let policy = privacy.policy();
-        let projected = if let Some(path) = &cli.file {
-            privacy
-                .preview_source(&path.to_string_lossy(), &policy)
-                .map(|(_, projection)| projection.text)
-        } else if let Some(text) = &cli.text {
-            privacy
-                .project_source("__sample__.txt", text)
-                .map(|projection| projection.text.clone())
-        } else {
-            Ok(String::new())
-        };
-        return match projected {
-            Ok(projected) => {
-                println!("{}", privacy.summary());
-                if !projected.is_empty() {
-                    match provider_filter::ProviderFilter::compile(&filter_config).and_then(
-                        |filter| {
-                            filter
-                                .prepare_request(projected.as_bytes())
-                                .map_err(anyhow::Error::new)
-                        },
-                    ) {
-                        Ok(sent) => println!("would send:\n{}", String::from_utf8_lossy(&sent)),
-                        Err(error) => {
-                            eprintln!("ca filter check: {error}");
-                            return 1;
-                        }
-                    }
-                }
-                0
-            }
-            Err(error) => {
-                eprintln!("ca filter check: {error}");
-                1
-            }
-        };
-    }
-    if let Some(path) = &cli.file {
-        const FILE_READ_CAP: u64 = 8 * 1024 * 1024;
-        let bytes = match std::fs::read(path) {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                eprintln!("ca filter check: {}: {error}", path.display());
-                return 1;
-            }
-        };
-        if bytes.len() as u64 > FILE_READ_CAP {
-            eprintln!(
-                "ca filter check: {} is larger than {} bytes",
-                path.display(),
-                FILE_READ_CAP
-            );
-            return 1;
-        }
-        let text = match String::from_utf8(bytes) {
-            Ok(text) => text,
-            Err(_) => {
-                eprintln!("ca filter check: {} is not UTF-8 text", path.display());
-                return 1;
-            }
-        };
-        match provider_filter::format_check_page(&filter_config, &text) {
-            Ok(report) => {
-                print!("{report}");
-                0
-            }
-            Err(error) => {
-                eprintln!("ca filter check: {error}");
-                1
-            }
-        }
-    } else {
-        match provider_filter::format_check(&filter_config, cli.text.as_deref()) {
-            Ok(report) => {
-                print!("{report}");
-                0
-            }
-            Err(error) => {
-                eprintln!("ca filter check: {error}");
-                1
-            }
-        }
-    }
+    let _ = cli;
+    eprintln!("ca filter was removed");
+    2
 }
 
 fn list_models_and_exit(profile: &runtime::ActiveProfile) -> Result<()> {
@@ -3049,9 +2886,7 @@ async fn run_headless(cli: CliArgs) -> headless::HeadlessExit {
             cli.active_profile.clone(),
         )
     };
-    if cli.filter {
-        provider_filter::force_structural_filter();
-    }
+    let _ = cli.filter;
     let mut config = match config_store.load() {
         Ok(config) => config,
         Err(error) => {
@@ -3999,6 +3834,7 @@ async fn run_headless(cli: CliArgs) -> headless::HeadlessExit {
             skills_enabled: capabilities.skills,
             images_supported: false,
             pricing: std::sync::Arc::new(config.pricing.clone()),
+            resume_rate_limited: config.agent.resume_rate_limited_children,
         }),
         agent::subagent::AgentLimits::from_config(&config.agent),
         headless_child_policy,
@@ -4681,7 +4517,10 @@ fn load_project_instructions_for_workspace(workspace: &workspace::WorkspaceConte
 
 fn load_instruction_files_for_workspace(workspace: &workspace::WorkspaceContext) -> String {
     let mut parts = load_global_instruction_parts();
+    let mut loaded = Vec::new();
+    let mut roots = Vec::new();
     for root in workspace.roots() {
+        roots.push(root.path.clone());
         let local_start = if root.primary && workspace.cwd().starts_with(&root.path) {
             workspace.cwd()
         } else {
@@ -4695,6 +4534,7 @@ fn load_instruction_files_for_workspace(workspace: &workspace::WorkspaceContext)
                 if let Ok(content) = std::fs::read_to_string(&path) {
                     let trimmed = content.trim().to_string();
                     if !trimmed.is_empty() {
+                        loaded.push(path);
                         found_local.push(format!(
                             "# {} (in {})\n{}",
                             name,
@@ -4712,6 +4552,7 @@ fn load_instruction_files_for_workspace(workspace: &workspace::WorkspaceContext)
         found_local.reverse();
         parts.extend(found_local);
     }
+    instruction_proximity::note_loaded(&roots, &loaded);
     parts.join("\n\n")
 }
 
@@ -4889,6 +4730,7 @@ fn create_tui_agent_manager(
             skills_enabled: state.run_capabilities.skills,
             images_supported: agent_images_supported,
             pricing: std::sync::Arc::new(config.pricing.clone()),
+            resume_rate_limited: config.agent.resume_rate_limited_children,
         }),
         agent::subagent::AgentLimits::from_config(&config.agent),
         state
@@ -5028,9 +4870,7 @@ async fn run_tui(cli: CliArgs) -> Result<Option<String>> {
             cli.active_profile.clone(),
         )
     };
-    if cli.filter {
-        provider_filter::force_structural_filter();
-    }
+    let _ = cli.filter;
     let mut config = config_store.load()?;
     cache_memory::configure(config.memory.cache_budget_mib);
     let filter_notice = provider_filter::take_process_notice();
@@ -5860,6 +5700,7 @@ async fn run_tui(cli: CliArgs) -> Result<Option<String>> {
     }
 
     let mut last_turn_animation = std::time::Instant::now();
+    mcp_elicit::attach();
     loop {
         // A routed background event leaves its owning pane materialized for one loop edge so
         // completion bookkeeping and notifications are applied to that exact session before
@@ -6642,6 +6483,14 @@ async fn run_tui(cli: CliArgs) -> Result<Option<String>> {
             state.status_message = Some(message);
         }
         tokio::select! {
+                        _ = mcp_elicit::wait_for_question(), if state.interaction.is_none() => {
+                            if let Some(request) = mcp_elicit::current_request().await {
+                                let interaction = crate::interaction::InteractionState::host(request);
+                                mcp_elicit::arm_display(interaction.id);
+                                state.interaction = Some(interaction);
+                                tui.draw(&state)?;
+                            }
+                        }
                         Some((sequence, result)) = presence_rx.recv() => {
                             if sequence >= presence_applied {
                                 presence_applied = sequence;
@@ -7150,7 +6999,21 @@ async fn run_tui(cli: CliArgs) -> Result<Option<String>> {
                                         state.slash_palette_open = false;
                                         state.status_message = Some("Reusable command expanded".into());
                                     }
-                                    Ok(None) => {}
+                                    Ok(None) => {
+                                        if expanded_bundle.is_none() {
+                                            if let Some(name) = tui::commands::unknown_slash_command(
+                                                &state.input,
+                                            )
+                                            .map(str::to_string)
+                                            {
+                                                state.status_message =
+                                                    Some(format!("Unknown command /{name}"));
+                                                state.slash_palette_open = false;
+                                                tui.draw(&state)?;
+                                                continue;
+                                            }
+                                        }
+                                    }
                                     Err(error) => {
                                         state.status_message = Some(error);
                                         tui.draw(&state)?;
@@ -7167,6 +7030,13 @@ async fn run_tui(cli: CliArgs) -> Result<Option<String>> {
                                         tui::Event::Key(KeyCode::Esc, KeyModifiers::NONE)
                                     ));
                             if interaction_owns_key {
+                                if let tui::Event::Paste(text) = &event {
+                                    if let Some(interaction) = state.interaction.as_mut() {
+                                        interaction.insert_text(text);
+                                    }
+                                    tui.draw(&state)?;
+                                    continue;
+                                }
                                 if state.interaction_parked {
                                     state.interaction_parked = false;
                                     state.composer_focus = crate::app::ComposerFocus::Composer;
@@ -7194,6 +7064,17 @@ async fn run_tui(cli: CliArgs) -> Result<Option<String>> {
                                         crate::interaction::InteractionOutcome::Cancelled
                                     );
                                     state.interaction = None;
+                                    if mcp_elicit::accepts(resolution.id) {
+                                        let answer = match &resolution.outcome {
+                                            crate::interaction::InteractionOutcome::Answer(answer) => {
+                                                Some(answer.clone())
+                                            }
+                                            _ => None,
+                                        };
+                                        mcp_elicit::submit(answer);
+                                        tui.draw(&state)?;
+                                        continue;
+                                    }
                                     if state
                                         .pending_privilege_secret
                                         .as_ref()
@@ -7345,11 +7226,8 @@ async fn run_tui(cli: CliArgs) -> Result<Option<String>> {
                                 tui.draw(&state)?;
                                 continue;
                             }
-                            if state.interaction.is_none()
-                                && state.approval_queue.is_active()
-                                && !state.approval_queue.is_in_flight()
-                            {
-                                if let tui::Event::Key(code, KeyModifiers::NONE) = &event {
+                            if let tui::Event::Key(code, modifiers) = &event {
+                                if tui::input::approval_card_owns_key(&state, *code, *modifiers) {
                                     if matches!(code, KeyCode::Char('y' | 'a' | 'g' | 's' | 'p'))
                                         && pending_command_denied(&state, &config)
                                     {
@@ -7713,9 +7591,9 @@ async fn run_tui(cli: CliArgs) -> Result<Option<String>> {
                                         }
                                         _ => {}
                                     }
+                                    tui.draw(&state)?;
+                                    continue;
                                 }
-                                tui.draw(&state)?;
-                                continue;
                             }
 
 
@@ -9225,9 +9103,10 @@ async fn run_tui(cli: CliArgs) -> Result<Option<String>> {
                                                     );
                                                 }
                                                 let tx = stream_tx.clone();
+                                                let plan_reads_only = state.mode == AgentMode::Plan;
                                                 multi_run_task_handle = Some(tokio::spawn(async move {
                                                     let result = perform_multi_run_start(
-                                                        run, store, source, manager,
+                                                        run, store, source, manager, plan_reads_only,
                                                     )
                                                     .await;
                                                     let _ = tx.send(StreamMsg::MultiRun(MultiRunTaskResult {
@@ -11533,6 +11412,7 @@ async fn run_tui(cli: CliArgs) -> Result<Option<String>> {
                                             store: session_store.clone(), session: current_session_snapshot(&state),
                                             lease: state.session_writer.as_ref().or(state.checkpoint_writer.as_ref()).cloned(),
                                         };
+                                        let plan_reads_only = state.mode == AgentMode::Plan;
                                         agent_graph_task_handle = Some(tokio::spawn(async move {
                                             let result = perform_agent_graph_tick_durable(
                                                 manager,
@@ -11540,6 +11420,7 @@ async fn run_tui(cli: CliArgs) -> Result<Option<String>> {
                                                 worktree_store,
                                                 workspace,
                                                 Some(&mut persistence),
+                                                plan_reads_only,
                                             )
                                             .await;
                                             let _ = tx.send(StreamMsg::AgentGraphTick(result));
@@ -12595,6 +12476,8 @@ async fn run_tui(cli: CliArgs) -> Result<Option<String>> {
                                     model,
                                     cause,
                                     cooldown_seconds,
+                                    detail,
+                                    primary_sign_in,
                                     ..
                                 } => {
                                     apply_fallback_activation(
@@ -12604,6 +12487,10 @@ async fn run_tui(cli: CliArgs) -> Result<Option<String>> {
                                         provider,
                                         model,
                                         cause,
+                                        fallback::FallbackNotice {
+                                            detail,
+                                            primary_sign_in,
+                                        },
                                     );
                                     if let Some(seconds) = cooldown_seconds {
                                         show_cooldown_fallback(&mut state, cause, seconds);
@@ -15439,14 +15326,7 @@ async fn run_tui(cli: CliArgs) -> Result<Option<String>> {
                                                     Err(error) => format!(" · recent state failed: {error}"),
                                                 };
                                                 state.provider_auth = None;
-                                                let filter_note = matches!(
-                                                    outcome.status,
-                                                    provider_probe::ProviderCheckStatus::FilterStopped
-                                                )
-                                                .then_some(
-                                                    " The live check was stopped by the provider filter.",
-                                                )
-                                                .unwrap_or("");
+                                                let filter_note = "";
                                                 state.status_message = Some(format!(
                                                     "Connected and switched to {}{}{}",
                                                     outcome.provider.display_name(),
@@ -19993,11 +19873,11 @@ fn open_config_hub(
             "Approval mode",
             match state.approval {
                 ApprovalMode::AutoReview => "Auto-review",
-                ApprovalMode::RunEverything => "Run everything",
+                ApprovalMode::RunEverything => "Yolo",
                 ApprovalMode::Allowlist => "Ask",
             },
             "approval auto-review ask yolo",
-            "How unmatched tools are approved. Run everything lasts for this launch.",
+            "How unmatched tools are approved. Yolo lasts for this launch.",
             crate::app::ConfigHubAction::ApprovalSave(state.approval == ApprovalMode::AutoReview),
         )
         .with_choices(
@@ -21278,6 +21158,7 @@ fn recent_filter_paths(state: &AppState) -> Vec<String> {
     ranked.into_iter().map(|(_, path)| path).collect()
 }
 
+#[allow(dead_code)]
 fn hold_for_filter_guide(
     state: &mut AppState,
     raw: &str,
@@ -21976,6 +21857,7 @@ fn dispatch_privacy_editor(
 
 /// Explicit local recovery: retain transcript/tool receipts, remove only
 /// immutable native wire replay so the next request can project fresh bytes.
+#[allow(dead_code)]
 fn continue_with_private_history(state: &mut AppState) {
     if session_transition_busy(state)
         || state
@@ -23250,56 +23132,10 @@ fn execute_command_action(
         CommandId::Trace => {
             execute_trace_command(state, &action.args);
         }
-        CommandId::Filter => match action.args.trim() {
-            "" => {
-                if filter_review::inspect(state) {
-                    return;
-                }
-                state.privacy_binding_error = None;
-                state.privacy_editor_generation = state.privacy_editor_generation.wrapping_add(1);
-                state.privacy_editor = Some(tui::privacy::Editor::loading(state.cwd.clone()));
-            }
-            "guide" => {
-                let task = if state.input.is_empty() {
-                    state
-                        .messages
-                        .iter()
-                        .rev()
-                        .find(|message| message.role == Role::User)
-                        .map(|message| message.content.clone())
-                        .unwrap_or_default()
-                } else {
-                    state.input.clone()
-                };
-                if !hold_for_filter_guide(state, &task, &task, None) {
-                    state.status_message =
-                        Some("No filter suggestions for the current task.".into());
-                }
-            }
-            "report" => {
-                let filter = provider_filter::current();
-                state.pager_content = provider_filter::command_report(&filter);
-                state.pager_scroll = 0;
-                state.pager_open = true;
-            }
-            "continue" => continue_with_private_history(state),
-            "on" | "off" => {
-                let enabled = action.args.trim() == "on";
-                if state.run_capabilities.config_writes {
-                    if let Err(error) = config_store.update_filter_preview(enabled) {
-                        state.status_set_at = None;
-                        state.status_message =
-                            Some(format!("Could not save filter setting: {error}"));
-                        return;
-                    }
-                }
-                set_filter_preview_enabled(state, session_store, enabled);
-            }
-            _ => {
-                state.status_set_at = None;
-                state.status_message = Some("Usage: /filter [on|off|guide|report|continue]".into());
-            }
-        },
+        CommandId::Filter => {
+            state.status_set_at = None;
+            state.status_message = Some("The filter was removed.".into());
+        }
         CommandId::Jobs => {
             state.jobs_view_open = true;
             state.job_detail_open = false;
@@ -28411,7 +28247,6 @@ fn provider_check_status_text(status: &provider_probe::ProviderCheckStatus) -> S
         } => format!("provider error (HTTP {status})"),
         ProviderCheckStatus::ProviderError { status: None } => "provider request failed".into(),
         ProviderCheckStatus::InvalidResponse => "invalid or incomplete response".into(),
-        ProviderCheckStatus::FilterStopped => "provider filter stopped".into(),
         ProviderCheckStatus::NeedsModel => "needs a configured model".into(),
         ProviderCheckStatus::AuthenticationRequired => "authentication required".into(),
     }
@@ -32251,6 +32086,7 @@ fn apply_fallback_activation(
     provider: String,
     model: String,
     cause: fallback::ProviderFallbackCause,
+    notice: fallback::FallbackNotice,
 ) {
     reset_loop_guard_state(state);
     observe_goal_turn_usage(state);
@@ -32296,10 +32132,17 @@ fn apply_fallback_activation(
                 provider: provider.clone(),
                 model: model.clone(),
                 cause,
+                detail: notice.detail.clone(),
+                primary_sign_in: notice.primary_sign_in,
             });
     }
-    state.status_message = Some(format!(
-        "Provider fallback: {primary_provider}/{primary_model} → {provider}/{model} · {cause}"
+    state.status_message = Some(fallback::status_line(
+        &primary_provider,
+        &primary_model,
+        &provider,
+        &model,
+        cause,
+        &notice.detail,
     ));
 }
 
@@ -32860,14 +32703,10 @@ fn apply_stream_failure(
     state.outcome_tracker.record_failure();
     schedule_observing_hook(state, hooks::HookEvent::StopFailure);
     finish_active_prompt_epoch(state);
-    let filter_stopped = matches!(error, agent::stream::ProviderError::FilterStopped { .. });
-    state.retry_boundary = if filter_stopped { None } else { retry_boundary };
+    state.retry_boundary = retry_boundary;
     state.active_turn_start_message_count = None;
     let paused = pause_active_goal(state, crate::goal::GoalPauseReason::EvaluationFailed);
     let mut message = match error {
-        agent::stream::ProviderError::FilterStopped { rule } => {
-            provider_filter::session_stopped_status(rule)
-        }
         agent::stream::ProviderError::Http { status: 401, .. } => format!(
             "Authentication rejected for {provider} (HTTP 401). Run /provider setup {provider}, then /retry"
         ),
@@ -32926,8 +32765,10 @@ fn safe_provider_failure(provider: &str, error: &agent::stream::ProviderError) -
         agent::stream::ProviderError::MissingEnvironment(variable) => {
             format!("environment variable {variable} is not set for {provider}")
         }
-        agent::stream::ProviderError::FilterStopped { rule } => {
-            format!("provider filter stopped the session ({rule})")
+        agent::stream::ProviderError::Protocol(detail)
+            if detail.starts_with("Primary sign-in failed") =>
+        {
+            detail.clone()
         }
         _ => format!(
             "provider {provider} failed: {}",
@@ -35799,7 +35640,24 @@ async fn forward_turn_attempt(
     })
     .await
     {
-        Ok(_) => Ok(()),
+        Ok(turn) => {
+            if let Some(usage) = turn.usage.as_ref() {
+                let route = format!("{}/{}", prepared.provider, prepared.model);
+                prompt_cache_warm::note_usage(
+                    &route,
+                    usage.cached_prompt_tokens.unwrap_or(0),
+                    usage.prompt_tokens,
+                );
+            }
+            prompt_cache_warm::spawn_keepalive(
+                client.clone(),
+                prepared.clone(),
+                prompt_cache_warm::Pace::Human,
+                false,
+                None,
+            );
+            Ok(())
+        }
         Err(error) => Err((error, usable_output)),
     }
 }
@@ -36253,32 +36111,14 @@ fn prepare_native_mutation_drain(
 
 async fn enforce_provider_filter_stop(
     state: &mut AppState,
-    session_store: &session::SessionStore,
-    tasks: TurnTaskHandles<'_>,
+    _session_store: &session::SessionStore,
+    _tasks: TurnTaskHandles<'_>,
 ) {
     let notice = provider_filter::take_process_notice();
-    let Some(rule) = provider_filter::claim_session_stop() else {
-        if notice.is_some() && !provider_filter::is_tripped() {
-            state.status_message = notice;
-            state.status_set_at = None;
-        }
-        return;
-    };
-    let busy =
-        state.turn_lifecycle.is_active() || state.streaming.is_some() || state.goal_evaluating;
-    if busy {
-        stop_active_turn(state, session_store, tasks);
+    if notice.is_some() && !provider_filter::is_tripped() {
+        state.status_message = notice;
+        state.status_set_at = None;
     }
-    if let Some(agents) = &state.agents {
-        agents.request_cancel_all().await;
-    }
-    state.retry_boundary = None;
-    state.retry_requested = false;
-    state.workflow_next_requested = false;
-    state.workflow_start_requested = false;
-    state.goal_resume_requested = false;
-    state.status_message = Some(provider_filter::session_stopped_status(&rule));
-    state.status_set_at = None;
 }
 
 fn resume_privacy_recovery_owner(state: &mut AppState) -> bool {
@@ -36355,10 +36195,7 @@ async fn revalidate_restored_observations(
         let translated = if let (Some(context), Some(mut arguments)) = (privacy.clone(), arguments)
         {
             tokio::task::spawn_blocking(move || {
-                if let Some(path) = arguments["path"]
-                    .as_str()
-                    .filter(|path| path.contains("__CA_PATH_") || path.contains("__CA_NAME_"))
-                {
+                if let Some(path) = arguments["path"].as_str().filter(|_path| false) {
                     arguments["path"] = serde_json::Value::String(
                         context
                             .resolve_filename_path(path, false)
@@ -36437,6 +36274,10 @@ fn start_llm_turn(
         workflow_execution.as_ref(),
     );
     let new_user_turn = !state.turn_lifecycle.is_active();
+    if new_user_turn {
+        crate::write_baseline::begin_turn();
+        crate::prompt_cache_warm::begin_user_message();
+    }
     if !new_user_turn {
         let (_, threshold) = context_limits(state, config);
         if let Some(limit) = threshold {
@@ -37381,6 +37222,10 @@ fn start_llm_turn(
                         Some("Primary provider cooldown is active".to_owned()),
                     )
                 }
+                ProviderFallbackCause::SignIn => agent::stream::ProviderError::http_with_excerpt(
+                    401,
+                    Some("Primary sign-in failed".to_owned()),
+                ),
             };
             Err((error, false))
         } else {
@@ -37391,6 +37236,27 @@ fn start_llm_turn(
                 let _ = tx.send(StreamMsg::Finish(gen));
             }
             Err((error, usable_output)) => {
+                let mut error = error;
+                let mut usable_output = usable_output;
+                if !usable_output
+                    && crate::image_content::provider_rejected_image_size(&error.to_string())
+                {
+                    let mut shrunk = prepared.clone();
+                    if shrunk.shrink_images_to(crate::image_content::PROVIDER_IMAGE_RETRY_BYTES) {
+                        match forward_turn_attempt(&client, &shrunk, &tx, gen).await {
+                            Ok(()) => {
+                                let _ = tx.send(StreamMsg::Finish(gen));
+                                return;
+                            }
+                            Err((next, next_usable)) => {
+                                error = next;
+                                usable_output = next_usable;
+                            }
+                        }
+                    }
+                }
+                let primary_sign_in = fallback::sign_in_failure(&error);
+                let fallback_detail = fallback::error_detail(&error);
                 let fallback_match = fallback_attempt.as_ref().and_then(
                     |(
                         rule,
@@ -37402,22 +37268,17 @@ fn start_llm_turn(
                         (!usable_output
                             && (prepared.tools.is_empty() || fallback_constraints.tools_supported))
                             .then(|| {
-                                fallback::matching_rule(
-                                    std::slice::from_ref(rule),
-                                    &provider_id,
-                                    &model_id,
-                                    &error,
-                                )
-                                .map(|(_, cause)| {
-                                    (
-                                        rule,
-                                        fallback_config,
-                                        fallback_options,
-                                        fallback_constraints,
-                                        fallback_cache_contract,
-                                        cause,
-                                    )
-                                })
+                                fallback::attempt_for_rule(rule, &provider_id, &model_id, &error)
+                                    .map(|cause| {
+                                        (
+                                            rule,
+                                            fallback_config,
+                                            fallback_options,
+                                            fallback_constraints,
+                                            fallback_cache_contract,
+                                            cause,
+                                        )
+                                    })
                             })
                             .flatten()
                     },
@@ -37491,14 +37352,16 @@ fn start_llm_turn(
                     .clone()
                     .unwrap_or(breakdown);
                 let _ = tx.send(StreamMsg::FallbackActivated {
-                    primary_provider: provider_id,
-                    primary_model: model_id,
+                    primary_provider: provider_id.clone(),
+                    primary_model: model_id.clone(),
                     provider: rule.fallback_provider.clone(),
                     model: rule.fallback_model.clone(),
                     cause,
                     generation: gen,
                     cooldown_seconds: skip_primary
                         .map(|cooldown| cooldown.remaining.as_secs().saturating_add(1)),
+                    detail: fallback_detail,
+                    primary_sign_in,
                 });
                 let _ = tx.send(StreamMsg::PromptToolsPrepared {
                     provider: rule.fallback_provider.clone(),
@@ -37527,7 +37390,16 @@ fn start_llm_turn(
                     Ok(()) => {
                         let _ = tx.send(StreamMsg::Finish(gen));
                     }
-                    Err((error, _)) => {
+                    Err((backup_error, _)) => {
+                        let error = if primary_sign_in {
+                            fallback::lead_with_primary_sign_in(
+                                &provider_id,
+                                &model_id,
+                                &backup_error,
+                            )
+                        } else {
+                            backup_error
+                        };
                         let _ = tx.send(StreamMsg::Error {
                             error,
                             provider: rule.fallback_provider.clone(),
@@ -39805,8 +39677,12 @@ async fn execute_pending_tools_in_privacy_context(
                     .and_then(serde_json::Value::as_str)
                     .ok_or_else(|| "activate_skill requires id".to_string())
                     .and_then(|id| {
+                        let id = crate::privacy::for_owner(job_owner).map_or_else(
+                            || crate::skills::canonical_skill_selector(id),
+                            |privacy| privacy.skill_selector(id),
+                        );
                         registry
-                            .preflight_activation(id)
+                            .preflight_activation(&id)
                             .map_err(|error| error.to_string())
                     }),
                 "skill_view" => raw_args
@@ -43334,6 +43210,8 @@ enum StreamMsg {
         cause: fallback::ProviderFallbackCause,
         generation: u64,
         cooldown_seconds: Option<u64>,
+        detail: String,
+        primary_sign_in: bool,
     },
     Delta(agent::ChatDelta, u64),
     Finish(u64),
@@ -43796,6 +43674,7 @@ async fn perform_multi_run_start(
     store: worktree::WorktreeStore,
     source: std::path::PathBuf,
     manager: std::sync::Arc<agent::subagent::AgentManager>,
+    plan_reads_only: bool,
 ) -> Result<crate::multi_run::MultiRunState, String> {
     if run.status != crate::multi_run::MultiRunStatus::Preview {
         return Err("multi-run is no longer awaiting confirmation".into());
@@ -43879,7 +43758,8 @@ async fn perform_multi_run_start(
             output_contract: None,
             isolation: agent::subagent::AgentIsolation::Shared,
 
-        admitted: None,};
+        admitted: None,
+        reads_only: plan_reads_only,};
         match manager
             .spawn_with_origin(request, agent::subagent::AgentRunOrigin::MultiRun)
             .await
@@ -44234,9 +44114,17 @@ async fn perform_agent_graph_tick(
     work_state: std::sync::Arc<std::sync::Mutex<work::WorkState>>,
     worktree_store: Option<worktree::WorktreeStore>,
     current_workspace: workspace::WorkspaceContext,
+    plan_reads_only: bool,
 ) -> AgentGraphTickResult {
-    perform_agent_graph_tick_durable(manager, work_state, worktree_store, current_workspace, None)
-        .await
+    perform_agent_graph_tick_durable(
+        manager,
+        work_state,
+        worktree_store,
+        current_workspace,
+        None,
+        plan_reads_only,
+    )
+    .await
 }
 
 async fn perform_agent_graph_tick_durable(
@@ -44245,6 +44133,7 @@ async fn perform_agent_graph_tick_durable(
     worktree_store: Option<worktree::WorktreeStore>,
     current_workspace: workspace::WorkspaceContext,
     mut persistence: Option<&mut automatic_tasks::GraphPersistence>,
+    plan_reads_only: bool,
 ) -> AgentGraphTickResult {
     let mut result = perform_agent_graph_tick_inner(
         manager,
@@ -44252,6 +44141,7 @@ async fn perform_agent_graph_tick_durable(
         worktree_store,
         current_workspace,
         persistence.as_deref_mut(),
+        plan_reads_only,
     )
     .await;
     if result.changed {
@@ -44274,6 +44164,7 @@ async fn perform_agent_graph_tick_inner(
     worktree_store: Option<worktree::WorktreeStore>,
     current_workspace: workspace::WorkspaceContext,
     mut persistence: Option<&mut automatic_tasks::GraphPersistence>,
+    plan_reads_only: bool,
 ) -> AgentGraphTickResult {
     let graph_budget_configuration = {
         let work = work_state
@@ -44771,6 +44662,7 @@ async fn perform_agent_graph_tick_inner(
             isolation: agent::subagent::AgentIsolation::Shared,
 
             admitted: None,
+            reads_only: plan_reads_only,
         };
         let reservation = agent::subagent::AgentId(uuid::Uuid::new_v4());
         if let Some(persistence) = persistence.as_deref_mut() {
@@ -56876,6 +56768,10 @@ model = "base"
             "backup".into(),
             "two".into(),
             fallback::ProviderFallbackCause::ServerError,
+            fallback::FallbackNotice {
+                detail: String::new(),
+                primary_sign_in: false,
+            },
         );
         show_cooldown_fallback(&mut state, fallback::ProviderFallbackCause::ServerError, 15);
         for (width, height) in [(60, 24), (100, 30)] {
@@ -57126,6 +57022,7 @@ model = "base"
                 request_format: Some(config::PromptCacheRequestFormat::OpenAiResponsesExplicit),
                 usage_format: Some(config::PromptCacheUsageFormat::Auto),
                 policy: Some(config::PromptCachePolicy::Automatic),
+                ttl_seconds: None,
             },
         );
 
@@ -57163,6 +57060,8 @@ model = "base"
                     provider,
                     model,
                     cause,
+                    detail,
+                    primary_sign_in,
                     ..
                 } => {
                     activated = true;
@@ -57173,6 +57072,10 @@ model = "base"
                         provider,
                         model,
                         cause,
+                        fallback::FallbackNotice {
+                            detail,
+                            primary_sign_in,
+                        },
                     );
                 }
                 StreamMsg::PromptToolsPrepared { tools, .. } => {
@@ -66408,6 +66311,7 @@ tools = ["read_file", "search_files", "list_dir"]
                 isolation: agent::subagent::AgentIsolation::Shared,
 
                 admitted: None,
+                reads_only: state.mode == AgentMode::Plan,
             })
             .await
             .unwrap();
@@ -66566,8 +66470,14 @@ tools = ["read_file", "search_files", "list_dir"]
         let workspace_root = tempfile::tempdir().unwrap();
         let workspace = workspace::WorkspaceContext::discover(workspace_root.path()).unwrap();
 
-        let first_tick =
-            perform_agent_graph_tick(manager.clone(), work.clone(), None, workspace.clone()).await;
+        let first_tick = perform_agent_graph_tick(
+            manager.clone(),
+            work.clone(),
+            None,
+            workspace.clone(),
+            false,
+        )
+        .await;
         assert!(first_tick.changed, "{:?}", first_tick.error);
         let first_agents = manager.list().await;
         assert!(
@@ -66580,8 +66490,14 @@ tools = ["read_file", "search_files", "list_dir"]
         manager.await_agent(first_agent).await.unwrap();
         assert_eq!(&*calls.lock().unwrap(), &[first]);
 
-        let second_tick =
-            perform_agent_graph_tick(manager.clone(), work.clone(), None, workspace.clone()).await;
+        let second_tick = perform_agent_graph_tick(
+            manager.clone(),
+            work.clone(),
+            None,
+            workspace.clone(),
+            false,
+        )
+        .await;
         assert!(second_tick.changed);
         let second_agent = manager
             .list()
@@ -66593,7 +66509,8 @@ tools = ["read_file", "search_files", "list_dir"]
         manager.await_agent(second_agent).await.unwrap();
         assert_eq!(&*calls.lock().unwrap(), &[first, second]);
 
-        let final_tick = perform_agent_graph_tick(manager, work.clone(), None, workspace).await;
+        let final_tick =
+            perform_agent_graph_tick(manager, work.clone(), None, workspace, false).await;
         assert!(final_tick.changed);
         let work = work.lock().unwrap();
         assert_eq!(
@@ -66655,6 +66572,7 @@ tools = ["read_file", "search_files", "list_dir"]
                 None,
                 workspace.clone(),
                 Some(&mut persistence),
+                false,
             )
             .await;
             assert!(tick.error.is_none(), "{:?}", tick.error);
@@ -66685,6 +66603,7 @@ tools = ["read_file", "search_files", "list_dir"]
             None,
             workspace.clone(),
             Some(&mut persistence),
+            false,
         )
         .await;
         assert!(tick.error.is_none(), "{:?}", tick.error);
@@ -66718,6 +66637,7 @@ tools = ["read_file", "search_files", "list_dir"]
             None,
             workspace,
             Some(&mut persistence),
+            false,
         )
         .await;
         assert!(!again.changed && again.saved_session.is_none());
@@ -66864,8 +66784,14 @@ tools = ["read_file", "search_files", "list_dir"]
         let workspace_root = tempfile::tempdir().unwrap();
         let workspace = workspace::WorkspaceContext::discover(workspace_root.path()).unwrap();
 
-        let first_tick =
-            perform_agent_graph_tick(manager.clone(), work.clone(), None, workspace.clone()).await;
+        let first_tick = perform_agent_graph_tick(
+            manager.clone(),
+            work.clone(),
+            None,
+            workspace.clone(),
+            false,
+        )
+        .await;
         assert!(first_tick.changed, "{:?}", first_tick.error);
         let producer_agent = manager
             .list()
@@ -66875,8 +66801,14 @@ tools = ["read_file", "search_files", "list_dir"]
             .unwrap()
             .id;
         manager.await_agent(producer_agent).await.unwrap();
-        let second_tick =
-            perform_agent_graph_tick(manager.clone(), work.clone(), None, workspace.clone()).await;
+        let second_tick = perform_agent_graph_tick(
+            manager.clone(),
+            work.clone(),
+            None,
+            workspace.clone(),
+            false,
+        )
+        .await;
         assert!(second_tick.changed);
         {
             let work = work.lock().unwrap();
@@ -67008,8 +66940,14 @@ tools = ["read_file", "search_files", "list_dir"]
             work.user_start_agent_graph().unwrap();
         }
         let manager = manager.clone();
-        let _first_tick =
-            perform_agent_graph_tick(manager.clone(), work.clone(), None, workspace.clone()).await;
+        let _first_tick = perform_agent_graph_tick(
+            manager.clone(),
+            work.clone(),
+            None,
+            workspace.clone(),
+            false,
+        )
+        .await;
         let producer_agent = manager
             .list()
             .await
@@ -67018,8 +66956,14 @@ tools = ["read_file", "search_files", "list_dir"]
             .unwrap()
             .id;
         manager.await_agent(producer_agent).await.unwrap();
-        let tick =
-            perform_agent_graph_tick(manager.clone(), work.clone(), None, workspace.clone()).await;
+        let tick = perform_agent_graph_tick(
+            manager.clone(),
+            work.clone(),
+            None,
+            workspace.clone(),
+            false,
+        )
+        .await;
         assert!(
             tick.changed,
             "error={:?} notice={:?}",
@@ -67065,7 +67009,8 @@ tools = ["read_file", "search_files", "list_dir"]
         let (work, first, _) = configured_test_graph(Some(uuid::Uuid::new_v4()));
         let temp = tempfile::tempdir().unwrap();
         let workspace = workspace::WorkspaceContext::discover(temp.path()).unwrap();
-        let result = perform_agent_graph_tick(manager.clone(), work.clone(), None, workspace).await;
+        let result =
+            perform_agent_graph_tick(manager.clone(), work.clone(), None, workspace, false).await;
 
         assert!(result.changed);
         assert!(manager.list().await.is_empty());
@@ -67135,6 +67080,7 @@ tools = ["read_file", "search_files", "list_dir"]
             work,
             Some(store),
             original_workspace.clone(),
+            false,
         )
         .await;
         assert!(result.changed);
@@ -67418,10 +67364,15 @@ tools = ["read_file", "search_files", "list_dir"]
             },
         );
 
-        let started =
-            perform_multi_run_start(run, store.clone(), repository.clone(), manager.clone())
-                .await
-                .unwrap();
+        let started = perform_multi_run_start(
+            run,
+            store.clone(),
+            repository.clone(),
+            manager.clone(),
+            false,
+        )
+        .await
+        .unwrap();
         assert_eq!(started.status, crate::multi_run::MultiRunStatus::Running);
         for candidate in &started.candidates {
             manager

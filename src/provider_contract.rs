@@ -1308,6 +1308,7 @@ mod tests {
                 request_format: Some(PromptCacheRequestFormat::OpenAiResponsesExplicit),
                 usage_format: Some(PromptCacheUsageFormat::Auto),
                 policy: None,
+                ttl_seconds: None,
             },
         );
 

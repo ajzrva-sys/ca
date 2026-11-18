@@ -5939,6 +5939,8 @@ mod tests {
                 provider: "backup".into(),
                 model: "two".into(),
                 cause: crate::fallback::ProviderFallbackCause::Timeout,
+                detail: String::new(),
+                primary_sign_in: false,
             },
             crate::fallback::TurnProviderProvenance {
                 user_message_index: 2,
@@ -5947,11 +5949,21 @@ mod tests {
                 provider: "backup".into(),
                 model: "two".into(),
                 cause: crate::fallback::ProviderFallbackCause::RateLimited,
+                detail: String::new(),
+                primary_sign_in: false,
             },
         ];
         store.save(&mut source).unwrap();
         let loaded = store.load(&source.id.to_string()).unwrap();
         assert_eq!(loaded.fallback_provenance, source.fallback_provenance);
+        let mut legacy = serde_json::to_value(&source.fallback_provenance).unwrap();
+        for entry in legacy.as_array_mut().unwrap() {
+            entry.as_object_mut().unwrap().remove("detail");
+            entry.as_object_mut().unwrap().remove("primary_sign_in");
+        }
+        let restored: Vec<crate::fallback::TurnProviderProvenance> =
+            serde_json::from_value(legacy).unwrap();
+        assert_eq!(restored, source.fallback_provenance);
 
         let first_turn = branch_in_memory(&loaded, 2, 1, "first").unwrap();
         assert_eq!(first_turn.fallback_provenance.len(), 1);

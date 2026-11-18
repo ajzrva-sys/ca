@@ -529,6 +529,15 @@ impl PreparedModelRequest {
         }
     }
 
+    /// Shrink images on this request copy. Returns whether any image got smaller.
+    pub fn shrink_images_to(&mut self, max_bytes: usize) -> bool {
+        let mut changed = false;
+        for message in &mut self.messages {
+            changed |= message.content.shrink_images_to(max_bytes);
+        }
+        changed
+    }
+
     pub(crate) fn prepare_evidence_guidance(&mut self) {
         if self.evidence_guidance_prepared {
             return;

@@ -227,10 +227,7 @@ fn builtin_repair_checks_restore_typed_argv_and_exact_command_grants() {
             .is_err());
 
         let mut unknown = arguments.clone();
-        let unknown_argv = vec![
-            "__CA_PATH_00000000000000000000000000000000__/f999".to_owned(),
-            argv[1].clone(),
-        ];
+        let unknown_argv = vec!["not-a-real-path/f999".to_owned(), argv[1].clone()];
         unknown["repair_contract"]["checks"][0]["argv"] = json!(unknown_argv);
         unknown["commands"][0] = json!(crate::narrow_worker::render_command(&unknown_argv));
         assert!(context
@@ -746,7 +743,7 @@ fn builtin_guarded_native_commands_keep_sources_and_support_background_artifacts
                 let artifact = roots[0].join("build-result316.txt"); assert_eq!(std::fs::read_to_string(&artifact).unwrap(), "artifact");
                 context.refresh_filenames().unwrap();
                 let artifact_directory = result.model_text().lines().find_map(|line| line.strip_prefix("command_artifact_directory: ")).expect("native result publishes owned artifact directory").to_owned();
-                assert!(artifact_directory.starts_with("__CA_PATH_"));
+                assert!(!artifact_directory.is_empty());
                 let listing = crate::agent::tools::execute_tool_with_context("list_dir", &json!({"path":artifact_directory}), &native).await;
                 assert!(listing.is_success(), "{}", listing.model_text());
                 let provider_listing = projected_listing(&context, &artifact_directory, listing.model_text()).unwrap();

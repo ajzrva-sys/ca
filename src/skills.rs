@@ -2367,6 +2367,115 @@ fn join_locator(prefix: &str, relative: &Path) -> String {
     }
 }
 
+const SELECTOR_SCOPES: &[&str] = &[
+    "workspace",
+    "user",
+    "admin",
+    "bundled",
+    "managed",
+    "plugin",
+    "auto_distill",
+    "legacy",
+];
+
+/// Qualified skill ids are identifiers. Filename projection must not rewrite them.
+pub(crate) fn qualified_selector_spans(text: &str) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let mut index = 0;
+    while index < text.len() {
+        let Some(relative) = text[index..].find("::") else {
+            break;
+        };
+        let colon = index + relative;
+        let scope_start = text[..colon]
+            .rfind(|character: char| {
+                character.is_whitespace()
+                    || matches!(character, '"' | '\'' | '`' | '{' | '[' | ',' | ':' | '(')
+            })
+            .map_or(0, |found| found + character_len_at(text, found));
+        let scope = &text[scope_start..colon];
+        if !SELECTOR_SCOPES.contains(&scope) {
+            index = colon + 2;
+            continue;
+        }
+        let locator_start = colon + 2;
+        let Some(second) = text[locator_start..].find("::") else {
+            break;
+        };
+        if second == 0 {
+            index = colon + 2;
+            continue;
+        }
+        let name_start = locator_start + second + 2;
+        let mut name_end = name_start;
+        for character in text[name_start..].chars() {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                name_end += character.len_utf8();
+            } else {
+                break;
+            }
+        }
+        if name_end == name_start {
+            index = colon + 2;
+            continue;
+        }
+        spans.push((scope_start, name_end));
+        index = name_end;
+    }
+    spans
+}
+
+fn character_len_at(text: &str, index: usize) -> usize {
+    text[index..]
+        .chars()
+        .next()
+        .map(char::len_utf8)
+        .unwrap_or(1)
+}
+
+pub(crate) fn canonical_skill_selector(selector: &str) -> String {
+    let selector = selector.trim();
+    let Some((scope, rest)) = selector.split_once("::") else {
+        return selector.to_string();
+    };
+    if !SELECTOR_SCOPES.contains(&scope) {
+        return selector.to_string();
+    }
+    let Some((locator, name)) = rest.rsplit_once("::") else {
+        return selector.to_string();
+    };
+    if locator.is_empty() || name.is_empty() {
+        return selector.to_string();
+    }
+    format!("{scope}::{}::{name}", normalize_locator(locator))
+}
+
+fn normalize_locator(locator: &str) -> String {
+    let mut output = String::new();
+    let bytes = locator.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'/'
+            && index + 3 < bytes.len()
+            && bytes[index + 1] == b'%'
+            && bytes[index + 2].eq_ignore_ascii_case(&b'2')
+            && bytes[index + 3].eq_ignore_ascii_case(&b'F')
+        {
+            output.push_str("%2F");
+            index += 4;
+            continue;
+        }
+        if bytes[index] == b'/' {
+            output.push_str("%2F");
+            index += 1;
+            continue;
+        }
+        output.push(char::from(bytes[index]));
+        index += 1;
+    }
+    output
+}
+
 fn percent_encode_locator(locator: &str) -> String {
     let mut output = String::new();
     for byte in locator.as_bytes() {
@@ -4280,6 +4389,27 @@ fn estimate_tokens(value: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encoded_locator_slash_is_the_qualified_name() {
+        assert_eq!(
+            canonical_skill_selector(
+                "managed::mimo-user-skills/%2Fbsd-host-lifecycle::bsd-host-lifecycle"
+            ),
+            "managed::mimo-user-skills%2Fbsd-host-lifecycle::bsd-host-lifecycle"
+        );
+        assert_eq!(
+            canonical_skill_selector(
+                "managed::mimo-user-skills/bsd-host-lifecycle::bsd-host-lifecycle"
+            ),
+            "managed::mimo-user-skills%2Fbsd-host-lifecycle::bsd-host-lifecycle"
+        );
+        let text = "use managed::mimo-user-skills%2Fbsd-host-lifecycle::bsd-host-lifecycle now";
+        assert_eq!(
+            qualified_selector_spans(text),
+            vec![(4, text.trim_end_matches(" now").len())]
+        );
+    }
 
     fn write_skill(
         root: &Path,

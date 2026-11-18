@@ -318,27 +318,10 @@ fn decode_double_quoted(value: &str) -> String {
 /// Filename references are complete path arguments, never executable syntax.
 pub(crate) fn restore_filename_references(
     command: &str,
-    mut resolve: impl FnMut(&str) -> Result<String, String>,
+    resolve: impl FnMut(&str) -> Result<String, String>,
 ) -> Result<String, String> {
-    if !command.contains("__CA_PATH_") && !command.contains("__CA_NAME_") {
-        return Ok(command.into());
-    }
-    transform_literals(command, true, |value| {
-        if value.contains("__CA_PATH_") || value.contains("__CA_NAME_") {
-            let (prefix, reference) = value
-                .split_once('=')
-                .filter(|(prefix, _)| prefix.starts_with('-'))
-                .map_or(("", value), |(prefix, reference)| (prefix, reference));
-            let resolved = resolve(reference)?;
-            Ok(if prefix.is_empty() {
-                resolved
-            } else {
-                format!("{prefix}={resolved}")
-            })
-        } else {
-            Ok(value.into())
-        }
-    })
+    let _ = resolve;
+    Ok(command.into())
 }
 
 pub(crate) fn rebase_paths(
@@ -398,7 +381,7 @@ fn literal(node: Node<'_>, command: &str) -> Option<String> {
 
 fn transform_literals(
     command: &str,
-    require_all_references: bool,
+    _require_all_references: bool,
     mut transform: impl FnMut(&str) -> Result<String, String>,
 ) -> Result<String, String> {
     let tree = parse(command)?;
@@ -415,24 +398,12 @@ fn transform_literals(
                     .is_some_and(|target| target.id() == node.id())
         });
         if is_literal_argument(node) || redirect {
-            let raw = &command[node.byte_range()];
             if let Some(value) = literal(node, command) {
-                let contains = value.contains("__CA_PATH_") || value.contains("__CA_NAME_");
-                if contains
-                    && (has_dynamic_ancestor(node)
-                        || (!redirect && is_evaluated_argument(node, command)))
-                {
-                    return Err(GUIDANCE.into());
-                }
                 let next = transform(&value)?;
                 if next != value {
                     edits.push((node.byte_range(), single_quote(&next)));
                 }
                 continue;
-            }
-            if require_all_references && (raw.contains("__CA_PATH_") || raw.contains("__CA_NAME_"))
-            {
-                return Err(GUIDANCE.into());
             }
         }
         for child in node.children(&mut node.walk()) {
@@ -448,9 +419,6 @@ fn transform_literals(
         end = range.end;
     }
     result.push_str(&command[end..]);
-    if require_all_references && (result.contains("__CA_PATH_") || result.contains("__CA_NAME_")) {
-        return Err(GUIDANCE.into());
-    }
     if parse(&result)?.root_node().has_error() {
         return Err(GUIDANCE.into());
     }

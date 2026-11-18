@@ -12,7 +12,7 @@ Use this before accepting an agent change in the root `ca` tree. Inside `crates/
 
 - `oracles/` and `reference/` are unchanged.
 - Tool schema, execution name, approval class, and tool-result message stay aligned.
-- The TUI path does not gain `block_on`, `block_in_place`, or other synchronous long work.
+- `python3 scripts/check-pyramid.py` rejects a new `block_on` or `block_in_place` under `src/tui/`.
 - Approval checks are not weaker. A new destructive slash command has an explicit scope and a test.
 - Session format, protocol, and approval changes name the broader gate they require.
 

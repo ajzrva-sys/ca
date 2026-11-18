@@ -52,9 +52,7 @@ fn narrow_task_map_shows_one_unrestored_provider_listing() {
                 summary: Some(
                     "The workspace contains two entries:\n2. listed-name.rtf\n3. other-name".into(),
                 ),
-                provider_summary: Some(
-                    "1. `__CA_PATH_abc__/f001`\n2. `__CA_PATH_abc__/f002`".into(),
-                ),
+                provider_summary: Some("1. `listed-name.rtf`\n2. `other-name`".into()),
                 terminal_event_sequence: Some(1),
                 verification_receipt: None,
                 workspace_snapshot: None,
@@ -79,23 +77,18 @@ fn narrow_task_map_shows_one_unrestored_provider_listing() {
         narrow.contains("The workspace contains two entries:"),
         "{narrow}"
     );
-    assert!(
-        narrow.contains("Provider listing: __CA_PATH_abc__/f001"),
-        "{narrow}"
-    );
-    assert!(narrow.contains("__CA_PATH_abc__/f002"), "{narrow}");
-    assert!(!narrow.contains("Provider listing: 1."), "{narrow}");
+    assert!(!narrow.contains("Project privacy"), "{narrow}");
+    assert!(!narrow.contains("filenames on"), "{narrow}");
     set_filter_presentation(
         &state,
         crate::provider_filter::FilterStatus::Active,
         "Project privacy · Selected values only · filenames on · 0 selected values",
     );
-    state
-        .provider_pane
-        .note(1, std::sync::Arc::from("provider body"));
     let wide = render_to_text(&state, 100, 24);
-    assert!(!wide.contains("Provider listing:"), "{wide}");
-    assert!(wide.contains("filenames on"), "{wide}");
+    assert!(!wide.contains("Project privacy"), "{wide}");
+    assert!(!wide.contains("Selected values"), "{wide}");
+    assert!(!wide.contains("filenames on"), "{wide}");
+    assert!(!wide.contains("Filter off"), "{wide}");
 }
 
 /// Render one state at both the wide and narrow test sizes and join them, so a
@@ -1388,6 +1381,49 @@ fn scrolled_transcript_keeps_keys_and_shows_the_suffix_when_it_fits() {
     let narrow = render_to_text(&state, 20, 30);
     assert!(!narrow.contains("Ctrl+End"), "{narrow}");
     assert!(narrow.contains("commands"), "{narrow}");
+}
+
+#[test]
+fn approval_card_says_a_draft_stays_typeable() {
+    let mut state = test_state();
+    state.input = "~/projectsv".into();
+    state.input_cursor = state.input.len();
+    state.composer_ui.path_completion.open = true;
+    state.composer_ui.path_completion.loading = false;
+    state.approval_queue.begin_batch(vec![PendingApproval {
+        tool_name: "run_command".into(),
+        tool_args: r#"{"command":"true"}"#.into(),
+        tool_id: "call-approval".into(),
+        network_requested: false,
+        email_preview: None,
+        email_draft_ref: None,
+    }]);
+    let covered = render_to_text(&state, 100, 32);
+    assert!(covered.contains("~/projectsv"), "{covered}");
+    assert!(covered.contains("No path matches"), "{covered}");
+
+    state.composer_ui.path_completion.open = false;
+    let text = render_to_text(&state, 100, 32);
+    assert!(text.contains("~/projectsv"), "{text}");
+    assert!(text.contains("Typing stays in the composer"), "{text}");
+}
+
+#[test]
+fn approval_card_keeps_yolo_visible_for_a_long_command() {
+    let mut state = test_state();
+    let command = format!("find /tmp {} UNIQUE_TAIL", "x".repeat(400));
+    state.approval_queue.begin_batch(vec![PendingApproval {
+        tool_name: "run_command".into(),
+        tool_args: serde_json::json!({ "command": command }).to_string(),
+        tool_id: "call-approval".into(),
+        network_requested: false,
+        email_preview: None,
+        email_draft_ref: None,
+    }]);
+    let text = render_to_text(&state, 100, 32);
+    assert!(text.contains("[y] run"), "{text}");
+    assert!(text.contains("[a] yolo"), "{text}");
+    assert!(!text.contains("UNIQUE_TAIL"), "{text}");
 }
 
 #[test]
@@ -9286,6 +9322,8 @@ fn fallback_marker_state(streaming: bool) -> AppState {
             provider: "deepseek".into(),
             model: "deepseek-v4-pro".into(),
             cause: crate::fallback::ProviderFallbackCause::RateLimited,
+            detail: String::new(),
+            primary_sign_in: false,
         });
     if streaming {
         state.streaming = Some(StreamingState {

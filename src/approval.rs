@@ -429,6 +429,7 @@ impl<'a> ApprovalBroker<'a> {
             arguments: arguments.clone(),
             origin: tool_origin,
             network_requested,
+            path_note: None,
         };
         // Opaque tool semantics cannot safely resolve the filename namespace.
         // This ceiling also covers dynamic tools that reuse a builtin name.

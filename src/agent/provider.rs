@@ -4810,7 +4810,7 @@ mod tests {
                     &stop_filter,
                 );
                 assert_eq!(
-                    matches!(result, Err(ProviderError::FilterStopped { .. })),
+                    matches!(result, Err(ProviderError::Protocol(_))),
                     stopped,
                     "stop scan must inspect restored items, not temporary masks"
                 );

@@ -4,6 +4,7 @@ use crate::app::{ToolCall, ToolStatus};
 use crate::config::CaConfig;
 use crate::request::RequestKind;
 use serde::{Deserialize, Serialize};
+use sha2::Digest;
 use std::collections::{HashMap, HashSet};
 use std::sync::{OnceLock, RwLock};
 
@@ -132,7 +133,99 @@ pub fn project_request(
         .get(&format!("{provider}/{model}"))
         .or_else(|| settings.windows.get(model))
         .copied();
-    project(messages, !settings.disabled, window)
+    let disabled = settings.disabled;
+    drop(settings);
+    let cold = crate::prompt_cache_warm::temperature(provider, model)
+        == crate::prompt_cache_warm::Temperature::Cold;
+    let mut stats = if cold {
+        offload_cold_tool_bodies(messages, &cold_spill_dir(), true)
+    } else {
+        PruningStats::default()
+    };
+    let pruned = project(messages, !disabled, window);
+    stats.results += pruned.results;
+    stats.saved_tokens += pruned.saved_tokens;
+    stats.added_tokens += pruned.added_tokens;
+    stats
+}
+
+const COLD_BODY_BYTES: usize = 1024;
+
+fn cold_spill_dir() -> std::path::PathBuf {
+    static DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| std::env::temp_dir().join("ca-cold-tool-bodies"))
+        .clone()
+}
+
+/// When the route cache is already expired, replace old tool bodies on this
+/// request copy with a marker and a path. A warm or unknown route is unchanged.
+/// The latest tool batch stays. The stored transcript is not this slice.
+pub fn offload_cold_tool_bodies(
+    messages: &mut [ChatMessage],
+    spill_dir: &std::path::Path,
+    cold: bool,
+) -> PruningStats {
+    if !cold {
+        return PruningStats::default();
+    }
+    let calls = paired(messages);
+    let incomplete = messages
+        .iter()
+        .enumerate()
+        .filter(|(_, message)| {
+            message.tool_calls.as_ref().is_some_and(|batch| {
+                batch
+                    .iter()
+                    .any(|call| !calls.contains_key(call.id.as_str()))
+            })
+        })
+        .map(|(index, _)| index)
+        .collect::<HashSet<_>>();
+    let latest_batch = calls.values().map(|(_, index)| *index).max();
+    let mut replacements = Vec::new();
+    for (index, message) in messages.iter().enumerate() {
+        if message.role != "tool" {
+            continue;
+        }
+        let Some(text) = message.content.as_str() else {
+            continue;
+        };
+        if text.len() < COLD_BODY_BYTES {
+            continue;
+        }
+        let Some(id) = message.tool_call_id.as_deref() else {
+            continue;
+        };
+        let Some((_, batch)) = calls.get(id) else {
+            continue;
+        };
+        if Some(*batch) == latest_batch || incomplete.contains(batch) {
+            continue;
+        }
+        let digest = format!("{:x}", sha2::Sha256::digest(text.as_bytes()));
+        let path = spill_dir.join(format!("{digest}.txt"));
+        if !path.exists()
+            && (std::fs::create_dir_all(spill_dir).is_err() || std::fs::write(&path, text).is_err())
+        {
+            continue;
+        }
+        let marker = format!(
+            "[Earlier tool result saved at {}. The cache for this route had expired, so this request keeps the path instead of the body.]",
+            path.display()
+        );
+        let before = crate::context::estimate_text_tokens(text);
+        let after = crate::context::estimate_text_tokens(&marker);
+        replacements.push((index, marker, before, after));
+    }
+    let mut stats = PruningStats::default();
+    for (index, marker, before, after) in replacements {
+        messages[index].content = crate::image_content::ModelContent::context_marker(marker)
+            .with_tool_result_status(true);
+        stats.results += 1;
+        stats.saved_tokens += before.saturating_sub(after);
+        stats.added_tokens += after.saturating_sub(before);
+    }
+    stats
 }
 
 /// A graph worker has one human turn, so ordinary multi-turn age pruning cannot
@@ -733,5 +826,119 @@ mod tests {
                 .unwrap(),
             "evidence ".repeat(3000)
         );
+    }
+
+    fn tool_turn(id: &str, body: &str) -> Vec<ChatMessage> {
+        vec![
+            ChatMessage {
+                role: "user".into(),
+                content: crate::image_content::ModelContent::text("turn"),
+                tool_calls: None,
+                tool_call_id: None,
+                response_items: vec![],
+            },
+            ChatMessage {
+                role: "assistant".into(),
+                content: crate::image_content::ModelContent::text(""),
+                tool_calls: Some(vec![ToolCallMsg {
+                    id: id.into(),
+                    call_type: "function".into(),
+                    function: FunctionCall {
+                        arguments_retrieved_spans: Vec::new(),
+                        name: "read_file".into(),
+                        arguments: "{}".into(),
+                    },
+                }]),
+                tool_call_id: None,
+                response_items: vec![],
+            },
+            ChatMessage {
+                role: "tool".into(),
+                content: crate::image_content::ModelContent::text(body)
+                    .with_prunable_tool_result(true)
+                    .with_tool_result_status(true),
+                tool_calls: None,
+                tool_call_id: Some(id.into()),
+                response_items: vec![],
+            },
+        ]
+    }
+
+    #[test]
+    fn cold_request_drops_saved_tool_bodies_and_a_warm_prefix_stays() {
+        let large = "evidence ".repeat(200);
+        assert!(large.len() >= 1024);
+        let mut messages = Vec::new();
+        messages.extend(tool_turn("old", &large));
+        messages.extend(tool_turn("small", "short"));
+        messages.extend(tool_turn("latest", &large));
+        let original: Vec<_> = messages
+            .iter()
+            .map(|message| message.content.as_str().unwrap().to_string())
+            .collect();
+        let dir = std::env::temp_dir().join(format!("ca-cold-tool-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut warm = messages.clone();
+        assert_eq!(offload_cold_tool_bodies(&mut warm, &dir, false).results, 0);
+        let warm_text: Vec<_> = warm
+            .iter()
+            .map(|message| message.content.as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(warm_text, original);
+
+        let stats = offload_cold_tool_bodies(&mut messages, &dir, true);
+        assert_eq!(stats.results, 1);
+        let old = messages
+            .iter()
+            .find(|message| message.tool_call_id.as_deref() == Some("old"))
+            .unwrap()
+            .content
+            .as_str()
+            .unwrap();
+        assert!(old.contains("saved at"));
+        assert!(old.contains(&dir.display().to_string()));
+        let saved = std::fs::read_dir(&dir)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        assert_eq!(std::fs::read_to_string(&saved).unwrap(), large);
+        std::fs::write(&saved, "already written").unwrap();
+        let mut again = Vec::new();
+        again.extend(tool_turn("old", &large));
+        again.extend(tool_turn("latest", &large));
+        offload_cold_tool_bodies(&mut again, &dir, true);
+        assert_eq!(std::fs::read_to_string(&saved).unwrap(), "already written");
+        assert_eq!(
+            messages
+                .iter()
+                .find(|message| message.tool_call_id.as_deref() == Some("small"))
+                .unwrap()
+                .content
+                .as_str()
+                .unwrap(),
+            "short"
+        );
+        assert_eq!(
+            messages
+                .iter()
+                .find(|message| message.tool_call_id.as_deref() == Some("latest"))
+                .unwrap()
+                .content
+                .as_str()
+                .unwrap(),
+            large
+        );
+        let mut unknown = tool_turn("only", &large);
+        let before = unknown[2].content.as_str().unwrap().to_string();
+        project_request(
+            &mut unknown,
+            RequestKind::MainTurn,
+            "unknown-provider",
+            "unknown-model",
+        );
+        assert_eq!(unknown[2].content.as_str().unwrap(), before);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

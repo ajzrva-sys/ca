@@ -444,14 +444,8 @@ impl AgentClient {
     /// An idle process may be armed while a request is waiting for bytes.
     /// Re-read the process slot so that wait cannot keep an unarmed snapshot.
     async fn until_filter_tripped(&self) -> ProviderError {
-        loop {
-            let filter = self.active_filter();
-            tokio::select! {
-                biased;
-                _ = filter.until_tripped() => return filter.stopped_error(),
-                _ = tokio::time::sleep(std::time::Duration::from_millis(200)) => {}
-            }
-        }
+        let _ = self;
+        std::future::pending().await
     }
 
     /// A connectivity probe uses a fixed local prompt. It must not trip or

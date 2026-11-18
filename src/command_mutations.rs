@@ -85,7 +85,7 @@ fn eligible(path: &Path) -> bool {
             | "log"
     )
 }
-fn skipped_directory(name: &std::ffi::OsStr) -> bool {
+pub(crate) fn skipped_directory(name: &std::ffi::OsStr) -> bool {
     matches!(
         name.to_str().unwrap_or(""),
         ".git"

@@ -143,7 +143,8 @@ def main():
             return 0
         verifier.ROOT = slot
         features = ["--all-features"] if args.all_features else []
-        commands = [("focused", ["cargo", "test", "--locked", "--offline", "--bin", "ca", *features,
+        commands = [("pyramid", [sys.executable, str(slot / "scripts/check-pyramid.py")]),
+                    ("focused", ["cargo", "test", "--locked", "--offline", "--bin", "ca", *features,
                                  "--", *args.selector, "--test-threads=1"]),
                     ("format", ["cargo", "fmt", "--all", "--", "--check"]),
                     ("lint", ["cargo", "clippy", "--locked", "--offline", "--bin", "ca", *features, "--", "-D", "warnings"])]

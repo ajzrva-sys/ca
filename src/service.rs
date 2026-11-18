@@ -3138,7 +3138,6 @@ fn wire_request_id(prefix: &str) -> String {
 
 fn provider_failure(error: &ProviderError) -> (i32, HeadlessFailureKind) {
     match error {
-        ProviderError::FilterStopped { .. } => (11, HeadlessFailureKind::ProviderFilter),
         ProviderError::Http { .. }
         | ProviderError::Transport(_)
         | ProviderError::MissingEnvironment(_) => (5, HeadlessFailureKind::ProviderTransport),

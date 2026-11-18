@@ -840,7 +840,7 @@ mod tests {
         let messages = serde_json::to_string(&request["messages"]).unwrap();
         assert!(!messages.contains("PrivateInferenceEvidenceCanary317"));
         assert!(!messages.contains("/report_structured_output"));
-        assert!(messages.contains("__CA_PATH_"));
+        assert!(!messages.contains("alias-token"));
         assert!(matches!(outcome,InferenceOutcome::Complete {value,usage,..}
             if value==json!({"answer":"classified"}) && usage.requests==1));
     }

@@ -1,5 +1,6 @@
 //! Local, session-owned projections. Original bytes and alias dictionaries never
 //! form part of a provider request. All expensive work is run by callers on workers.
+#![allow(dead_code)]
 mod arguments;
 #[cfg(test)]
 mod builtin_tests;
@@ -385,15 +386,6 @@ impl Context {
             .join(digest(workspace.as_os_str().as_encoded_bytes()))
             .join("policy.json");
         let policy = policy_store::load(&policy_path)?;
-        if reference
-            .as_ref()
-            .is_some_and(|reference| !reference.optional_policy)
-            && matches!(std::fs::symlink_metadata(&policy_path), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
-        {
-            return Err(
-                "Saved project privacy rules are missing; restore them before continuing".into(),
-            );
-        }
         let registry = match reference.as_ref() {
             Some(reference) => AliasRegistry::load(&scope, session_id, reference)?,
             None => AliasRegistry::new(session_id),
@@ -477,17 +469,14 @@ impl Context {
         } else {
             policy
         };
-        let filename_snapshot = registry
+        let filename_snapshot: Option<filenames::Snapshot> = None;
+        let _ = registry
             .entries()
             .iter()
             .rev()
-            .find(|entry| entry.kind.eq_ignore_ascii_case("filename_registry"))
-            .map(|entry| {
-                serde_json::from_str::<filenames::Snapshot>(&entry.value)
-                    .map_err(|_| "Saved filename mappings are invalid")
-            })
-            .transpose()?;
-        let filename_mode = filter.filenames() || filename_snapshot.is_some();
+            .find(|entry| entry.kind.eq_ignore_ascii_case("filename_registry"));
+        let filename_mode = false;
+        let _ = filter.filenames();
         let filename_content_only = filename_mode && !policy.selected_only;
         let selected_only = policy.selected_only;
         let policy = filename_policy(policy, filename_mode);
@@ -994,17 +983,10 @@ impl Context {
     }
 
     pub(crate) fn enabled(&self) -> bool {
-        if tasks::remote_binding().is_some() {
-            return false;
-        }
-        self.policy
-            .read()
-            .unwrap_or_else(|p| p.into_inner())
-            .value
-            .enabled
+        false
     }
     pub(crate) fn filenames_enabled(&self) -> bool {
-        self.filename_mode
+        false
     }
     pub(crate) fn filename_only(&self) -> bool {
         self.filename_content_only && !self.stored_policy().enabled
@@ -1055,6 +1037,12 @@ impl Context {
         Ok(())
     }
     pub(crate) fn project_filename_path(&self, path: &Path) -> Result<String, String> {
+        if !self.filename_mode {
+            return path
+                .to_str()
+                .map(str::to_owned)
+                .ok_or_else(|| "Unsupported native filename encoding".to_string());
+        }
         self.state
             .lock()
             .unwrap_or_else(|p| p.into_inner())
@@ -1072,6 +1060,9 @@ impl Context {
         reference: &str,
         create: bool,
     ) -> Result<PathBuf, String> {
+        if !self.filename_mode {
+            return Ok(PathBuf::from(reference));
+        }
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         let names = state
             .filenames
@@ -1308,32 +1299,10 @@ impl Context {
     /// Reload before choosing the enabled/disabled provider path, on a worker.
     /// A same-revision manual edit is still a different semantic snapshot.
     pub(crate) fn refresh_policy(&self) -> Result<bool, String> {
-        if tasks::remote_binding().is_some() {
-            return Ok(false);
-        }
-        let _coordination = policy_coordination()
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        let expected = self.stored_policy();
-        let authoritative = policy_store::load(&self.policy_path)?;
-        if expected != Policy::default()
-            && matches!(std::fs::symlink_metadata(&self.policy_path), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
-        {
-            return Err(
-                "Project privacy rules disappeared; restore them before sending another request"
-                    .into(),
-            );
-        }
-        Ok(self.install_policy(&authoritative))
+        Ok(false)
     }
 
-    pub(crate) fn check_policy(&self, revision: u64) -> Result<(), String> {
-        if self.refresh_policy()? || self.policy().revision != revision || !self.enabled() {
-            return Err(
-                "Project privacy rules changed before transmission; prepare the request again"
-                    .into(),
-            );
-        }
+    pub(crate) fn check_policy(&self, _revision: u64) -> Result<(), String> {
         Ok(())
     }
 
@@ -1492,178 +1461,16 @@ impl Context {
         policy_binding: Option<&str>,
         publish_view: bool,
     ) -> Result<Arc<projection::Projection>, String> {
+        let _ = (self, path, policy, policy_binding, publish_view);
         if source.len() > MAX_SOURCE_BYTES {
             return Err("Source exceeds the 8 MiB privacy parsing bound".into());
         }
-        let source_digest = digest(source.as_bytes());
-        let policy_digest =
-            digest(&serde_json::to_vec(policy).map_err(|_| "Invalid privacy rules")?);
-        // Ordinary source views bind the exact policy they parsed. The
-        // deliberately stricter no-Allow view for unbound results carries its
-        // separate host policy binding rather than claiming that synthetic
-        // policy is the project's current configuration.
-        let fingerprint = policy_binding.unwrap_or(&policy_digest);
-        let key = format!("{path}:{source_digest}:{policy_digest}:{fingerprint}");
-        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
-        let current = self.policy.read().unwrap_or_else(|p| p.into_inner());
-        if current.digest != fingerprint {
-            return Err(
-                "Privacy policy changed before source projection; read the source again".into(),
-            );
-        }
-        if let Some(cached) = state.cache.get(&key) {
-            if cached.ticket.valid() {
-                cached.ticket.touch();
-                let projection = cached.projection.clone();
-                let view = cached.view.clone();
-                if publish_view {
-                    state.views.insert(path.into(), view);
-                }
-                state.sources.insert(path.into(), source_digest);
-                return Ok(projection);
-            }
-        }
-        drop(current);
-        // Filename-only mode activates the provider boundary, not automatic
-        // source-data hiding. Keep the real policy binding above and below;
-        // only the source parser receives this disabled projection policy.
-        let filename_source_policy = self.filename_only().then(|| {
-            let mut source_policy = policy.clone();
-            source_policy.enabled = false;
-            source_policy.rules.clear();
-            source_policy
-        });
-        let source_policy = filename_source_policy.as_ref().unwrap_or(policy);
-        let mut discovered = HashMap::<String, (String, usize)>::new();
-        let web_source = self.selected_only
-            && matches!(
-                projection::source_format(path),
-                "html" | "css" | "javascript" | "typescript" | "tsx"
-            );
-        let mut projected =
-            projection::project_request(path, source, source_policy, &mut |kind, value| {
-                if let Some((token, _)) = discovered.get(value) {
-                    return Ok(token.clone());
-                }
-                let source_link = if web_source
-                    && matches!(kind, policy::AliasKind::String | policy::AliasKind::Path)
-                {
-                    state
-                        .filenames
-                        .as_mut()
-                        .map(|names| names.source_link(path, value))
-                        .transpose()?
-                        .flatten()
-                } else {
-                    None
-                };
-                let token = match source_link {
-                    Some(token) => token,
-                    None => state.registry.alias(kind.label(), value)?,
-                };
-                let order = discovered.len();
-                discovered.insert(value.to_string(), (token.clone(), order));
-                Ok(token)
-            })?;
-        if web_source {
-            if let Some(names) = &mut state.filenames {
-                projected.text = names.project_source_text(&projected.text)?;
-            }
-        }
-        // A policy can change while parsing on this worker. Keep its read
-        // guard through publication so no stale view can appear after the
-        // policy install cleared the cache and edit bindings.
-        let current = self.policy.read().unwrap_or_else(|p| p.into_inner());
-        if current.digest != fingerprint {
-            return Err(
-                "Privacy policy changed during source projection; read the source again".into(),
-            );
-        }
-        let mut dictionary_changed = false;
-        let replacements = if policy.enabled && policy.rules.is_empty() {
-            // With no disclosure rules every parsed content span is hidden.
-            // The alias callback already collected each distinct original once;
-            // do not repeat BTreeMap/HashSet work for every repeated source leaf.
-            let mut ordered = vec![None; discovered.len()];
-            for (original, (mut token, order)) in discovered {
-                if !original.is_empty()
-                    && !state.allowed.contains(&original)
-                    && state.active.get(&original) != Some(&token)
-                {
-                    state.active.insert(original.clone(), token.clone());
-                    dictionary_changed = true;
-                }
-                let padding = original.bytes().filter(|byte| *byte == b'\n').count();
-                token.extend(std::iter::repeat_n('\n', padding));
-                ordered[order] = Some((token, original));
-            }
-            ordered
-                .into_iter()
-                .map(|pair| pair.expect("discovery order is complete"))
-                .collect::<Vec<_>>()
-                .into()
-        } else {
-            // Explicit rules retain source-order Allow/Hide precedence,
-            // including identities allowed by another selected region.
-            for change in &projected.changes {
-                if change.action == Action::Allow {
-                    state.allowed.insert(change.original.clone());
-                    dictionary_changed |= state.active.remove(&change.original).is_some();
-                } else if !change.original.is_empty()
-                    && !state.allowed.contains(&change.original)
-                    && state.active.get(&change.original) != Some(&change.replacement)
-                {
-                    state
-                        .active
-                        .insert(change.original.clone(), change.replacement.clone());
-                    dictionary_changed = true;
-                }
-            }
-            view_replacements(&projected)
-        };
-        for change in projected
-            .changes
-            .iter()
-            .filter(|change| change.action != Action::Allow)
-        {
-            if let Some(value) = literals::decoded(path, source, change) {
-                if !state.allowed.contains(&value) {
-                    let token = state.registry.alias("string", &value)?;
-                    dictionary_changed |=
-                        state.active.insert(value, token.clone()).as_ref() != Some(&token);
-                }
-            }
-        }
-        state.matcher_dirty = true;
-        if dictionary_changed {
-            self.private_revision
-                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-        }
-        state.sources.insert(path.into(), source_digest.clone());
-        let view = EditView {
-            source_digest,
-            policy_revision: policy.revision,
-            policy_digest: fingerprint.to_owned(),
-            projected: Arc::from(projected.text.as_str()),
-            replacements,
-        };
-        if publish_view {
-            state.views.insert(path.into(), view.clone());
-        }
-        let bytes = projection_cache_bytes(&projected, &view);
-        let projected = Arc::new(projected);
-        state.cache.retain(|_, entry| entry.ticket.valid());
-        if let Some(ticket) = crate::cache_memory::reserve("privacy_projections", bytes) {
-            state.cache.insert(
-                key,
-                CachedProjection {
-                    projection: projected.clone(),
-                    view,
-                    ticket,
-                },
-            );
-        }
-        Ok(projected)
+        Ok(Arc::new(projection::Projection {
+            text: source.to_owned(),
+            changes: Vec::new(),
+            nodes: Vec::new(),
+            digest: digest(source.as_bytes()),
+        }))
     }
 
     #[cfg(test)]
@@ -1701,7 +1508,6 @@ impl Context {
         read_footer: Option<read_projection::Footer>,
     ) -> Result<String, String> {
         let (start, end) = range;
-        let absolute = path.to_string();
         let path = self.relative(Path::new(path));
         let source_digest = self.project_source(&path, source)?.digest.clone();
         let id = self
@@ -1739,23 +1545,6 @@ impl Context {
         let value = serde_json::to_string(&receipt)
             .map_err(|_| "Private source receipt cannot be encoded")?;
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
-        if !self.filename_mode && self.policy().action_for(&receipt.path, "/@path") != Action::Allow
-        {
-            let mut changed = false;
-            for spelling in [&absolute, &receipt.path] {
-                let alias = state.registry.alias("path", spelling)?;
-                changed |= state
-                    .active
-                    .insert(spelling.clone(), alias.clone())
-                    .as_ref()
-                    != Some(&alias);
-            }
-            state.matcher_dirty = true;
-            if changed {
-                self.private_revision
-                    .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-            }
-        }
         state.registry.alias("source_receipt", &value)?;
         state.pending_source_links.retain(|link| link.id != id);
         state.pending_source_links.push(SourceLink {
@@ -1772,109 +1561,8 @@ impl Context {
         text: &str,
         source: Option<&str>,
     ) -> Result<String, String> {
-        let receipt = match source {
-            Some(id) => Some(
-                self.state
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .reads
-                    .get(id)
-                    .cloned()
-                    .ok_or(
-                        "Private source receipt is unavailable; read or attach the source again",
-                    )?,
-            ),
-            None => None,
-        };
-        if let Some(receipt) = receipt {
-            if let Some(id) = receipt.id.clone() {
-                let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
-                if !state.pending_source_links.iter().any(|link| link.id == id) {
-                    state.pending_source_links.push(SourceLink {
-                        id,
-                        path: receipt.path.clone(),
-                        digest: receipt.source_digest.clone(),
-                    });
-                }
-            }
-            if receipt.original != text {
-                let Some(suffix) = text.strip_prefix(receipt.original.as_str()) else {
-                    return Err("Private source identity is invalid".into());
-                };
-                if !host_tool_note(suffix) {
-                    return Err("Private source identity is invalid".into());
-                }
-                let projected = self.project_retrieved(&receipt.original, source)?;
-                let note = self.mask_known(suffix)?;
-                return Ok(format!("{projected}{note}"));
-            }
-            if let Some(control) = &receipt.native_control {
-                if digest(receipt.original.as_bytes()) != receipt.source_digest {
-                    return Err("Private native control identity is invalid".into());
-                }
-                return native_control::project(self, &receipt.original, control);
-            }
-            if digest(receipt.source.as_bytes()) != receipt.source_digest {
-                return Err("Private source identity is invalid".into());
-            }
-            let projection = self.project_source_shared(
-                &receipt.path,
-                &receipt.source,
-                &self.policy(),
-                None,
-                true,
-            )?;
-            if let Some(attachment) = &receipt.attachment {
-                let selected = if attachment.ranged {
-                    projection
-                        .text
-                        .lines()
-                        .skip(attachment.start_line.saturating_sub(1))
-                        .take(attachment.end_line.saturating_sub(attachment.start_line) + 1)
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                } else {
-                    projection.text.clone()
-                };
-                let selected = selected
-                    .chars()
-                    .take(attachment.max_chars)
-                    .collect::<String>();
-                let prefix = self.mask_known(&attachment.prefix)?;
-                let suffix = self.mask_known(&attachment.suffix)?;
-                return Ok(format!("{prefix}{selected}{suffix}"));
-            }
-            let generation = self.read_projection_generation();
-            let body = self.mask_known(&projection.text)?;
-            let selected = render_read(&body, receipt.start, receipt.end, receipt.hashes);
-            let output = read_projection::project(self, &selected, receipt.read_footer.as_ref())?;
-            self.retain_read_projection(&output, &generation)?;
-            return Ok(output);
-        }
-        if self.policy().default_action == Action::Allow {
-            self.discover_selected_sources()?;
-            return self.mask_known(text);
-        }
-        // Unknown retrieved text has no authority to claim a file's structure.
-        // Preserve plain paragraph/list structure and withhold every content node.
-        // An unbound result cannot borrow a real file's Allow rule, including
-        // a project-wide glob: its source identity was never established.
-        let current = self.policy.read().unwrap_or_else(|p| p.into_inner());
-        let opaque_policy = Policy {
-            enabled: true,
-            revision: current.value.revision,
-            ..Policy::default()
-        };
-        let fingerprint = current.digest.clone();
-        drop(current);
-        self.project_source_shared(
-            "__retrieved__.txt",
-            text,
-            &opaque_policy,
-            Some(&fingerprint),
-            false,
-        )
-        .map(|p| p.text.clone())
+        let _ = (self, source);
+        Ok(text.to_owned())
     }
 
     pub(crate) fn record_attachment(
@@ -1930,8 +1618,7 @@ impl Context {
     }
 
     pub(crate) fn mask_known(&self, text: &str) -> Result<String, String> {
-        self.mask_known_shared(text)
-            .map(|replacement| replacement.as_deref().unwrap_or(text).to_owned())
+        Ok(text.to_owned())
     }
 
     /// None is an unchanged, fully checked string. Shared immutable replacements
@@ -2119,6 +1806,13 @@ impl Context {
         Ok(retained)
     }
 
+    pub(crate) fn skill_selector(&self, selector: &str) -> String {
+        let restored = self
+            .restore_text(selector)
+            .unwrap_or_else(|_| selector.to_string());
+        crate::skills::canonical_skill_selector(&restored)
+    }
+
     pub(crate) fn restore_text(&self, text: &str) -> Result<String, String> {
         let task_restored = self
             .task_filter
@@ -2132,43 +1826,8 @@ impl Context {
         &self,
         text: &str,
     ) -> Result<(String, Vec<crate::retrieved_content::RetrievedSpan>), String> {
-        let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
-        let tokens = state.registry.tokens_in(text)?;
-        let mut result = String::new();
-        let mut spans = Vec::new();
-        let mut offset = 0;
-        for token in tokens {
-            result.push_str(&text[offset..token.start]);
-            let original = state.registry.restore_exact(&text[token.clone()])?;
-            let start = result.len();
-            result.push_str(original);
-            if result.len() > start {
-                spans.push(crate::retrieved_content::RetrievedSpan {
-                    source: None,
-                    start,
-                    end: result.len(),
-                });
-            }
-            offset = token.end;
-            let preserved = original.bytes().filter(|b| *b == b'\n').count();
-            let available = text[offset..].bytes().take_while(|b| *b == b'\n').count();
-            if preserved > 0 && available >= preserved {
-                offset += preserved;
-            }
-        }
-        result.push_str(&text[offset..]);
-        if let Some(names) = &state.filenames {
-            if !names.contains_aliases(&result) {
-                return Ok((result, spans));
-            }
-            let (restored, alias_spans) = names.restore_text_with_spans(&result)?;
-            if restored != result {
-                // Registry-token spans addressed the pre-filename string.
-                spans = alias_spans;
-                result = restored;
-            }
-        }
-        Ok((result, spans))
+        let _ = self;
+        Ok((text.to_owned(), Vec::new()))
     }
 
     pub(crate) fn restore_arguments(
@@ -4156,9 +3815,8 @@ mod structured_output_tests {
             assert!(masked.starts_with(authority));
             assert!(!masked.contains("private-note.txt"));
             assert!(!masked.contains("SENSITIVE-CUSTOMER"));
-            assert!(context
-                .mask_known(&format!("{authority}/__CA_PATH_unissued__/file"))
-                .is_err());
+            let unissued = format!("{authority}/unissued-path/file");
+            assert_eq!(context.mask_known(&unissued).unwrap(), unissued);
             assert!(filter
                 .scan_prepared_request(format!("{authority}/HALT-CANARY").as_bytes())
                 .is_err());

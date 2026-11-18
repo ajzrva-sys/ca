@@ -1471,7 +1471,6 @@ mod tests {
         );
         for command in [
             "cargo test && rm -rf build",
-            "cargo test > out",
             "cargo $(echo test)",
             "cargo test\nrm build",
         ] {
@@ -1485,10 +1484,90 @@ mod tests {
                         tool: "run_command".into()
                     }],
                 ),
-                PermissionOutcome::Allow,
+                PermissionOutcome::Ask,
                 "{command}"
             );
         }
+        assert_eq!(
+            evaluate(
+                "run_command",
+                &serde_json::json!({"command":"cargo test > out"}),
+                std::slice::from_ref(&broad),
+                std::slice::from_ref(&allow),
+                &[PermissionMatcher::Tool {
+                    tool: "run_command".into()
+                }],
+            ),
+            PermissionOutcome::Allow
+        );
+    }
+
+    #[test]
+    fn a_tool_allow_runs_find_exec_grep_and_still_asks_for_a_write() {
+        let broad = crate::config::ApprovalRule::AllowTool("run_command".into());
+        let grant = PermissionMatcher::Tool {
+            tool: "run_command".into(),
+        };
+        let search = "find /Volumes/projects -maxdepth 4 -name '.git' 2>/dev/null | head -40; echo '---remotes mentioning ajzrva/ca---'; find /Volumes/projects -maxdepth 4 -path '*/.git/config' 2>/dev/null -exec grep -H -E 'ajzrva|/ca' {} \\; | head -40";
+        assert_eq!(
+            evaluate(
+                "run_command",
+                &serde_json::json!({"command": search}),
+                std::slice::from_ref(&broad),
+                &[],
+                std::slice::from_ref(&grant),
+            ),
+            PermissionOutcome::Allow,
+            "{search}"
+        );
+        assert_eq!(
+            evaluate(
+                "run_command",
+                &serde_json::json!({"command": "find . -exec rm {} \\;"}),
+                std::slice::from_ref(&broad),
+                &[],
+                std::slice::from_ref(&grant),
+            ),
+            PermissionOutcome::Ask
+        );
+    }
+
+    #[test]
+    fn a_tool_allow_asks_for_the_command_after_an_unquoted_newline() {
+        let broad = crate::config::ApprovalRule::AllowTool("run_command".into());
+        let grant = PermissionMatcher::Tool {
+            tool: "run_command".into(),
+        };
+        assert_eq!(
+            evaluate(
+                "run_command",
+                &serde_json::json!({"command":"cargo test\nrm -rf build"}),
+                std::slice::from_ref(&broad),
+                &[],
+                std::slice::from_ref(&grant),
+            ),
+            PermissionOutcome::Ask
+        );
+        assert_eq!(
+            evaluate(
+                "run_command",
+                &serde_json::json!({"command":"echo \"hello\nworld\""}),
+                std::slice::from_ref(&broad),
+                &[],
+                std::slice::from_ref(&grant),
+            ),
+            PermissionOutcome::Allow
+        );
+        assert_eq!(
+            evaluate(
+                "run_command",
+                &serde_json::json!({"command":"cat <<'EOF'\nrm -rf /\nEOF"}),
+                std::slice::from_ref(&broad),
+                &[],
+                std::slice::from_ref(&grant),
+            ),
+            PermissionOutcome::Allow
+        );
     }
 
     #[test]

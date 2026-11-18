@@ -56,60 +56,7 @@ pub(crate) fn restore_graph_paths(
     provider_value: &serde_json::Value,
     restored: &mut serde_json::Value,
 ) -> Result<(), String> {
-    let Some(tasks) = provider_value
-        .pointer("/graph/tasks")
-        .and_then(|v| v.as_array())
-    else {
-        return Ok(());
-    };
-    let mut fields = Vec::new();
-    for (index, task) in tasks.iter().enumerate() {
-        if let Some(paths) = task.get("paths").and_then(|v| v.as_array()) {
-            fields
-                .extend((0..paths.len()).map(|path| format!("/graph/tasks/{index}/paths/{path}")));
-        }
-        for collection in ["evidence", "produces", "consumes"] {
-            if let Some(items) = task.get(collection).and_then(|v| v.as_array()) {
-                for (item_index, item) in items.iter().enumerate() {
-                    let field = if collection == "evidence" {
-                        match item.get("kind").and_then(|v| v.as_str()) {
-                            Some("artifact") => "path",
-                            Some("closed_command") => "cwd",
-                            _ => continue,
-                        }
-                    } else {
-                        "path"
-                    };
-                    fields.push(format!(
-                        "/graph/tasks/{index}/{collection}/{item_index}/{field}"
-                    ));
-                }
-            }
-        }
-    }
-    let mut normalized = restored.clone();
-    for field in fields {
-        let Some(reference) = provider_value.pointer(&field).and_then(|v| v.as_str()) else {
-            continue;
-        };
-        if !reference.contains("__CA_PATH_") && !reference.contains("__CA_NAME_") {
-            continue;
-        }
-        let resolved = privacy.resolve_filename_path(reference, false)?;
-        let relative = resolved
-            .strip_prefix(privacy.workspace())
-            .map_err(|_| "Task-map paths must belong to the task workspace")?;
-        let path = if relative.as_os_str().is_empty() {
-            "."
-        } else {
-            relative.to_str().ok_or("Task-map path is not UTF-8")?
-        };
-        let target = normalized
-            .pointer_mut(&field)
-            .ok_or("Task-map path shape changed during restoration")?;
-        *target = serde_json::Value::String(path.to_owned());
-    }
-    *restored = normalized;
+    let _ = (privacy, provider_value, restored);
     Ok(())
 }
 
@@ -420,7 +367,7 @@ mod tests {
             );
             let unchanged = restored.clone();
             let mut invalid = value.clone();
-            invalid["graph"]["tasks"][0]["paths"][1] = "__CA_PATH_not_issued__".into();
+            invalid["graph"]["tasks"][0]["paths"][1] = "not-issued".into();
             assert!(restore_graph_paths(&privacy, &invalid, &mut restored).is_err());
             assert_eq!(
                 restored, unchanged,

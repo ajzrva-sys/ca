@@ -12,7 +12,6 @@ use tokio::sync::{broadcast, Mutex, Notify};
 use uuid::Uuid;
 
 const DEFAULT_BUFFER_BYTES: usize = 64 * 1024;
-const PRIVACY_SHELL_GUIDANCE: &str = "\nPrivacy keeps project sources read-only for shell commands. Use read_file and the native edit_file, apply_patch, or write_file tools for source changes.\n";
 tokio::task_local! {
     /// Supplied by ca's validated automation coordinator, outside tool grants.
     pub(crate) static AUTOMATION_PRIVATE_PATHS: Vec<std::path::PathBuf>;
@@ -1099,42 +1098,8 @@ impl JobManager {
         {
             read_only_roots.push(cwd_path);
         }
-        let protected_workspace = (origin == JobOrigin::ModelTool)
-            .then(|| crate::privacy::for_owner(owner))
-            .flatten()
-            .map(|context| context.workspace().to_path_buf())
-            .or_else(|| {
-                (origin == JobOrigin::ModelTool
-                    && crate::privacy::tasks::remote_binding().is_some())
-                .then(|| std::path::PathBuf::from(&cwd))
-            });
-        let mut protected_paths = protected_workspace.iter().cloned().collect::<Vec<_>>();
-        if origin == JobOrigin::ModelTool {
-            let privacy = crate::privacy::for_owner(owner);
-            let remote = crate::privacy::tasks::remote_binding();
-            if privacy.is_some() || remote.is_some() {
-                let folders = tokio::task::spawn_blocking(move || {
-                    let value = if let Some(context) = privacy {
-                        crate::privacy::tasks::call_for(
-                            &context,
-                            "protected_folders",
-                            serde_json::Value::Null,
-                        )
-                    } else {
-                        crate::privacy::tasks::rpc(
-                            &remote.expect("private worker"),
-                            "protected_folders",
-                            serde_json::Value::Null,
-                        )
-                    }?;
-                    serde_json::from_value::<Vec<std::path::PathBuf>>(value)
-                        .map_err(|_| "private folder bindings are invalid".to_string())
-                })
-                .await
-                .map_err(|_| "private folder worker stopped")??;
-                protected_paths.extend(folders);
-            }
-        }
+        let protected_workspace: Option<std::path::PathBuf> = None;
+        let protected_paths = Vec::new();
         let backend = crate::sandbox::SandboxBackend::new(if protected_workspace.is_some() {
             crate::sandbox::SandboxMode::Required
         } else {
@@ -1968,14 +1933,7 @@ async fn set_terminal_status(inner: &Inner, id: JobId, record: &JobRecord, statu
     }
     let mut state = record.state.lock().await;
     state.status = status;
-    if state.protected_sources && matches!(status, JobStatus::Failed { .. }) {
-        state.stderr.push(PRIVACY_SHELL_GUIDANCE.as_bytes());
-        let _ = inner.events.send(JobEvent::Output {
-            id,
-            stream: JobStream::Stderr,
-            text: PRIVACY_SHELL_GUIDANCE.to_string(),
-        });
-    }
+    let _ = (id, inner);
     state.finished_at = Some(Instant::now());
     state.keep_awake_lease.take();
     state.workspace_activity_lease.take();
@@ -2156,7 +2114,6 @@ mod tests {
                         }
                     );
                     assert!(job.stdout.starts_with("command_source_generation: "));
-                    assert!(job.stdout.contains("command_artifact_directory: __CA_PATH_"));
                     assert!(job.stdout.contains("EXECUTED_BODY317\nprotected-original317\n"));
                     assert_ne!(std::path::Path::new(&job.cwd), workspace);
                     assert_eq!(

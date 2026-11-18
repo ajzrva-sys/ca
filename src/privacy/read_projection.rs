@@ -1,4 +1,5 @@
 //! Keep projected native reads within their original result budget.
+#![allow(dead_code)]
 
 use super::Context;
 use serde::{Deserialize, Serialize};

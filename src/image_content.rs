@@ -12,6 +12,9 @@ pub const MAX_COMPRESSED_IMAGE_BYTES: usize = 10 * 1024 * 1024;
 pub const MAX_IMAGE_PIXELS: u64 = 40_000_000;
 pub const MAX_DECODED_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
 pub const MAX_NORMALIZED_IMAGE_BYTES: usize = 20 * 1024 * 1024;
+/// Retry cap after a provider rejects an image for size. Screenshots are still
+/// re-encoded before the model sees them; this cap is only for that rejection.
+pub const PROVIDER_IMAGE_RETRY_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct RawClipboardImage {
@@ -113,6 +116,66 @@ impl ModelImage {
     pub(crate) fn data_url(&self) -> String {
         format!("data:image/png;base64,{}", self.base64())
     }
+
+    /// A smaller PNG within `max_bytes`, or nothing when the image is already
+    /// inside the cap or a shrink would not get smaller.
+    pub(crate) fn shrink_to(&self, max_bytes: usize) -> Option<Self> {
+        if self.png.len() <= max_bytes {
+            return None;
+        }
+        let image = image::load_from_memory(&self.png).ok()?;
+        let mut current = image;
+        let original = self.png.len();
+        for _ in 0..8 {
+            let width = current.width();
+            let height = current.height();
+            let long = width.max(height);
+            if long <= 1 {
+                break;
+            }
+            let next = (long / 2).max(1);
+            let width = scale_edge(width, long, next);
+            let height = scale_edge(height, long, next);
+            current = current.resize(width, height, image::imageops::FilterType::Triangle);
+            let mut png = Vec::new();
+            current
+                .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+                .ok()?;
+            if png.len() >= original {
+                return None;
+            }
+            if png.len() <= max_bytes {
+                return Some(Self {
+                    png: png.into(),
+                    width,
+                    height,
+                });
+            }
+        }
+        None
+    }
+}
+
+fn scale_edge(side: u32, long: u32, next_long: u32) -> u32 {
+    let scaled = (u64::from(side) * u64::from(next_long)) / u64::from(long.max(1));
+    u32::try_from(scaled.max(1)).unwrap_or(1)
+}
+
+/// The provider named an image and a size problem. Other failures stay put.
+pub fn provider_rejected_image_size(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    let image = lower.contains("image");
+    let size = [
+        "too large",
+        "too big",
+        "exceed",
+        "maximum size",
+        "payload too large",
+        "image size",
+    ]
+    .iter()
+    .any(|phrase| lower.contains(phrase));
+    image && size
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -672,6 +735,19 @@ impl ModelContent {
         &self.blocks
     }
 
+    pub(crate) fn shrink_images_to(&mut self, max_bytes: usize) -> bool {
+        let mut changed = false;
+        for block in &mut self.blocks {
+            if let ModelContentBlock::Image(image) = block {
+                if let Some(smaller) = image.shrink_to(max_bytes) {
+                    *image = smaller;
+                    changed = true;
+                }
+            }
+        }
+        changed
+    }
+
     pub fn image_accounting(&self) -> (usize, usize) {
         let mut blocks: usize = 0;
         let mut bytes: usize = 0;
@@ -987,6 +1063,39 @@ fn normalize_dynamic_image(image: image::DynamicImage) -> Result<ModelImage, Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_shrinks_once_after_the_provider_rejects_the_size() {
+        assert!(provider_rejected_image_size(
+            "image exceeds the maximum size"
+        ));
+        assert!(provider_rejected_image_size(
+            "Image payload too large for this model"
+        ));
+        assert!(!provider_rejected_image_size("payload too large"));
+        assert!(!provider_rejected_image_size("image was not a png"));
+
+        let mut noisy = image::RgbImage::new(64, 64);
+        for (index, pixel) in noisy.pixels_mut().enumerate() {
+            *pixel = image::Rgb([(index * 17) as u8, (index * 31) as u8, (index * 13) as u8]);
+        }
+        let dynamic = image::DynamicImage::ImageRgb8(noisy);
+        let image = normalize_dynamic_image(dynamic).unwrap();
+        assert!(image.shrink_to(image.encoded_len()).is_none());
+        let smaller = image
+            .shrink_to(image.encoded_len().saturating_sub(1))
+            .expect("a half-size png is smaller than the original");
+        assert!(smaller.encoded_len() < image.encoded_len());
+        assert!(smaller.shrink_to(1).is_none());
+        let mut content = ModelContent::multimodal("shot", std::slice::from_ref(&image));
+        if content.shrink_images_to(image.encoded_len().saturating_sub(1)) {
+            let ModelContentBlock::Image(block) = &content.blocks()[1] else {
+                panic!("image block missing");
+            };
+            assert!(block.encoded_len() < image.encoded_len());
+            assert!(!content.shrink_images_to(block.encoded_len()));
+        }
+    }
 
     #[test]
     fn tool_images_stay_under_the_limit_and_retire_a_batch_when_over() {

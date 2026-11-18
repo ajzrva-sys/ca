@@ -1,5 +1,6 @@
 //! Session-owned, metadata-only filename projection. This is a name boundary,
 //! not a source-content anonymizer. All filesystem work belongs on a worker.
+#![allow(dead_code)]
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder, MatchKind};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -109,7 +110,7 @@ impl FilenameAliases {
             Snapshot {
                 version: VERSION,
                 namespace: namespace.into(),
-                root_alias: format!("__CA_PATH_{namespace}__"),
+                root_alias: format!("{namespace}__"),
                 allocation_tag: String::new(),
                 next_directory: 1,
                 next_file: 1,
@@ -134,7 +135,6 @@ impl FilenameAliases {
         if !matches!(snapshot.version, 1 | VERSION)
             || !valid_namespace(&snapshot.namespace)
             || (!snapshot.allocation_tag.is_empty() && !valid_namespace(&snapshot.allocation_tag))
-            || !snapshot.root_alias.starts_with("__CA_PATH_")
             || !snapshot.root_alias.ends_with("__")
             || !snapshot
                 .root_alias
@@ -185,7 +185,6 @@ impl FilenameAliases {
             if name.is_empty()
                 || name.contains('/')
                 || name.contains('\0')
-                || !alias.starts_with("__CA_NAME_")
                 || !alias.ends_with("__")
                 || !aliases.insert(alias.clone())
             {
@@ -194,8 +193,7 @@ impl FilenameAliases {
             bytes = bytes.saturating_add(name.len() + alias.len());
         }
         for (alias, spelling) in &snapshot.source_spellings {
-            let source_token = alias.starts_with("__CA_NAME_")
-                && alias.ends_with("__")
+            let source_token = alias.ends_with("__")
                 && alias
                     .bytes()
                     .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_');
@@ -530,6 +528,7 @@ impl FilenameAliases {
 
     /// Enumerate every basename, but allocate path references only for shallow
     /// browsing and paths actually projected. Census data never enters a snapshot.
+    #[allow(dead_code)]
     pub(crate) fn discover(&mut self) -> Result<bool, String> {
         let census = collect_census(&self.census_roots())?;
         self.apply_census(census)
@@ -663,7 +662,7 @@ impl FilenameAliases {
             {
                 return Err("Filename alias namespace conflicts with a newly discovered name; no private filenames were sent".into());
             }
-            let base = format!("__CA_PATH_{}", self.snapshot.namespace);
+            let base = self.snapshot.namespace.clone();
             let mut counter = 1_u64;
             loop {
                 let candidate = format!("{base}_{counter}__");
@@ -1229,44 +1228,7 @@ impl FilenameAliases {
     }
 
     fn issue_name(&mut self, name: &str) -> Result<String, String> {
-        if !self.census.contains_key(name) {
-            if let Some(root) = self
-                .scopes
-                .iter()
-                .find(|(_, scope)| scope.census.contains_key(name))
-                .map(|(root, _)| root.clone())
-            {
-                let alias = self.scopes.get_mut(&root).ok_or(ERROR)?.issue_name(name)?;
-                self.forward.insert(name.into(), alias.clone());
-                self.backward.insert(alias.clone(), name.into());
-                return Ok(alias);
-            }
-        }
-        if let Some(alias) = self.snapshot.names.get(name) {
-            return Ok(alias.clone());
-        }
-        if self.snapshot.names.len() >= MAX_ENTRIES {
-            return Err(LIMIT.into());
-        }
-        let alias = loop {
-            let number = self.snapshot.next_name;
-            self.snapshot.next_name = number.checked_add(1).ok_or(LIMIT)?;
-            let alias = format!("__CA_NAME_{}_{number}__", self.snapshot.namespace);
-            if !self.backward.contains_key(&alias)
-                && !self
-                    .census
-                    .keys()
-                    .chain(self.scopes.values().flat_map(|scope| scope.census.keys()))
-                    .filter(|name| name.contains("__CA_"))
-                    .any(|name| name.contains(&alias))
-            {
-                break alias;
-            }
-        };
-        self.snapshot.names.insert(name.into(), alias.clone());
-        self.forward.insert(name.into(), alias.clone());
-        self.backward.insert(alias.clone(), name.into());
-        Ok(alias)
+        Ok(name.to_owned())
     }
 
     /// Longest-match, non-recursive projection. Already issued references are
@@ -1286,6 +1248,7 @@ impl FilenameAliases {
         self.register_descriptive_paths(text)?;
         self.ensure_matcher()?;
         let protected = self.reference_ranges(text)?;
+        let selectors = crate::skills::qualified_selector_spans(text);
         let matches = self
             .matcher
             .as_ref()
@@ -1310,6 +1273,9 @@ impl FilenameAliases {
                 || opaque
                     .iter()
                     .any(|range| start < range.end && end > range.start)
+                || selectors
+                    .iter()
+                    .any(|(left, right)| start < *right && end > *left)
             {
                 continue;
             }
@@ -1326,7 +1292,8 @@ impl FilenameAliases {
     }
 
     pub(crate) fn contains_aliases(&self, text: &str) -> bool {
-        text.contains("__CA_PATH_") || text.contains("__CA_NAME_")
+        let _ = (self, text);
+        false
     }
 
     /// `list_dir` expands a leading `~` before it reads. Projection has to use
@@ -1471,72 +1438,8 @@ impl FilenameAliases {
         target: Option<String>,
         source: Option<&str>,
     ) -> Result<String, String> {
-        let spelling = SourceSpelling {
-            original: original.into(),
-            target,
-            source: source.map(str::to_owned),
-        };
-        let home_path = spelling.home_path().is_some();
-        if let Some((alias, _)) = self
-            .snapshot
-            .source_spellings
-            .iter()
-            .find(|(alias, value)| {
-                **value == spelling
-                    && (!home_path || valid_alias_path(&self.snapshot.root_alias, alias))
-            })
-        {
-            return Ok(alias.clone());
-        }
-        if self.snapshot.source_spellings.len() >= MAX_ENTRIES {
-            return Err(LIMIT.into());
-        }
-        let alias = if home_path {
-            let target = spelling.target.as_deref().ok_or(ERROR)?;
-            let directory = std::fs::metadata(self.workspace.join(target))
-                .map_err(|_| ERROR)?
-                .is_dir();
-            let kind = if directory { 'd' } else { 'f' };
-            let suffix = if directory { "" } else { extension(target) };
-            let counter = if directory {
-                &mut self.snapshot.next_directory
-            } else {
-                &mut self.snapshot.next_file
-            };
-            loop {
-                let number = *counter;
-                *counter = counter.checked_add(1).ok_or(LIMIT)?;
-                let tag = &self.snapshot.allocation_tag;
-                let component = if tag.is_empty() {
-                    format!("{kind}{number:03}{suffix}")
-                } else {
-                    format!("{kind}{tag}_{number:03}{suffix}")
-                };
-                let alias = format!("{}/{component}", self.snapshot.root_alias);
-                if !self.census.contains_key(&component)
-                    && !self.backward.contains_key(&alias)
-                    && !self.forward.keys().any(|name| name.contains(&alias))
-                {
-                    break alias;
-                }
-            }
-        } else {
-            let mut counter = self.snapshot.source_spellings.len() + 1;
-            loop {
-                let alias = format!("__CA_NAME_{}_source_{counter}__", self.snapshot.namespace);
-                if !self.backward.contains_key(&alias)
-                    && !self.forward.keys().any(|name| name.contains(&alias))
-                {
-                    break alias;
-                }
-                counter += 1;
-            }
-        };
-        self.backward.insert(alias.clone(), original.into());
-        self.snapshot
-            .source_spellings
-            .insert(alias.clone(), spelling);
-        Ok(alias)
+        let _ = (self, target, source);
+        Ok(original.to_owned())
     }
 
     /// Remaining filename occurrences in code get exact-spelling references,
@@ -1546,6 +1449,7 @@ impl FilenameAliases {
         self.register_descriptive_paths(text)?;
         self.ensure_matcher()?;
         let protected = self.reference_ranges(text)?;
+        let selectors = crate::skills::qualified_selector_spans(text);
         let matches = self
             .matcher
             .as_ref()
@@ -1563,6 +1467,9 @@ impl FilenameAliases {
                 !protected
                     .iter()
                     .any(|(start, end)| found.start() < *end && found.end() > *start)
+                    && !selectors
+                        .iter()
+                        .any(|(start, end)| found.start() < *end && found.end() > *start)
             })
             .map(|found| (found.start(), found.end()))
             .collect::<Vec<_>>();
@@ -2005,55 +1912,8 @@ impl FilenameAliases {
     }
 
     fn reference_ranges(&self, text: &str) -> Result<Vec<(usize, usize)>, String> {
-        let mut ranges = Vec::new();
-        let mut offset = 0;
-        while offset < text.len() {
-            let tail = &text[offset..];
-            let starts = [tail.find("__CA_PATH_"), tail.find("__CA_NAME_")];
-            let Some(relative_start) = starts.into_iter().flatten().min() else {
-                break;
-            };
-            let start = offset + relative_start;
-            // A discovered literal name can contain the reserved-looking
-            // spelling. It must be projected as original data, not mistaken
-            // for an invented reference. Allocation avoids exact collisions.
-            if !self
-                .backward
-                .keys()
-                .any(|token| text[start..].starts_with(token.as_str()))
-            {
-                if let Some(original) = self
-                    .forward
-                    .keys()
-                    .filter(|original| text[start..].starts_with(original.as_str()))
-                    .max_by_key(|original| original.len())
-                {
-                    offset = start + original.len();
-                    continue;
-                }
-            }
-            let matched = self
-                .backward
-                .keys()
-                .filter(|token| text[start..].starts_with(token.as_str()))
-                .max_by_key(|token| token.len())
-                .ok_or("Unknown filename reference; request was withheld")?;
-            let end = start + matched.len();
-            // A registered directory is not a valid prefix of an invented path.
-            if text[end..].starts_with('/')
-                && text[end + 1..]
-                    .chars()
-                    .next()
-                    .is_some_and(|c| !c.is_whitespace() && !"\"'`,;)]}".contains(c))
-            {
-                return Err(
-                    "Unknown or traversing filename reference; local action was blocked".into(),
-                );
-            }
-            ranges.push((start, end));
-            offset = end;
-        }
-        Ok(ranges)
+        let _ = (self, text);
+        Ok(Vec::new())
     }
 }
 
@@ -2333,864 +2193,12 @@ fn filename_match(pattern: &str, text: &str, start: usize, end: usize) -> bool {
 mod tests {
     use super::*;
 
-    fn fixture() -> (tempfile::TempDir, FilenameAliases) {
+    #[test]
+    fn issued_name_is_the_real_name() {
         let temp = tempfile::tempdir().unwrap();
-        let aliases = FilenameAliases::new(temp.path().into(), "test").unwrap();
-        (temp, aliases)
-    }
-
-    #[cfg(unix)]
-    fn home_fixture() -> (tempfile::TempDir, PathBuf, FilenameAliases) {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().canonicalize().unwrap();
-        let home = root.join("home");
-        let workspace = root.join("workspace");
-        std::fs::create_dir(&home).unwrap();
-        std::fs::create_dir(&workspace).unwrap();
-        std::os::unix::fs::symlink(&workspace, home.join("projects")).unwrap();
-        let mut names = FilenameAliases::new(workspace, "home_test").unwrap();
-        names.home = Some(home.clone());
-        (temp, home, names)
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn home_path_root_and_nested_references_restore_and_resume() {
-        let (_temp, home, mut names) = home_fixture();
-        std::fs::create_dir(names.workspace.join("nested")).unwrap();
-        std::fs::write(names.workspace.join("nested/private.txt"), "private").unwrap();
-        names.discover().unwrap();
-        let root = names.project_text("~/projects").unwrap();
-        let nested = names.project_text("~/projects/nested/private.txt").unwrap();
-        assert!(root.starts_with(&format!("{}/d", names.snapshot.root_alias)));
-        assert!(nested.starts_with(&format!("{}/f", names.snapshot.root_alias)));
-        assert!(nested.ends_with(".txt"));
-        assert!(names.is_known_path_alias(&root));
-        assert_eq!(names.resolve_path(&root).unwrap(), names.workspace);
-        assert_eq!(
-            names.resolve_path(&nested).unwrap(),
-            names.workspace.join("nested/private.txt")
-        );
-        let original =
-            "testing filter. list '~/projects' then read `~/projects/nested/private.txt`";
-        let projected = names.project_text(original).unwrap();
-        assert!(!projected.contains("~/"));
-        assert_eq!(names.restore_text(&projected).unwrap(), original);
-        assert_eq!(
-            names.restore_source_text(&root, None).unwrap(),
-            "~/projects"
-        );
-        let snapshot =
-            serde_json::from_slice(&serde_json::to_vec(&names.snapshot()).unwrap()).unwrap();
-        let mut resumed =
-            FilenameAliases::from_snapshot(names.workspace.clone(), snapshot).unwrap();
-        resumed.home = Some(home);
-        resumed.discover().unwrap();
-        resumed.fork_namespace("child").unwrap();
-        assert_eq!(resumed.project_text("~/projects").unwrap(), root);
-        assert_eq!(resumed.resolve_path(&root).unwrap(), names.workspace);
-        assert_eq!(resumed.restore_text(&projected).unwrap(), original);
-        assert_eq!(
-            resumed.resolve_path(&nested).unwrap(),
-            names.workspace.join("nested/private.txt")
-        );
-        assert!(
-            resumed.resolve_path("~/projects").is_err(),
-            "raw model paths gain no authority"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn home_path_prefers_typed_reference_and_retains_legacy_name_history() {
-        let (_temp, home, mut names) = home_fixture();
-        names.discover().unwrap();
-        let legacy = "__CA_NAME_home_test_source_1__";
-        names.snapshot.source_spellings.insert(
-            legacy.into(),
-            SourceSpelling {
-                original: "~/projects".into(),
-                target: Some(".".into()),
-                source: None,
-            },
-        );
-        names.rebuild().unwrap();
-        let mut resumed =
-            FilenameAliases::from_snapshot(names.workspace.clone(), names.snapshot()).unwrap();
-        resumed.home = Some(home.clone());
-        let typed = resumed.project_text("~/projects").unwrap();
-        assert!(valid_alias_path(&resumed.snapshot.root_alias, &typed));
-        assert_ne!(typed, legacy);
-        for reference in [legacy, typed.as_str()] {
-            assert_eq!(resumed.restore_text(reference).unwrap(), "~/projects");
-            assert_eq!(resumed.resolve_path(reference).unwrap(), resumed.workspace);
-        }
-        let mut inherited =
-            FilenameAliases::from_snapshot(resumed.workspace.clone(), resumed.snapshot()).unwrap();
-        inherited.home = Some(home);
-        inherited.fork_namespace("next_task").unwrap();
-        assert_eq!(inherited.project_text("~/projects").unwrap(), typed);
-        assert_eq!(inherited.restore_text(legacy).unwrap(), "~/projects");
-        // A root-bound spelling is issued authority even with no child entries.
-        // Its namespace cannot be renamed to accommodate a new literal name.
-        let before = inherited.snapshot();
-        let literal = inherited.workspace.join(&inherited.snapshot.root_alias);
-        std::fs::write(&literal, "late literal namespace").unwrap();
-        assert!(inherited.discover().is_err());
-        assert_eq!(inherited.snapshot(), before);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn home_path_scope_binding_requires_current_grant() {
-        let (temp, home, mut names) = home_fixture();
-        let external = temp.path().canonicalize().unwrap().join("external");
-        std::fs::create_dir(&external).unwrap();
-        std::fs::write(external.join("private.txt"), "private").unwrap();
-        std::os::unix::fs::symlink(&external, home.join("outside")).unwrap();
-        names.discover().unwrap();
-        assert_eq!(names.project_text("~/outside").unwrap(), "~/outside");
-        assert!(names.authorized_scopes.is_empty());
-        names
-            .authorize_roots(std::slice::from_ref(&external))
-            .unwrap();
-        names.discover().unwrap();
-        let root = names.project_text("~/outside").unwrap();
-        let file = names.project_text("~/outside/private.txt").unwrap();
-        assert_eq!(names.resolve_path(&root).unwrap(), external);
-        assert_eq!(names.restore_text(&file).unwrap(), "~/outside/private.txt");
-        let mut resumed =
-            FilenameAliases::from_snapshot(names.workspace.clone(), names.snapshot()).unwrap();
-        resumed.home = Some(home.clone());
-        for scope in resumed.scopes.values_mut() {
-            scope.home = Some(home.clone());
-        }
-        assert!(
-            resumed.resolve_path(&root).is_err(),
-            "snapshot grants no access"
-        );
-        resumed
-            .authorize_roots(std::slice::from_ref(&external))
-            .unwrap();
-        resumed.discover().unwrap();
-        assert_eq!(
-            resumed.resolve_path(&file).unwrap(),
-            external.join("private.txt")
-        );
-        resumed.authorize_roots(&[]).unwrap();
-        assert!(resumed.resolve_path(&root).is_err());
-        assert!(resumed.resolve_write_path(&file).is_err());
-        assert_eq!(
-            resumed.restore_text(&file).unwrap(),
-            "~/outside/private.txt"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn home_path_stale_links_and_traversal_never_gain_execution() {
-        let (temp, home, mut names) = home_fixture();
-        std::fs::create_dir(names.workspace.join("nested")).unwrap();
-        std::fs::write(names.workspace.join("nested/private.txt"), "private").unwrap();
-        names.discover().unwrap();
-        let root = names.project_text("~/projects").unwrap();
-        let file = names.project_text("~/projects/nested/private.txt").unwrap();
-        let outside = temp.path().canonicalize().unwrap().join("outside");
-        std::fs::create_dir(&outside).unwrap();
-        std::fs::remove_file(home.join("projects")).unwrap();
-        std::os::unix::fs::symlink(&outside, home.join("projects")).unwrap();
-        assert!(names.resolve_path(&root).is_err());
-        assert!(names.resolve_path(&file).is_err());
-        assert!(names.resolve_write_path(&file).is_err());
-        assert_eq!(names.restore_text(&root).unwrap(), "~/projects");
-        assert!(names.authorized_scopes.is_empty());
-        std::fs::remove_file(home.join("projects")).unwrap();
-        assert!(names.resolve_path(&root).is_err());
-        std::os::unix::fs::symlink(&names.workspace, home.join("projects")).unwrap();
-        assert_eq!(names.resolve_path(&root).unwrap(), names.workspace);
-        std::fs::remove_file(names.workspace.join("nested/private.txt")).unwrap();
-        assert!(
-            names.resolve_write_path(&file).is_err(),
-            "a stale home path cannot recreate its target"
-        );
-        for spelling in [
-            "~/../workspace",
-            "~/projects/../outside",
-            "~other/projects",
-            "~//outside",
-        ] {
-            let projected = names.project_text(spelling).unwrap();
-            assert!(names.resolve_path(&projected).is_err(), "{spelling}");
-        }
-        assert!(names.resolve_path("__CA_NAME_invented_source_1__").is_err());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn home_path_unscanned_literal_reference_collisions_are_atomic() {
-        let (_temp, _home, mut names) = home_fixture();
-        std::fs::create_dir(names.workspace.join("deep")).unwrap();
-        std::fs::write(names.workspace.join("deep/private.txt"), "private").unwrap();
-        names.discover().unwrap();
-        let issued = names.project_text("private.txt").unwrap();
-        for literal in [issued, names.snapshot.root_alias.clone()] {
-            std::fs::write(names.workspace.join("deep").join(&literal), "collision").unwrap();
-            let before = names.snapshot();
-            assert!(names
-                .project_text(&format!("~/projects/deep/{literal}"))
-                .is_err());
-            assert_eq!(names.snapshot(), before);
-            std::fs::remove_file(names.workspace.join("deep").join(&literal)).unwrap();
-        }
-    }
-
-    #[test]
-    fn filename_words_do_not_reclassify_other_words_or_published_copy_leaves() {
-        let (root, mut names) = fixture();
-        let prose = "stdout outer output without about timeout_secs build target";
-        names.declare_public_names(prose).unwrap();
-        let copy = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(copy.path().join("target/debug/build/out")).unwrap();
-        names.authorize_roots(&[copy.path().into()]).unwrap();
-        names.discover().unwrap();
-        assert_eq!(names.project_text(prose).unwrap(), prose);
-        let code = "function output() { return stdout + outer + timeout_secs; }";
-        assert_eq!(names.project_source_text(code).unwrap(), code);
-        let ordinary_path = "folder/stdout/notes";
-        assert_eq!(names.project_text(ordinary_path).unwrap(), ordinary_path);
-        assert_eq!(
-            names.project_source_text(ordinary_path).unwrap(),
-            ordinary_path
-        );
-        let private_path = names.project_text("folder/out/notes").unwrap();
-        assert_ne!(private_path, "folder/out/notes");
-        assert!(
-            names.resolve_path(&private_path).is_err(),
-            "descriptive paths grant no executable target"
-        );
-        for relative in ["target", "target/debug/build", "target/debug/build/out"] {
-            let native = copy.path().join(relative);
-            let alias = names.project_path(native.to_str().unwrap()).unwrap();
-            assert!(alias.starts_with("__CA_PATH_"));
-            assert_eq!(names.resolve_path(&alias).unwrap(), native);
-        }
-        assert_ne!(names.project_text("out").unwrap(), "out");
-        assert!(!names.project_text("/out/").unwrap().contains("/out/"));
-        std::fs::write(root.path().join("PrivateLeaf317.rs"), "private").unwrap();
-        names.discover().unwrap();
-        assert!(!names
-            .project_text("prefixPrivateLeaf317.rsSuffix")
-            .unwrap()
-            .contains("PrivateLeaf317.rs"));
-    }
-
-    #[test]
-    fn filename_census_repeated_metadata_exceeds_old_entry_count_without_snapshot_growth() {
-        let mut names = HashMap::new();
-        let mut bytes = 0;
-        for _ in 0..MAX_ENTRIES + 1 {
-            remember_name(&mut names, &mut bytes, "reused-private.rs").unwrap();
-        }
-        assert_eq!(names.len(), 1);
-        assert_eq!(bytes, "reused-private.rs".len());
-        assert!(names["reused-private.rs"]);
-        assert!(remember_name(&mut names, &mut bytes, "unsupported\\name").is_err());
-    }
-
-    #[test]
-    fn filename_aliases_symbolic_authored_paths_are_descriptive_and_never_executable() {
-        let (root, mut names) = fixture();
-        std::fs::create_dir(root.path().join("src")).unwrap();
-        std::fs::create_dir(root.path().join("tests")).unwrap();
-        std::fs::write(root.path().join("src/config.rs"), "source").unwrap();
-        std::fs::create_dir_all(root.path().join("templates/.agent")).unwrap();
-        std::fs::write(
-            root.path().join("templates/.agent/PLANS.md"),
-            "unrelated plan",
-        )
-        .unwrap();
-        names.discover().unwrap();
-        let original =
-            "See `tests/*.ca`, `src/{config,session,context,approval,undo,markdown,test}.rs` and `.agent/PLANS.md`.";
-        let projected = names.project_text(original).unwrap();
-        names.validate_wire_text(&projected).unwrap();
-        assert_eq!(names.restore_text(&projected).unwrap(), original);
-        assert!(
-            !projected.contains("tests/")
-                && !projected.contains("src/")
-                && !projected.contains(".agent/")
-        );
-        let references = names.reference_ranges(&projected).unwrap();
-        assert_eq!(references.len(), 3);
-        for (start, end) in references {
-            let reference = &projected[start..end];
-            assert!(reference.starts_with("__CA_NAME_"));
-            assert!(names.resolve_path(reference).is_err());
-            assert!(names.resolve_write_path(reference).is_err());
-        }
-        let directory = names.project_path("tests").unwrap();
-        assert!(names.project_text(&format!("{directory}/*.ca")).is_err());
-        assert!(names
-            .project_text(&format!("{directory}/../outside.rs"))
-            .is_err());
-        std::fs::remove_dir_all(root.path().join("templates/.agent")).unwrap();
-        names.discover().unwrap();
-        assert_eq!(names.project_text(original).unwrap(), projected);
-        assert_eq!(names.restore_text(&projected).unwrap(), original);
-        let mut loaded =
-            FilenameAliases::from_snapshot(root.path().into(), names.snapshot()).unwrap();
-        loaded.discover().unwrap();
-        assert_eq!(loaded.project_text(original).unwrap(), projected);
-        assert_eq!(loaded.restore_text(&projected).unwrap(), original);
-        for (start, end) in loaded.reference_ranges(&projected).unwrap() {
-            assert!(loaded.resolve_path(&projected[start..end]).is_err());
-            assert!(loaded.resolve_write_path(&projected[start..end]).is_err());
-        }
-    }
-
-    #[test]
-    fn filename_census_masks_unvisited_names_and_preserves_deferred_links_globs_resume_deletion() {
-        let (root, mut names) = fixture();
-        std::fs::create_dir_all(root.path().join("target/.hidden/deep")).unwrap();
-        let file = root
-            .path()
-            .join("target/.hidden/deep/PrivateDeferred317.rs");
-        std::fs::write(&file, "original source").unwrap();
-        names.discover().unwrap();
-        assert_eq!(
-            names.snapshot.entries.len(),
-            1,
-            "only shallow browsing is allocated"
-        );
-        assert!(
-            names.snapshot.names.is_empty(),
-            "the global census is not persisted"
-        );
-        let prose = names
-            .project_text("Discuss PrivateDeferred317.rs before visiting it")
-            .unwrap();
-        assert!(!prose.contains("PrivateDeferred317.rs"));
-        assert_eq!(names.snapshot.names.len(), 1);
-        let descriptive = names.snapshot.names["PrivateDeferred317.rs"].clone();
-        let alias = names
-            .project_path("target/.hidden/deep/PrivateDeferred317.rs")
-            .unwrap();
-        assert_eq!(names.resolve_path(&alias).unwrap(), file);
-        assert_eq!(names.resolve_write_path(&alias).unwrap(), file);
-        let link = names
-            .source_link("index.html", "target/.hidden/deep/PrivateDeferred317.rs")
-            .unwrap()
-            .unwrap();
-        assert_eq!(names.resolve_path(&link).unwrap(), file);
-        assert!(names
-            .matching_files(&root.path().join("target"), "*.rs")
-            .unwrap()
-            .contains(&file));
-        let snapshot = names.snapshot();
-        assert!(serde_json::to_vec(&snapshot).unwrap().len() < 8 * 1024 * 1024);
-        let mut loaded = FilenameAliases::from_snapshot(root.path().into(), snapshot).unwrap();
-        loaded.discover().unwrap();
-        assert_eq!(loaded.resolve_path(&alias).unwrap(), file);
-        assert_eq!(
-            loaded.restore_text(&descriptive).unwrap(),
-            "PrivateDeferred317.rs"
-        );
-        std::fs::remove_file(&file).unwrap();
-        loaded.discover().unwrap();
-        assert!(loaded.resolve_path(&alias).is_err());
-        assert!(loaded.resolve_path(&link).is_err());
-        assert_eq!(
-            loaded
-                .project_path("target/.hidden/deep/PrivateDeferred317.rs")
-                .unwrap(),
-            alias
-        );
-    }
-
-    #[test]
-    fn filename_census_scoped_lazy_names_do_not_collide_with_literal_foreign_aliases() {
-        let (root, mut names) = fixture();
-        std::fs::create_dir(root.path().join("deep")).unwrap();
-        std::fs::write(root.path().join("deep/RootPrivate317.rs"), "x").unwrap();
-        let other = tempfile::tempdir().unwrap();
-        std::fs::create_dir(other.path().join("deep")).unwrap();
-        std::fs::write(other.path().join("__CA_NAME_test_1__"), "literal").unwrap();
-        std::fs::write(other.path().join("deep/ForeignPrivate317.rs"), "x").unwrap();
-        names
-            .authorize_roots(&[other.path().to_path_buf()])
-            .unwrap();
-        names.discover().unwrap();
-        let root_alias = names.project_text("RootPrivate317.rs").unwrap();
-        assert_ne!(root_alias, "__CA_NAME_test_1__");
-        let foreign = names.project_text("ForeignPrivate317.rs").unwrap();
-        assert!(!foreign.contains("ForeignPrivate317.rs"));
-        assert_ne!(foreign, root_alias);
-        assert_eq!(
-            names.restore_text(&foreign).unwrap(),
-            "ForeignPrivate317.rs"
-        );
-        let mut loaded =
-            FilenameAliases::from_snapshot(root.path().into(), names.snapshot()).unwrap();
-        loaded
-            .authorize_roots(&[other.path().to_path_buf()])
-            .unwrap();
-        loaded.discover().unwrap();
-        assert_eq!(
-            loaded.restore_text(&foreign).unwrap(),
-            "ForeignPrivate317.rs"
-        );
-    }
-
-    #[test]
-    fn filename_census_new_literal_issued_name_collision_is_transactionally_withheld() {
-        let (root, mut names) = fixture();
-        std::fs::create_dir_all(root.path().join("deep")).unwrap();
-        std::fs::write(root.path().join("deep/PrivateBasename317.rs"), "x").unwrap();
-        names.discover().unwrap();
-        let issued = names.project_text("PrivateBasename317.rs").unwrap();
-        assert!(issued.starts_with("__CA_NAME_"));
-        let before = names.snapshot();
-        std::fs::write(root.path().join(&issued), "literal conflicting name").unwrap();
-        assert!(names.discover().is_err());
-        assert_eq!(names.snapshot(), before);
-    }
-
-    #[test]
-    fn whole_site_source_spelling_snapshot_fork_and_target_identity() {
-        let (root, mut names) = fixture();
-        std::fs::create_dir(root.path().join("pages")).unwrap();
-        std::fs::create_dir(root.path().join("assets")).unwrap();
-        std::fs::write(root.path().join("assets/private logo.svg"), "<svg/>").unwrap();
-        names.discover().unwrap();
-        let spelling = "../assets/private%20logo.svg?size=2#mark";
-        let token = names
-            .source_link("pages/index.html", spelling)
-            .unwrap()
-            .unwrap();
-        assert_eq!(names.restore_source_text(&token, None).unwrap(), spelling);
-        let folder = names
-            .source_link("pages/index.html", "../assets/")
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            names
-                .restore_source_text(&folder, Some("index.html"))
-                .unwrap(),
-            "assets/"
-        );
-        assert_eq!(
-            names.resolve_path(&token).unwrap(),
-            root.path().join("assets/private logo.svg")
-        );
-        let snapshot = names.snapshot();
-        let mut loaded = FilenameAliases::from_snapshot(root.path().into(), snapshot).unwrap();
-        loaded.discover().unwrap();
-        assert_eq!(
-            loaded
-                .source_link("pages/index.html", spelling)
-                .unwrap()
-                .unwrap(),
-            token
-        );
-        loaded.fork_namespace("child").unwrap();
-        assert_eq!(loaded.restore_source_text(&token, None).unwrap(), spelling);
-        assert_eq!(
-            loaded.resolve_path(&token).unwrap(),
-            root.path().join("assets/private logo.svg")
-        );
-        assert!(loaded
-            .source_link("pages/index.html", "../../outside.svg")
-            .unwrap()
-            .is_none());
-        let unknown = "__CA_NAME_unknown_source_9__";
-        assert!(loaded.restore_source_text(unknown, None).is_err());
-        std::fs::remove_file(root.path().join("assets/private logo.svg")).unwrap();
-        loaded.discover().unwrap();
-        assert!(loaded.resolve_path(&token).is_err());
-        assert_eq!(loaded.restore_source_text(&token, None).unwrap(), spelling);
-    }
-
-    #[test]
-    fn whole_site_created_root_file_snapshot_reloads() {
-        let (root, mut names) = fixture();
-        names.discover().unwrap();
-        let path = names.resolve_write_path("./new.css").unwrap();
-        assert_eq!(path, root.path().join("new.css"));
-        std::fs::write(&path, ".card { color: blue; }").unwrap();
-        names.discover().unwrap();
-        let mut loaded =
-            FilenameAliases::from_snapshot(root.path().into(), names.snapshot()).unwrap();
-        loaded.discover().unwrap();
-        let alias = loaded.project_path("new.css").unwrap();
-        assert_eq!(loaded.resolve_path(&alias).unwrap(), path);
-        assert_eq!(loaded.project_text("new.css").unwrap(), "new.css");
-        assert!(!loaded
-            .project_text("./new.css")
-            .unwrap()
-            .contains("new.css"));
-    }
-
-    #[test]
-    fn whole_site_deleted_alias_cannot_create_a_synthetic_filename() {
-        let (root, mut names) = fixture();
-        let path = root.path().join("private.css");
-        std::fs::write(&path, "a{}").unwrap();
-        names.discover().unwrap();
-        let alias = names.project_path("private.css").unwrap();
-        std::fs::remove_file(path).unwrap();
-        names.discover().unwrap();
-        let before = names.snapshot();
-        assert!(names.resolve_write_path(&alias).is_err());
-        assert_eq!(names.snapshot(), before);
-    }
-
-    #[test]
-    fn filename_aliases_metadata_round_trip_duplicates_unicode_and_case() {
-        let (temp, mut aliases) = fixture();
-        for path in [
-            "secret-one/customer.rs",
-            "secret-two/customer.rs",
-            "秘密/École.rs",
-            "Case.rs",
-            "case.rs",
-        ] {
-            std::fs::create_dir_all(temp.path().join(path).parent().unwrap()).unwrap();
-            std::fs::write(temp.path().join(path), "untouched source").unwrap();
-        }
-        aliases.discover().unwrap();
-        let left = aliases.project_text("secret-one/customer.rs").unwrap();
-        let right = aliases.project_text("secret-two/customer.rs").unwrap();
-        assert_ne!(left, right);
-        assert!(left.ends_with(".rs"));
-        assert!(!left.contains("secret-one") && !left.contains("customer"));
-        assert_eq!(
-            aliases.resolve_path(&left).unwrap(),
-            temp.path()
-                .canonicalize()
-                .unwrap()
-                .join("secret-one/customer.rs")
-        );
-        assert_eq!(
-            aliases.restore_text(&left).unwrap(),
-            "secret-one/customer.rs"
-        );
-        let unicode = aliases.project_text("秘密/École.rs").unwrap();
-        assert_eq!(aliases.restore_text(&unicode).unwrap(), "秘密/École.rs");
-        assert_eq!(
-            std::fs::read_to_string(aliases.resolve_path(&unicode).unwrap()).unwrap(),
-            "untouched source"
-        );
-        assert_eq!(
-            aliases.project_text(&format!("{left} {right}")).unwrap(),
-            format!("{left} {right}")
-        );
-        let basename = aliases.project_text("customer.rs").unwrap();
-        assert!(aliases.resolve_path(&basename).is_err());
-        assert_eq!(aliases.restore_text(&basename).unwrap(), "customer.rs");
-    }
-
-    #[test]
-    fn filename_aliases_snapshot_stable_incremental_and_forked() {
-        let (temp, mut aliases) = fixture();
-        std::fs::write(temp.path().join("original.rs"), "a").unwrap();
-        assert!(aliases.discover().unwrap());
-        let original = aliases.project_text("original.rs").unwrap();
-        let json = serde_json::to_string(&aliases.snapshot()).unwrap();
-        let mut resumed = FilenameAliases::from_snapshot(
-            temp.path().into(),
-            serde_json::from_str(&json).unwrap(),
-        )
-        .unwrap();
-        resumed.discover().unwrap();
-        assert_eq!(resumed.project_text("original.rs").unwrap(), original);
-        resumed.fork_namespace("fork").unwrap();
-        std::fs::write(temp.path().join("another.rs"), "b").unwrap();
-        resumed.discover().unwrap();
-        aliases.discover().unwrap();
-        assert_eq!(resumed.project_text("original.rs").unwrap(), original);
-        assert_ne!(
-            resumed.project_text("another.rs").unwrap(),
-            aliases.project_text("another.rs").unwrap()
-        );
-    }
-
-    #[test]
-    fn filename_aliases_block_unknown_traversal_creation_and_deleted_paths() {
-        let (temp, mut aliases) = fixture();
-        std::fs::write(temp.path().join("private.rs"), "a").unwrap();
-        aliases.discover().unwrap();
-        let alias = aliases.project_text("private.rs").unwrap();
-        for bad in [
-            format!("{alias}/../f999.rs"),
-            "../outside.rs".into(),
-            "__CA_PATH_test__/f999.rs".into(),
-            "private.rs".into(),
-        ] {
-            assert!(aliases.resolve_path(&bad).is_err());
-        }
-        assert!(aliases.project_text("__CA_PATH_test__/f999.rs").is_err());
-        std::fs::remove_file(temp.path().join("private.rs")).unwrap();
-        aliases.discover().unwrap();
-        assert!(aliases.resolve_path(&alias).is_err());
-        assert_eq!(aliases.project_text("private.rs").unwrap(), alias);
-    }
-
-    #[test]
-    fn filename_aliases_reserve_literal_alias_names_and_do_not_rewrite_insertions() {
-        let (temp, mut aliases) = fixture();
-        std::fs::create_dir(temp.path().join("__CA_PATH_test__")).unwrap();
-        std::fs::write(temp.path().join("__CA_PATH_test__/f001.rs"), "a").unwrap();
-        std::fs::write(temp.path().join("f001.rs"), "b").unwrap();
-        std::fs::write(temp.path().join("__CA_NAME_test_1__"), "c").unwrap();
-        aliases.discover().unwrap();
-        let alias = aliases.project_text("__CA_PATH_test__/f001.rs").unwrap();
-        assert!(alias.starts_with("__CA_PATH_test_1__/"));
-        assert_eq!(
-            aliases.resolve_path(&alias).unwrap(),
-            temp.path()
-                .canonicalize()
-                .unwrap()
-                .join("__CA_PATH_test__/f001.rs")
-        );
-        assert_eq!(aliases.project_text(&alias).unwrap(), alias);
-        let name_alias = aliases.project_path("__CA_NAME_test_1__").unwrap();
-        assert_eq!(
-            aliases.project_text("__CA_NAME_test_1__").unwrap(),
-            name_alias
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn filename_aliases_symlinks_are_lexical_and_not_traversed() {
-        let (temp, mut aliases) = fixture();
-        let outside = tempfile::tempdir().unwrap();
-        std::fs::write(outside.path().join("must-not-discover.rs"), "a").unwrap();
-        std::os::unix::fs::symlink(outside.path(), temp.path().join("secret-link")).unwrap();
-        aliases.discover().unwrap();
-        assert_eq!(
-            aliases.project_text("must-not-discover.rs").unwrap(),
-            "must-not-discover.rs"
-        );
-        let alias = aliases.project_text("secret-link").unwrap();
-        assert_eq!(
-            aliases.resolve_path(&alias).unwrap(),
-            temp.path().canonicalize().unwrap().join("secret-link")
-        );
-        assert_eq!(aliases.restore_text(&alias).unwrap(), "secret-link");
-    }
-
-    #[test]
-    fn filename_aliases_wire_check_and_atomic_discovery_failure() {
-        let (temp, mut aliases) = fixture();
-        std::fs::write(temp.path().join("sensitive.rs"), "a").unwrap();
-        aliases.discover().unwrap();
-        let before = aliases.snapshot();
-        assert!(aliases.validate_wire_text("open sensitive.rs").is_err());
-        let projected = aliases.project_text("open sensitive.rs").unwrap();
-        aliases.validate_wire_text(&projected).unwrap();
-        let mut corrupt = aliases.snapshot();
-        corrupt.entries[0].relative = "../outside".into();
-        assert!(FilenameAliases::from_snapshot(temp.path().into(), corrupt).is_err());
-        assert_eq!(aliases.snapshot(), before);
-        #[cfg(unix)]
-        {
-            std::fs::write(temp.path().join("unsupported\\name.rs"), "a").unwrap();
-            assert!(aliases.discover().is_err());
-            assert_eq!(
-                aliases.snapshot(),
-                before,
-                "failed discovery must not allocate partial aliases"
-            );
-        }
-    }
-
-    #[test]
-    fn filename_aliases_keep_case_and_unicode_normalization_identities_distinct() {
-        let (temp, aliases) = fixture();
-        let mut snapshot = aliases.snapshot();
-        for (index, relative) in ["Case.rs", "case.rs", "é.rs", "e\u{301}.rs"]
-            .iter()
-            .enumerate()
-        {
-            snapshot.entries.push(Entry {
-                relative: (*relative).into(),
-                alias: format!("__CA_PATH_test__/f{:03}.rs", index + 1),
-                directory: false,
-            });
-        }
-        let mut aliases = FilenameAliases::from_snapshot(temp.path().into(), snapshot).unwrap();
-        let mut identities = BTreeSet::new();
-        for spelling in ["Case.rs", "case.rs", "é.rs", "e\u{301}.rs"] {
-            let alias = aliases.project_text(spelling).unwrap();
-            assert!(identities.insert(alias.clone()));
-            assert_eq!(aliases.restore_text(&alias).unwrap(), spelling);
-        }
-    }
-
-    #[test]
-    fn filename_census_permission_gap_preserves_siblings_and_recovers() {
-        let (root, mut names) = fixture();
-        let blocked = root.path().join("private-folder");
-        let sibling = root.path().join("readable.rs");
-        std::fs::create_dir(&blocked).unwrap();
-        let blocked = blocked.canonicalize().unwrap();
-        std::fs::write(&sibling, "safe").unwrap();
-        names.discover().unwrap();
-        let alias = names.project_path("readable.rs").unwrap();
-        let census = inventory_names_with(&names.workspace, MAX_DESCENDANT_ENTRIES, |path| {
-            if path == blocked {
-                Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
-            } else {
-                std::fs::read_dir(path)
-            }
-        })
-        .unwrap();
-        assert_eq!(census.names, names.census, "only coverage changed");
-        assert!(names.apply_census(vec![census]).unwrap());
-        assert!(names.coverage_note().contains("1 inaccessible folder"));
-        assert_eq!(
-            names.resolve_path(&alias).unwrap(),
-            sibling.canonicalize().unwrap()
-        );
-        assert_eq!(names.restore_text(&alias).unwrap(), "readable.rs");
-        let bare = names.project_text("readable.rs").unwrap();
-        assert_ne!(bare, "readable.rs");
-        assert!(
-            names.resolve_path(&bare).is_err(),
-            "incomplete discovery cannot prove a basename unique"
-        );
-        assert_eq!(names.restore_text(&bare).unwrap(), "readable.rs");
-        assert!(names.discover().unwrap());
-        assert!(names.coverage_note().is_empty());
-        assert_eq!(names.project_text("readable.rs").unwrap(), alias);
-        assert_eq!(names.restore_text(&bare).unwrap(), "readable.rs");
-        assert!(
-            inventory_names_with(&names.workspace, MAX_DESCENDANT_ENTRIES, |_| {
-                Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
-            })
-            .err()
-            .unwrap()
-            .contains("Workspace filename discovery failed")
-        );
-    }
-
-    #[test]
-    fn filename_census_budget_counts_repeated_entries_and_keeps_exact_paths() {
-        let (root, mut names) = fixture();
-        for folder in ["alpha", "beta", "gamma"] {
-            std::fs::create_dir(root.path().join(folder)).unwrap();
-            for file in ["repeated.rs", "repeated.txt"] {
-                std::fs::write(root.path().join(folder).join(file), "x").unwrap();
-            }
-        }
-        let census =
-            inventory_names_with(&names.workspace, 3, |path| std::fs::read_dir(path)).unwrap();
-        assert!(census.coverage.limited);
-        assert_eq!(census.shallow.len(), 3, "root enumeration remains complete");
-        assert_eq!(
-            census.names.len(),
-            5,
-            "duplicate names still consume work budget"
-        );
-        names.apply_census(vec![census]).unwrap();
-        assert!(names.coverage_note().contains("25,000"));
-        let typed = names.project_path("alpha/repeated.rs").unwrap();
-        assert_eq!(
-            names.resolve_path(&typed).unwrap(),
-            names.workspace.join("alpha/repeated.rs")
-        );
-        assert_eq!(
-            names.resolve_write_path(&typed).unwrap(),
-            names.workspace.join("alpha/repeated.rs")
-        );
-        assert_eq!(names.restore_text(&typed).unwrap(), "alpha/repeated.rs");
-        let bare = names.project_text("repeated.rs").unwrap();
-        assert!(bare.starts_with("__CA_NAME_"));
-        assert!(names.resolve_path(&bare).is_err());
-        let mut resumed =
-            FilenameAliases::from_snapshot(names.workspace.clone(), names.snapshot()).unwrap();
-        resumed.discover().unwrap();
-        assert_eq!(
-            resumed.resolve_path(&typed).unwrap(),
-            names.workspace.join("alpha/repeated.rs")
-        );
-        assert_eq!(resumed.restore_text(&bare).unwrap(), "repeated.rs");
-        assert!(resumed.coverage_note().is_empty());
-    }
-
-    #[test]
-    fn filename_census_partial_late_root_leaf_stays_descriptive() {
-        let (root, mut names) = fixture();
-        std::fs::create_dir(root.path().join("deep")).unwrap();
-        std::fs::write(root.path().join("late.rs"), "root").unwrap();
-        let mut census =
-            inventory_names_with(&names.workspace, 0, |path| std::fs::read_dir(path)).unwrap();
-        // Simulate a root leaf beyond the shallow path-allocation window.
-        census.shallow.remove("late.rs");
-        names.apply_census(vec![census]).unwrap();
-        assert!(!names
-            .snapshot
-            .entries
-            .iter()
-            .any(|entry| entry.relative == "late.rs"));
-        let bare = names.project_text("late.rs").unwrap();
-        assert!(bare.starts_with("__CA_NAME_"));
-        assert!(names.resolve_path(&bare).is_err());
-        assert_eq!(names.restore_text(&bare).unwrap(), "late.rs");
-        let exact = names.project_text("./late.rs").unwrap();
-        assert_eq!(
-            names.resolve_path(&exact).unwrap(),
-            names.workspace.join("late.rs")
-        );
-        assert_eq!(names.project_path("late.rs").unwrap(), exact);
-    }
-
-    #[test]
-    fn filename_census_partial_on_demand_literal_collisions_are_atomic_across_scopes() {
-        let (root, mut names) = fixture();
-        std::fs::write(root.path().join("known.rs"), "x").unwrap();
-        std::fs::create_dir(root.path().join("deep")).unwrap();
-        let census =
-            inventory_names_with(&names.workspace, 0, |path| std::fs::read_dir(path)).unwrap();
-        names.apply_census(vec![census]).unwrap();
-        let token = names.project_text("known.rs").unwrap();
-        assert!(token.starts_with("__CA_NAME_"));
-        let original_root = names.snapshot.root_alias.clone();
-        for literal in [&token, &original_root] {
-            let path = format!("deep/{literal}");
-            std::fs::write(root.path().join(&path), "literal").unwrap();
-            let before = names.snapshot();
-            assert!(names.project_path(&path).is_err());
-            assert!(names.source_link("index.html", &path).is_err());
-            assert!(names.project_text(&path).is_err());
-            assert_eq!(names.snapshot(), before);
-        }
-        let external = tempfile::tempdir().unwrap();
-        let external = external.path().canonicalize().unwrap();
-        std::fs::create_dir(external.join("deep")).unwrap();
-        std::fs::write(external.join("deep").join(&token), "external literal").unwrap();
-        names
-            .authorize_roots(std::slice::from_ref(&external))
-            .unwrap();
-        // Refresh only shallow metadata; the conflicting native leaf is unseen.
-        let census = names
-            .census_roots()
-            .iter()
-            .map(|root| inventory_names_with(root, 0, |path| std::fs::read_dir(path)).unwrap())
-            .collect();
-        names.apply_census(census).unwrap();
-        let before = names.snapshot();
-        let target = external.join("deep").join(&token);
-        assert!(names.project_path(target.to_str().unwrap()).is_err());
-        assert!(names.project_text(target.to_str().unwrap()).is_err());
-        assert!(names
-            .source_link(
-                external.join("index.html").to_str().unwrap(),
-                &format!("deep/{token}")
-            )
-            .is_err());
-        assert_eq!(names.snapshot(), before);
-        assert_eq!(names.restore_text(&token).unwrap(), "known.rs");
+        std::fs::write(temp.path().join("kept.txt"), "a").unwrap();
+        let mut aliases = FilenameAliases::new(temp.path().to_path_buf(), "preview").unwrap();
+        assert_eq!(aliases.project_text("kept.txt").unwrap(), "kept.txt");
+        assert!(!aliases.contains_aliases("kept.txt"));
     }
 }

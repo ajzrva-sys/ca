@@ -131,7 +131,7 @@ Docs-only work skips the release. A Rust change uses one `python3 scripts/check-
   defect blocking the requested workflow belongs to the current repair.
 
 ## Guardrails
-- Preserve async responsiveness: no `block_on`, `block_in_place`, or synchronous long work in the TUI event loop.
+- Preserve async responsiveness. `python3 scripts/check-pyramid.py` is the blocking-call, comment-ceiling, and oracle-include check.
 - Keep tool schemas, execution names, approval classification, and OpenAI tool-result messages aligned.
 - Do not weaken approval checks or add destructive slash commands without explicit scope and tests.
 - Convert repeated mistakes into tests or proposed checks in `docs/QUALITY.md`.

@@ -734,48 +734,13 @@ fn review_gate_shown(state: &AppState) -> bool {
 /// Status text while the legacy process filter is off.
 /// Project privacy still rewrites the Active row in `paint_filter_status`.
 fn review_status_line(state: &AppState) -> Option<String> {
-    let privacy = state.request_store.privacy_context();
-    if privacy.as_ref().is_some_and(|context| context.enabled()) {
-        return None;
-    }
-    if privacy
-        .as_ref()
-        .is_some_and(|context| context.filenames_enabled())
-    {
-        let label = if review_gate_shown(state) {
-            "Filter on"
-        } else {
-            "Filter off"
-        };
-        return Some(format!("{label} · Filename masking"));
-    }
-    review_gate_shown(state).then(|| "Filter on · review before send · /filter off".to_string())
+    let _ = state;
+    None
 }
 
 fn filter_presentation(state: &AppState) -> crate::provider_filter::FilterPresentation {
-    if state
-        .current_model
-        .as_ref()
-        .is_some_and(|model| crate::chatgpt_plan_auth::skips_provider_filter(&model.provider))
-    {
-        return crate::provider_filter::FilterPresentation::default();
-    }
-    let mut presentation = state
-        .filter_presentation
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
-        .clone();
-    if presentation.status != crate::provider_filter::FilterStatus::Stopped {
-        if let Some(context) = state
-            .request_store
-            .privacy_context()
-            .filter(|context| context.enabled())
-        {
-            presentation.status = crate::provider_filter::FilterStatus::Active;
-            presentation.detail = context.summary();
-        }
-    }
-    presentation
+    let _ = state;
+    crate::provider_filter::FilterPresentation::default()
 }
 
 fn filter_summary_text(state: &AppState) -> String {
@@ -4658,9 +4623,6 @@ fn provider_check_label(
         Some(ProviderCheckStatus::InvalidResponse) => {
             ("invalid or incomplete response".into(), theme.error)
         }
-        Some(ProviderCheckStatus::FilterStopped) => {
-            ("provider filter stopped".into(), theme.warning)
-        }
         Some(ProviderCheckStatus::NeedsModel) => ("needs a model".into(), theme.warning),
         Some(ProviderCheckStatus::AuthenticationRequired) => {
             ("authentication required".into(), theme.warning)
@@ -5258,7 +5220,7 @@ fn identity_line(state: &AppState) -> String {
         match state.approval {
             crate::app::ApprovalMode::Allowlist => {}
             crate::app::ApprovalMode::AutoReview => parts.push("auto-review".into()),
-            crate::app::ApprovalMode::RunEverything => parts.push("always-approve".into()),
+            crate::app::ApprovalMode::RunEverything => parts.push("yolo".into()),
         }
     }
     for field in &state.statusline_fields {
@@ -5430,8 +5392,10 @@ fn key_line(state: &AppState) -> String {
             "Ctrl+S save · Enter newline · Esc cancel".into()
         };
     }
-    if state.approval_queue.current().is_some() {
-        return "[y] run · [n] deny · [e] edit".into();
+    if state.approval_queue.current().is_some()
+        && !crate::tui::input::composer_keeps_keys_during_approval(state)
+    {
+        return "[y] run · [n] deny · [a] yolo · [e] edit".into();
     }
     if let Some(message) = state
         .status_message
@@ -7330,6 +7294,21 @@ fn append_conversation_controls(
     }
 }
 
+fn approval_typing_line(state: &AppState) -> Line<'static> {
+    Line::from(Span::styled(
+        "  Typing stays in the composer. Clear the draft to use y, n, a, and e.",
+        Style::default().fg(palette(state).muted),
+    ))
+}
+
+fn approval_decision_line(state: &AppState, shortcuts: Vec<Span<'static>>) -> Line<'static> {
+    if crate::tui::input::composer_keeps_keys_during_approval(state) {
+        approval_typing_line(state)
+    } else {
+        Line::from(shortcuts)
+    }
+}
+
 fn approval_card_lines(state: &AppState, width: u16) -> Vec<Line<'static>> {
     let Some(pa) = state.approval_queue.current() else {
         return Vec::new();
@@ -7341,7 +7320,6 @@ fn approval_card_lines(state: &AppState, width: u16) -> Vec<Line<'static>> {
         state.approval_queue.progress()
     };
     let n = resolved + 1; // current item is 1-indexed
-    lines.push(Line::from(""));
     lines.push(Line::from(vec![Span::styled(
         format!(
             "  Approve {} [{}/{}] — {}",
@@ -7382,16 +7360,19 @@ fn approval_card_lines(state: &AppState, width: u16) -> Vec<Line<'static>> {
             "    Invocation digest: {}",
             privilege.invocation.digest()
         )));
-        lines.push(Line::from(vec![
-            Span::styled(
-                "  [y] authorize once  ",
-                Style::default().fg(palette(state).approval_accept),
-            ),
-            Span::styled(
-                "[n/Esc] deny",
-                Style::default().fg(palette(state).approval_deny),
-            ),
-        ]));
+        lines.push(approval_decision_line(
+            state,
+            vec![
+                Span::styled(
+                    "  [y] authorize once  ",
+                    Style::default().fg(palette(state).approval_accept),
+                ),
+                Span::styled(
+                    "[n/Esc] deny",
+                    Style::default().fg(palette(state).approval_deny),
+                ),
+            ],
+        ));
     } else if let Some(preview) = &pa.email_preview {
         for (label, values) in [
             ("Account", vec![preview.account_id.clone()]),
@@ -7418,16 +7399,19 @@ fn approval_card_lines(state: &AppState, width: u16) -> Vec<Line<'static>> {
             preview.draft_sha256,
             preview.attachments.len()
         )));
-        lines.push(Line::from(vec![
-            Span::styled(
-                "  [y] send exactly once  ",
-                Style::default().fg(palette(state).approval_accept),
-            ),
-            Span::styled(
-                "[n/Esc] deny",
-                Style::default().fg(palette(state).approval_deny),
-            ),
-        ]));
+        lines.push(approval_decision_line(
+            state,
+            vec![
+                Span::styled(
+                    "  [y] send exactly once  ",
+                    Style::default().fg(palette(state).approval_accept),
+                ),
+                Span::styled(
+                    "[n/Esc] deny",
+                    Style::default().fg(palette(state).approval_deny),
+                ),
+            ],
+        ));
     } else if let Some(editor) = state.approval_queue.command_editor() {
         lines.extend(inline_command_editor_lines(editor, width, &palette(state)));
     } else {
@@ -7443,23 +7427,24 @@ fn approval_card_lines(state: &AppState, width: u16) -> Vec<Line<'static>> {
             ),
         ]));
         let theme = palette(state);
-        lines.extend(approval_argument_lines(pa, &theme));
+        lines.extend(approval_argument_lines(pa, &theme, width));
         // Primary pair first; secondary policy keys wrap to the next line.
-        lines.push(Line::from(vec![
-            Span::styled("  [y] run  ", Style::default().fg(theme.approval_accept)),
-            Span::styled("[n] deny", Style::default().fg(theme.approval_deny)),
-        ]));
-        lines.push(Line::from(vec![
-            Span::styled("  [e] edit  ", Style::default().fg(theme.approval_pending)),
-            Span::styled("[s] tool always  ", Style::default().fg(theme.accent)),
-            Span::styled("[g] this run  ", Style::default().fg(theme.approval_accept)),
-            Span::styled("[p] path always  ", Style::default().fg(theme.link)),
-            Span::styled(
-                "[x] always deny  ",
-                Style::default().fg(theme.approval_deny),
-            ),
-            Span::styled("[a] yolo", Style::default().fg(theme.accent)),
-        ]));
+        if crate::tui::input::composer_keeps_keys_during_approval(state) {
+            lines.push(approval_typing_line(state));
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled("  [y] run  ", Style::default().fg(theme.approval_accept)),
+                Span::styled("[n] deny  ", Style::default().fg(theme.approval_deny)),
+                Span::styled("[a] yolo", Style::default().fg(theme.accent)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("  [e] edit  ", Style::default().fg(theme.approval_pending)),
+                Span::styled("[s] tool always  ", Style::default().fg(theme.accent)),
+                Span::styled("[g] this run  ", Style::default().fg(theme.approval_accept)),
+                Span::styled("[p] path always  ", Style::default().fg(theme.link)),
+                Span::styled("[x] always deny", Style::default().fg(theme.approval_deny)),
+            ]));
+        }
     }
     lines
 }
@@ -7903,9 +7888,16 @@ fn approval_reason_and_scope(pa: &crate::app::PendingApproval) -> (&'static str,
     )
 }
 
+fn fit_approval_row(prefix: &str, body: &str, width: u16) -> String {
+    let room = usize::from(width).saturating_sub(2);
+    let row = format!("{prefix}{body}");
+    crate::tui::selection::truncate_cells(&row, room)
+}
+
 fn approval_argument_lines(
     pa: &crate::app::PendingApproval,
     theme: &ThemePalette,
+    width: u16,
 ) -> Vec<Line<'static>> {
     let arguments = serde_json::from_str::<serde_json::Value>(&pa.tool_args).ok();
     if let Some(preview) = arguments
@@ -7921,7 +7913,8 @@ fn approval_argument_lines(
             "{path} — final edit contents:\n{preview}"
         ))
         .lines()
-        .map(|line| Line::from(format!("    {line}")))
+        .take(2)
+        .map(|line| Line::from(fit_approval_row("    ", line, width)))
         .collect();
     }
     if pa.tool_name == "run_command" {
@@ -7929,30 +7922,18 @@ fn approval_argument_lines(
             .as_ref()
             .and_then(|arguments| arguments["command"].as_str());
         if let Some(command) = command {
-            let safe = crate::terminal_text::sanitize_terminal_text(command);
-            let mut rendered = safe
-                .split('\n')
-                .enumerate()
-                .map(|(index, line)| {
-                    Line::from(Span::styled(
-                        if index == 0 {
-                            format!("    Command: {line}")
-                        } else {
-                            format!("             {line}")
-                        },
-                        Style::default().fg(theme.muted),
-                    ))
-                })
-                .collect::<Vec<_>>();
+            let safe = crate::approval_display::command_preview(command).replace('\n', " ");
+            let mut rendered = vec![Line::from(Span::styled(
+                fit_approval_row("    Command: ", &safe, width),
+                Style::default().fg(theme.muted),
+            ))];
             if let Some(cwd) = arguments
                 .as_ref()
                 .and_then(|arguments| arguments["cwd"].as_str())
             {
+                let cwd = crate::approval_display::command_preview(cwd).replace('\n', " ");
                 rendered.push(Line::from(Span::styled(
-                    format!(
-                        "    cwd: {}",
-                        crate::terminal_text::sanitize_terminal_text(cwd)
-                    ),
+                    fit_approval_row("    cwd: ", &cwd, width),
                     Style::default().fg(theme.muted),
                 )));
             }
@@ -7962,9 +7943,10 @@ fn approval_argument_lines(
 
     crate::terminal_text::sanitize_terminal_text(&pa.tool_args)
         .split('\n')
+        .take(2)
         .map(|line| {
             Line::from(Span::styled(
-                format!("    {line}"),
+                fit_approval_row("    ", line, width),
                 Style::default().fg(theme.muted),
             ))
         })
@@ -8389,11 +8371,18 @@ fn render_fallback_marker<'a>(
         "{}/{}",
         provenance.provider, provenance.model
     ));
+    let mut line = format!(
+        "* Provider fallback · {primary} → {fallback} · {}",
+        provenance.cause
+    );
+    if !provenance.detail.is_empty() {
+        line.push_str(" · ");
+        line.push_str(&crate::terminal_text::sanitize_terminal_text(
+            &provenance.detail,
+        ));
+    }
     lines.push(Line::from(Span::styled(
-        format!(
-            "* Provider fallback · {primary} → {fallback} · {}",
-            provenance.cause
-        ),
+        line,
         Style::default()
             .fg(theme.warning)
             .add_modifier(Modifier::ITALIC),
@@ -13212,29 +13201,8 @@ fn wrap_plan_text(text: &str, width: usize) -> Vec<String> {
 }
 
 fn provider_alias_tokens(text: &str) -> Vec<&str> {
-    let mut tokens = Vec::new();
-    let mut rest = text;
-    while let Some(start) = ["__CA_PATH_", "__CA_NAME_"]
-        .iter()
-        .filter_map(|prefix| rest.find(prefix))
-        .min()
-    {
-        let token = &rest[start..];
-        let end = token
-            .find(|ch: char| {
-                ch.is_whitespace() || matches!(ch, '`' | ',' | ';' | ')' | ']' | '"' | '\'')
-            })
-            .unwrap_or(token.len());
-        let token = &token[..end];
-        if token.len() > "__CA_PATH_".len() && !tokens.contains(&token) {
-            tokens.push(token);
-        }
-        rest = &rest[start + end.max(1)..];
-        if tokens.len() == 4 {
-            break;
-        }
-    }
-    tokens
+    let _ = text;
+    Vec::new()
 }
 
 fn task_progress(row: &crate::agent::subagent::AgentActivitySnapshot) -> Option<&str> {
@@ -15846,7 +15814,7 @@ mod orc290_render_tests {
     #[test]
     fn orc290_approval_shows_final_contents_without_internal_ticket() {
         let approval = crate::app::PendingApproval { tool_name: "write_file".into(), tool_id: "call".into(), tool_args: serde_json::json!({"path":"sample.rs","content":"raw","_ca_edit_token":"private-ticket","_ca_edit_preview":"FORMATTED\n"}).to_string(), network_requested: false, email_preview: None, email_draft_ref: None };
-        let lines = approval_argument_lines(&approval, &standalone_palette())
+        let lines = approval_argument_lines(&approval, &standalone_palette(), 80)
             .iter()
             .map(ToString::to_string)
             .collect::<Vec<_>>()

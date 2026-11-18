@@ -121,6 +121,7 @@ impl Editor {
         editor
     }
 
+    #[allow(dead_code)]
     pub fn task_inspection(
         workspace: String,
         policy: crate::task_filter::Policy,
@@ -341,6 +342,7 @@ impl Editor {
     }
 
     /// Inspect only the task and attachment bytes already read for this draft.
+    #[allow(dead_code)]
     pub fn guided(workspace: String, task: &str, expanded: &str) -> Option<Self> {
         let analysis = super::suggestions::analyze(task, expanded, std::iter::empty());
         if !analysis.needs_review() {

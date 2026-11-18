@@ -13,8 +13,8 @@ Current install identity is in `CONTINUITY.md`. The qualification sections below
 
 | Command | Status | What it validates |
 |---|---|---|
-| `python3 scripts/check-change.py --selector <name>` | Script in `scripts/check-change.py`. Repeat `--selector`. The admission selector passed in `scratch/check-change/runs/20261113T211937Z-53015/report.json`. | `cargo test --locked --offline --bin ca` with those filters, then `cargo fmt --all -- --check`, then `cargo clippy --locked --offline --bin ca -- -D warnings`. Receipt under `scratch/check-change/runs/`. |
-| `python3 scripts/check-change.py --selector <name> --all-features --release` | Same script. `--all-features` and `--release` are argparse flags. | The same three stages with `--all-features` on test and clippy, then `cargo build --release --bin ca --all-features`. |
+| `python3 scripts/check-change.py --selector <name>` | Script in `scripts/check-change.py`. Repeat `--selector`. The admission selector passed in `scratch/check-change/runs/20261113T211937Z-53015/report.json`. | `python3 scripts/check-pyramid.py` on the stable checkout, then `cargo test --locked --offline --bin ca` with those filters, then `cargo fmt --all -- --check`, then `cargo clippy --locked --offline --bin ca -- -D warnings`. A selector does not skip the pyramid stage. Receipt under `scratch/check-change/runs/`. |
+| `python3 scripts/check-change.py --selector <name> --all-features --release` | Same script. `--all-features` and `--release` are argparse flags. | The pyramid stage, then the same test and clippy stages with `--all-features`, then `cargo build --release --bin ca --all-features`. |
 | `python3 scripts/check-change.py --prepare-only` | Same script. | Stable checkout and cache preparation. Not a test pass. |
 | `cargo fmt --all -- --check` | Listed in `docs/DEVELOPMENT.md` and `docs/QUALITY.md`. | Formatting. |
 | `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` | Listed in `docs/DEVELOPMENT.md`. | Strict workspace lint. |
@@ -23,6 +23,7 @@ Current install identity is in `CONTINUITY.md`. The qualification sections below
 | `./scripts/verify.sh --self-test` | Documented in `AGENTS.md`. Not run in the docs pass. | Intentional-defect detection in a disposable copy. Run when that verifier changes. |
 | `bash tools/bug257_install.sh` | Installer documented in `docs/VERIFICATION.md`. Docs-only work must skip it. | Signed replacement of an already-built candidate. |
 | `python3 scripts/check-exec-plan.py <plan.md>` | GRD-010. Reads one plan. Does not rewrite it. | Exits 0 when Goal, Acceptance Criteria or Validation, and Recovery and Rollback are present. Otherwise prints `active ExecPlan missing required section: <name>`. |
+| `python3 scripts/check-pyramid.py` | Runs before Cargo in `scripts/check-change.py` and `scripts/verify.py`. `--prepare-only` skips it. A selector does not. | Exits 0 when comment ceilings, the `src/main.rs` blocking ceiling, `src/tui/` blocking calls, and oracle `include!` / `include_str!` / `include_bytes!` / `#[path]` stay inside the baseline. `--update` rewrites ceilings only downward. |
 
 Toolchain pin: Rust 1.97.1 in `rust-toolchain.toml`. Package version is the root `ca` entry in `Cargo.toml`.
 

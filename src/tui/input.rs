@@ -986,6 +986,12 @@ fn handle_event_inner(state: &mut crate::app::AppState, event: &Event, cwd: &str
                     }
                     insert_char(state, character);
                 }
+                if !active_composer_token(&state.input, state.input_cursor)
+                    .is_some_and(|(_, token)| token.starts_with('@'))
+                {
+                    close_file_picker(state);
+                    return true;
+                }
                 sync_file_picker_filter(state);
                 state.selected_file_idx = 0;
                 state.file_picker_generation = state.file_picker_generation.wrapping_add(1);
@@ -1285,7 +1291,7 @@ fn shortcut_help(state: &crate::app::AppState) -> String {
         "/ · @ · path          inline completion".into(),
         "Esc                   stop current turn / dismiss active popup".into(),
         "Ctrl+C                stop current turn, even with a popup open".into(),
-        "Shift+Tab             cycle Normal / Plan / Auto-review / Always-approve".into(),
+        "Shift+Tab             cycle Normal / Plan / Auto-review / Yolo".into(),
         String::new(),
         "Configured actions".into(),
     ];
@@ -1483,6 +1489,39 @@ fn scrollback_focus_allowed(state: &crate::app::AppState) -> bool {
     crate::tui::render::composer_has_focus(state)
         && state.interaction.is_none()
         && !state.approval_queue.is_active()
+}
+
+fn approval_shortcut(code: KeyCode) -> bool {
+    matches!(
+        code,
+        KeyCode::Char('y' | 'n' | 'g' | 'a' | 's' | 'x' | 'e' | 'p') | KeyCode::Esc
+    )
+}
+
+/// A composer draft, including an open path prompt, keeps ordinary keys.
+pub(crate) fn composer_keeps_keys_during_approval(state: &crate::app::AppState) -> bool {
+    !state.input.is_empty()
+        || !state.pasted_images.is_empty()
+        || state.composer_ui.path_completion.open
+        || state.file_picker_open
+        || state.slash_palette_open
+}
+
+/// Approval letters apply only while the composer is idle.
+pub(crate) fn approval_card_owns_key(
+    state: &crate::app::AppState,
+    code: KeyCode,
+    modifiers: KeyModifiers,
+) -> bool {
+    if state.interaction.is_some()
+        || !state.approval_queue.is_active()
+        || state.approval_queue.is_in_flight()
+        || state.approval_queue.command_editor().is_some()
+        || composer_keeps_keys_during_approval(state)
+    {
+        return false;
+    }
+    modifiers == KeyModifiers::NONE && approval_shortcut(code)
 }
 
 pub(crate) fn steer_focused_interaction(
@@ -3630,7 +3669,7 @@ fn cycle_session_mode(state: &mut crate::app::AppState) {
         ApprovalMode::AutoReview => {
             state.mode = AgentMode::Agent;
             state.approval = ApprovalMode::RunEverything;
-            state.status_message = Some("Always-approve".into());
+            state.status_message = Some("Yolo".into());
         }
         ApprovalMode::RunEverything => {
             state.mode = AgentMode::Agent;
@@ -7726,6 +7765,7 @@ fn active_slash_command_token(input: &str, cursor: usize) -> Option<&str> {
 fn refresh_inline_completion(state: &mut crate::app::AppState) {
     let Some((range, token)) = active_composer_token(&state.input, state.input_cursor) else {
         state.slash_palette_open = false;
+        close_path_completion(state);
         return;
     };
     let token = token.to_string();
@@ -7758,6 +7798,15 @@ fn refresh_inline_completion(state: &mut crate::app::AppState) {
     } else {
         state.composer_ui.path_completion.open = false;
     }
+}
+
+fn close_path_completion(state: &mut crate::app::AppState) {
+    if !state.composer_ui.path_completion.open {
+        return;
+    }
+    state.composer_ui.path_completion.open = false;
+    state.composer_ui.path_completion.generation =
+        state.composer_ui.path_completion.generation.wrapping_add(1);
 }
 
 fn open_path_completion(state: &mut crate::app::AppState, token: String) {
@@ -7904,6 +7953,12 @@ fn handle_path_completion(
         _ => {}
     }
     true
+}
+
+fn close_file_picker(state: &mut crate::app::AppState) {
+    state.file_picker_open = false;
+    state.file_picker_generation = state.file_picker_generation.wrapping_add(1);
+    state.file_picker_phase = crate::attachments::PickerPhase::Idle;
 }
 
 fn open_inline_file_picker(state: &mut crate::app::AppState, rebuild_index: bool) {
@@ -12137,6 +12192,12 @@ fn handle_file_picker(
                 return true;
             }
             insert_char(state, c);
+            if !active_composer_token(&state.input, state.input_cursor)
+                .is_some_and(|(_, token)| token.starts_with('@'))
+            {
+                close_file_picker(state);
+                return true;
+            }
             sync_file_picker_filter(state);
             state.selected_file_idx = 0;
             state.file_picker_generation = state.file_picker_generation.wrapping_add(1);

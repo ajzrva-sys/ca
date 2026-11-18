@@ -599,7 +599,6 @@ fn status_text(status: &ProviderCheckStatus) -> String {
         }
         ProviderCheckStatus::ProviderError { status: None } => "provider error".into(),
         ProviderCheckStatus::InvalidResponse => "invalid or incomplete response".into(),
-        ProviderCheckStatus::FilterStopped => "provider filter stopped".into(),
         ProviderCheckStatus::NeedsModel => "needs a model".into(),
         ProviderCheckStatus::AuthenticationRequired => "authentication required".into(),
     }

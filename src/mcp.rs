@@ -8,7 +8,7 @@ use rmcp::model::{
     CallToolRequestParams, ClientInfo, ClientJsonRpcMessage, ContentBlock,
     ReadResourceRequestParams, Resource, ResourceContents, ServerJsonRpcMessage,
 };
-use rmcp::service::{NotificationContext, RoleClient, RunningService};
+use rmcp::service::{NotificationContext, RequestContext, RoleClient, RunningService};
 use rmcp::transport::streamable_http_client::{
     AuthRequiredError, InsufficientScopeError, StreamableHttpClient,
     StreamableHttpClientTransportConfig, StreamableHttpError, StreamableHttpPostResponse,
@@ -135,6 +135,7 @@ struct ServerDefinition {
 
 #[derive(Clone)]
 struct McpClientHandler {
+    server: String,
     stale_tools: Arc<AtomicBool>,
     stale_resources: Arc<AtomicBool>,
 }
@@ -157,7 +158,20 @@ impl ClientHandler for McpClientHandler {
     }
 
     fn get_info(&self) -> ClientInfo {
-        ClientInfo::default()
+        let mut info = ClientInfo::default();
+        info.capabilities.elicitation =
+            Some(rmcp::model::ElicitationCapability::new().with_form(
+                rmcp::model::FormElicitationCapability::new().with_schema_validation(true),
+            ));
+        info
+    }
+
+    async fn create_elicitation(
+        &self,
+        request: rmcp::model::ElicitRequestParams,
+        _context: RequestContext<RoleClient>,
+    ) -> Result<rmcp::model::ElicitResult, rmcp::ErrorData> {
+        Ok(answer_elicitation(&self.server, request).await)
     }
 }
 
@@ -644,6 +658,9 @@ fn form_from_arguments(arguments: &serde_json::Value) -> Option<crate::mcp_elici
             .or_else(|| field.get("name").and_then(serde_json::Value::as_str))?;
         names.push(crate::mcp_elicit::ElicitField {
             name: name.to_string(),
+            kind: crate::mcp_elicit::FieldKind::String,
+            options: Vec::new(),
+            required: false,
         });
     }
     let schema_bytes = form
@@ -687,6 +704,82 @@ pub(crate) fn gate_tool_form(
             server: server_id.to_string(),
             detail: format!("server {server_id} elicitation is cut off"),
         }),
+    }
+}
+
+fn refusal_count(server_id: &str) -> usize {
+    elicitation_refusals()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .get(server_id)
+        .copied()
+        .unwrap_or(0)
+}
+
+fn note_refusal(server_id: &str) {
+    let mut refusals = elicitation_refusals()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    *refusals.entry(server_id.to_string()).or_insert(0) += 1;
+}
+
+fn declined_elicitation() -> rmcp::model::ElicitResult {
+    rmcp::model::ElicitResult::new(rmcp::model::ElicitationAction::Decline)
+}
+
+/// Ask a server form through the question UI and return schema-checked answers
+/// only on the elicitation result. A headless process declines without waiting.
+async fn answer_elicitation(
+    server_id: &str,
+    request: rmcp::model::ElicitRequestParams,
+) -> rmcp::model::ElicitResult {
+    if refusal_count(server_id) >= crate::mcp_elicit::MAX_REFUSAL_NOTES {
+        return declined_elicitation();
+    }
+    let rmcp::model::ElicitRequestParams::FormElicitationParams {
+        message,
+        requested_schema,
+        ..
+    } = request
+    else {
+        note_refusal(server_id);
+        return declined_elicitation();
+    };
+    let Ok(schema) = serde_json::to_value(&requested_schema) else {
+        note_refusal(server_id);
+        return declined_elicitation();
+    };
+    let schema_bytes = serde_json::to_string(&schema)
+        .map(|text| text.len())
+        .unwrap_or(usize::MAX);
+    let Some(form) = crate::mcp_elicit::form_from_schema(&message, &schema, schema_bytes) else {
+        note_refusal(server_id);
+        return declined_elicitation();
+    };
+    match crate::mcp_elicit::decide(server_id, &form, refusal_count(server_id)) {
+        crate::mcp_elicit::Decision::Allow => {}
+        crate::mcp_elicit::Decision::Refuse { .. } => {
+            note_refusal(server_id);
+            return declined_elicitation();
+        }
+        crate::mcp_elicit::Decision::CutOff => return declined_elicitation(),
+    }
+    let title = message;
+    let conducted = crate::mcp_elicit::conduct(&form, |field, attempt| {
+        let title = title.clone();
+        let field = field.clone();
+        async move { crate::mcp_elicit::ask_user(&title, &field, attempt).await }
+    })
+    .await;
+    match conducted {
+        crate::mcp_elicit::Conducted::Accept(value) => {
+            rmcp::model::ElicitResult::new(rmcp::model::ElicitationAction::Accept)
+                .with_content(value)
+        }
+        crate::mcp_elicit::Conducted::Decline => {
+            note_refusal(server_id);
+            declined_elicitation()
+        }
     }
 }
 
@@ -2632,6 +2725,7 @@ impl McpManager {
         let stale_tools = Arc::new(AtomicBool::new(false));
         let stale_resources = Arc::new(AtomicBool::new(false));
         let handler = McpClientHandler {
+            server: definition.name.clone(),
             stale_tools: stale_tools.clone(),
             stale_resources: stale_resources.clone(),
         };
@@ -2698,6 +2792,7 @@ impl McpManager {
         let stale_tools = Arc::new(AtomicBool::new(false));
         let stale_resources = Arc::new(AtomicBool::new(false));
         let handler = McpClientHandler {
+            server: definition.name.clone(),
             stale_tools: stale_tools.clone(),
             stale_resources: stale_resources.clone(),
         };

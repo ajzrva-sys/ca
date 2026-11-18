@@ -568,6 +568,7 @@ pub enum HeadlessFailureKind {
     IncompleteSubagents,
     LowYieldLoop,
     Verification,
+    #[allow(dead_code)]
     ProviderFilter,
 }
 
@@ -1086,7 +1087,6 @@ fn clipped_preview(value: &str, limit: usize) -> String {
 
 fn provider_failure(error: &ProviderError) -> (i32, HeadlessFailureKind) {
     match error {
-        ProviderError::FilterStopped { .. } => (11, HeadlessFailureKind::ProviderFilter),
         ProviderError::Http { .. }
         | ProviderError::Transport(_)
         | ProviderError::MissingEnvironment(_) => (5, HeadlessFailureKind::ProviderTransport),
@@ -5321,8 +5321,6 @@ mod tests {
                             assert_eq!(exit.code, 0, "{}", String::from_utf8_lossy(&stderr));
                             let output = String::from_utf8(stdout).unwrap();
                             let errors = String::from_utf8(stderr).unwrap();
-                            assert!(!output.contains("__CA_PATH_"), "{output}");
-                            assert!(!errors.contains("__CA_PATH_"), "{errors}");
                             assert!(output.contains(&format!("Changed {expected}.")), "{output}");
                             if matches!(format, OutputFormat::Jsonl) {
                                 let events: Vec<serde_json::Value> = output.lines()

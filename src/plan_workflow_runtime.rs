@@ -657,6 +657,7 @@ pub async fn poll(
         isolation: AgentIsolation::Shared,
 
         admitted: None,
+        reads_only: state.mode == crate::app::AgentMode::Plan,
     };
     // Retain the exact input and an admission nonce before the manager can
     // start network traffic. A crash here restores paused, never replayed.
@@ -1086,6 +1087,7 @@ mod tests {
                 skills_enabled: false,
                 images_supported: false,
                 pricing: std::sync::Arc::new(std::collections::HashMap::new()),
+                resume_rate_limited: false,
             }),
             AgentLimits::default(),
         );

@@ -1248,11 +1248,17 @@ pub struct ModelPromptCacheConfig {
     pub usage_format: Option<PromptCacheUsageFormat>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy: Option<PromptCachePolicy>,
+    /// Seconds the provider keeps a prompt prefix. Absent means the TTL is unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl_seconds: Option<u64>,
 }
 
 impl ModelPromptCacheConfig {
     pub const fn is_empty(&self) -> bool {
-        self.request_format.is_none() && self.usage_format.is_none() && self.policy.is_none()
+        self.request_format.is_none()
+            && self.usage_format.is_none()
+            && self.policy.is_none()
+            && self.ttl_seconds.is_none()
     }
 }
 
@@ -1870,6 +1876,9 @@ pub struct AgentConfig {
     /// Cheaper model for compaction. Unset uses the session model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compaction_model: Option<String>,
+    /// Continue a rate-limited child, at most twice. Off unless the user turns it on.
+    #[serde(default)]
+    pub resume_rate_limited_children: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -2002,6 +2011,7 @@ impl Default for AgentConfig {
             modes: HashMap::new(),
             child_execution: None,
             compaction_model: None,
+            resume_rate_limited_children: false,
         }
     }
 }
@@ -2922,6 +2932,7 @@ impl ConfigStore {
         crate::provider_filter::install(&config.provider_filter)?;
         crate::formatting::install(&config).map_err(anyhow::Error::msg)?;
         crate::context_pruning::install(&config);
+        crate::prompt_cache_warm::install(&config);
         Ok(config)
     }
 
@@ -7038,6 +7049,7 @@ policy = "stable_prefix"
                 request_format: None,
                 usage_format: None,
                 policy: Some(PromptCachePolicy::Off),
+                ttl_seconds: None,
             })
         );
         assert_eq!(
@@ -7046,6 +7058,7 @@ policy = "stable_prefix"
                 request_format: Some(PromptCacheRequestFormat::OpenAiResponsesExplicit),
                 usage_format: Some(PromptCacheUsageFormat::Auto),
                 policy: Some(PromptCachePolicy::StablePrefix),
+                ttl_seconds: None,
             })
         );
     }

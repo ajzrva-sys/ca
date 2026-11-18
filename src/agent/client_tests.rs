@@ -473,6 +473,7 @@ fn runtime_prompt_cache_contract_sends_fields_only_for_declared_routes() {
             request_format: Some(PromptCacheRequestFormat::OpenAiResponsesExplicit),
             usage_format: Some(PromptCacheUsageFormat::Auto),
             policy: Some(PromptCachePolicy::StablePrefix),
+            ttl_seconds: None,
         },
     );
     let custom_contract =
@@ -1677,7 +1678,7 @@ fn private_chat_reasoning_list_dir_continuation_is_byte_exact() {
                 )
                 .unwrap();
                 privacy.allow_ephemeral();
-                let reasoning = "  synthetic opaque continuation __CA_NAME_example__ \n雪  ";
+                let reasoning = "  synthetic opaque continuation opaque-name-example \n雪  ";
                 let requests =
                     capture_private_reasoning_tool_loop("deepseek", reasoning, Some(privacy)).await;
                 assert_eq!(requests.len(), 2);
@@ -1721,7 +1722,7 @@ fn private_chat_reasoning_receipt_keeps_visible_data_and_stops_guarded() {
         )
         .unwrap();
         privacy.allow_ephemeral();
-        let synthetic = "opaque receipt canary __CA_NAME_example__";
+        let synthetic = "opaque receipt canary opaque-name-example";
         let mut source =
             ProviderStateSourceV1::for_test("deepseek", ProviderProtocol::ChatCompletions);
         source.privacy_policy_digest = Some(privacy.policy_fingerprint());
@@ -4196,12 +4197,7 @@ async fn error_body_response_rule_stops_without_echoing_the_match() {
         .chat_stream(&[], &[])
         .await
         .unwrap_err();
-    assert_eq!(
-        error,
-        ProviderError::FilterStopped {
-            rule: "phrase".into()
-        }
-    );
+    assert_eq!(error, ProviderError::Protocol("phrase".into()));
     assert!(!error.to_string().contains("NEEDLE"));
     server.await.unwrap();
 
@@ -4330,7 +4326,7 @@ async fn filter_response_stops_decoded_text_across_frames_and_json_escapes() {
         "data: {\"choices\":[{\"delta\":{\"content\":\"sec\\u0072et\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
     ] {
         let (events, error) = filtered_response_events(body, "secret").await;
-        assert_eq!(error, Some(ProviderError::FilterStopped { rule: "response-stop".into() }));
+        assert_eq!(error, Some(ProviderError::Protocol("response-stop".into())));
         assert!(!events.contains(&ProviderEvent::Text("ret".into())));
         assert!(!events.contains(&ProviderEvent::Text("secret".into())));
         assert!(!events.contains(&ProviderEvent::Done));
@@ -4344,7 +4340,7 @@ async fn filter_response_stops_decoded_reasoning_and_tool_arguments_across_frame
         "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"sec\"}}]}}]}\n\ndata: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"ret\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n",
     ] {
         let (events, error) = filtered_response_events(body, "secret").await;
-        assert_eq!(error, Some(ProviderError::FilterStopped { rule: "response-stop".into() }));
+        assert_eq!(error, Some(ProviderError::Protocol("response-stop".into())));
         assert!(!events.contains(&ProviderEvent::Done));
     }
 }
@@ -4368,12 +4364,7 @@ async fn filter_response_stops_escaped_tool_argument_values() {
         "\n\ndata: [DONE]\n\n"
     );
     let (events, error) = filtered_response_events(body, "secret").await;
-    assert_eq!(
-        error,
-        Some(ProviderError::FilterStopped {
-            rule: "response-stop".into()
-        })
-    );
+    assert_eq!(error, Some(ProviderError::Protocol("response-stop".into())));
     assert!(!events.contains(&ProviderEvent::Done));
 }
 
@@ -4418,7 +4409,7 @@ fn filter_response_argument_lexer_tracks_activation_without_validating_disabled_
         assert_eq!(arguments.strings.decoded.capacity(), 0);
         assert!(matches!(
             arguments.observe(&response_filter("secret"), suffix),
-            Err(ProviderError::FilterStopped { .. })
+            Err(ProviderError::Protocol(_))
         ));
     }
     let mut arguments = FilteredToolArguments::default();
@@ -4449,12 +4440,7 @@ async fn filter_response_stops_long_escaped_tool_arguments_without_retaining_the
     ] {
         let body = tool_argument_sse(&arguments);
         let (events, error) = filtered_response_events(&body, "secret").await;
-        assert_eq!(
-            error,
-            Some(ProviderError::FilterStopped {
-                rule: "response-stop".into()
-            })
-        );
+        assert_eq!(error, Some(ProviderError::Protocol("response-stop".into())));
         assert!(!events.contains(&ProviderEvent::Done));
     }
 }
@@ -4487,12 +4473,7 @@ async fn filter_response_exact_url_split_across_frames_is_flushed_at_eof() {
         );
         let (events, error) = filtered_response_events_with_filter(&body, filter).await;
         if suffix == ".com" {
-            assert_eq!(
-                error,
-                Some(ProviderError::FilterStopped {
-                    rule: "url-1".into()
-                })
-            );
+            assert_eq!(error, Some(ProviderError::Protocol("url-1".into())));
             assert!(!events.contains(&ProviderEvent::Done));
         } else {
             assert_eq!(error, None);
@@ -4579,7 +4560,7 @@ async fn assert_arming_interrupts_silent_response(status: Option<u16>) {
             .unwrap()
             .unwrap_err()
     };
-    assert!(matches!(error, ProviderError::FilterStopped { .. }));
+    assert!(matches!(error, ProviderError::Protocol(_)));
     assert!(armed.is_tripped());
     assert!(
         server.await.unwrap(),
@@ -4633,9 +4614,7 @@ async fn filter_arming_checks_the_next_in_flight_response_frame() {
     release.send(()).unwrap();
     assert_eq!(
         receiver.recv().await.unwrap().unwrap_err(),
-        ProviderError::FilterStopped {
-            rule: "response-stop".into()
-        }
+        ProviderError::Protocol("response-stop".into())
     );
     server.await.unwrap();
 }

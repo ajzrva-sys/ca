@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 #[derive(Default)]
 pub(crate) struct Workspaces {
     generations: BTreeMap<String, Generation>,
+    inplace: Vec<PathBuf>,
 }
 struct Generation {
     roots: Vec<(PathBuf, PathBuf)>,
@@ -108,17 +109,47 @@ impl Context {
                 return Err("Command directory needs a current project or folder grant".into());
             }
             let excluded = [self.private_metadata_root(), base.clone()];
-            let identity = inventory(&pinned, &excluded)?;
+            if manager.inplace == pinned {
+                drop(manager);
+                self.refresh_authorized_roots()?;
+                return Ok(PreparedCommand {
+                    command: command.to_string(),
+                    cwd: cwd.to_string(),
+                    roots: pinned,
+                    generation: "inplace".into(),
+                    artifact_directory: self
+                        .project_filename_path(Path::new(cwd))
+                        .unwrap_or_default(),
+                });
+            }
+            let (identity, capped) = inventory(&pinned, &excluded, FILE_BUDGET)?;
             let digest = super::digest(
                 &serde_json::to_vec(&identity)
                     .map_err(|_| "Command snapshot cannot be identified")?,
             );
+            if capped {
+                manager.inplace = pinned.clone();
+                drop(manager);
+                self.refresh_authorized_roots()?;
+                return Ok(PreparedCommand {
+                    command: command.to_string(),
+                    cwd: cwd.to_string(),
+                    roots: pinned,
+                    generation: digest,
+                    artifact_directory: self
+                        .project_filename_path(Path::new(cwd))
+                        .unwrap_or_default(),
+                });
+            }
             if !manager.generations.contains_key(&digest) {
                 ca_automation::runtime::private_dir(&base)
                     .map_err(|_| "Command workspace storage is unavailable")?;
                 let mut stable = None;
                 for _ in 0..2 {
-                    let identity = inventory(&pinned, &excluded)?;
+                    let (identity, capped) = inventory(&pinned, &excluded, FILE_BUDGET)?;
+                    if capped {
+                        continue;
+                    }
                     let digest = super::digest(
                         &serde_json::to_vec(&identity)
                             .map_err(|_| "Command snapshot cannot be identified")?,
@@ -134,7 +165,7 @@ impl Context {
                         mapped.push((source.clone(), view));
                     }
                     rebase_links(&mapped)?;
-                    if inventory(&pinned, &excluded)? != identity {
+                    if inventory(&pinned, &excluded, FILE_BUDGET)?.0 != identity {
                         continue;
                     }
                     let directory = staging.keep();
@@ -166,7 +197,7 @@ impl Context {
             }
             // The first identity may have drifted while staging. Rebind to the
             // independently checked identity; no command has executed yet.
-            let current = inventory(&pinned, &excluded)?;
+            let current = inventory(&pinned, &excluded, FILE_BUDGET)?.0;
             super::digest(
                 &serde_json::to_vec(&current)
                     .map_err(|_| "Command snapshot cannot be identified")?,
@@ -218,19 +249,58 @@ impl Context {
 }
 
 type Inventory = Vec<(String, u64, u128, u32, String)>;
-fn inventory(roots: &[PathBuf], excluded: &[PathBuf]) -> Result<Inventory, String> {
+const FILE_BUDGET: usize = 262_144;
+const CONTENT_FILE_CAP: u64 = 1024 * 1024;
+const CONTENT_TOTAL_CAP: u64 = 64 * 1024 * 1024;
+
+fn included_source(entry: &walkdir::DirEntry, excluded: &[PathBuf]) -> bool {
+    !excluded.iter().any(|path| entry.path().starts_with(path))
+        && (entry.depth() == 0 || !crate::command_mutations::skipped_directory(entry.file_name()))
+}
+
+fn walk_is_unreadable(error: &walkdir::Error) -> bool {
+    let Some(io) = error.io_error() else {
+        return false;
+    };
+    matches!(
+        io.kind(),
+        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::NotFound
+    ) || matches!(io.raw_os_error(), Some(1 | 13))
+}
+
+fn walk_failure(action: &str, error: &walkdir::Error) -> String {
+    let path = error
+        .path()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "the workspace root".to_string());
+    format!(
+        "Command source cannot be {action} at {path}: {error}. Grant read access, or keep the workspace off volume metadata such as .fseventsd, then retry the command."
+    )
+}
+
+fn inventory(
+    roots: &[PathBuf],
+    excluded: &[PathBuf],
+    file_limit: usize,
+) -> Result<(Inventory, bool), String> {
     let mut inventory = Vec::new();
     let mut bytes_read = 0_u64;
-    for root in roots {
+    let mut capped = false;
+    'roots: for root in roots {
         for entry in walkdir::WalkDir::new(root)
             .follow_links(false)
             .sort_by_file_name()
             .into_iter()
-            .filter_entry(|entry| !excluded.iter().any(|path| entry.path().starts_with(path)))
+            .filter_entry(|entry| included_source(entry, excluded))
         {
-            let entry = entry.map_err(|_| "Command source cannot be inventoried")?;
-            if inventory.len() >= 262_144 {
-                return Err("Command snapshot exceeds its file budget".into());
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) if walk_is_unreadable(&error) => continue,
+                Err(error) => return Err(walk_failure("inventoried", &error)),
+            };
+            if inventory.len() >= file_limit {
+                capped = true;
+                break 'roots;
             }
             let metadata = std::fs::symlink_metadata(entry.path())
                 .map_err(|_| "Command source changed during discovery")?;
@@ -257,6 +327,12 @@ fn inventory(roots: &[PathBuf], excluded: &[PathBuf]) -> Result<Inventory, Strin
                 }
                 #[cfg(not(unix))]
                 hasher.update(target.to_string_lossy().as_bytes());
+            } else if metadata.is_file()
+                && (metadata.len() > CONTENT_FILE_CAP || bytes_read >= CONTENT_TOTAL_CAP)
+            {
+                capped = true;
+                hasher.update(b"fingerprint");
+                hasher.update(metadata.len().to_le_bytes());
             } else if metadata.is_file() {
                 let mut options = std::fs::OpenOptions::new();
                 options.read(true);
@@ -276,11 +352,18 @@ fn inventory(roots: &[PathBuf], excluded: &[PathBuf]) -> Result<Inventory, Strin
                     if count == 0 {
                         break;
                     }
-                    bytes_read += count as u64;
-                    if bytes_read > 8 * 1024 * 1024 * 1024 {
-                        return Err("Command snapshot exceeds its 8 GiB identity budget".into());
+                    let room = CONTENT_TOTAL_CAP.saturating_sub(bytes_read);
+                    if room == 0 {
+                        capped = true;
+                        break;
                     }
+                    let count = count.min(room as usize);
+                    bytes_read += count as u64;
                     hasher.update(&buffer[..count]);
+                    if bytes_read >= CONTENT_TOTAL_CAP {
+                        capped = true;
+                        break;
+                    }
                 }
             }
             let content = format!("{:x}", hasher.finalize());
@@ -297,16 +380,20 @@ fn inventory(roots: &[PathBuf], excluded: &[PathBuf]) -> Result<Inventory, Strin
             ));
         }
     }
-    Ok(inventory)
+    Ok((inventory, capped))
 }
 fn copy_tree(source: &Path, destination: &Path, excluded: &[PathBuf]) -> Result<(), String> {
     for entry in walkdir::WalkDir::new(source)
         .follow_links(false)
         .sort_by_file_name()
         .into_iter()
-        .filter_entry(|entry| !excluded.iter().any(|path| entry.path().starts_with(path)))
+        .filter_entry(|entry| included_source(entry, excluded))
     {
-        let entry = entry.map_err(|_| "Command source cannot be copied")?;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) if walk_is_unreadable(&error) => continue,
+            Err(error) => return Err(walk_failure("copied", &error)),
+        };
         let target = destination.join(
             entry
                 .path()
@@ -423,5 +510,81 @@ mod tests {
         );
         std::fs::rename(view.join("Private.html"), view.join("new.html")).unwrap();
         assert!(source.join("Private.html").exists());
+    }
+
+    #[test]
+    fn volume_metadata_is_left_out_of_the_command_snapshot() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::write(source.join("keep.txt"), "visible").unwrap();
+        let events = source.join(".fseventsd");
+        std::fs::create_dir(&events).unwrap();
+        std::fs::write(events.join("note.txt"), "event").unwrap();
+        let (found, capped) = inventory(std::slice::from_ref(&source), &[], FILE_BUDGET).unwrap();
+        assert!(!capped);
+        assert!(found.iter().any(|(path, ..)| path.ends_with("keep.txt")));
+        assert!(found.iter().all(|(path, ..)| !path.contains(".fseventsd")));
+        let view = temp.path().join("view");
+        copy_tree(&source, &view, &[]).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(view.join("keep.txt")).unwrap(),
+            "visible"
+        );
+        assert!(!view.join(".fseventsd").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unlistable_directory_does_not_fail_the_command_snapshot() {
+        use std::os::unix::fs::PermissionsExt;
+        struct Restore(PathBuf);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+            }
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::write(source.join("keep.txt"), "visible").unwrap();
+        let sealed = source.join("sealed");
+        std::fs::create_dir(&sealed).unwrap();
+        std::fs::write(sealed.join("hidden.txt"), "secret").unwrap();
+        let _restore = Restore(sealed.clone());
+        std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let (found, _) = inventory(std::slice::from_ref(&source), &[], FILE_BUDGET).unwrap();
+        assert!(found.iter().any(|(path, ..)| path.ends_with("keep.txt")));
+        assert!(found.iter().all(|(path, ..)| !path.ends_with("hidden.txt")));
+    }
+
+    #[test]
+    fn oversized_workspace_stays_runnable() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::write(source.join("keep.txt"), "visible").unwrap();
+        let large = source.join("large.bin");
+        std::fs::File::create(&large)
+            .unwrap()
+            .set_len(CONTENT_FILE_CAP + 1)
+            .unwrap();
+        let (found, capped) = inventory(std::slice::from_ref(&source), &[], FILE_BUDGET).unwrap();
+        assert!(capped);
+        assert!(found.iter().any(|(path, ..)| path.ends_with("keep.txt")));
+        assert!(found.iter().any(|(path, ..)| path.ends_with("large.bin")));
+    }
+
+    #[test]
+    fn file_budget_runs_the_command_in_place() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::write(source.join("a.txt"), "a").unwrap();
+        std::fs::write(source.join("b.txt"), "b").unwrap();
+        let (found, capped) = inventory(std::slice::from_ref(&source), &[], 2).unwrap();
+        assert!(capped);
+        assert!(found.len() <= 2);
+        assert!(!found.is_empty());
     }
 }

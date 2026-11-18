@@ -1044,8 +1044,8 @@ pub static COMMANDS: &[CommandSpec] = &[
         Filter,
         "filter",
         [],
-        "Turn the pre-send review on or off",
-        "[on|off|guide|report|continue]",
+        "Report that the filter was removed",
+        "",
         General,
         Always,
         State,
@@ -1646,6 +1646,29 @@ pub fn parse_command_line(line: &str) -> Option<CommandAction> {
     })
 }
 
+/// First token of a slash line when it is one command name and nothing in the
+/// builtin list claims it. A path, a dotted name, or a second slash is `None`
+/// so the text is sent. The caller still accepts skill bundles and prompt
+/// commands before using this.
+#[must_use]
+pub fn unknown_slash_command(line: &str) -> Option<&str> {
+    let line = line.trim();
+    let rest = line.strip_prefix('/')?;
+    let token = rest.split_whitespace().next().unwrap_or("");
+    if token.is_empty() || find_command(token).is_some() || !command_shaped(token) {
+        return None;
+    }
+    Some(token)
+}
+
+fn command_shaped(token: &str) -> bool {
+    let mut chars = token.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    first.is_ascii_alphabetic() && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+}
+
 /// Bare token matching a known model id becomes `/model <id>` (study idea from
 /// Cursor `modelSlashCommands`). Explicit commands always win.
 pub fn parse_command_line_with_model_alias(
@@ -1732,6 +1755,24 @@ fn command_match_rank(spec: &CommandSpec, query: &str) -> u8 {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn unknown_slash_command_keeps_paths_and_names_a_missing_command() {
+        assert_eq!(
+            unknown_slash_command("/not-a-command"),
+            Some("not-a-command")
+        );
+        assert_eq!(
+            unknown_slash_command("/not-a-command extra"),
+            Some("not-a-command")
+        );
+        assert_eq!(unknown_slash_command("/help"), None);
+        assert_eq!(unknown_slash_command("/tmp/build.log"), None);
+        assert_eq!(unknown_slash_command("/README.md"), None);
+        assert_eq!(unknown_slash_command("/commit:"), None);
+        assert_eq!(unknown_slash_command("/fix_issue"), None);
+        assert_eq!(unknown_slash_command("not a slash"), None);
+    }
 
     #[test]
     fn new_session_command_is_discoverable_and_distinct_from_clear() {
@@ -2990,5 +3031,187 @@ mod tests {
         // Short command /m is not overridden by model alias.
         let m = parse_command_line_with_model_alias("/m provider/x", models).unwrap();
         assert_eq!(m.id, CommandId::Model);
+    }
+
+    fn render_feature_map() -> String {
+        let mut out = String::from(
+            "# Feature map\n\nReach a command with `/<name>`. Rows follow `COMMANDS` order.\n\n",
+        );
+        for spec in COMMANDS {
+            let availability = match spec.availability {
+                CommandAvailability::Always => "Always",
+                CommandAvailability::IdleOnly => "IdleOnly",
+            };
+            out.push('/');
+            out.push_str(spec.name);
+            out.push('\t');
+            out.push_str(spec.description);
+            out.push('\t');
+            out.push_str(spec.usage);
+            out.push('\t');
+            out.push_str(availability);
+            out.push('\n');
+        }
+        out
+    }
+
+    macro_rules! command_ids {
+        ($($name:ident => $tag:literal),+ $(,)?) => {
+            fn command_id_tag(id: CommandId) -> u16 {
+                match id {
+                    $(CommandId::$name => $tag,)+
+                }
+            }
+
+            fn for_each_command_id(mut visit: impl FnMut(CommandId)) {
+                $(visit(CommandId::$name);)+
+            }
+        };
+    }
+
+    command_ids! {
+        Feedback => 0,
+        Model => 1,
+        Preset => 2,
+        PresetSave => 3,
+        Provider => 4,
+        AddDir => 5,
+        Workspace => 6,
+        SaveWorkspace => 7,
+        LoadWorkspace => 8,
+        Rule => 9,
+        CommandManager => 10,
+        Plugin => 11,
+        Direnv => 12,
+        Skills => 13,
+        Bundles => 14,
+        Recall => 15,
+        Learning => 16,
+        Mcp => 17,
+        Hooks => 18,
+        Permissions => 19,
+        Memory => 20,
+        Personality => 21,
+        Learn => 22,
+        Dream => 23,
+        Distill => 24,
+        Goal => 25,
+        Workflow => 26,
+        Automation => 27,
+        Worktree => 28,
+        MultiRun => 29,
+        Reasoning => 30,
+        Thinking => 31,
+        Plan => 32,
+        Recipes => 33,
+        SelfImprove => 34,
+        Tasks => 35,
+        Agents => 36,
+        Ask => 37,
+        Btw => 38,
+        Voice => 39,
+        Debug => 40,
+        Logs => 41,
+        Errors => 42,
+        SupportBundle => 43,
+        Yolo => 44,
+        AutoReview => 45,
+        New => 46,
+        Clear => 47,
+        Quit => 48,
+        Help => 49,
+        Vim => 50,
+        Version => 51,
+        Mode => 52,
+        Config => 53,
+        Sandbox => 54,
+        ContextLimit => 55,
+        PromptCache => 56,
+        Doctor => 57,
+        Audit => 58,
+        Raw => 59,
+        Output => 60,
+        Scratch => 61,
+        Copy => 62,
+        Diff => 63,
+        Walkthrough => 64,
+        Review => 65,
+        Acceptance => 66,
+        Artifacts => 67,
+        Split => 68,
+        Pane => 69,
+        Save => 70,
+        Resume => 71,
+        Retention => 72,
+        Export => 73,
+        Import => 74,
+        Init => 75,
+        Compact => 76,
+        Summarize => 77,
+        Shell => 78,
+        Commit => 79,
+        Undo => 80,
+        Redo => 81,
+        Recover => 82,
+        Branches => 83,
+        Bookmark => 84,
+        Pause => 85,
+        Unpause => 86,
+        Fork => 87,
+        Rewind => 88,
+        Retry => 89,
+        Timeline => 90,
+        Queue => 91,
+        Context => 92,
+        Session => 93,
+        Usage => 94,
+        Dashboard => 95,
+        Request => 96,
+        Trace => 97,
+        Filter => 98,
+        Keymap => 99,
+        History => 100,
+        Stash => 101,
+        Jobs => 102,
+        Delegate => 103,
+        Evidence => 104,
+        Term => 105,
+        Theme => 106,
+        SyncTheme => 107,
+        StatusIndicators => 108,
+        Statusline => 109,
+        CompactMode => 110,
+        LineNumbers => 111,
+        Reload => 112,
+        Name => 113,
+        Connect => 114,
+        Disconnect => 115,
+        Tools => 116
+    }
+
+    #[test]
+    fn every_command_id_is_one_feature_map_row() {
+        let mut seen = HashSet::new();
+        for_each_command_id(|id| {
+            let _ = command_id_tag(id);
+            let rows = COMMANDS.iter().filter(|spec| spec.id == id).count();
+            assert_eq!(
+                rows,
+                1,
+                "CommandId::{id:?} has no single feature-map row. Add one command! entry with a description and usage. /<name> is how a person reaches it."
+            );
+            assert!(
+                seen.insert(id),
+                "CommandId::{id:?} has no single feature-map row. Add one command! entry with a description and usage. /<name> is how a person reaches it."
+            );
+        });
+        assert_eq!(seen.len(), COMMANDS.len());
+        let rendered = render_feature_map();
+        let expected = include_str!("FEATURE_MAP.md");
+        assert_eq!(
+            rendered,
+            expected,
+            "FEATURE_MAP.md drifted from COMMANDS. Replace the file with the rendered catalog. Reach a feature with /<name>."
+        );
     }
 }

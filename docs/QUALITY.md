@@ -39,13 +39,15 @@ Rule: every editing operation leaves the cursor at a character boundary and neve
 
 ### GRD-004 — Async responsiveness test
 
+Status: `python3 scripts/check-pyramid.py` rejects a new `block_on` or `block_in_place` under `src/tui/` and refuses to raise the `src/main.rs` ceiling. Cancellation and busy Enter stay tests. This script does not prove them.
+
 Interrupt regression (TUI-240): aborting a foreground tool waiter must reap its
 process group, not merely stop its UI future. Cover promotion/ownership isolation,
 late-event rejection, held queues, and visible stop controls under transient
 status. Busy Enter must never silently become queueing again.
 
 Trigger: event-loop, slash side effect, provider, or tool execution changes.  
-Rule: ticks/cancellation progress while a controlled slow task is pending. Reject new `block_on`/`block_in_place` paths reachable from TUI orchestration unless narrowly justified and tested.
+Rule: ticks/cancellation progress while a controlled slow task is pending. The new-path ban is `python3 scripts/check-pyramid.py`.
 
 ### GRD-005 — Approval exactly-once model
 

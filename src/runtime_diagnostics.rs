@@ -1383,7 +1383,6 @@ impl RuntimeDiagnostics {
             Category::Protocol => RuntimeErrorClass::ProviderProtocol,
             Category::Incomplete => RuntimeErrorClass::ProviderIncomplete,
             Category::Refused => RuntimeErrorClass::ProviderRefused,
-            Category::FilterStopped => RuntimeErrorClass::ProviderFilter,
         });
         self.hub.record(entry);
     }

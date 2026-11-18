@@ -1,5 +1,6 @@
 //! Deterministic runtime spellings of selected quoted literals. Source aliases
 //! still restore the original source bytes through their existing edit views.
+#![allow(dead_code)]
 use super::policy::AliasKind;
 use super::projection::Change;
 

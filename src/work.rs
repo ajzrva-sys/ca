@@ -1068,17 +1068,7 @@ impl WorkState {
     }
 
     fn retain_provider_alias(value: &str) -> String {
-        let bounded = crate::agent_graph::bounded_summary(value);
-        if bounded.contains("__CA_PATH_") || bounded.contains("__CA_NAME_") {
-            return bounded;
-        }
-        let Some(line) = value
-            .lines()
-            .find(|line| line.contains("__CA_PATH_") || line.contains("__CA_NAME_"))
-        else {
-            return bounded;
-        };
-        format!("{}\n{bounded}", crate::agent_graph::bounded_summary(line))
+        crate::agent_graph::bounded_summary(value)
     }
 
     #[allow(clippy::too_many_arguments)]

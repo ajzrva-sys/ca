@@ -166,8 +166,74 @@ fn execute_git(arguments: &Value) -> Result<Value, String> {
 fn execute_ssh(arguments: &Value) -> Result<Value, String> {
     let request: SshOperation =
         serde_json::from_value(arguments.clone()).map_err(|error| error.to_string())?;
-    let planned = plan_ssh(&request)?;
-    Ok(json!({ "program": planned.program, "args": planned.args }))
+    run_ssh(&request)
+}
+
+pub fn run_ssh(request: &SshOperation) -> Result<Value, String> {
+    if request.user.is_empty() || request.host.is_empty() || request.command.is_empty() {
+        return Err("ssh operation is incomplete".into());
+    }
+    if request.command.contains("ProxyCommand") {
+        return Err("ssh forwarding and alternate commands are not admitted".into());
+    }
+    let target = format!("{}@{}", request.user, request.host);
+    let args = [
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=8",
+        "-o",
+        "ForwardAgent=no",
+        "-o",
+        "ClearAllForwardings=yes",
+        "-p",
+    ];
+    let mut command = std::process::Command::new("/usr/bin/ssh");
+    command
+        .args(args)
+        .arg(request.port.to_string())
+        .arg(target)
+        .arg(&request.command)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("ssh failed to start: {error}"))?;
+    let started = std::time::Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() > std::time::Duration::from_secs(20) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("ssh timed out before the host answered".into());
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(50)),
+            Err(error) => return Err(format!("ssh failed while waiting: {error}")),
+        }
+    };
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    if let Some(mut output) = child.stdout.take() {
+        let _ = std::io::Read::read_to_string(&mut output, &mut stdout);
+    }
+    if let Some(mut output) = child.stderr.take() {
+        let _ = std::io::Read::read_to_string(&mut output, &mut stderr);
+    }
+    let limit = 64 * 1024;
+    if stdout.len() > limit {
+        stdout.truncate(limit);
+    }
+    if stderr.len() > limit {
+        stderr.truncate(limit);
+    }
+    Ok(json!({
+        "program": "/usr/bin/ssh",
+        "status": status.code(),
+        "stdout": stdout,
+        "stderr": stderr,
+    }))
 }
 
 #[cfg(test)]
@@ -228,6 +294,17 @@ mod tests {
         .unwrap();
         assert!(ssh.args.iter().any(|arg| arg == "ForwardAgent=no"));
         assert!(ssh.args.iter().any(|arg| arg == "/dev/null"));
+        let refused = run_ssh(&SshOperation {
+            user: "nobody".into(),
+            host: "127.0.0.1".into(),
+            port: 1,
+            command: "true".into(),
+            destination: "local-ssh".into(),
+        })
+        .unwrap();
+        assert!(refused.get("stdout").is_some());
+        assert!(refused.get("stderr").is_some());
+        assert_ne!(refused["status"], 0);
     }
 
     #[test]

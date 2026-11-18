@@ -16,7 +16,6 @@ pub(crate) enum Category {
     Protocol,
     Incomplete,
     Refused,
-    FilterStopped,
 }
 
 impl Category {
@@ -32,7 +31,6 @@ impl Category {
             ProviderError::PrematureEof => Self::PrematureEof,
             ProviderError::MissingEnvironment(_) => Self::Authentication,
             ProviderError::ResponseRefused => Self::Refused,
-            ProviderError::FilterStopped { .. } => Self::FilterStopped,
             ProviderError::IncompleteFinish(_)
             | ProviderError::ResponseIncomplete
             | ProviderError::OutputTokenLimit
@@ -65,7 +63,6 @@ impl Category {
             Self::Protocol => "invalid provider stream".into(),
             Self::Incomplete => "incomplete provider response".into(),
             Self::Refused => "provider refused response".into(),
-            Self::FilterStopped => "provider filter stopped".into(),
         }
     }
 }
@@ -307,9 +304,6 @@ mod tests {
             ProviderError::ResponseIncomplete,
             ProviderError::OutputTokenLimit,
             ProviderError::ResponseRefused,
-            ProviderError::FilterStopped {
-                rule: "rule".into(),
-            },
         ] {
             assert!(!Category::of(&error).retryable());
             assert!(!Category::of(&error).label().contains("secret"));

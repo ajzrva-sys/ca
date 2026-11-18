@@ -649,9 +649,7 @@ fn dispatch(context: &Arc<Context>, operation: &str, value: Value) -> Result<Val
             let mut args: SelectFilesV1 = serde_json::from_value(value)
                 .map_err(|_| "private selection arguments are invalid")?;
             let included = if context.filename_mode {
-                if let Some(pattern) = args.criteria.name_glob.as_deref().filter(|pattern| {
-                    pattern.contains("__CA_PATH_") || pattern.contains("__CA_NAME_")
-                }) {
+                if let Some(pattern) = args.criteria.name_glob.as_deref().filter(|_pattern| false) {
                     context.refresh_filenames()?;
                     let native = files
                         .resolve_resource(&args.folder)

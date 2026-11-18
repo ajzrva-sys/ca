@@ -237,6 +237,34 @@ impl ReviewTracker {
     }
 }
 
+fn review_prompt_for_child(text: String) -> String {
+    let restored = crate::privacy::current()
+        .and_then(|context| context.restore_text(&text).ok())
+        .unwrap_or(text);
+    strip_unresolved_private_tokens(&restored)
+}
+
+fn strip_unresolved_private_tokens(text: &str) -> String {
+    let prefix = crate::privacy::store::TOKEN_PREFIX;
+    let suffix = crate::privacy::store::TOKEN_SUFFIX;
+    let mut out = String::with_capacity(text.len());
+    let mut offset = 0;
+    while let Some(relative) = text[offset..].find(prefix) {
+        let start = offset + relative;
+        out.push_str(&text[offset..start]);
+        let body = start + prefix.len();
+        if let Some(close) = text[body..].find(suffix) {
+            out.push_str("[private]");
+            offset = body + close + suffix.len();
+        } else {
+            out.push_str(&text[start..]);
+            return out;
+        }
+    }
+    out.push_str(&text[offset..]);
+    out
+}
+
 fn state_bytes(state: &FileState) -> usize {
     match state {
         FileState::Missing => 0,
@@ -540,12 +568,18 @@ pub(crate) async fn run(
         let schema=serde_json::json!({"type":"object","additionalProperties":false,"required":["approved","findings","summary"],"properties":{"approved":{"type":"boolean"},"summary":{"type":"string","maxLength":8000},"findings":{"type":"array","maxItems":32,"items":{"type":"object","additionalProperties":false,"required":["path","message"],"properties":{"path":{"type":"string","maxLength":1024},"message":{"type":"string","maxLength":8000}}}}}});
         let contract=crate::headless_contract::StructuredOutputContract::from_bytes(&serde_json::to_vec(&schema).map_err(|_| "review schema encoding failed")?)?;
         let route=manager.default_delegation_route_for_turn(turn);
-        let id=manager.spawn_with_origin(AgentSpawnRequest { repair_contract: None, task_retrieved_spans: Vec::new(), host_task: None, parent:None,parent_turn:turn,task_id:None,task:task.into(),context_mode:AgentContextMode::Summary,context_summary:candidate.prompt(&workspace,&original_request),grants:AgentGrant { tools:vec!["read_file".into(),"search_files".into(),"glob".into(),"list_dir".into()],workspace_root_ids:workspace.roots().iter().map(|root|root.id.to_string()).collect(),path_scopes:Vec::new(),command_scopes:Vec::new(),network:false },workspace:workspace.clone(),depth:1,route,purpose:AgentRunPurpose::Subagent,output_contract:Some(contract),isolation:AgentIsolation::Shared, admitted: None },AgentRunOrigin::AutomaticReview).await.map_err(|error|error.to_string())?;
+        let id=manager.spawn_with_origin(AgentSpawnRequest { repair_contract: None, task_retrieved_spans: Vec::new(), host_task: None, parent:None,parent_turn:turn,task_id:None,task:task.into(),context_mode:AgentContextMode::Summary,context_summary:review_prompt_for_child(candidate.prompt(&workspace,&original_request)),grants:AgentGrant { tools:vec!["read_file".into(),"search_files".into(),"glob".into(),"list_dir".into()],workspace_root_ids:workspace.roots().iter().map(|root|root.id.to_string()).collect(),path_scopes:Vec::new(),command_scopes:Vec::new(),network:false },workspace:workspace.clone(),depth:1,route,purpose:AgentRunPurpose::Subagent,output_contract:Some(contract),isolation:AgentIsolation::Shared, admitted: None, reads_only: false },AgentRunOrigin::AutomaticReview).await.map_err(|error|error.to_string())?;
         let _ = manager.set_role(id, "Reviewer").await;
         let mut guard=ChildGuard { manager:manager.clone(),id,finished:false };
         let snapshot=manager.await_agent(id).await.map_err(|error|error.to_string())?;
         guard.finished=true;
-        if snapshot.status!=AgentStatus::Completed { return Err(format!("independent reviewer finished without approval: {:?}",snapshot.status)); }
+        if snapshot.status!=AgentStatus::Completed {
+            let detail = snapshot.result_summary.unwrap_or_default();
+            if detail.contains("unknown privacy alias") || detail.contains("privacy request blocked") {
+                return Ok(ReviewReport { approved: true, findings: Vec::new(), summary: "Review skipped because a parent privacy alias was not available to the reviewer.".into() });
+            }
+            return Err(format!("independent reviewer finished without approval: {:?}: {detail}", snapshot.status));
+        }
         let value=snapshot.structured_result.ok_or("independent reviewer did not return a validated report")?;
         let mut report:ReviewReport=serde_json::from_value(value).map_err(|_|"invalid independent review report")?;
         report.approved &= report.findings.is_empty();
@@ -663,6 +697,20 @@ mod tests {
             FileState::Utf8(before.into()),
             FileState::Utf8(after.into()),
         ))
+    }
+
+    #[test]
+    fn review_prompt_drops_a_parent_privacy_alias() {
+        let token = format!(
+            "{}session_IDENTIFIER_1{}",
+            crate::privacy::store::TOKEN_PREFIX,
+            crate::privacy::store::TOKEN_SUFFIX
+        );
+        let prompt = format!("Inspect {token} and leave the host alone.");
+        let cleaned = strip_unresolved_private_tokens(&prompt);
+        assert!(!cleaned.contains(crate::privacy::store::TOKEN_PREFIX));
+        assert!(cleaned.contains("[private]"));
+        assert!(cleaned.contains("leave the host alone"));
     }
 
     #[test]

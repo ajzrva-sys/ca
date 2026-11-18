@@ -492,6 +492,31 @@ impl ToolExecutionResult {
         matches!(self, Self::ExternalPrivateSuccess { .. })
     }
 
+    pub fn append_path_note(mut self, note: Option<String>) -> Self {
+        let Some(note) = note.filter(|_| self.is_success()) else {
+            return self;
+        };
+        match &mut self {
+            Self::Success(text)
+            | Self::SourceSuccess { text, .. }
+            | Self::Command {
+                model_text: text, ..
+            }
+            | Self::SuccessMutation { marker: text, .. }
+            | Self::SuccessImage { marker: text, .. }
+            | Self::MemoryProposal { marker: text, .. }
+            | Self::ExternalPrivateSuccess { live: text, .. } => {
+                if !text.ends_with('\n') {
+                    text.push('\n');
+                }
+                text.push_str(&note);
+                text.push('\n');
+            }
+            Self::Failure(_) | Self::Denied(_) | Self::Cancelled(_) => {}
+        }
+        self
+    }
+
     pub fn is_success(&self) -> bool {
         matches!(
             self,

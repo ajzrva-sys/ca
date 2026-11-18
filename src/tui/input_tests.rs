@@ -1,7 +1,7 @@
 use crate::app::AppState;
 use crate::context::ShellHistory;
 use crate::tui::event::Event;
-use crate::tui::input::handle_event;
+use crate::tui::input::{approval_card_owns_key, handle_event};
 use crossterm::event::{KeyCode, KeyModifiers};
 
 fn state_with_input(input: &str, cursor: usize) -> AppState {
@@ -824,8 +824,8 @@ fn shift_tab_cycles_normal_plan_auto_review_and_always_approve() {
         (
             crate::app::AgentMode::Agent,
             crate::app::ApprovalMode::RunEverything,
-            "Always-approve",
-            "always-approve",
+            "Yolo",
+            "yolo",
         ),
         (
             crate::app::AgentMode::Agent,
@@ -2635,6 +2635,70 @@ fn pasted_absolute_folder_path_stays_in_composer_without_opening_commands() {
 }
 
 #[test]
+fn approval_card_keeps_a_path_draft_typeable() {
+    let mut state = state_with_input("~/projectsv", "~/projectsv".len());
+    state.composer_ui.path_completion.open = true;
+    state
+        .approval_queue
+        .begin_batch(vec![crate::app::PendingApproval {
+            tool_name: "run_command".into(),
+            tool_args: r#"{"command":"true"}"#.into(),
+            tool_id: "call-1".into(),
+            network_requested: false,
+            email_preview: None,
+            email_draft_ref: None,
+        }]);
+
+    assert!(!approval_card_owns_key(
+        &state,
+        KeyCode::Char('a'),
+        KeyModifiers::NONE,
+    ));
+    assert!(handle_event(
+        &mut state,
+        &Event::Key(KeyCode::Char('a'), KeyModifiers::NONE),
+        "/tmp/ca-approval-type",
+    ));
+    assert_eq!(state.input, "~/projectsva");
+    assert!(state.approval_queue.is_active());
+    assert!(!state.approval_queue.is_in_flight());
+
+    let mut idle = state_with_input("", 0);
+    idle.approval_queue
+        .begin_batch(vec![crate::app::PendingApproval {
+            tool_name: "run_command".into(),
+            tool_args: "{}".into(),
+            tool_id: "call-2".into(),
+            network_requested: false,
+            email_preview: None,
+            email_draft_ref: None,
+        }]);
+    assert!(approval_card_owns_key(
+        &idle,
+        KeyCode::Char('y'),
+        KeyModifiers::NONE,
+    ));
+    assert!(approval_card_owns_key(
+        &idle,
+        KeyCode::Esc,
+        KeyModifiers::NONE,
+    ));
+    assert!(!approval_card_owns_key(
+        &idle,
+        KeyCode::Char('c'),
+        KeyModifiers::NONE,
+    ));
+    assert!(handle_event(
+        &mut idle,
+        &Event::Key(KeyCode::Char('c'), KeyModifiers::NONE),
+        "/tmp/ca-approval-type",
+    ));
+    assert_eq!(idle.input, "c");
+    assert!(idle.approval_queue.is_active());
+    assert!(!idle.approval_queue.is_in_flight());
+}
+
+#[test]
 fn remote_absolute_path_in_prose_never_becomes_a_slash_command_or_blocks_submit() {
     let input =
         "great, copy the data files for the missing RED, OPS ones into /bigmac/sed-ro/seedbox/";
@@ -4204,6 +4268,42 @@ fn path_directory_completion_stays_active_and_file_completion_closes() {
         file.composer_ui.atomic_elements[0].kind,
         crate::tui::composer::AtomicKind::File
     ));
+}
+
+#[test]
+fn space_after_directory_slash_closes_path_completion() {
+    let mut state = state_with_input("./src/", "./src/".len());
+    state.composer_ui.path_completion.open = true;
+    state.composer_ui.path_completion.token = "./src/".into();
+    state.composer_ui.path_completion.entries = vec![crate::tui::composer::PathCompletionEntry {
+        display: "main.rs".into(),
+        replacement: "./src/main.rs".into(),
+        is_dir: false,
+    }];
+
+    press(&mut state, KeyCode::Char(' '));
+
+    assert_eq!(state.input, "./src/ ");
+    assert!(!state.composer_ui.path_completion.open);
+    assert!(state.pending_input_action.is_none());
+}
+
+#[test]
+fn space_after_directory_slash_closes_file_picker() {
+    let mut state = state_with_input("@src/", "@src/".len());
+    state.file_picker_open = true;
+    state.file_picker_phase = crate::attachments::PickerPhase::Ready;
+    state.file_picker_filter = "src/".into();
+
+    press(&mut state, KeyCode::Char(' '));
+
+    assert_eq!(state.input, "@src/ ");
+    assert!(!state.file_picker_open);
+    assert_eq!(
+        state.file_picker_phase,
+        crate::attachments::PickerPhase::Idle
+    );
+    assert!(state.pending_input_action.is_none());
 }
 
 #[test]

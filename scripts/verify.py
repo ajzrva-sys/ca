@@ -30,7 +30,7 @@ def source_inventory(root):
     """Cover source and verification criteria, including untracked inputs."""
     names = ["Cargo.toml", "Cargo.lock", "build.rs", "rust-toolchain.toml",
              "build_support", "src", "crates", "tests", "prompts", "scripts",
-             "tools", ".cargo", ".codex/hooks.json"]
+             "tools", ".cargo", ".codex/hooks.json", ".ca/skills/verify-ca"]
     files = {}
     for name in names:
         entry = root / name
@@ -223,6 +223,7 @@ def main():
         if not cargo:
             raise RuntimeError("Cargo is unavailable on PATH")
         commands = [
+            ("pyramid", [sys.executable, str(ROOT / "scripts/check-pyramid.py")], "check"),
             ("preflight", [cargo, "metadata", "--locked", "--offline", "--format-version", "1", "--no-deps"], "preflight"),
             ("workflow-tests", [sys.executable, "-m", "unittest", "discover", "-s", "tools", "-p", "test_verify*.py", "-v"], "check"),
             ("format", [cargo, "fmt", "--all", "--", "--check"], "check"),

@@ -417,6 +417,42 @@ impl InteractionState {
         self.other_editing
     }
 
+    /// Insert pasted text into the open answer. A choice list ignores the paste.
+    pub fn insert_text(&mut self, text: &str) -> bool {
+        if !self.is_editor_mode() {
+            return false;
+        }
+        let text = crate::terminal_text::sanitize_terminal_text(text);
+        match &mut self.draft {
+            InteractionDraft::Text { value, cursor } => {
+                let clean: String = text
+                    .chars()
+                    .filter(|character| !character.is_control() || matches!(character, '\n' | '\t'))
+                    .collect();
+                if clean.is_empty() {
+                    return false;
+                }
+                value.insert_str(*cursor, &clean);
+                *cursor += clean.len();
+                true
+            }
+            InteractionDraft::Secret(bytes) => {
+                let mut inserted = false;
+                for character in text.chars().filter(|character| !character.is_control()) {
+                    let mut encoded_bytes = [0_u8; 4];
+                    let encoded = character.encode_utf8(&mut encoded_bytes);
+                    if bytes.len().saturating_add(encoded.len()) > MAX_MASKED_SECRET_BYTES {
+                        break;
+                    }
+                    bytes.extend_from_slice(encoded.as_bytes());
+                    inserted = true;
+                    encoded_bytes.fill(0);
+                }
+                inserted
+            }
+        }
+    }
+
     pub fn draft_display(&self) -> String {
         match &self.draft {
             InteractionDraft::Text { value, .. } => value.clone(),
@@ -860,6 +896,27 @@ mod tests {
             .handle_key(KeyCode::Enter, KeyModifiers::NONE)
             .unwrap();
         assert_eq!(answer.outcome.model_result().unwrap(), r#"{"text":"x"}"#);
+    }
+
+    #[test]
+    fn paste_fills_an_open_answer_and_does_not_choose() {
+        let mut free = InteractionState::host(
+            InteractionRequest::from_legacy_question("Explain".into()).unwrap(),
+        );
+        assert!(free.insert_text("hello\nthere"));
+        assert_eq!(free.draft_display(), "hello\nthere");
+
+        let mut other = InteractionState::host(request(ModelInteractionKind::SingleChoice));
+        other.handle_key(KeyCode::Char('3'), KeyModifiers::NONE);
+        assert!(other.other_editing());
+        assert!(other.insert_text("pasted"));
+        assert_eq!(other.draft_display(), "pasted");
+
+        let mut single = InteractionState::host(request(ModelInteractionKind::SingleChoice));
+        let selected = single.selected_index;
+        assert!(!single.insert_text("2"));
+        assert_eq!(single.selected_index, selected);
+        assert!(single.draft_display().is_empty());
     }
 
     #[test]

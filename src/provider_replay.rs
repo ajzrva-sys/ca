@@ -1004,7 +1004,7 @@ mod final_wire_tests {
         );
         assert!(matches!(
             prepare_outbound(&serde_json::to_vec(&body).unwrap(), &bindings, &filter),
-            Err(ProviderError::FilterStopped { .. })
+            Err(ProviderError::Protocol(_))
         ));
     }
     #[test]

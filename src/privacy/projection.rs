@@ -1,6 +1,7 @@
 //! Lossless, host-only source analysis. Unknown bytes never become public data.
 //! Projected views intentionally use typed markers, including at scalar/code
 //! positions; only locally restored bytes may be parsed or executed as edits.
+#![allow(dead_code)]
 use super::policy::{Action, AliasKind, Policy};
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;

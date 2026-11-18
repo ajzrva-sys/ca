@@ -330,6 +330,7 @@ mod tests {
             output_contract: None,
             isolation: AgentIsolation::Shared,
             admitted: None,
+            reads_only: false,
         }
     }
 

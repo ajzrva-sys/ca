@@ -351,6 +351,7 @@ impl ProactiveContext {
             isolation: AgentIsolation::Shared,
 
             admitted: None,
+            reads_only: false,
         };
         if let Ok(id) = manager
             .spawn_with_origin(request, AgentRunOrigin::Conversation)
@@ -730,6 +731,7 @@ mod tests {
             isolation: AgentIsolation::Shared,
 
             admitted: None,
+            reads_only: false,
         };
         manager.spawn(ordinary).await.unwrap();
         read(&context, &manager, "alpha.rs").await;

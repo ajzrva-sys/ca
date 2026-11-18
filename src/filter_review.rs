@@ -254,51 +254,8 @@ pub(crate) fn hold(
     expanded: &str,
     queued: Option<uuid::Uuid>,
 ) -> bool {
-    if !state.task_filter_preview_enabled {
-        return false;
-    }
-    if state
-        .current_model
-        .as_ref()
-        .is_some_and(|model| crate::chatgpt_plan_auth::skips_provider_filter(&model.provider))
-    {
-        return false;
-    }
-    if state.task_filter_review.as_ref().is_some_and(|r| {
-        r.phase == Phase::Accepted && r.input.raw == raw && r.input.expanded == expanded
-    }) {
-        state.task_filter_review = None;
-        return false;
-    }
-    if state.turn_lifecycle.is_active() || {
-        let work = state.work_state.lock().unwrap_or_else(|p| p.into_inner());
-        crate::plan_workflow::task_graph_active(&work)
-    } {
-        return false;
-    }
-    crate::ensure_session_identity(state);
-    let queued = queued.or_else(|| state.filter_queue_origin.as_ref().map(|q| q.id));
-    if let Some(origin) = state.filter_queue_origin.take() {
-        state.input_queue.push_front(origin);
-    }
-    let input = Input::capture(state, raw, expanded, queued);
-    state.privacy_editor_generation = state.privacy_editor_generation.wrapping_add(1);
-    state.privacy_editor = Some(crate::tui::privacy::Editor::preparing(
-        state.cwd.clone(),
-        Some(input.guide()),
-    ));
-    state.pending_filter_task = Some((raw.into(), expanded.into(), queued));
-    state.task_filter_send_authorized = false;
-    state.task_filter_review = Some(Review {
-        input,
-        phase: Phase::Analyze,
-        busy: false,
-        suggested: Policy::default(),
-        defaults: Policy::default(),
-        prepared: None,
-    });
-    state.status_message = Some("Preparing your filter preview locally…".into());
-    true
+    let _ = (state, raw, expanded, queued);
+    false
 }
 
 fn send_result(
@@ -708,6 +665,7 @@ pub(crate) fn refresh_inspection(state: &mut AppState) {
     );
 }
 
+#[allow(dead_code)]
 pub(crate) fn inspect(state: &mut AppState) -> bool {
     let Some(context) = state.request_store.privacy_context() else {
         return false;

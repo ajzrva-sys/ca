@@ -189,7 +189,7 @@ fn whole_site_new_file_keeps_directory_private_and_rejects_traversal() {
         );
         for invalid in [
             format!("{directory}/../escaped.css"),
-            format!("{directory}/__CA_NAME_forged__"),
+            format!("{directory}/forged-name.css"),
             format!("{directory}/new.css/child.css"),
         ] {
             assert!(context

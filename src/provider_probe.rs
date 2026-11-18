@@ -12,24 +12,16 @@ const PROBE_PROMPT: &str = "Reply with exactly OK and nothing else.";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderCheckStatus {
     Checking,
-    Working {
-        model: String,
-    },
-    MissingEnvironment {
-        variable: String,
-    },
+    Working { model: String },
+    MissingEnvironment { variable: String },
     CredentialRejected,
     AccessDenied,
     TimedOut,
     CannotConnect,
     EndpointNotFound,
     RateLimited,
-    ProviderError {
-        status: Option<u16>,
-    },
+    ProviderError { status: Option<u16> },
     InvalidResponse,
-    /// The process provider filter stopped the probe. This is not a provider fault.
-    FilterStopped,
     NeedsModel,
     AuthenticationRequired,
 }
@@ -193,9 +185,7 @@ fn status_for_error(error: ProviderError) -> ProviderCheckStatus {
         | ProviderError::UnresolvedToolCall { .. }
         | ProviderError::Protocol(_)
         | ProviderError::StreamAnomaly(_) => ProviderCheckStatus::InvalidResponse,
-        ProviderError::FilterStopped { .. } | ProviderError::PrivacyBlocked { .. } => {
-            ProviderCheckStatus::FilterStopped
-        }
+        ProviderError::PrivacyBlocked { .. } => ProviderCheckStatus::InvalidResponse,
     }
 }
 

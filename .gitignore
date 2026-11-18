@@ -9,6 +9,7 @@
 ._*
 *.log
 *.profraw
+
 # Runtime state and credentials
 .env
 .env.*
@@ -18,6 +19,21 @@
 **/.hermes/
 **/.ca/
 **/.codex/
+
 # Local planning artifacts
 /dontdo.txt
 /fx.plan
+
+# Local working-snapshot artifacts (not published)
+/exports/
+/false/
+/ca-hrs-252/
+/errors/
+/archive-notes/
+/ARCHIVE-README.txt
+/esxi-vmxnet3-case-runner-task-graph.md
+/.mimocode/
+/.agent/
+/.ignore
+/docs/archive/
+/crates/codex-team/docs/archive/

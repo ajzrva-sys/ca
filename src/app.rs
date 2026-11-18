@@ -19,14 +19,14 @@ pub enum ApprovalMode {
 
 impl AgentMode {
     /// Label for the status line. Plan covers an armed approval mode, matching
-    /// the Shift+Tab cycle: Normal, Plan, Auto-review, Always-approve.
+    /// the Shift+Tab cycle: Normal, Plan, Auto-review, Yolo.
     pub fn status_label<'a>(&'a self, approval: &ApprovalMode) -> &'a str {
         if matches!(self, Self::Plan) {
             return "plan";
         }
         match approval {
             ApprovalMode::AutoReview => "auto-review",
-            ApprovalMode::RunEverything => "always-approve",
+            ApprovalMode::RunEverything => "yolo",
             ApprovalMode::Allowlist => match self {
                 Self::Agent => "agent",
                 Self::Ask => "ask",

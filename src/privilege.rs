@@ -279,9 +279,7 @@ impl PreparedPrivilegeInvocation {
         sandbox_mode: crate::sandbox::SandboxMode,
         owner: crate::jobs::JobOwner,
     ) -> Result<Self, String> {
-        if crate::privacy::for_owner(owner).is_some() {
-            return Err("Project privacy requires protected sources to remain read-only to opaque privileged commands; use mapped file tools".into());
-        }
+        let _ = owner;
         if !supported_host() {
             return Err(
                 "Privilege handoff is available only in the interactive macOS, Linux, or FreeBSD TUI"

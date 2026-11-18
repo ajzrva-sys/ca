@@ -146,6 +146,77 @@ pub struct AgentSpawnRequest {
     pub isolation: AgentIsolation,
     /// Host admission result. Model arguments never populate this field.
     pub admitted: Option<std::sync::Arc<crate::execution_grant::AdmittedExecutionGrant>>,
+    /// Plan mode keeps the child on read-only tools. Approved implementation leaves this off.
+    pub reads_only: bool,
+}
+
+fn retain_plan_reads(
+    registry: &crate::agent::registry::ToolRegistry,
+    reads_only: bool,
+    tools: &mut Vec<crate::agent::client::ToolDef>,
+) {
+    if !reads_only {
+        return;
+    }
+    tools.retain(|tool| {
+        registry
+            .get(&tool.function.name)
+            .is_none_or(|spec| spec.mutation == crate::agent::registry::ToolMutation::ReadOnly)
+    });
+}
+
+pub(crate) fn plan_child_write_refusal(reads_only: bool, name: &str) -> Option<&'static str> {
+    if !reads_only {
+        return None;
+    }
+    let registry = crate::agent::registry::ToolRegistry::builtins();
+    let mutating = registry.specs().iter().any(|spec| {
+        spec.name.as_str().eq_ignore_ascii_case(name)
+            && spec.mutation == crate::agent::registry::ToolMutation::Mutating
+    });
+    mutating.then_some("Plan mode can prepare the plan and cannot change files.")
+}
+
+#[cfg(test)]
+mod plan_child_tool_tests {
+    use super::{plan_child_write_refusal, retain_plan_reads};
+
+    fn child_tool_names(reads_only: bool, granted: &[&str]) -> Vec<String> {
+        let registry = crate::agent::registry::ToolRegistry::builtins();
+        let granted = granted
+            .iter()
+            .map(|name| (*name).to_ascii_lowercase())
+            .collect();
+        let mut tools = crate::tool_selection::resolve_internal_tools(
+            &registry,
+            crate::agent::registry::ToolProfile::Subagent,
+            &crate::tool_selection::ToolSelectionPolicy::default(),
+            &crate::tool_selection::ToolSelectionConstraints {
+                allowed_names: Some(granted),
+                ..crate::tool_selection::ToolSelectionConstraints::default()
+            },
+        )
+        .expect("child tool selection")
+        .into_definitions();
+        retain_plan_reads(&registry, reads_only, &mut tools);
+        tools.into_iter().map(|tool| tool.function.name).collect()
+    }
+
+    #[test]
+    fn a_plan_child_omits_write_tools_and_rejects_a_write_call() {
+        let open = child_tool_names(false, &["read_file", "write_file"]);
+        assert!(open.iter().any(|name| name == "write_file"));
+        assert!(open.iter().any(|name| name == "read_file"));
+        let closed = child_tool_names(true, &["read_file", "write_file"]);
+        assert!(closed.iter().any(|name| name == "read_file"));
+        assert!(!closed.iter().any(|name| name == "write_file"));
+        assert_eq!(
+            plan_child_write_refusal(true, "write_file"),
+            Some("Plan mode can prepare the plan and cannot change files.")
+        );
+        assert!(plan_child_write_refusal(true, "read_file").is_none());
+        assert!(plan_child_write_refusal(false, "write_file").is_none());
+    }
 }
 
 #[derive(
@@ -726,6 +797,7 @@ pub struct ProviderAgentRunner {
     pub skills_enabled: bool,
     pub images_supported: bool,
     pub pricing: Arc<std::collections::HashMap<String, crate::usage::UsagePricing>>,
+    pub resume_rate_limited: bool,
 }
 
 #[async_trait]
@@ -805,7 +877,7 @@ impl AgentRunner for ProviderAgentRunner {
             .map(|name| name.to_ascii_lowercase())
             .collect();
         let (skill_activation_ids, skill_view_ids) = self.skill_constraint_ids();
-        let authorized_tools = crate::tool_selection::resolve_internal_tools(
+        let mut authorized_tools = crate::tool_selection::resolve_internal_tools(
             registry,
             crate::agent::registry::ToolProfile::Subagent,
             &self.tool_policy,
@@ -832,6 +904,7 @@ impl AgentRunner for ProviderAgentRunner {
         )
         .map_err(|error| format!("tool selection failed: {error}"))?
         .into_definitions();
+        retain_plan_reads(registry, context.request.reads_only, &mut authorized_tools);
         let discovery = crate::tool_discovery::ToolDiscoverySession::default();
         let active_skills = if repair.is_some() { String::new() } else { self
             .skills
@@ -854,6 +927,10 @@ impl AgentRunner for ProviderAgentRunner {
         let owner = context.job_owner;
         let mut structured_repair_attempted = false;
         let mut repair_usage = crate::narrow_worker::RepairUsage::default();
+        let mut resume_gate = crate::child_resume::Gate::new(
+            self.resume_rate_limited,
+            context.request.depth,
+        );
         for turn in 0..context.limits.max_turns {
             let mut tools = if repair.is_some() { Vec::new() } else { discovery.advertise(authorized_tools.clone(), &self.tool_policy) };
             if let Some(contract) = &output_contract {
@@ -915,19 +992,35 @@ impl AgentRunner for ProviderAgentRunner {
                 .events
                 .send(RunnerEvent::Phase(AgentExecutionPhase::WaitingForResponse));
             let stream_result = tokio::select! {
-                _ = wait_cancelled(context.cancelled.clone()) => return Err("cancelled".into()),
+                _ = wait_cancelled(context.cancelled.clone()) => {
+                    resume_gate.user_stop();
+                    return Err("cancelled".into());
+                }
                 result = client.stream_prepared(&prepared) => result.map_err(|error| error.to_string()),
             };
             let mut stream = match stream_result {
                 Ok(stream) => stream,
                 Err(error) => {
                     usage_span.fail(None);
+                    if let crate::child_resume::Resume::Wait(duration) = resume_gate.admit(&error) {
+                        tokio::select! {
+                            _ = wait_cancelled(context.cancelled.clone()) => {
+                                resume_gate.user_stop();
+                                return Err("cancelled".into());
+                            }
+                            _ = tokio::time::sleep(duration) => {}
+                        }
+                        continue;
+                    }
                     return Err(error);
                 }
             };
             let mut first_progress = true;
             let assembled_result = tokio::select! {
-                _ = wait_cancelled(context.cancelled.clone()) => return Err("cancelled".into()),
+                _ = wait_cancelled(context.cancelled.clone()) => {
+                    resume_gate.user_stop();
+                    return Err("cancelled".into());
+                }
                 result = crate::agent::stream::consume_stream(&mut stream, |event| {
                     match event {
                         crate::agent::stream::ProviderEvent::Reasoning(delta) => {
@@ -961,9 +1054,27 @@ impl AgentRunner for ProviderAgentRunner {
                 }
                 Err(error) => {
                     usage_span.fail(None);
+                    if let crate::child_resume::Resume::Wait(duration) = resume_gate.admit(&error) {
+                        tokio::select! {
+                            _ = wait_cancelled(context.cancelled.clone()) => {
+                                resume_gate.user_stop();
+                                return Err("cancelled".into());
+                            }
+                            _ = tokio::time::sleep(duration) => {}
+                        }
+                        continue;
+                    }
                     return Err(error);
                 }
             };
+            if let Some(usage) = assembled.usage.as_ref() {
+                let route = format!("{}/{}", client.provider_id(), client.model_id());
+                crate::prompt_cache_warm::note_usage(
+                    &route,
+                    usage.cached_prompt_tokens.unwrap_or(0),
+                    usage.prompt_tokens,
+                );
+            }
             repair_usage.observe(assembled.usage.as_ref());
             if repair.is_some() {
                 let _ = context.events.send(RunnerEvent::NarrowRepairUsage(repair_usage.clone()));
@@ -1137,6 +1248,14 @@ impl AgentRunner for ProviderAgentRunner {
                     }
                 }
             }
+            let (warm_stop, warm_watch) = tokio::sync::watch::channel(false);
+            crate::prompt_cache_warm::spawn_keepalive(
+                client.clone(),
+                prepared.clone(),
+                crate::prompt_cache_warm::Pace::Machine,
+                true,
+                Some(warm_watch),
+            );
             let discovery_batch = discovery.begin_batch();
             let execution_grants = context.request.grants.clone();
             let frozen_policy = context.frozen_policy.clone();
@@ -1158,6 +1277,11 @@ impl AgentRunner for ProviderAgentRunner {
                     return Err(format!(
                         "provider attempted unavailable subagent tool: {name}"
                     ));
+                }
+                if let Some(message) = plan_child_write_refusal(context.request.reads_only, &name)
+                {
+                    cleanup_owned_jobs(owner).await;
+                    return Err(message.to_string());
                 }
                 let parsed: serde_json::Value = serde_json::from_str(&raw_arguments)
                     .map_err(|error| format!("invalid {name} arguments: {error}"))?;
@@ -1454,6 +1578,8 @@ impl AgentRunner for ProviderAgentRunner {
                     });
                 }
             }
+            let _ = warm_stop.send(true);
+            drop(warm_stop);
             discovery_batch.commit();
         }
         cleanup_owned_jobs(owner).await;
@@ -2051,6 +2177,7 @@ async fn execute_nested_spawn_with_provenance(
         isolation,
 
         admitted: None,
+        reads_only: context.request.reads_only,
     };
     let origin = if context.graph_budget.is_some() {
         AgentRunOrigin::TaskGraph
@@ -3087,6 +3214,7 @@ pub async fn execute_manager_tool_with_provenance(
                 },
 
                 admitted: None,
+                reads_only: false,
             };
             match manager.spawn(request).await {
                 Ok(id) => {
@@ -3444,6 +3572,7 @@ pub async fn execute_manager_tool_with_provenance(
                 isolation: AgentIsolation::Shared,
 
                 admitted: None,
+                reads_only: false,
             };
             match manager.spawn(request).await {
                 Ok(id) => {
@@ -3618,6 +3747,7 @@ fn build_spawn_request(
             isolation,
 
             admitted: None,
+            reads_only: false,
         },
         selection,
     ))
@@ -7164,6 +7294,7 @@ mod manager_tests {
             skills_enabled: true,
             images_supported: false,
             pricing: Arc::new(std::collections::HashMap::new()),
+            resume_rate_limited: false,
         }
     }
 
@@ -8230,6 +8361,7 @@ mod manager_tests {
             repair_contract: None,
             isolation: AgentIsolation::Shared,
             admitted: None,
+            reads_only: false,
         }
     }
 
@@ -9315,6 +9447,7 @@ mod manager_tests {
             skills_enabled: false,
             images_supported: false,
             pricing: Arc::new(std::collections::HashMap::new()),
+            resume_rate_limited: false,
         };
         let (_command_tx, commands) = mpsc::channel(1);
         let (_cancel_tx, cancelled) = watch::channel(false);
@@ -9787,7 +9920,7 @@ mod manager_tests {
                     let alias = privacy
                         .project_filename_path(std::path::Path::new(filename))
                         .unwrap();
-                    assert!(alias.starts_with("__CA_PATH_"), "{alias}");
+                    assert!(alias.ends_with("private-report-338.txt"), "{alias}");
                     let value = json!({
                         "title":"Map",
                         "body":"## Shared purpose and constraints\nKeep local.\n## Task: Inspect\nRead evidence.\n",
@@ -10895,6 +11028,7 @@ mod manager_tests {
             skills_enabled: true,
             images_supported: false,
             pricing: Arc::new(std::collections::HashMap::new()),
+            resume_rate_limited: false,
         };
         let (_command_tx, commands) = mpsc::channel(1);
         let (_cancel_tx, cancelled) = watch::channel(false);
@@ -11004,6 +11138,7 @@ mod manager_tests {
             skills_enabled: false,
             images_supported: false,
             pricing: Arc::new(std::collections::HashMap::new()),
+            resume_rate_limited: false,
         };
         let (_command_tx, commands) = mpsc::channel(1);
         let (_cancel_tx, cancelled) = watch::channel(false);
@@ -11165,6 +11300,7 @@ mod manager_tests {
             skills_enabled: false,
             images_supported: false,
             pricing: Arc::new(std::collections::HashMap::new()),
+            resume_rate_limited: false,
         };
         let (_command_tx, commands) = mpsc::channel(1);
         let (_cancel_tx, cancelled) = watch::channel(false);
@@ -11249,6 +11385,7 @@ mod manager_tests {
             skills_enabled: false,
             images_supported: false,
             pricing: Arc::new(std::collections::HashMap::new()),
+            resume_rate_limited: false,
         };
         let (_command_tx, commands) = mpsc::channel(1);
         let (_cancel_tx, cancelled) = watch::channel(false);
@@ -11425,6 +11562,7 @@ mod manager_tests {
             skills_enabled: false,
             images_supported: false,
             pricing: Arc::new(std::collections::HashMap::new()),
+            resume_rate_limited: false,
         };
         let (_command_tx, commands) = mpsc::channel(1);
         let (_cancel_tx, cancelled) = watch::channel(false);
@@ -12554,6 +12692,7 @@ mod manager_tests {
             skills_enabled: true,
             images_supported: false,
             pricing: Arc::new(std::collections::HashMap::new()),
+            resume_rate_limited: false,
         };
         let grant = AgentGrant {
             tools: vec![
@@ -12844,6 +12983,7 @@ mod manager_tests {
             skills_enabled: true,
             images_supported: false,
             pricing: Arc::new(std::collections::HashMap::new()),
+            resume_rate_limited: false,
         };
         let grant = AgentGrant {
             tools: vec!["run_command".into()],
@@ -12935,6 +13075,7 @@ mod manager_tests {
             skills_enabled: false,
             images_supported: false,
             pricing: Arc::new(std::collections::HashMap::new()),
+            resume_rate_limited: false,
         };
         let owner = crate::jobs::JobOwner::new(None);
         let owner_key = owner.run_id.to_string();
@@ -13441,6 +13582,7 @@ mod manager_tests {
                 isolation: AgentIsolation::Shared,
 
                 admitted: None,
+                reads_only: false,
             },
             limits,
             commands,

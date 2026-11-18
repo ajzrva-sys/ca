@@ -9,6 +9,7 @@ pub enum ProviderFallbackCause {
     Timeout,
     RateLimited,
     ServerError,
+    SignIn,
 }
 
 impl std::fmt::Display for ProviderFallbackCause {
@@ -18,6 +19,7 @@ impl std::fmt::Display for ProviderFallbackCause {
             Self::Timeout => "timeout",
             Self::RateLimited => "rate limited",
             Self::ServerError => "server error",
+            Self::SignIn => "sign-in",
         })
     }
 }
@@ -50,6 +52,22 @@ pub struct TurnProviderProvenance {
     pub provider: String,
     pub model: String,
     pub cause: ProviderFallbackCause,
+    /// Provider reason shown with the switch. Empty keeps the original line.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub detail: String,
+    /// The primary failed before login and the backup was attempted anyway.
+    #[serde(default, skip_serializing_if = "skip_false")]
+    pub primary_sign_in: bool,
+}
+
+fn skip_false(value: &bool) -> bool {
+    !*value
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FallbackNotice {
+    pub detail: String,
+    pub primary_sign_in: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,6 +127,77 @@ pub fn matching_rule<'a>(
             rule.provider == provider && rule.model == model && rule.causes.contains(&cause)
         })
         .map(|rule| (rule, cause))
+}
+
+pub const FALLBACK_DETAIL_MAX_CHARS: usize = 200;
+
+/// A rule for this provider and model, including a dead primary login even when
+/// sign-in is not one of the rule's ordinary causes.
+pub fn attempt_for_rule(
+    rule: &ProviderFallbackRule,
+    provider: &str,
+    model: &str,
+    error: &ProviderError,
+) -> Option<ProviderFallbackCause> {
+    if let Some((_, cause)) = matching_rule(std::slice::from_ref(rule), provider, model, error) {
+        return Some(cause);
+    }
+    (rule.provider == provider && rule.model == model && sign_in_failure(error))
+        .then_some(ProviderFallbackCause::SignIn)
+}
+
+pub fn sign_in_failure(error: &ProviderError) -> bool {
+    match error {
+        ProviderError::Http {
+            status: 401 | 403, ..
+        } => true,
+        ProviderError::MissingEnvironment(_) => true,
+        other => {
+            let text = other.to_string().to_ascii_lowercase();
+            text.contains("unauthorized")
+                || text.contains("invalid api key")
+                || text.contains("authentication")
+                || text.contains("sign-in")
+                || text.contains("signin")
+                || text.contains("not logged in")
+        }
+    }
+}
+
+pub fn error_detail(error: &ProviderError) -> String {
+    error
+        .to_string()
+        .chars()
+        .take(FALLBACK_DETAIL_MAX_CHARS)
+        .collect()
+}
+
+pub fn lead_with_primary_sign_in(
+    provider: &str,
+    model: &str,
+    backup: &ProviderError,
+) -> ProviderError {
+    ProviderError::Protocol(format!(
+        "Primary sign-in failed for {provider}/{model}. Sign in to that provider, then retry. {backup}"
+    ))
+}
+
+pub fn status_line(
+    primary_provider: &str,
+    primary_model: &str,
+    provider: &str,
+    model: &str,
+    cause: ProviderFallbackCause,
+    detail: &str,
+) -> String {
+    let line = format!(
+        "Provider fallback: {primary_provider}/{primary_model} → {provider}/{model} · {cause}"
+    );
+    if detail.is_empty() {
+        line
+    } else {
+        format!("{line} · {detail}")
+    }
 }
 
 pub fn validate_rules(config: &crate::config::CaConfig) -> anyhow::Result<()> {
@@ -393,5 +482,53 @@ fallback_model = "two"
             .unwrap_err()
             .to_string()
             .contains("at least one cause"));
+    }
+
+    #[test]
+    fn a_dead_primary_login_tries_the_backup_and_leads_with_sign_in() {
+        assert!(!default_fallback_causes().contains(&ProviderFallbackCause::SignIn));
+        let selected = rule();
+        let unauthorized = ProviderError::Http {
+            status: 401,
+            body_excerpt: Some("invalid api key".into()),
+        };
+        assert!(cause_for_error(&unauthorized).is_none());
+        assert_eq!(
+            attempt_for_rule(&selected, "primary", "one", &unauthorized),
+            Some(ProviderFallbackCause::SignIn)
+        );
+        assert!(attempt_for_rule(&selected, "other", "one", &unauthorized).is_none());
+        let missing = ProviderError::MissingEnvironment("OPENAI_API_KEY".into());
+        assert!(sign_in_failure(&missing));
+        let led = lead_with_primary_sign_in(
+            "primary",
+            "one",
+            &ProviderError::Protocol("backup down".into()),
+        );
+        let ProviderError::Protocol(text) = led else {
+            panic!("sign-in lead is a protocol message");
+        };
+        assert!(text.starts_with(
+            "Primary sign-in failed for primary/one. Sign in to that provider, then retry."
+        ));
+        assert!(text.contains("backup down"));
+        let long = ProviderError::Protocol("x".repeat(400));
+        assert_eq!(
+            error_detail(&long).chars().count(),
+            FALLBACK_DETAIL_MAX_CHARS
+        );
+        assert_eq!(
+            status_line("a", "b", "c", "d", ProviderFallbackCause::Timeout, ""),
+            "Provider fallback: a/b → c/d · timeout"
+        );
+        assert!(status_line(
+            "a",
+            "b",
+            "c",
+            "d",
+            ProviderFallbackCause::SignIn,
+            "provider HTTP 401"
+        )
+        .ends_with("sign-in · provider HTTP 401"));
     }
 }

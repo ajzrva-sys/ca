@@ -73,44 +73,439 @@ fn too_broad(path: &Path, workspace: &Path, home: Option<&Path>) -> bool {
         || path == home.join(".local").join("share")
 }
 
-/// Split a shell command on `&&`, `||`, `;`, and `|` outside quotes.
+/// Split a shell command on `&&`, `||`, `;`, `|`, and a newline or CR the
+/// shell would run as its own command.
+///
+/// A newline inside quotes stays in the segment. A newline inside `$(...)`
+/// or backticks is still a command start, including when that substitution
+/// sits inside double quotes. A backslash before `;` or `|` stays in the
+/// segment, because the shell does not start a command there. A literal
+/// heredoc body that `cat` or `tee` only copies is blanked first, so a line
+/// of that body is not a command.
 #[must_use]
 pub fn split_command_segments(command: &str) -> Vec<String> {
-    let mut segments = Vec::new();
-    let mut current = String::new();
-    let mut quote = None;
-    let mut chars = command.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if quote.is_some() {
-            if Some(ch) == quote {
-                quote = None;
-            }
-            current.push(ch);
-            continue;
+    split_shell_segments(&blank_literal_heredoc_bodies(command))
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ShellQuote {
+    Single,
+    Double,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ShellFrameKind {
+    Root,
+    Dollar,
+    Tick,
+}
+
+struct ShellFrame {
+    kind: ShellFrameKind,
+    quote: Option<ShellQuote>,
+    paren_depth: i32,
+}
+
+impl ShellFrame {
+    fn root() -> Self {
+        Self {
+            kind: ShellFrameKind::Root,
+            quote: None,
+            paren_depth: 0,
         }
-        if ch == '\'' || ch == '"' {
-            quote = Some(ch);
-            current.push(ch);
-            continue;
-        }
-        let split = ch == ';'
-            || ch == '|'
-            || (ch == '&' && chars.peek() == Some(&'&') && chars.next().is_some());
-        if split {
-            let segment = current.trim().to_string();
-            if !segment.is_empty() {
-                segments.push(segment);
-            }
-            current.clear();
-            continue;
-        }
-        current.push(ch);
     }
+}
+
+fn next_char(text: &str, index: usize) -> Option<(usize, char)> {
+    let ch = text[index..].chars().next()?;
+    Some((index + ch.len_utf8(), ch))
+}
+
+fn push_substitution(command: &str, index: usize, frames: &mut Vec<ShellFrame>) -> Option<usize> {
+    let (next, ch) = next_char(command, index)?;
+    if ch == '`' {
+        frames.push(ShellFrame {
+            kind: ShellFrameKind::Tick,
+            quote: None,
+            paren_depth: 0,
+        });
+        return Some(next);
+    }
+    if ch == '$' {
+        let (after, peek) = next_char(command, next)?;
+        if peek == '(' {
+            frames.push(ShellFrame {
+                kind: ShellFrameKind::Dollar,
+                quote: None,
+                paren_depth: 1,
+            });
+            return Some(after);
+        }
+    }
+    None
+}
+
+fn close_tick(frames: &mut Vec<ShellFrame>, ch: char) -> bool {
+    if ch != '`' {
+        return false;
+    }
+    let close = frames
+        .last()
+        .is_some_and(|frame| frame.kind == ShellFrameKind::Tick && frame.quote.is_none());
+    if close {
+        frames.pop();
+    }
+    close
+}
+
+fn note_paren(frames: &mut Vec<ShellFrame>, ch: char) -> bool {
+    let Some(frame) = frames.last() else {
+        return false;
+    };
+    if frame.kind != ShellFrameKind::Dollar || frame.quote.is_some() {
+        return false;
+    }
+    if ch == '(' {
+        frames.last_mut().unwrap().paren_depth += 1;
+        return true;
+    }
+    if ch == ')' {
+        let depth = frame.paren_depth - 1;
+        if depth <= 0 && frames.len() > 1 {
+            frames.pop();
+        } else if let Some(frame) = frames.last_mut() {
+            frame.paren_depth = depth;
+        }
+        return true;
+    }
+    false
+}
+
+fn at_word_start(command: &str, index: usize) -> bool {
+    index == 0
+        || command[..index]
+            .ends_with(|ch: char| ch.is_whitespace() || matches!(ch, ';' | '|' | '&' | '(' | ')'))
+}
+
+fn skip_comment(command: &str, index: usize) -> usize {
+    let mut cursor = index;
+    while let Some((next, ch)) = next_char(command, cursor) {
+        if ch == '\n' || ch == '\r' {
+            break;
+        }
+        cursor = next;
+    }
+    cursor
+}
+
+fn push_segment(segments: &mut Vec<String>, current: &mut String) {
     let segment = current.trim().to_string();
     if !segment.is_empty() {
         segments.push(segment);
     }
+    current.clear();
+}
+
+fn escaped_break_end(command: &str, after_slash: usize) -> Option<usize> {
+    let (after, escaped) = next_char(command, after_slash)?;
+    if escaped == '\n' {
+        return Some(after);
+    }
+    if escaped != '\r' {
+        return None;
+    }
+    let Some((after_line, next)) = next_char(command, after) else {
+        return Some(after);
+    };
+    if next == '\n' {
+        Some(after_line)
+    } else {
+        Some(after)
+    }
+}
+
+fn split_boundary(command: &str, index: usize) -> Option<usize> {
+    let (next, ch) = next_char(command, index)?;
+    if matches!(ch, ';' | '|' | '\n' | '\r') {
+        return Some(next);
+    }
+    if ch == '&' {
+        let (after, peek) = next_char(command, next)?;
+        if peek == '&' {
+            return Some(after);
+        }
+    }
+    None
+}
+
+fn split_shell_segments(command: &str) -> Vec<String> {
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    let mut frames = vec![ShellFrame::root()];
+    let mut index = 0;
+    while index < command.len() {
+        let (next, ch) = next_char(command, index).expect("index stays on a char");
+        let quote = frames.last().expect("root frame").quote;
+        if quote == Some(ShellQuote::Single) {
+            current.push(ch);
+            if ch == '\'' {
+                frames.last_mut().expect("root frame").quote = None;
+            }
+            index = next;
+            continue;
+        }
+        if quote == Some(ShellQuote::Double) && ch == '\\' {
+            current.push(ch);
+            index = next;
+            if let Some((after, escaped)) = next_char(command, index) {
+                current.push(escaped);
+                index = after;
+            }
+            continue;
+        }
+        if quote == Some(ShellQuote::Double) {
+            if ch == '"' {
+                current.push(ch);
+                frames.last_mut().expect("root frame").quote = None;
+                index = next;
+                continue;
+            }
+            if let Some(end) = push_substitution(command, index, &mut frames) {
+                current.push_str(&command[index..end]);
+                index = end;
+                continue;
+            }
+            current.push(ch);
+            index = next;
+            continue;
+        }
+        if ch == '\\' {
+            if let Some(end) = escaped_break_end(command, next) {
+                current.push_str(&command[index..end]);
+                index = end;
+                continue;
+            }
+            if let Some((after, escaped)) = next_char(command, next) {
+                if matches!(escaped, ';' | '|') {
+                    current.push_str(&command[index..after]);
+                    index = after;
+                    continue;
+                }
+            }
+        }
+        if ch == '\'' || ch == '"' {
+            current.push(ch);
+            frames.last_mut().expect("root frame").quote = if ch == '\'' {
+                Some(ShellQuote::Single)
+            } else {
+                Some(ShellQuote::Double)
+            };
+            index = next;
+            continue;
+        }
+        if ch == '#' && at_word_start(command, index) {
+            let comment_end = skip_comment(command, next);
+            current.push_str(&command[index..comment_end]);
+            index = comment_end;
+            continue;
+        }
+        if close_tick(&mut frames, ch) {
+            current.push(ch);
+            index = next;
+            continue;
+        }
+        if let Some(end) = push_substitution(command, index, &mut frames) {
+            current.push_str(&command[index..end]);
+            index = end;
+            continue;
+        }
+        if note_paren(&mut frames, ch) {
+            current.push(ch);
+            index = next;
+            continue;
+        }
+        if let Some(end) = split_boundary(command, index) {
+            push_segment(&mut segments, &mut current);
+            index = end;
+            continue;
+        }
+        current.push(ch);
+        index = next;
+    }
+    push_segment(&mut segments, &mut current);
     segments
+}
+
+fn line_continues(header: &str) -> bool {
+    header.chars().rev().take_while(|ch| *ch == '\\').count() % 2 == 1
+}
+
+fn header_runs_the_body(header: &str) -> bool {
+    header.chars().any(|ch| matches!(ch, '|' | ';' | '&'))
+}
+
+fn is_literal_reader(word: &str) -> bool {
+    let base = word.rsplit(['/', '\\']).next().unwrap_or(word);
+    base.eq_ignore_ascii_case("cat") || base.eq_ignore_ascii_case("tee")
+}
+
+fn command_word_before(command: &str, index: usize) -> Option<&str> {
+    let head = &command[..index];
+    let line_start = head.rfind('\n').map_or(0, |found| found + 1);
+    let piece_start = head[line_start..]
+        .rfind(['&', ';', '|', '('])
+        .map_or(line_start, |found| line_start + found + 1);
+    command[piece_start..index].split_whitespace().next()
+}
+
+fn is_delim_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-')
+}
+
+fn quoted_heredoc_opener(command: &str, index: usize) -> Option<(String, usize)> {
+    let bytes = command.as_bytes();
+    if bytes.get(index) != Some(&b'<') || bytes.get(index + 1) != Some(&b'<') {
+        return None;
+    }
+    let word = command_word_before(command, index)?;
+    if !is_literal_reader(word) {
+        return None;
+    }
+    let mut cursor = index + 2;
+    if bytes.get(cursor) == Some(&b'-') {
+        cursor += 1;
+    }
+    while matches!(bytes.get(cursor), Some(b' ' | b'\t')) {
+        cursor += 1;
+    }
+    let quote = *bytes.get(cursor)?;
+    if quote != b'\'' && quote != b'"' {
+        return None;
+    }
+    cursor += 1;
+    let delim_start = cursor;
+    while cursor < bytes.len() && is_delim_byte(bytes[cursor]) {
+        cursor += 1;
+    }
+    if cursor == delim_start || bytes.get(cursor) != Some(&quote) {
+        return None;
+    }
+    let delim = command[delim_start..cursor].to_string();
+    cursor += 1;
+    let newline = command[cursor..].find('\n')?;
+    let mut header = command[cursor..cursor + newline].to_string();
+    let mut body_start = cursor + newline + 1;
+    for _ in 0..8 {
+        if !line_continues(&header) || header_runs_the_body(&header) {
+            break;
+        }
+        let rest = command.get(body_start..)?;
+        let newline = rest.find('\n')?;
+        header.pop();
+        header.push_str(&rest[..newline]);
+        body_start += newline + 1;
+    }
+    if line_continues(&header) || header_runs_the_body(&header) {
+        return None;
+    }
+    Some((delim, body_start))
+}
+
+fn heredoc_body_end(command: &str, body_start: usize, delim: &str) -> usize {
+    let mut line_start = body_start;
+    for line in command[body_start..].split_inclusive('\n') {
+        let bare = line.trim_end_matches(['\n', '\r']).trim_start_matches('\t');
+        if bare == delim {
+            return line_start;
+        }
+        line_start += line.len();
+    }
+    command.len()
+}
+
+fn literal_heredoc_ranges(command: &str) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let mut frames = vec![ShellFrame::root()];
+    let mut index = 0;
+    while index < command.len() {
+        let (next, ch) = next_char(command, index).expect("index stays on a char");
+        let quote = frames.last().expect("root frame").quote;
+        if quote == Some(ShellQuote::Single) {
+            if ch == '\'' {
+                frames.last_mut().expect("root frame").quote = None;
+            }
+            index = next;
+            continue;
+        }
+        if ch == '\\' && quote != Some(ShellQuote::Single) {
+            index = next_char(command, next).map_or(command.len(), |(after, _)| after);
+            continue;
+        }
+        if quote == Some(ShellQuote::Double) {
+            if ch == '"' {
+                frames.last_mut().expect("root frame").quote = None;
+            } else if let Some(end) = push_substitution(command, index, &mut frames) {
+                index = end;
+                continue;
+            }
+            index = next;
+            continue;
+        }
+        if ch == '\'' || ch == '"' {
+            frames.last_mut().expect("root frame").quote = if ch == '\'' {
+                Some(ShellQuote::Single)
+            } else {
+                Some(ShellQuote::Double)
+            };
+            index = next;
+            continue;
+        }
+        if ch == '#' && at_word_start(command, index) {
+            index = skip_comment(command, next);
+            continue;
+        }
+        if close_tick(&mut frames, ch) || note_paren(&mut frames, ch) {
+            index = next;
+            continue;
+        }
+        if let Some(end) = push_substitution(command, index, &mut frames) {
+            index = end;
+            continue;
+        }
+        if ch == '<' {
+            if let Some((delim, body_start)) = quoted_heredoc_opener(command, index) {
+                let body_end = heredoc_body_end(command, body_start, &delim);
+                if body_end > body_start {
+                    ranges.push((body_start, body_end));
+                }
+                index = body_end;
+                continue;
+            }
+        }
+        index = next;
+    }
+    ranges
+}
+
+fn blank_literal_heredoc_bodies(command: &str) -> String {
+    let ranges = literal_heredoc_ranges(command);
+    if ranges.is_empty() {
+        return command.to_string();
+    }
+    let mut out = String::with_capacity(command.len());
+    let mut cursor = 0;
+    for (start, end) in ranges {
+        if start < cursor || end > command.len() {
+            continue;
+        }
+        out.push_str(&command[cursor..start]);
+        for ch in command[start..end].chars() {
+            out.push(if ch == '\n' { '\n' } else { ' ' });
+        }
+        cursor = end;
+    }
+    out.push_str(&command[cursor..]);
+    out
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -242,6 +637,77 @@ fn peeled_command(words: &[String]) -> Peel {
     }
 }
 
+/// A plan-mode shell write. Ask is not this check: `curl` and `git log` stay reads.
+#[must_use]
+pub fn command_writes(command: &str) -> bool {
+    split_command_segments(command)
+        .iter()
+        .any(|segment| segment_writes(segment))
+}
+
+fn segment_writes(segment: &str) -> bool {
+    if has_unquoted_redirect(segment) {
+        return true;
+    }
+    let words = shell_words(segment);
+    let Peel::Words(words) = peeled_command(&words) else {
+        return false;
+    };
+    write_program(&words)
+}
+
+fn has_unquoted_redirect(segment: &str) -> bool {
+    let mut quote = None;
+    for ch in segment.chars() {
+        if let Some(open) = quote {
+            if ch == open {
+                quote = None;
+            }
+            continue;
+        }
+        if ch == '\'' || ch == '"' {
+            quote = Some(ch);
+            continue;
+        }
+        if ch == '>' {
+            return true;
+        }
+    }
+    false
+}
+
+fn write_program(words: &[String]) -> bool {
+    let Some(program) = words.first() else {
+        return false;
+    };
+    let program = program
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(program)
+        .to_ascii_lowercase();
+    if matches!(
+        program.as_str(),
+        "rm" | "mv"
+            | "cp"
+            | "mkdir"
+            | "rmdir"
+            | "touch"
+            | "install"
+            | "tee"
+            | "truncate"
+            | "ln"
+            | "chmod"
+            | "chown"
+            | "dd"
+    ) {
+        return true;
+    }
+    matches!(program.as_str(), "sed" | "perl")
+        && words
+            .iter()
+            .any(|word| word == "-i" || word.starts_with("-i"))
+}
+
 fn score_words(words: &[String]) -> CommandFloor {
     let Some(program) = words.first().map(|word| word.to_ascii_lowercase()) else {
         return CommandFloor::Allow;
@@ -264,12 +730,8 @@ fn score_words(words: &[String]) -> CommandFloor {
     {
         return CommandFloor::Ask;
     }
-    if program == "find"
-        && words
-            .iter()
-            .any(|word| word == "-exec" || word == "-execdir" || word == "-ok")
-    {
-        return CommandFloor::Ask;
+    if program == "find" {
+        return find_action_floor(words);
     }
     if program == "git" {
         if words.iter().any(|word| word == "-c") {
@@ -280,6 +742,98 @@ fn score_words(words: &[String]) -> CommandFloor {
         }
     }
     CommandFloor::Allow
+}
+
+fn find_action_floor(words: &[String]) -> CommandFloor {
+    if words.iter().any(|word| {
+        matches!(
+            word.as_str(),
+            "-delete" | "-fls" | "-fprint" | "-fprint0" | "-fprintf" | "-ok" | "-okdir"
+        )
+    }) {
+        return CommandFloor::Ask;
+    }
+    let mut floor = CommandFloor::Allow;
+    let mut index = 0;
+    while index < words.len() {
+        let word = words[index].as_str();
+        if word == "-exec" || word == "-execdir" {
+            index += 1;
+            let start = index;
+            while index < words.len() && !find_exec_end(&words[index]) {
+                index += 1;
+            }
+            if start == index {
+                return CommandFloor::Ask;
+            }
+            floor = raise_floor(floor, exec_program_floor(&words[start..index]));
+            if floor == CommandFloor::Deny {
+                return floor;
+            }
+        }
+        index += 1;
+    }
+    floor
+}
+
+fn find_exec_end(word: &str) -> bool {
+    matches!(word, ";" | "\\;" | "+")
+}
+
+fn exec_program_floor(words: &[String]) -> CommandFloor {
+    let Some(program) = words.first() else {
+        return CommandFloor::Ask;
+    };
+    if program.contains('/') || program.contains('\\') {
+        return CommandFloor::Ask;
+    }
+    match peeled_command(words) {
+        Peel::Deny => CommandFloor::Deny,
+        Peel::Ask => CommandFloor::Ask,
+        Peel::Words(words) => {
+            let Some(program) = words.first() else {
+                return CommandFloor::Ask;
+            };
+            if program.contains('/') || program.contains('\\') || !find_exec_reader(program) {
+                return CommandFloor::Ask;
+            }
+            score_words(&words)
+        }
+    }
+}
+
+fn find_exec_reader(program: &str) -> bool {
+    matches!(
+        program.to_ascii_lowercase().as_str(),
+        "basename"
+            | "cat"
+            | "cmp"
+            | "comm"
+            | "cut"
+            | "dirname"
+            | "echo"
+            | "egrep"
+            | "false"
+            | "fgrep"
+            | "grep"
+            | "head"
+            | "id"
+            | "ls"
+            | "md5"
+            | "od"
+            | "printf"
+            | "pwd"
+            | "readlink"
+            | "realpath"
+            | "shasum"
+            | "strings"
+            | "tail"
+            | "tr"
+            | "true"
+            | "uname"
+            | "wc"
+            | "whoami"
+    )
 }
 
 fn unvetted_assignment_only(segment: &str) -> bool {
@@ -1378,6 +1932,95 @@ mod tests {
     }
 
     #[test]
+    fn an_unquoted_newline_is_scored_as_its_own_command() {
+        assert_eq!(
+            split_command_segments("cargo test\nrm -rf build"),
+            vec!["cargo test", "rm -rf build"]
+        );
+        assert_eq!(
+            split_command_segments("cargo test\r\nrm -rf build"),
+            vec!["cargo test", "rm -rf build"]
+        );
+        assert_eq!(
+            split_command_segments("cargo test\rrm -rf build"),
+            vec!["cargo test", "rm -rf build"]
+        );
+        assert!(command_requires_ask("cargo test\nrm -rf build"));
+        assert_eq!(
+            split_command_segments("echo \"hello\nworld\""),
+            vec!["echo \"hello\nworld\""]
+        );
+        assert!(!command_requires_ask("echo \"hello\nworld\""));
+        assert_eq!(
+            split_command_segments("echo '$(grep x f\nrm -rf /)'"),
+            vec!["echo '$(grep x f\nrm -rf /)'"]
+        );
+        assert!(!command_requires_ask("echo '$(grep x f\nrm -rf /)'"));
+        assert_eq!(
+            split_command_segments("echo \"$(grep x f\nrm -rf /)\""),
+            vec!["echo \"$(grep x f", "rm -rf /)\""]
+        );
+        assert!(command_requires_ask("echo \"$(grep x f\nrm -rf /)\""));
+        assert_eq!(
+            split_command_segments("echo \"`grep x f\nrm -rf /`\""),
+            vec!["echo \"`grep x f", "rm -rf /`\""]
+        );
+        assert_eq!(
+            split_command_segments("cargo test \\\nrm -rf build"),
+            vec!["cargo test \\\nrm -rf build"]
+        );
+        assert!(!command_requires_ask("cargo test \\\nrm -rf build"));
+        assert_eq!(
+            split_command_segments("echo \\; rm -rf /"),
+            vec!["echo \\; rm -rf /"]
+        );
+        assert!(!command_requires_ask("echo \\; rm -rf /"));
+        assert_eq!(
+            split_command_segments("echo foo; rm -rf /"),
+            vec!["echo foo", "rm -rf /"]
+        );
+        assert!(command_requires_ask("echo foo; rm -rf /"));
+        assert_eq!(
+            split_command_segments("echo \\| rm -rf /"),
+            vec!["echo \\| rm -rf /"]
+        );
+        assert_eq!(
+            split_command_segments("echo foo | rm -rf /"),
+            vec!["echo foo", "rm -rf /"]
+        );
+        assert!(command_requires_ask("echo foo | rm -rf /"));
+        assert_eq!(
+            split_command_segments("find . -exec grep needle {} \\; -delete"),
+            vec!["find . -exec grep needle {} \\; -delete"]
+        );
+        assert!(command_writes("echo hi > out"));
+        assert!(command_writes("echo hi >> out"));
+        assert!(!command_writes("echo 'a > b'"));
+        assert!(!command_writes("echo \"a > b\""));
+        assert!(command_writes("rm file"));
+        assert!(command_writes("/bin/rm file"));
+        assert!(command_writes("sed -i s/a/b/ file"));
+        assert!(!command_writes("sed s/a/b/ file"));
+        assert!(!command_writes("ls"));
+        assert!(!command_writes("git status"));
+        assert!(!command_writes("git diff"));
+        assert!(!command_writes("rg pattern"));
+        assert!(!command_writes("cargo test"));
+        assert!(!command_writes("curl https://example.com"));
+        assert!(!command_requires_ask("cat <<'EOF'\nrm -rf /\nEOF"));
+        assert!(!command_requires_ask("tee <<'EOF'\nrm -rf /\nEOF"));
+        assert!(!command_requires_ask("/bin/cat <<'EOF'\nrm -rf /\nEOF"));
+        assert!(command_requires_ask("bash <<'EOF'\nrm -rf /\nEOF"));
+        assert!(command_requires_ask("cat <<EOF\nrm -rf /\nEOF"));
+        assert!(command_requires_ask("cat <<'EOF' | sh\nrm -rf /\nEOF"));
+        assert!(command_requires_ask("ls # '\nrm -rf /"));
+        assert_eq!(
+            split_command_segments("echo \"cat <<'EOF'\nrm -rf /\nEOF\""),
+            vec!["echo \"cat <<'EOF'\nrm -rf /\nEOF\""]
+        );
+    }
+
+    #[test]
     fn compaction_keeps_the_latest_tool_pair() {
         let results = [false, false, true, false, true];
         let calls = [false, true, false, true, false];
@@ -1455,6 +2098,27 @@ mod tests {
         assert!(command_requires_ask("git -C repo push --force origin main"));
         assert!(!command_requires_ask("git status"));
         assert!(!command_requires_ask("ls src"));
+        let search = "find /Volumes/projects -maxdepth 4 -name '.git' 2>/dev/null | head -40; echo '---remotes mentioning ajzrva/ca---'; find /Volumes/projects -maxdepth 4 -path '*/.git/config' 2>/dev/null -exec grep -H -E 'ajzrva|/ca' {} \\; | head -40";
+        assert!(!command_requires_ask(search), "{search}");
+        assert!(!command_requires_ask("find . -exec grep -H needle {} \\;"));
+        assert!(!command_requires_ask("find . -execdir grep needle {} +"));
+        assert!(command_requires_ask("find . -exec rm {} \\;"));
+        assert!(command_requires_ask("find . -exec touch marker ';'"));
+        assert!(command_requires_ask(
+            "find . -exec bash -c 'rm -rf /tmp/x' {} \\;"
+        ));
+        assert!(command_requires_ask("find . -exec /bin/grep needle {} \\;"));
+        assert!(command_requires_deny(
+            "find . -exec env LD_PRELOAD=/tmp/x.so grep needle {} \\;"
+        ));
+        assert!(command_requires_ask("find . -ok grep needle {} ';'"));
+        assert!(command_requires_ask("find . -delete"));
+        assert!(command_requires_ask(
+            "find . -exec grep needle {} \\; -delete"
+        ));
+        assert!(command_requires_ask("find . -exec"));
+        assert!(command_requires_ask("find . -exec env \\;"));
+        assert!(command_requires_ask("find . -exec command \\;"));
         assert_eq!(
             continuation_summary(true, false, true),
             ContinuationSummary::UseModel

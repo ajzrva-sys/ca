@@ -543,9 +543,6 @@ pub enum ProviderError {
     Protocol(String),
     #[error("provider stream anomaly: {0}")]
     StreamAnomaly(StreamAnomalyKind),
-    /// The user-owned provider filter tripped. The rule id is not the matched text.
-    #[error("provider filter stopped the session ({rule})")]
-    FilterStopped { rule: String },
     /// Recoverable local preparation failure; no provider action is retried.
     #[error("privacy request blocked: {detail}")]
     PrivacyBlocked { detail: String },

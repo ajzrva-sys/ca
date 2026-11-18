@@ -134,7 +134,86 @@ impl WorkflowRetryPolicy {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkflowEvidenceGate {
     AssistantOutput,
-    ToolSuccess { tool: String },
+    ToolSuccess {
+        tool: String,
+    },
+    /// Opt-in proof file. `path` is absolute JSON. `digest` is the SHA-256 of
+    /// the transcript that JSON names. Assistant text does not satisfy it.
+    Artifact {
+        path: String,
+        digest: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProofKind {
+    Command,
+    Screen,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProofDriver {
+    InProcess,
+}
+
+/// A rerunnable proof. The digest covers the transcript bytes, not this JSON.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VerificationProof {
+    pub id: String,
+    pub kind: ProofKind,
+    pub driver: ProofDriver,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub columns: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rows: Option<u16>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub asserted: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_digest: Option<String>,
+    pub output_digest: String,
+    pub exit_code: i32,
+    pub artifact_path: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cleanup_may_delete: Vec<String>,
+}
+
+pub fn proof_digest(bytes: &[u8]) -> String {
+    hex_digest(bytes)
+}
+
+/// Read a proof and require `expected_digest` to be the transcript's SHA-256.
+pub fn artifact_proof_ok(proof_path: &Path, expected_digest: &str) -> Result<(), &'static str> {
+    if !proof_path.is_absolute() {
+        return Err("artifact proof path must be absolute");
+    }
+    if !is_sha256(expected_digest) {
+        return Err("artifact digest is short");
+    }
+    let bytes = match std::fs::read(proof_path) {
+        Ok(bytes) => bytes,
+        Err(_) => return Err("artifact proof is missing"),
+    };
+    let proof: VerificationProof = match serde_json::from_slice(&bytes) {
+        Ok(proof) => proof,
+        Err(_) => return Err("artifact proof is missing"),
+    };
+    if proof.output_digest != expected_digest || !is_sha256(&proof.output_digest) {
+        return Err("artifact digest does not match");
+    }
+    let artifact = Path::new(&proof.artifact_path);
+    if !artifact.is_absolute() {
+        return Err("artifact proof path must be absolute");
+    }
+    let transcript = match std::fs::read(artifact) {
+        Ok(bytes) => bytes,
+        Err(_) => return Err("artifact proof is missing"),
+    };
+    if hex_digest(&transcript) != expected_digest {
+        return Err("artifact digest does not match");
+    }
+    Ok(())
 }
 
 fn default_evidence() -> Vec<WorkflowEvidenceGate> {
@@ -378,8 +457,19 @@ impl WorkflowDefinition {
                 return Err(WorkflowError::InvalidEvidence);
             }
             for gate in &step.evidence {
-                if let WorkflowEvidenceGate::ToolSuccess { tool } = gate {
-                    validate_tool_name(tool).map_err(|_| WorkflowError::InvalidEvidence)?;
+                match gate {
+                    WorkflowEvidenceGate::ToolSuccess { tool } => {
+                        validate_tool_name(tool).map_err(|_| WorkflowError::InvalidEvidence)?;
+                    }
+                    WorkflowEvidenceGate::Artifact { path, .. } => {
+                        if path.is_empty()
+                            || !Path::new(path).is_absolute()
+                            || path.chars().any(char::is_control)
+                        {
+                            return Err(WorkflowError::InvalidEvidence);
+                        }
+                    }
+                    WorkflowEvidenceGate::AssistantOutput => {}
                 }
             }
             for grant in &step.grants {
@@ -1928,17 +2018,27 @@ impl WorkflowRun {
         if state.status != WorkflowStepStatus::Running {
             return Err(WorkflowError::StateMismatch);
         }
+        let mut evidence_error = None;
         let evidence_ok = step.evidence.iter().all(|gate| match gate {
             WorkflowEvidenceGate::AssistantOutput => !assistant_output.trim().is_empty(),
             WorkflowEvidenceGate::ToolSuccess { tool } => {
                 state.successful_tools.iter().any(|name| name == tool)
+            }
+            WorkflowEvidenceGate::Artifact { path, digest } => {
+                match artifact_proof_ok(Path::new(path), digest) {
+                    Ok(()) => true,
+                    Err(message) => {
+                        evidence_error = Some(message);
+                        false
+                    }
+                }
             }
         });
         if !evidence_ok {
             return self.fail_attempt(
                 definition,
                 WorkflowRetryCause::EvidenceFailed,
-                "evidence gate was not satisfied",
+                evidence_error.unwrap_or("evidence gate was not satisfied"),
                 now,
                 true,
             );
@@ -2526,6 +2626,9 @@ fn evidence_label(gate: &WorkflowEvidenceGate) -> String {
     match gate {
         WorkflowEvidenceGate::AssistantOutput => "assistant output".into(),
         WorkflowEvidenceGate::ToolSuccess { tool } => format!("successful {tool}"),
+        WorkflowEvidenceGate::Artifact { digest, .. } => {
+            format!("artifact {}", &digest[..digest.len().min(12)])
+        }
     }
 }
 
@@ -3346,5 +3449,156 @@ mod tests {
         let mut tampered = run;
         tampered.definition_digest = "0".repeat(64);
         assert_eq!(tampered.loaded_builtin(), Err(WorkflowError::StateMismatch));
+    }
+
+    fn single_step(evidence: Vec<WorkflowEvidenceGate>) -> LoadedWorkflow {
+        LoadedWorkflow {
+            definition: WorkflowDefinition {
+                version: 1,
+                id: "proof-check".into(),
+                title: "Proof check".into(),
+                steps: vec![WorkflowStep {
+                    id: "show".into(),
+                    depends_on: Vec::new(),
+                    prompt: "Show the proof".into(),
+                    model: None,
+                    tools: None,
+                    grants: Vec::new(),
+                    retry: WorkflowRetryPolicy::default(),
+                    output: Some("proof".into()),
+                    evidence,
+                    when: None,
+                }],
+            }
+            .validate()
+            .unwrap(),
+            relative_path: "proof.workflow".into(),
+            digest: "proof".into(),
+            pause_before_run: false,
+            agent_budget: default_agent_budget(),
+        }
+    }
+
+    fn finish_show(loaded: &LoadedWorkflow, text: &str) -> (WorkflowRun, WorkflowStepCompletion) {
+        let mut run = WorkflowRun::start(loaded, "mimo".into(), "mimo".into(), Utc::now());
+        let now = Utc::now();
+        run.begin_step(
+            &loaded.definition,
+            "show",
+            "mimo".into(),
+            "mimo".into(),
+            now,
+        )
+        .unwrap();
+        let completion = run.complete_step(&loaded.definition, text, now).unwrap();
+        (run, completion)
+    }
+
+    #[test]
+    fn assistant_output_gate_still_completes_without_an_artifact() {
+        let loaded = single_step(default_evidence());
+        let (run, completion) = finish_show(&loaded, "inspected");
+        assert_eq!(completion, WorkflowStepCompletion::WorkflowComplete);
+        assert_eq!(run.steps[0].status, WorkflowStepStatus::Succeeded);
+    }
+
+    #[test]
+    fn artifact_gate_fails_closed_without_a_proof() {
+        let directory = tempdir().unwrap();
+        let proof = directory.path().join("missing.json");
+        let loaded = single_step(vec![WorkflowEvidenceGate::Artifact {
+            path: proof.to_string_lossy().into_owned(),
+            digest: "ab".repeat(32),
+        }]);
+        let (run, completion) = finish_show(&loaded, "a proof was claimed");
+        assert_eq!(completion, WorkflowStepCompletion::WorkflowFailed);
+        assert_ne!(run.steps[0].status, WorkflowStepStatus::Succeeded);
+        assert_eq!(
+            run.steps[0].error.as_deref(),
+            Some("artifact proof is missing")
+        );
+    }
+
+    #[test]
+    fn artifact_gate_rejects_a_short_digest() {
+        let directory = tempdir().unwrap();
+        let proof = directory.path().join("proof.json");
+        std::fs::write(&proof, b"{}\n").unwrap();
+        let loaded = single_step(vec![WorkflowEvidenceGate::Artifact {
+            path: proof.to_string_lossy().into_owned(),
+            digest: "abc".into(),
+        }]);
+        let (run, completion) = finish_show(&loaded, "short");
+        assert_eq!(completion, WorkflowStepCompletion::WorkflowFailed);
+        assert_ne!(run.steps[0].status, WorkflowStepStatus::Succeeded);
+        assert_eq!(
+            run.steps[0].error.as_deref(),
+            Some("artifact digest is short")
+        );
+    }
+
+    #[test]
+    fn artifact_gate_rejects_a_digest_mismatch() {
+        let directory = tempdir().unwrap();
+        let transcript = directory.path().join("screen.txt");
+        let proof_path = directory.path().join("proof.json");
+        std::fs::write(&transcript, b"Plan mode\n").unwrap();
+        let digest = proof_digest(b"other\n");
+        let proof = VerificationProof {
+            id: "mode-cycle".into(),
+            kind: ProofKind::Screen,
+            driver: ProofDriver::InProcess,
+            columns: Some(100),
+            rows: Some(32),
+            asserted: vec!["Plan mode".into()],
+            command_digest: None,
+            output_digest: digest.clone(),
+            exit_code: 0,
+            artifact_path: transcript.to_string_lossy().into_owned(),
+            cleanup_may_delete: Vec::new(),
+        };
+        std::fs::write(&proof_path, serde_json::to_vec(&proof).unwrap()).unwrap();
+        let loaded = single_step(vec![WorkflowEvidenceGate::Artifact {
+            path: proof_path.to_string_lossy().into_owned(),
+            digest,
+        }]);
+        let (run, completion) = finish_show(&loaded, "mismatch");
+        assert_eq!(completion, WorkflowStepCompletion::WorkflowFailed);
+        assert_ne!(run.steps[0].status, WorkflowStepStatus::Succeeded);
+        assert_eq!(
+            run.steps[0].error.as_deref(),
+            Some("artifact digest does not match")
+        );
+    }
+
+    #[test]
+    fn artifact_gate_completes_when_the_digest_matches() {
+        let directory = tempdir().unwrap();
+        let transcript = directory.path().join("screen.txt");
+        let proof_path = directory.path().join("proof.json");
+        let body = b"Plan mode\nAuto-review\n";
+        std::fs::write(&transcript, body).unwrap();
+        let digest = proof_digest(body);
+        let proof = VerificationProof {
+            id: "mode-cycle".into(),
+            kind: ProofKind::Screen,
+            driver: ProofDriver::InProcess,
+            columns: Some(100),
+            rows: Some(32),
+            asserted: vec!["Plan mode".into(), "Auto-review".into()],
+            command_digest: None,
+            output_digest: digest.clone(),
+            exit_code: 0,
+            artifact_path: transcript.to_string_lossy().into_owned(),
+            cleanup_may_delete: Vec::new(),
+        };
+        std::fs::write(&proof_path, serde_json::to_vec(&proof).unwrap()).unwrap();
+        let loaded = single_step(vec![WorkflowEvidenceGate::Artifact {
+            path: proof_path.to_string_lossy().into_owned(),
+            digest,
+        }]);
+        let (run, completion) = finish_show(&loaded, "");
+        assert_eq!(completion, WorkflowStepCompletion::WorkflowComplete);
+        assert_eq!(run.steps[0].status, WorkflowStepStatus::Succeeded);
     }
 }

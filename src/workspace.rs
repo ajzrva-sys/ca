@@ -370,6 +370,7 @@ pub struct PreparedToolInvocation {
     pub arguments: Value,
     pub origin: crate::agent::registry::ToolOrigin,
     pub network_requested: bool,
+    pub path_note: Option<String>,
 }
 
 pub fn prepare_tool_invocation(
@@ -404,6 +405,7 @@ pub fn prepare_tool_invocation(
             arguments: crate::privacy::tasks::prepare_invocation(workspace, name, arguments)?,
             origin,
             network_requested: false,
+            path_note: None,
         });
     }
     if spec.handler == ToolHandler::Task {
@@ -418,6 +420,7 @@ pub fn prepare_tool_invocation(
             )));
         }
     }
+    let mut path_note = None;
     let mut prepared = arguments.clone();
     let object = prepared.as_object_mut().ok_or_else(|| {
         WorkspaceError::InvalidArguments("tool arguments are not an object".into())
@@ -486,7 +489,13 @@ pub fn prepare_tool_invocation(
         } else {
             raw
         };
-        let resolved = workspace.resolve(&raw, operation)?;
+        let (resolved, note) = workspace.resolve_noted(&raw, operation)?;
+        if let Some(note) = note {
+            path_note = Some(match path_note {
+                Some(existing) => format!("{existing}\n{note}"),
+                None => note,
+            });
+        }
         if crate::privacy::current().is_some_and(|c| c.enabled())
             || crate::privacy::tasks::remote_binding().is_some()
         {
@@ -544,7 +553,107 @@ pub fn prepare_tool_invocation(
         arguments: prepared,
         origin,
         network_requested,
+        path_note,
     })
+}
+
+impl WorkspaceContext {
+    fn resolve_noted(
+        &self,
+        raw: &str,
+        operation: PathOperation,
+    ) -> Result<(PathBuf, Option<String>), WorkspaceError> {
+        if self.roots.is_empty() {
+            return Err(WorkspaceError::NoRoots);
+        }
+        let path = Path::new(raw);
+        if raw.starts_with('~')
+            || path
+                .components()
+                .any(|part| matches!(part, Component::ParentDir))
+        {
+            return Err(WorkspaceError::Traversal(raw.into()));
+        }
+        let candidate = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.cwd.join(path)
+        };
+        let (resolved, note) = match operation {
+            PathOperation::Read | PathOperation::WriteExisting => {
+                self.existing_or_unicode(&candidate)?
+            }
+            PathOperation::Create => self.creation_or_unicode(&candidate)?,
+        };
+        if operation != PathOperation::Read {
+            let root = self
+                .roots
+                .iter()
+                .find(|root| resolved.starts_with(&root.path));
+            if let Some(root) = root {
+                if root.read_only {
+                    return Err(WorkspaceError::ReadOnly(root.path.display().to_string()));
+                }
+            } else if !self.has_session_write(&resolved) {
+                return Err(WorkspaceError::OutsideRoots(resolved.display().to_string()));
+            }
+        }
+        Ok((resolved, note))
+    }
+
+    fn existing_or_unicode(
+        &self,
+        candidate: &Path,
+    ) -> Result<(PathBuf, Option<String>), WorkspaceError> {
+        match bounded_canonical(candidate) {
+            crate::path_lookup::Canon::Found(path) => Ok((path, None)),
+            crate::path_lookup::Canon::TimedOut => Ok((candidate.to_path_buf(), None)),
+            crate::path_lookup::Canon::Missing => self.unicode_or_missing(candidate),
+        }
+    }
+
+    fn creation_or_unicode(
+        &self,
+        candidate: &Path,
+    ) -> Result<(PathBuf, Option<String>), WorkspaceError> {
+        let created = canonical_creation(candidate)?;
+        if created.exists() {
+            return Ok((created, None));
+        }
+        match crate::path_lookup::locate_missing(candidate, &self.cwd) {
+            located if located.note.is_some() => match bounded_canonical(&located.path) {
+                crate::path_lookup::Canon::Found(path) => Ok((path, located.note)),
+                _ => Ok((created, None)),
+            },
+            _ => Ok((created, None)),
+        }
+    }
+
+    fn unicode_or_missing(
+        &self,
+        candidate: &Path,
+    ) -> Result<(PathBuf, Option<String>), WorkspaceError> {
+        let located = crate::path_lookup::locate_missing(candidate, &self.cwd);
+        if located.note.is_some() {
+            return match bounded_canonical(&located.path) {
+                crate::path_lookup::Canon::Found(path) => Ok((path, located.note)),
+                crate::path_lookup::Canon::TimedOut => Ok((located.path, located.note)),
+                crate::path_lookup::Canon::Missing => Err(missing_with_hint(candidate, &located)),
+            };
+        }
+        Err(missing_with_hint(candidate, &located))
+    }
+}
+
+fn bounded_canonical(path: &Path) -> crate::path_lookup::Canon {
+    crate::path_lookup::canonicalize_until(path, crate::path_lookup::CANONICALIZE_LIMIT, |path| {
+        std::fs::canonicalize(path)
+    })
+}
+
+fn missing_with_hint(candidate: &Path, located: &crate::path_lookup::Located) -> WorkspaceError {
+    let hint = located.missing_hint.clone().unwrap_or_default();
+    WorkspaceError::Missing(format!("{}{hint}", candidate.display()))
 }
 
 fn obvious_network_client_command(command: &str, cwd: &Path) -> bool {

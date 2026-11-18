@@ -876,7 +876,7 @@ fn render_roster_list(frame: &mut ratatui::Frame, area: Rect, state: &AppState) 
 
 fn approval_label(state: &AppState) -> &'static str {
     match state.approval {
-        crate::app::ApprovalMode::RunEverything => "always-approve",
+        crate::app::ApprovalMode::RunEverything => "yolo",
         crate::app::ApprovalMode::AutoReview => "auto-review",
         crate::app::ApprovalMode::Allowlist => "allowlist",
     }

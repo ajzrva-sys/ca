@@ -720,7 +720,7 @@ fn authentication_rejected(status: &ProviderCheckStatus) -> bool {
 /// A local filter or privacy stop is not a rejected credential. The saved
 /// provider can still become current.
 fn probe_allows_selection(status: &ProviderCheckStatus) -> bool {
-    status.working_model().is_some() || matches!(status, ProviderCheckStatus::FilterStopped)
+    status.working_model().is_some()
 }
 
 #[cfg(test)]
@@ -794,7 +794,6 @@ mod tests {
         assert!(probe_allows_selection(&ProviderCheckStatus::Working {
             model: "grok-4.7".into()
         }));
-        assert!(probe_allows_selection(&ProviderCheckStatus::FilterStopped));
         assert!(!probe_allows_selection(
             &ProviderCheckStatus::CredentialRejected
         ));
