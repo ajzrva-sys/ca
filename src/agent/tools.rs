@@ -2547,6 +2547,36 @@ async fn execute_builtin(
     truncate_output(&result, limit)
 }
 
+fn reject_unapproved_shell_writes(
+    context: &ToolContext,
+    command: &str,
+    dir: &str,
+) -> Result<(), String> {
+    let targets = crate::parity_backend::shell_write_targets(command, std::path::Path::new(dir));
+    if targets.is_empty() {
+        return Ok(());
+    }
+    let workspace =
+        crate::workspace::WorkspaceContext::from_roots(&context.cwd, &context.workspace_roots)
+            .map_err(|error| error.to_string())?;
+    for target in targets {
+        match target {
+            crate::parity_backend::ShellWriteTarget::Unverified => {
+                return Err("The shell write target is not a literal path.".into());
+            }
+            crate::parity_backend::ShellWriteTarget::Literal(path) => {
+                workspace
+                    .resolve(
+                        &path.to_string_lossy(),
+                        crate::workspace::PathOperation::Create,
+                    )
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn execute_job_tool(
     handler: ToolHandler,
     args: &Value,
@@ -2563,25 +2593,27 @@ async fn execute_job_tool_with_policy(
     let manager = crate::jobs::JobManager::process();
     match handler {
         ToolHandler::RunCommand => {
+            let raw_command = args["command"].as_str().unwrap_or("");
             if context.profile == ToolProfile::Plan
-                && crate::parity_backend::command_writes(args["command"].as_str().unwrap_or(""))
+                && crate::parity_backend::command_writes(raw_command)
             {
                 return ToolExecutionResult::Failure(
                     "Plan mode can prepare the plan and cannot change files.".into(),
                 );
+            }
+            let dir = args["cwd"].as_str().map_or_else(
+                || context.cwd.to_string_lossy().into_owned(),
+                |path| resolve_path(path, &context.cwd.to_string_lossy()),
+            );
+            if let Err(error) = reject_unapproved_shell_writes(context, raw_command, &dir) {
+                return ToolExecutionResult::Failure(error);
             }
             if let Err(error) =
                 crate::command_mutations::begin(context.job_owner, &context.workspace_roots).await
             {
                 return ToolExecutionResult::Failure(error);
             }
-            let command = crate::shell_snapshot::prepared_shell_command(
-                args["command"].as_str().unwrap_or(""),
-            );
-            let dir = args["cwd"].as_str().map_or_else(
-                || context.cwd.to_string_lossy().into_owned(),
-                |path| resolve_path(path, &context.cwd.to_string_lossy()),
-            );
+            let command = crate::shell_snapshot::prepared_shell_command(raw_command);
             let background = args["background"].as_bool().unwrap_or(false);
             let effective_network_allowed = context.network_allowed;
             let execution_policy = context
@@ -2590,7 +2622,7 @@ async fn execute_job_tool_with_policy(
             match manager
                 .start_sandboxed_owned_with_policy_and_origin(
                     command,
-                    dir,
+                    dir.clone(),
                     background,
                     Duration::from_secs(context.timeout_secs),
                     context.workspace_roots.clone(),
@@ -2610,6 +2642,16 @@ async fn execute_job_tool_with_policy(
                     .await
                 {
                     Ok(crate::jobs::ForegroundJobOutcome::Finished(job)) => {
+                        if matches!(
+                            job.status,
+                            crate::jobs::JobStatus::Completed { exit_code: 0 }
+                        ) {
+                            crate::publish_receipt::note_command(
+                                context.job_owner,
+                                raw_command,
+                                &dir,
+                            );
+                        }
                         classify_job_result_owned(job, effective_network_allowed, context.job_owner)
                             .await
                     }
@@ -7172,6 +7214,46 @@ mod job_tool_tests {
         let listed =
             execute_tool_with_context("run_command", &json!({"command": "ls"}), &context).await;
         assert!(listed.is_success(), "{}", listed.model_text());
+    }
+
+    #[tokio::test]
+    async fn a_shell_redirect_outside_roots_does_not_create_the_file() {
+        let allowed = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("nope.txt");
+        let context = ToolContext {
+            recovery: crate::owned_tools::current_recovery(),
+            cwd: allowed.path().to_path_buf(),
+            timeout_secs: 2,
+            profile: ToolProfile::Main,
+            workspace_roots: vec![allowed.path().to_path_buf()],
+            sandbox_mode: crate::sandbox::SandboxMode::PolicyOnly,
+            network_allowed: false,
+            job_owner: crate::jobs::JobOwner::new(None),
+            job_execution_policy: crate::jobs::JobExecutionPolicy::default(),
+        };
+        let denied = execute_tool_with_context(
+            "run_command",
+            &json!({"command": format!("echo hi > {}", target.display())}),
+            &context,
+        )
+        .await;
+        assert!(matches!(denied, ToolExecutionResult::Failure(_)));
+        assert!(denied.model_text().contains("outside approved folders"));
+        assert!(!target.exists());
+        let granted = ToolContext {
+            workspace_roots: vec![allowed.path().to_path_buf(), outside.path().to_path_buf()],
+            job_owner: crate::jobs::JobOwner::new(None),
+            ..context
+        };
+        let written = execute_tool_with_context(
+            "run_command",
+            &json!({"command": format!("echo hi > {}", target.display())}),
+            &granted,
+        )
+        .await;
+        assert!(written.is_success(), "{}", written.model_text());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "hi\n");
     }
 
     #[tokio::test]

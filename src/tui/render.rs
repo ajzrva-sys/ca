@@ -12943,10 +12943,23 @@ fn interaction_card_lines(state: &AppState, _width: u16) -> Vec<Line<'static>> {
     } else {
         theme.accent
     };
-    let mut lines = vec![Line::from(Span::styled(
+    let mut lines = Vec::new();
+    if let Some((index, total)) = interaction.progress.filter(|(_, total)| *total > 1) {
+        lines.push(Line::from(Span::styled(
+            format!("Question {} of {total}", index + 1),
+            Style::default().fg(theme.muted),
+        )));
+    }
+    if let Some(header) = interaction.header.clone() {
+        lines.push(Line::from(Span::styled(
+            header,
+            Style::default().fg(accent).add_modifier(Modifier::BOLD),
+        )));
+    }
+    lines.push(Line::from(Span::styled(
         interaction.request.question.clone(),
         Style::default().fg(accent).add_modifier(Modifier::BOLD),
-    ))];
+    )));
     if let Some(description) = interaction.request.description.clone() {
         lines.push(Line::from(Span::styled(
             description,
@@ -12990,9 +13003,10 @@ fn interaction_card_lines(state: &AppState, _width: u16) -> Vec<Line<'static>> {
             let selected = index == interaction.selected_index;
             lines.push(Line::from(Span::styled(
                 format!(
-                    "  {} {}. Other",
+                    "  {} {}. {}",
                     if selected { "(•)" } else { "( )" },
-                    index + 1
+                    index + 1,
+                    interaction.custom_label
                 ),
                 if selected {
                     Style::default().fg(selected_accent)
@@ -13008,8 +13022,10 @@ fn interaction_card_lines(state: &AppState, _width: u16) -> Vec<Line<'static>> {
         lines.push(Line::from(Span::styled(
             if interaction.request.mode == crate::interaction::InteractionMode::Masked {
                 "  Secret:"
-            } else if interaction.other_editing() {
+            } else if interaction.other_editing() && interaction.custom_label == "Other" {
                 "  Other:"
+            } else if interaction.other_editing() {
+                "  Your answer:"
             } else {
                 "  Answer:"
             },
@@ -13035,6 +13051,21 @@ fn interaction_card_lines(state: &AppState, _width: u16) -> Vec<Line<'static>> {
     } else {
         "Enter submit · Esc cancel"
     };
+    let hint = if interaction.progress.is_some_and(|(_, total)| total > 1) {
+        let editing = interaction.other_editing()
+            || matches!(
+                interaction.request.mode,
+                crate::interaction::InteractionMode::FreeText
+                    | crate::interaction::InteractionMode::Masked
+            );
+        if editing {
+            format!("{hint} · Alt+←/→ questions")
+        } else {
+            format!("{hint} · ←/→ questions")
+        }
+    } else {
+        hint.to_string()
+    };
     lines.push(Line::from(Span::styled(
         hint,
         Style::default().fg(theme.muted),
@@ -13055,7 +13086,16 @@ fn pin_card_height(state: &AppState, width: u16) -> u16 {
     if count == 0 {
         0
     } else {
-        (count as u16).saturating_add(2).clamp(3, 8)
+        let max = if state
+            .interaction
+            .as_ref()
+            .is_some_and(|interaction| interaction.progress.is_some())
+        {
+            18
+        } else {
+            8
+        };
+        (count as u16).saturating_add(2).clamp(3, max)
     }
 }
 

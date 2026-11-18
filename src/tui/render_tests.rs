@@ -10149,6 +10149,7 @@ fn structured_choice_interaction_snapshots() {
                 },
             ],
             allow_other: true,
+            questions: Vec::new(),
         },
     )
     .unwrap();
@@ -10163,6 +10164,47 @@ fn structured_choice_interaction_snapshots() {
             render_to_text(&state, 60, 24)
         )
     );
+}
+
+#[test]
+fn question_form_shows_the_header_recommendation_and_custom_answer() {
+    let prepared = crate::interaction::RequestUserInputArgs {
+        question: String::new(),
+        description: None,
+        kind: crate::interaction::ModelInteractionKind::FreeText,
+        choices: Vec::new(),
+        allow_other: false,
+        questions: vec![crate::interaction::QuestionItemArgs {
+            question: "Push this commit?".into(),
+            header: Some("Publish".into()),
+            options: vec![
+                crate::interaction::QuestionOptionArgs {
+                    label: "Push main".into(),
+                    description: Some("fast-forward".into()),
+                },
+                crate::interaction::QuestionOptionArgs {
+                    label: "Leave it".into(),
+                    description: Some("keep the branch local".into()),
+                },
+            ],
+            multiple: false,
+        }],
+    }
+    .prepare()
+    .unwrap();
+    let crate::interaction::PreparedUserInput::Form(form) = prepared else {
+        panic!("expected a question form");
+    };
+    let mut state = test_state();
+    state.interaction = Some(crate::interaction::InteractionState::from_pending(
+        crate::interaction::PendingInteraction::form("call".into(), form),
+    ));
+    let rendered = render_to_text(&state, 100, 30);
+    assert!(rendered.contains("Publish"));
+    assert!(rendered.contains("Push this commit?"));
+    assert!(rendered.contains("Push main (Recommended)"));
+    assert!(rendered.contains("fast-forward"));
+    assert!(rendered.contains("Type your own answer"));
 }
 
 #[test]

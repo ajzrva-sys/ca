@@ -9,7 +9,8 @@ use crate::agent::stream::{
 use crate::app::{Message, Role, ToolCall, ToolStatus};
 use crate::headless::{HeadlessEventV1, HeadlessFailureKind, ToolResultStatus};
 use crate::interaction::{
-    InteractionAnswer, InteractionChoice, InteractionMode, InteractionRequest, RequestUserInputArgs,
+    FormLock, InteractionAnswer, InteractionChoice, InteractionMode, InteractionRequest,
+    PreparedUserInput, RequestUserInputArgs,
 };
 use crate::runtime::ActiveProfile;
 use async_trait::async_trait;
@@ -2692,38 +2693,62 @@ async fn execute_service_call(
                 return ExecuteOutcome::Protocol("invalid request_user_input arguments".into())
             }
         };
-        let interaction = match InteractionRequest::from_model(args) {
-            Ok(interaction) => interaction,
+        let prepared = match args.prepare() {
+            Ok(prepared) => prepared,
             Err(error) => return ExecuteOutcome::Protocol(error),
         };
-        let request_id = wire_request_id("int");
-        let pending = PendingRequest {
-            id: request_id,
-            kind: PendingKind::Interaction,
-            interaction: Some(interaction.clone()),
-            approval_digest: None,
+        let (form, interactions) = match prepared {
+            PreparedUserInput::One(interaction) => (None, vec![interaction]),
+            PreparedUserInput::Form(form) => {
+                let interactions = form
+                    .questions
+                    .iter()
+                    .map(|question| question.request.clone())
+                    .collect();
+                (Some(form), interactions)
+            }
         };
-        if events
-            .send(WorkerEvent::InteractionRequested {
-                turn_id,
-                request: pending,
-                call_id: bounded_identifier(&call.id),
-                interaction: interaction.clone(),
-            })
-            .await
-            .is_err()
-        {
-            return ExecuteOutcome::Abort;
+        let mut answers = Vec::with_capacity(interactions.len());
+        for interaction in &interactions {
+            let request_id = wire_request_id("int");
+            let pending = PendingRequest {
+                id: request_id,
+                kind: PendingKind::Interaction,
+                interaction: Some(interaction.clone()),
+                approval_digest: None,
+            };
+            if events
+                .send(WorkerEvent::InteractionRequested {
+                    turn_id,
+                    request: pending,
+                    call_id: bounded_identifier(&call.id),
+                    interaction: interaction.clone(),
+                })
+                .await
+                .is_err()
+            {
+                return ExecuteOutcome::Abort;
+            }
+            let Some(TurnControl::Interaction { selected, text }) = controls.recv().await else {
+                return ExecuteOutcome::Abort;
+            };
+            match validate_interaction_answer(interaction, selected, text) {
+                Ok(answer) => answers.push(answer),
+                Err(message) => {
+                    return ExecuteOutcome::Result(ToolExecutionResult::Failure(message))
+                }
+            }
         }
-        let Some(TurnControl::Interaction { selected, text }) = controls.recv().await else {
-            return ExecuteOutcome::Abort;
-        };
-        return match validate_interaction_answer(&interaction, selected, text) {
-            Ok(answer) => match serde_json::to_string(&answer) {
-                Ok(output) => ExecuteOutcome::Result(ToolExecutionResult::Success(output)),
-                Err(_) => ExecuteOutcome::Protocol("could not encode interaction answer".into()),
-            },
-            Err(message) => ExecuteOutcome::Result(ToolExecutionResult::Failure(message)),
+        if let Some(form) = form {
+            let locks = answers
+                .iter()
+                .map(FormLock::from_answer)
+                .collect::<Vec<_>>();
+            return ExecuteOutcome::Result(ToolExecutionResult::Success(form.report(&locks)));
+        }
+        return match serde_json::to_string(&answers[0]) {
+            Ok(output) => ExecuteOutcome::Result(ToolExecutionResult::Success(output)),
+            Err(_) => ExecuteOutcome::Protocol("could not encode interaction answer".into()),
         };
     }
 

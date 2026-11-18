@@ -30,6 +30,13 @@ pub(crate) struct ReviewTracker {
     pub verification_receipt: Option<crate::mechanistic_delegation::AutomaticVerificationOutcome>,
     accepted_verification_receipt:
         Option<crate::mechanistic_delegation::AutomaticVerificationOutcome>,
+    publish_receipts: Vec<crate::publish_receipt::PublishReceipt>,
+    publish_covers: bool,
+    publish_approved: bool,
+    pub awaiting_choice: bool,
+    carried_publish: Vec<crate::publish_receipt::PublishReceipt>,
+    carried_covers: bool,
+    carried_approved: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -121,8 +128,14 @@ impl ReviewTracker {
     }
     pub fn begin(&mut self, turn: Uuid) {
         if self.turn != Some(turn) {
+            let publish_receipts = std::mem::take(&mut self.carried_publish);
+            let publish_covers = self.carried_covers;
+            let publish_approved = self.carried_approved;
             *self = Self {
                 turn: Some(turn),
+                publish_receipts,
+                publish_covers,
+                publish_approved,
                 ..Default::default()
             };
         }
@@ -234,6 +247,57 @@ impl ReviewTracker {
             digest: format!("{:x}", hash.finalize()),
             files: self.files.values().cloned().collect(),
         }))
+    }
+
+    pub(crate) fn carry_publish(&mut self) {
+        self.carried_publish = self.publish_receipts.clone();
+        self.carried_covers = self.publish_covers;
+        self.carried_approved = self.publish_approved;
+    }
+
+    pub(crate) fn has_publish_receipt(&self) -> bool {
+        !self.publish_receipts.is_empty()
+    }
+
+    pub(crate) fn publish_status(&self) -> String {
+        crate::publish_receipt::format_blocks(
+            &self.publish_receipts,
+            self.publish_covers,
+            self.publish_approved,
+        )
+    }
+
+    fn replace_with_publish(
+        &mut self,
+        turn: Uuid,
+        files: Vec<FileMutationReceipt>,
+    ) -> Result<(), String> {
+        if self.turn != Some(turn) {
+            let receipts = std::mem::take(&mut self.publish_receipts);
+            let covers = self.publish_covers;
+            let approved = self.publish_approved;
+            self.begin(turn);
+            self.publish_receipts = receipts;
+            self.publish_covers = covers;
+            self.publish_approved = approved;
+        }
+        self.files.clear();
+        self.typed_after_hashes.clear();
+        self.error = None;
+        self.finalization_ready = false;
+        for receipt in files {
+            self.files.insert(receipt.path.clone(), receipt);
+        }
+        let bytes: usize = self
+            .files
+            .values()
+            .map(|file| state_bytes(&file.before) + state_bytes(&file.after))
+            .sum();
+        if self.files.len() > MAX_FILES || bytes > MAX_BYTES {
+            self.files.clear();
+            return Err("publish diff exceeds its review bound".into());
+        }
+        Ok(())
     }
 }
 
@@ -619,6 +683,38 @@ async fn native_verification_revision(
     }
 }
 
+fn publish_refusal(turn: Uuid, message: &str) -> ReviewOutcome {
+    ReviewOutcome {
+        turn,
+        digest: "publish-receipt".into(),
+        verification: None,
+        result: Ok(ReviewReport {
+            approved: false,
+            findings: vec![ReviewFinding {
+                path: "publish receipt".into(),
+                message: message.into(),
+            }],
+            summary: message.into(),
+        }),
+    }
+}
+
+fn bind_publish(tracker: &mut ReviewTracker, report: &mut ReviewReport, paths: &[PathBuf]) {
+    if tracker.publish_receipts.is_empty() {
+        return;
+    }
+    for receipt in &mut tracker.publish_receipts {
+        crate::publish_receipt::refresh_remote(receipt);
+    }
+    let covers = tracker
+        .publish_receipts
+        .iter()
+        .all(|receipt| crate::publish_receipt::covered(receipt, paths));
+    tracker.publish_covers = covers;
+    crate::publish_receipt::bind_approval(report, &tracker.publish_receipts, covers);
+    tracker.publish_approved = report.approved;
+}
+
 pub(crate) async fn run_barrier(
     manager: Arc<AgentManager>,
     mut tracker: ReviewTracker,
@@ -631,49 +727,184 @@ pub(crate) async fn run_barrier(
         let wait = async {
             loop {
                 if manager.subscribe_activity().borrow().iter().all(|agent| {
-                    agent.parent_turn != turn || agent.origin == AgentRunOrigin::AutomaticReview || agent.status.terminal()
-                }) { break; }
+                    agent.parent_turn != turn
+                        || agent.origin == AgentRunOrigin::AutomaticReview
+                        || agent.status.terminal()
+                }) {
+                    break;
+                }
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             }
         };
-        tokio::time::timeout(std::time::Duration::from_secs(1800), wait).await.map_err(|_| "review timed out waiting for turn-owned writers")?;
+        tokio::time::timeout(std::time::Duration::from_secs(1800), wait)
+            .await
+            .map_err(|_| "review timed out waiting for turn-owned writers")?;
         for child in manager.snapshot_mutations_for_turn(turn).await? {
             tracker.record_child(turn, &child);
         }
-        for batch in crate::command_mutations::preview(authority.job_owner).await? { tracker.record_aggregate(turn,&batch); }
-        let Some(candidate) = tracker.candidate(&workspace)? else {
-            return Ok(ReviewOutcome { turn, digest: "no_changes".into(), verification:None,result: Ok(ReviewReport { approved: true, findings: Vec::new(), summary: "No net executable changes require review".into() }) });
-        };
-        if tracker.approved_digest.as_deref() == Some(candidate.digest.as_str()) {
-            let check=candidate.clone();let roots=workspace.clone();
-            tokio::task::spawn_blocking(move||check.validate_disk(&roots)).await.map_err(|_|"review candidate worker stopped")??;
-            tracker.verification_receipt = tracker.accepted_verification_receipt.clone();
-            return Ok(ReviewOutcome { turn, digest: candidate.digest,verification:tracker.accepted_verification_receipt.clone(), result: Ok(ReviewReport { approved:true, findings:Vec::new(),summary:"Reused exact independent candidate review".into() }) });
+        for batch in crate::command_mutations::preview(authority.job_owner).await? {
+            tracker.record_aggregate(turn, &batch);
         }
-        if tracker.attempts >= 3 { return Err("independent review exhausted its three candidate attempts".into()); }
-        authorize(&workspace,&authority,"Independently review the final code/configuration candidate")?;
-        if manager.spawns_paused() { return Err("automatic review is paused with subagent spawning".into()); }
+        let pending = crate::publish_receipt::take(authority.job_owner);
+        let probed =
+            tokio::task::spawn_blocking(move || crate::publish_receipt::probe_commands(&pending))
+                .await
+                .map_err(|_| "publish receipt worker stopped".to_string())?;
+        match probed {
+            Ok(crate::publish_receipt::ProbeBatch::Hidden) => {
+                return Ok(publish_refusal(
+                    turn,
+                    "publish command was not a literal git push",
+                ));
+            }
+            Ok(crate::publish_receipt::ProbeBatch::Receipts(receipts)) => {
+                tracker.publish_receipts.extend(receipts);
+            }
+            Ok(crate::publish_receipt::ProbeBatch::None) => {}
+            Err(error) => return Ok(publish_refusal(turn, &error)),
+        }
+        if !tracker.publish_receipts.is_empty() {
+            let receipts = tracker.publish_receipts.clone();
+            let loaded = tokio::task::spawn_blocking(move || {
+                let mut files = Vec::new();
+                for receipt in &receipts {
+                    files.extend(crate::publish_receipt::commit_files(receipt)?);
+                }
+                Ok::<_, String>(files)
+            })
+            .await
+            .map_err(|_| "publish receipt worker stopped".to_string())?;
+            let files = match loaded {
+                Ok(files) => files,
+                Err(error) => return Ok(publish_refusal(turn, &error)),
+            };
+            if let Err(error) = tracker.replace_with_publish(turn, files) {
+                return Ok(publish_refusal(turn, &error));
+            }
+        }
+        let Some(candidate) = tracker.candidate(&workspace)? else {
+            if tracker.publish_receipts.is_empty() {
+                return Ok(ReviewOutcome {
+                    turn,
+                    digest: "no_changes".into(),
+                    verification: None,
+                    result: Ok(ReviewReport {
+                        approved: true,
+                        findings: Vec::new(),
+                        summary: "No net executable changes require review".into(),
+                    }),
+                });
+            }
+            let mut report = ReviewReport {
+                approved: true,
+                findings: Vec::new(),
+                summary: "No net executable changes require review".into(),
+            };
+            bind_publish(&mut tracker, &mut report, &[]);
+            return Ok(ReviewOutcome {
+                turn,
+                digest: "publish-receipt".into(),
+                verification: None,
+                result: Ok(report),
+            });
+        };
+        let file_paths = candidate
+            .files
+            .iter()
+            .map(|file| file.path.clone())
+            .collect::<Vec<_>>();
+        if tracker.approved_digest.as_deref() == Some(candidate.digest.as_str()) {
+            let check = candidate.clone();
+            let roots = workspace.clone();
+            tokio::task::spawn_blocking(move || check.validate_disk(&roots))
+                .await
+                .map_err(|_| "review candidate worker stopped")??;
+            tracker.verification_receipt = tracker.accepted_verification_receipt.clone();
+            let mut report = ReviewReport {
+                approved: true,
+                findings: Vec::new(),
+                summary: "Reused exact independent candidate review".into(),
+            };
+            bind_publish(&mut tracker, &mut report, &file_paths);
+            return Ok(ReviewOutcome {
+                turn,
+                digest: candidate.digest,
+                verification: tracker.accepted_verification_receipt.clone(),
+                result: Ok(report),
+            });
+        }
+        if tracker.attempts >= 3 {
+            return Err("independent review exhausted its three candidate attempts".into());
+        }
+        authorize(
+            &workspace,
+            &authority,
+            "Independently review the final code/configuration candidate",
+        )?;
+        if manager.spawns_paused() {
+            return Err("automatic review is paused with subagent spawning".into());
+        }
         tracker.attempts += 1;
-        tracker.verification_receipt=None;
+        tracker.verification_receipt = None;
         if authority.verification_enabled {
-            let check=candidate.clone();let roots=workspace.clone();
-            tokio::task::spawn_blocking(move||check.validate_disk(&roots)).await.map_err(|_|"candidate verification worker stopped")??;
-            let external=authority.verification_backend.clone();
-            let revision=native_verification_revision(&workspace).await?;
-            let paths=candidate.repository_paths(&workspace);
+            let check = candidate.clone();
+            let roots = workspace.clone();
+            tokio::task::spawn_blocking(move || check.validate_disk(&roots))
+                .await
+                .map_err(|_| "candidate verification worker stopped")??;
+            let external = authority.verification_backend.clone();
+            let revision = native_verification_revision(&workspace).await?;
+            let paths = candidate.repository_paths(&workspace);
             if !paths.is_empty() && (external.is_some() || revision.is_some()) {
-                authorize_invocation(&workspace,&authority,"verify_changes",&serde_json::json!({"paths":paths}))?;
-                let outcome=crate::mechanistic_delegation::candidate_verification(&workspace,external,paths,authority.verification_timeout,authority.allow_unisolated_evidence,authority.allow_unscoped_full).await;
-                tracker.verification_receipt=Some(outcome.clone());
-                if matches!(outcome.status,crate::mechanistic_delegation::AutomaticVerificationStatus::Failed) {
-                    return Ok(ReviewOutcome{turn,digest:candidate.digest,verification:Some(outcome.clone()),result:Ok(ReviewReport{approved:false,findings:vec![ReviewFinding{path:"host verification".into(),message:outcome.context.unwrap_or_else(||"The exact final candidate did not pass shared-engine verification".into())}],summary:"Final candidate verification remains incomplete".into()})});
+                authorize_invocation(
+                    &workspace,
+                    &authority,
+                    "verify_changes",
+                    &serde_json::json!({"paths":paths}),
+                )?;
+                let outcome = crate::mechanistic_delegation::candidate_verification(
+                    &workspace,
+                    external,
+                    paths,
+                    authority.verification_timeout,
+                    authority.allow_unisolated_evidence,
+                    authority.allow_unscoped_full,
+                )
+                .await;
+                tracker.verification_receipt = Some(outcome.clone());
+                if matches!(
+                    outcome.status,
+                    crate::mechanistic_delegation::AutomaticVerificationStatus::Failed
+                ) {
+                    let message = outcome.context.clone().unwrap_or_else(|| {
+                        "The exact final candidate did not pass shared-engine verification".into()
+                    });
+                    let mut report = ReviewReport {
+                        approved: false,
+                        findings: vec![ReviewFinding {
+                            path: "host verification".into(),
+                            message,
+                        }],
+                        summary: "Final candidate verification remains incomplete".into(),
+                    };
+                    bind_publish(&mut tracker, &mut report, &file_paths);
+                    return Ok(ReviewOutcome {
+                        turn,
+                        digest: candidate.digest,
+                        verification: Some(outcome),
+                        result: Ok(report),
+                    });
                 }
             }
         }
-        let mut outcome=run(manager, candidate, workspace, original_request, authority).await;
-        outcome.verification=tracker.verification_receipt.clone();
+        let mut outcome = run(manager, candidate, workspace, original_request, authority).await;
+        if let Ok(report) = outcome.result.as_mut() {
+            bind_publish(&mut tracker, report, &file_paths);
+        }
+        outcome.verification = tracker.verification_receipt.clone();
         Ok(outcome)
-    }.await;
+    }
+    .await;
     tracker.pending = false;
     let outcome = result.unwrap_or_else(|error: String| ReviewOutcome {
         turn,

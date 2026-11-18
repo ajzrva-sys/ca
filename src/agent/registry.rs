@@ -2049,7 +2049,7 @@ fn builtin_specs() -> Vec<ToolSpec> {
             RequestUserInput,
             crate::interaction::RequestUserInputArgs,
             "request_user_input",
-            "Request structured input from the user",
+            "Ask the user and wait. Prefer questions: 1 to 5 independent items, each with question, an optional header of at most 30 characters, and up to 4 options. Put the recommended option first. Each option has a label and an optional description. Set multiple to allow several options. Omit options for typed text. A typed answer is always available. Do not list options inside the question text. One call for independent questions. The result is a QUESTION block with choice and custom for each item. A single question can instead use question, kind, and choices.",
             ReadOnly,
             [Interaction],
             [],

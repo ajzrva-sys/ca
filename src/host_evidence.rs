@@ -112,12 +112,6 @@ impl HostEvidence {
         digest: &str,
         report: &crate::automatic_review::ReviewReport,
     ) -> bool {
-        if self.turn == Some(turn) {
-            self.receipts.retain(|saved| {
-                saved.kind != Kind::IndependentReview
-                    || saved.candidate_digest.as_deref() == Some(digest)
-            });
-        }
         self.insert(Receipt {
             schema: "ca.host-evidence.v1",
             kind: Kind::IndependentReview,
@@ -162,17 +156,24 @@ impl HostEvidence {
         self.failure.as_deref().or(self.next_failure.as_deref())
     }
 
-    pub fn wire(&self, turn: Uuid, current_candidate: Option<&str>) -> Vec<String> {
+    pub fn carry_forward(&mut self) {
+        for receipt in std::mem::take(&mut self.receipts) {
+            if self.next_turn.len() >= MAX_RECEIPTS {
+                self.next_failure =
+                    Some("Host findings exceed the bounded accepted receipt capacity".into());
+                return;
+            }
+            self.next_turn.push(receipt);
+        }
+    }
+
+    pub fn wire(&self, turn: Uuid, _current_candidate: Option<&str>) -> Vec<String> {
         if self.turn != Some(turn) {
             return Vec::new();
         }
         self.receipts
             .iter()
-            .filter(|receipt| {
-                receipt.parent_turn == turn
-                    && (receipt.kind != Kind::IndependentReview
-                        || receipt.candidate_digest.as_deref() == current_candidate)
-            })
+            .filter(|receipt| receipt.parent_turn == turn)
             .filter_map(|receipt| {
                 serde_json::to_string(receipt)
                     .ok()
@@ -242,24 +243,68 @@ mod tests {
     }
 
     #[test]
-    fn current_review_replaces_stale_proof_at_capacity_and_overflow_is_visible() {
+    fn current_review_keeps_the_other_digest_and_overflow_is_visible() {
         let turn = Uuid::new_v4();
         let mut evidence = HostEvidence::default();
         evidence.begin(turn);
-        for _ in 0..MAX_RECEIPTS - 1 {
+        for _ in 0..MAX_RECEIPTS - 2 {
             assert!(evidence.child(turn, &child(turn), false));
         }
-        let report = crate::automatic_review::ReviewReport {
+        let rejected = crate::automatic_review::ReviewReport {
+            approved: false,
+            findings: vec![crate::automatic_review::ReviewFinding {
+                path: "publish receipt".into(),
+                message: "rejected the pushed tree".into(),
+            }],
+            summary: "rejected".into(),
+        };
+        let accepted = crate::automatic_review::ReviewReport {
             approved: true,
             findings: Vec::new(),
             summary: "exact accepted candidate".into(),
         };
-        assert!(evidence.review(turn, "old", &report));
-        assert!(evidence.review(turn, "current", &report));
-        assert!(!evidence.review(turn, "current", &report));
-        assert_eq!(evidence.wire(turn, Some("current")).len(), MAX_RECEIPTS);
-        assert_eq!(evidence.wire(turn, Some("old")).len(), MAX_RECEIPTS - 1);
+        assert!(evidence.review(turn, "old", &rejected));
+        assert!(evidence.review(turn, "current", &accepted));
+        assert!(!evidence.review(turn, "current", &accepted));
+        let wire = evidence.wire(turn, Some("current"));
+        assert_eq!(wire.len(), MAX_RECEIPTS);
+        assert!(wire.iter().any(|line| line.contains("old")));
+        assert!(wire.iter().any(|line| line.contains("current")));
+        assert!(wire.iter().any(|line| line.contains("rejected")));
         assert!(!evidence.child(turn, &child(turn), false));
         assert!(evidence.failure().is_some());
+        assert!(evidence
+            .wire(turn, Some("old"))
+            .iter()
+            .any(|line| line.contains("old")));
+    }
+
+    #[test]
+    fn a_later_digest_does_not_erase_a_carried_rejection() {
+        let turn = Uuid::new_v4();
+        let mut evidence = HostEvidence::default();
+        evidence.begin(turn);
+        let rejected = crate::automatic_review::ReviewReport {
+            approved: false,
+            findings: vec![crate::automatic_review::ReviewFinding {
+                path: "publish receipt".into(),
+                message: "rejected the pushed tree".into(),
+            }],
+            summary: "rejected".into(),
+        };
+        assert!(evidence.review(turn, "old", &rejected));
+        evidence.carry_forward();
+        let next = Uuid::new_v4();
+        evidence.begin(next);
+        let accepted = crate::automatic_review::ReviewReport {
+            approved: true,
+            findings: Vec::new(),
+            summary: "session logs".into(),
+        };
+        assert!(evidence.review(next, "session", &accepted));
+        let both = evidence.wire(next, Some("session"));
+        assert!(both.iter().any(|line| line.contains("old")));
+        assert!(both.iter().any(|line| line.contains("rejected")));
+        assert!(both.iter().any(|line| line.contains("session")));
     }
 }

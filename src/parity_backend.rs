@@ -656,6 +656,202 @@ fn segment_writes(segment: &str) -> bool {
     write_program(&words)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShellWriteTarget {
+    Literal(PathBuf),
+    Unverified,
+}
+
+/// Literal `>` / `>>` / `tee` destinations after a leading `cd <literal> &&`.
+/// A quoted `>` and an fd copy such as `2>&1` are not destinations. A target
+/// that is not a literal path is [`ShellWriteTarget::Unverified`].
+#[must_use]
+pub fn shell_write_targets(command: &str, cwd: &Path) -> Vec<ShellWriteTarget> {
+    let mut base = cwd.to_path_buf();
+    let mut trusted = true;
+    let mut targets = Vec::new();
+    for segment in split_command_segments(command) {
+        if let Some(dir) = literal_cd(&shell_words(&segment)) {
+            if trusted && path_is_literal(&dir) {
+                let path = PathBuf::from(&dir);
+                base = if path.is_absolute() {
+                    path
+                } else {
+                    base.join(path)
+                };
+            } else {
+                trusted = false;
+            }
+            continue;
+        }
+        for target in segment_write_targets(&segment) {
+            if !trusted {
+                targets.push(ShellWriteTarget::Unverified);
+                continue;
+            }
+            match target {
+                Err(()) => targets.push(ShellWriteTarget::Unverified),
+                Ok(path) => {
+                    let path = PathBuf::from(path);
+                    let full = if path.is_absolute() {
+                        path
+                    } else {
+                        base.join(path)
+                    };
+                    targets.push(ShellWriteTarget::Literal(full));
+                }
+            }
+        }
+    }
+    targets
+}
+
+fn path_is_literal(word: &str) -> bool {
+    !word.is_empty()
+        && !word.contains(['$', '`', '*', '?', '~'])
+        && !word.contains("$(")
+        && !word.contains("${")
+}
+
+fn literal_cd(words: &[String]) -> Option<String> {
+    let program = words.first()?.rsplit(['/', '\\']).next()?;
+    if program != "cd" {
+        return None;
+    }
+    let rest: Vec<&String> = words
+        .iter()
+        .skip(1)
+        .filter(|word| word.as_str() != "--")
+        .collect();
+    match rest.as_slice() {
+        [dir] => Some((*dir).clone()),
+        _ => Some(String::new()),
+    }
+}
+
+fn segment_write_targets(segment: &str) -> Vec<Result<String, ()>> {
+    let mut targets = redirect_targets(segment);
+    targets.extend(tee_targets(segment));
+    targets
+}
+
+fn redirect_targets(segment: &str) -> Vec<Result<String, ()>> {
+    let chars: Vec<char> = segment.chars().collect();
+    let mut targets = Vec::new();
+    let mut index = 0;
+    let mut quote = None;
+    while index < chars.len() {
+        let ch = chars[index];
+        if let Some(open) = quote {
+            if ch == open {
+                quote = None;
+            }
+            index += 1;
+            continue;
+        }
+        if ch == '\'' || ch == '"' {
+            quote = Some(ch);
+            index += 1;
+            continue;
+        }
+        if ch != '>' {
+            index += 1;
+            continue;
+        }
+        if index > 0 && chars[index - 1] == '<' {
+            index += 1;
+            continue;
+        }
+        let mut cursor = index + 1;
+        if chars.get(cursor) == Some(&'>') || chars.get(cursor) == Some(&'|') {
+            cursor += 1;
+        }
+        if chars.get(cursor) == Some(&'&') {
+            let after = cursor + 1;
+            if chars
+                .get(after)
+                .is_some_and(|ch| ch.is_ascii_digit() || *ch == '-')
+            {
+                index = after + 1;
+                continue;
+            }
+        }
+        while chars.get(cursor).is_some_and(|ch| ch.is_whitespace()) {
+            cursor += 1;
+        }
+        let mut word = String::new();
+        let mut word_quote = None;
+        while cursor < chars.len() {
+            let ch = chars[cursor];
+            if let Some(open) = word_quote {
+                if ch == open {
+                    word_quote = None;
+                    cursor += 1;
+                    continue;
+                }
+                word.push(ch);
+                cursor += 1;
+                continue;
+            }
+            if ch == '\'' || ch == '"' {
+                word_quote = Some(ch);
+                cursor += 1;
+                continue;
+            }
+            if ch.is_whitespace() || matches!(ch, '>' | '<' | '|' | '&' | ';') {
+                break;
+            }
+            word.push(ch);
+            cursor += 1;
+        }
+        if word.is_empty() || !path_is_literal(&word) {
+            targets.push(Err(()));
+        } else {
+            targets.push(Ok(word));
+        }
+        index = cursor;
+    }
+    targets
+}
+
+fn tee_targets(segment: &str) -> Vec<Result<String, ()>> {
+    let mut words = shell_words(segment);
+    while words.first().is_some_and(|word| {
+        word.split_once('=').is_some_and(|(key, _)| {
+            !key.is_empty()
+                && key
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        })
+    }) {
+        words.remove(0);
+    }
+    let Some(program) = words.first() else {
+        return Vec::new();
+    };
+    let program = program.rsplit(['/', '\\']).next().unwrap_or(program);
+    if program != "tee" {
+        return Vec::new();
+    }
+    let mut targets = Vec::new();
+    let mut ended = false;
+    for word in words.iter().skip(1) {
+        if !ended && word == "--" {
+            ended = true;
+            continue;
+        }
+        if !ended && word.starts_with('-') {
+            continue;
+        }
+        if path_is_literal(word) {
+            targets.push(Ok(word.clone()));
+        } else {
+            targets.push(Err(()));
+        }
+    }
+    targets
+}
+
 fn has_unquoted_redirect(segment: &str) -> bool {
     let mut quote = None;
     for ch in segment.chars() {
@@ -930,7 +1126,7 @@ fn substitution_executes(segment: &str) -> bool {
     false
 }
 
-fn shell_words(segment: &str) -> Vec<String> {
+pub(crate) fn shell_words(segment: &str) -> Vec<String> {
     let mut words = Vec::new();
     let mut current = String::new();
     let mut quote = None;
@@ -1997,6 +2193,27 @@ mod tests {
         assert!(command_writes("echo hi >> out"));
         assert!(!command_writes("echo 'a > b'"));
         assert!(!command_writes("echo \"a > b\""));
+        assert_eq!(
+            shell_write_targets(
+                "cd /tmp/x && cat > .gitignore",
+                std::path::Path::new("/tmp")
+            ),
+            vec![ShellWriteTarget::Literal(std::path::PathBuf::from(
+                "/tmp/x/.gitignore"
+            ))]
+        );
+        assert!(shell_write_targets("echo 'a > b'", std::path::Path::new("/tmp")).is_empty());
+        assert!(shell_write_targets("echo hi 2>&1", std::path::Path::new("/tmp")).is_empty());
+        assert_eq!(
+            shell_write_targets("cat > \"$FILE\"", std::path::Path::new("/tmp")),
+            vec![ShellWriteTarget::Unverified]
+        );
+        assert_eq!(
+            shell_write_targets("tee kept.txt", std::path::Path::new("/work")),
+            vec![ShellWriteTarget::Literal(std::path::PathBuf::from(
+                "/work/kept.txt"
+            ))]
+        );
         assert!(command_writes("rm file"));
         assert!(command_writes("/bin/rm file"));
         assert!(command_writes("sed -i s/a/b/ file"));

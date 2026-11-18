@@ -6,6 +6,12 @@ use std::collections::VecDeque;
 use uuid::Uuid;
 
 const MAX_MASKED_SECRET_BYTES: usize = 1024;
+const MAX_FORM_QUESTIONS: usize = 5;
+const MAX_FORM_OPTIONS: usize = 4;
+const MAX_HEADER_CHARS: usize = 30;
+const MAX_OPTION_CHARS: usize = 200;
+const MAX_OPTION_DESCRIPTION_CHARS: usize = 400;
+const RECOMMENDED_SUFFIX: &str = "(Recommended)";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct InteractionId(Uuid);
@@ -47,8 +53,41 @@ pub enum ModelInteractionKind {
     Confirmation,
 }
 
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct QuestionOptionArgs {
+    /// Row label. Put the recommended option first.
+    pub label: String,
+    /// One line shown under the label.
+    #[serde(default)]
+    #[schemars(default)]
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct QuestionItemArgs {
+    /// Complete question. Do not list the options in this text.
+    pub question: String,
+    /// Short label, at most 30 characters.
+    #[serde(default)]
+    #[schemars(default)]
+    pub header: Option<String>,
+    /// Up to 4 choices. Omit this to ask for typed text.
+    #[serde(default)]
+    #[schemars(default)]
+    pub options: Vec<QuestionOptionArgs>,
+    /// Allow more than one listed choice. A typed answer is still available.
+    #[serde(default)]
+    #[schemars(default)]
+    pub multiple: bool,
+}
+
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct RequestUserInputArgs {
+    /// One question. Omit this when `questions` is set.
+    #[serde(default)]
+    #[schemars(default)]
     pub question: String,
     #[serde(default)]
     pub description: Option<String>,
@@ -58,6 +97,10 @@ pub struct RequestUserInputArgs {
     pub choices: Vec<InteractionChoice>,
     #[serde(default)]
     pub allow_other: bool,
+    /// One to five independent questions. Each one accepts a typed answer.
+    #[serde(default)]
+    #[schemars(default)]
+    pub questions: Vec<QuestionItemArgs>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,8 +121,92 @@ pub struct InteractionRequest {
     pub allow_other: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PreparedUserInput {
+    One(InteractionRequest),
+    Form(QuestionForm),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FormQuestion {
+    pub header: Option<String>,
+    pub request: InteractionRequest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuestionForm {
+    pub questions: Vec<FormQuestion>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FormLock {
+    pub choices: Vec<String>,
+    pub custom: Option<String>,
+}
+
+impl FormLock {
+    pub fn from_answer(answer: &InteractionAnswer) -> Self {
+        Self {
+            choices: answer.selected.clone(),
+            custom: answer
+                .text
+                .as_deref()
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map(str::to_string),
+        }
+    }
+}
+
+impl QuestionForm {
+    pub fn report(&self, locks: &[FormLock]) -> String {
+        let mut lines = vec![
+            "QUESTION".to_string(),
+            "outcome=submitted".to_string(),
+            format!("count={}", self.questions.len()),
+        ];
+        for (index, question) in self.questions.iter().enumerate() {
+            let number = index + 1;
+            let lock = locks.get(index);
+            let status = if lock.is_some() {
+                "answered"
+            } else {
+                "unanswered"
+            };
+            let choice = lock.map(|lock| lock.choices.join(", ")).unwrap_or_default();
+            let custom = lock
+                .and_then(|lock| lock.custom.clone())
+                .unwrap_or_default();
+            lines.push(format!(
+                "{number}.header={}",
+                question.header.clone().unwrap_or_default()
+            ));
+            lines.push(format!(
+                "{number}.question={}",
+                one_line(&question.request.question)
+            ));
+            lines.push(format!("{number}.status={status}"));
+            lines.push(format!("{number}.choice={}", one_line(&choice)));
+            lines.push(format!("{number}.custom={}", one_line(&custom)));
+        }
+        lines.join("\n")
+    }
+}
+
+impl RequestUserInputArgs {
+    pub fn prepare(self) -> Result<PreparedUserInput, String> {
+        if !self.questions.is_empty() {
+            return parse_form(self.questions).map(PreparedUserInput::Form);
+        }
+        InteractionRequest::from_model(self).map(PreparedUserInput::One)
+    }
+}
+
 impl InteractionRequest {
     pub fn from_model(args: RequestUserInputArgs) -> Result<Self, String> {
+        if !args.questions.is_empty() {
+            return Err("questions must be prepared as one form".into());
+        }
         let question = args.question.trim().to_string();
         if question.is_empty() {
             return Err("question must not be empty".into());
@@ -118,7 +245,13 @@ impl InteractionRequest {
         if mode == InteractionMode::FreeText && (!choices.is_empty() || args.allow_other) {
             return Err("free-text interactions do not accept choices or Other".into());
         }
-        let visible = choices.len() + usize::from(args.allow_other);
+        let allow_other = match mode {
+            InteractionMode::SingleChoice | InteractionMode::MultiSelect => true,
+            InteractionMode::Confirmation | InteractionMode::FreeText | InteractionMode::Masked => {
+                false
+            }
+        };
+        let visible = choices.len() + usize::from(allow_other);
         if visible > 9 {
             return Err("interaction choices are limited to nine visible items".into());
         }
@@ -136,7 +269,7 @@ impl InteractionRequest {
             description: args.description,
             mode,
             choices,
-            allow_other: args.allow_other,
+            allow_other,
         })
     }
 
@@ -147,6 +280,7 @@ impl InteractionRequest {
             kind: ModelInteractionKind::FreeText,
             choices: Vec::new(),
             allow_other: false,
+            questions: Vec::new(),
         })
     }
 
@@ -166,6 +300,7 @@ pub struct PendingInteraction {
     pub id: InteractionId,
     pub tool_call_id: String,
     pub request: InteractionRequest,
+    pub form: Option<QuestionForm>,
     pub write_access: Option<crate::write_access::WriteAccessRequest>,
 }
 
@@ -175,9 +310,138 @@ impl PendingInteraction {
             id: InteractionId::new(),
             tool_call_id,
             request,
+            form: None,
             write_access: None,
         }
     }
+
+    pub fn form(tool_call_id: String, form: QuestionForm) -> Self {
+        let request = form.questions[0].request.clone();
+        Self {
+            id: InteractionId::new(),
+            tool_call_id,
+            request,
+            form: Some(form),
+            write_access: None,
+        }
+    }
+}
+
+fn one_line(text: &str) -> String {
+    text.replace(['\n', '\r'], " ")
+}
+
+fn strip_recommended(label: &str) -> String {
+    let trimmed = label.trim();
+    if trimmed.to_ascii_lowercase().ends_with("(recommended)")
+        && trimmed.len() > RECOMMENDED_SUFFIX.len()
+    {
+        trimmed[..trimmed.len() - RECOMMENDED_SUFFIX.len()]
+            .trim()
+            .to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn parse_form(items: Vec<QuestionItemArgs>) -> Result<QuestionForm, String> {
+    if items.is_empty() || items.len() > MAX_FORM_QUESTIONS {
+        return Err(format!(
+            "questions must contain 1 to {MAX_FORM_QUESTIONS} items"
+        ));
+    }
+    let mut questions = Vec::with_capacity(items.len());
+    for (index, item) in items.into_iter().enumerate() {
+        let question = item.question.trim().to_string();
+        if question.is_empty() {
+            return Err(format!(
+                "questions[{index}].question must be non-empty text"
+            ));
+        }
+        let header = match item.header {
+            Some(header) => {
+                let header = header.trim().to_string();
+                if header.is_empty() {
+                    None
+                } else if header.chars().count() > MAX_HEADER_CHARS {
+                    return Err(format!(
+                        "questions[{index}].header is longer than {MAX_HEADER_CHARS} characters"
+                    ));
+                } else {
+                    Some(header)
+                }
+            }
+            None => None,
+        };
+        if item.options.len() > MAX_FORM_OPTIONS {
+            return Err(format!(
+                "questions[{index}].options supports at most {MAX_FORM_OPTIONS} choices"
+            ));
+        }
+        let mut seen = std::collections::HashSet::new();
+        let mut labels = Vec::with_capacity(item.options.len());
+        for (position, option) in item.options.into_iter().enumerate() {
+            let label = option.label.trim().to_string();
+            if label.is_empty() {
+                return Err(format!(
+                    "questions[{index}].options[{position}].label must be non-empty"
+                ));
+            }
+            if label.chars().count() > MAX_OPTION_CHARS {
+                return Err(format!(
+                    "questions[{index}].options[{position}].label is longer than {MAX_OPTION_CHARS} characters"
+                ));
+            }
+            let description = option
+                .description
+                .map(|description| description.trim().to_string())
+                .filter(|description| !description.is_empty());
+            if description.as_ref().is_some_and(|description| {
+                description.chars().count() > MAX_OPTION_DESCRIPTION_CHARS
+            }) {
+                return Err(format!(
+                    "questions[{index}].options[{position}].description is longer than {MAX_OPTION_DESCRIPTION_CHARS} characters"
+                ));
+            }
+            if !seen.insert(label.clone()) {
+                return Err(format!("questions[{index}].options must be unique"));
+            }
+            labels.push((label, description));
+        }
+        if labels.len() >= 2 {
+            let first = &labels[0].0;
+            if !first.to_ascii_lowercase().ends_with("(recommended)") {
+                labels[0].0 = format!("{first} {RECOMMENDED_SUFFIX}");
+            }
+        }
+        let allow_other = !labels.is_empty();
+        let mode = if labels.is_empty() {
+            InteractionMode::FreeText
+        } else if item.multiple {
+            InteractionMode::MultiSelect
+        } else {
+            InteractionMode::SingleChoice
+        };
+        let choices = labels
+            .into_iter()
+            .map(|(label, description)| InteractionChoice {
+                value: Some(strip_recommended(&label)),
+                label,
+                description,
+            })
+            .collect();
+        questions.push(FormQuestion {
+            header,
+            request: InteractionRequest {
+                question,
+                description: None,
+                mode,
+                choices,
+                allow_other,
+            },
+        });
+    }
+    Ok(QuestionForm { questions })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -325,6 +589,13 @@ impl InteractionOutcome {
     pub fn model_result(&self) -> Result<String, &'static str> {
         match self {
             Self::Answer(answer) => {
+                if let Some(report) = answer
+                    .text
+                    .as_deref()
+                    .and_then(|text| text.strip_prefix('\u{0}'))
+                {
+                    return Ok(report.to_string());
+                }
                 serde_json::to_string(answer).map_err(|_| "serialization failed")
             }
             Self::Cancelled => Ok("Cancelled by user".into()),
@@ -365,20 +636,74 @@ impl Drop for InteractionDraft {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+struct FormCursor {
+    selected_index: usize,
+    selected: Vec<usize>,
+    draft: String,
+    other_editing: bool,
+}
+
+#[derive(Debug)]
+struct FormRuntime {
+    questions: Vec<FormQuestion>,
+    active: usize,
+    locked: Vec<Option<FormLock>>,
+    cursors: Vec<FormCursor>,
+}
+
+impl FormRuntime {
+    fn new(form: QuestionForm) -> Self {
+        let len = form.questions.len();
+        Self {
+            questions: form.questions,
+            active: 0,
+            locked: (0..len).map(|_| None).collect(),
+            cursors: (0..len).map(|_| FormCursor::default()).collect(),
+        }
+    }
+
+    fn report(&self) -> String {
+        let locks = self
+            .locked
+            .iter()
+            .map(|lock| {
+                lock.clone().unwrap_or(FormLock {
+                    choices: Vec::new(),
+                    custom: None,
+                })
+            })
+            .collect::<Vec<_>>();
+        QuestionForm {
+            questions: self.questions.clone(),
+        }
+        .report(&locks)
+    }
+}
+
 #[derive(Debug)]
 pub struct InteractionState {
     pub id: InteractionId,
     pub tool_call_id: Option<String>,
     pub request: InteractionRequest,
+    pub header: Option<String>,
+    pub custom_label: &'static str,
+    pub progress: Option<(usize, usize)>,
     pub selected_index: usize,
     selected: Vec<usize>,
     draft: InteractionDraft,
     other_editing: bool,
+    form: Option<FormRuntime>,
 }
 
 impl InteractionState {
     pub fn from_pending(pending: PendingInteraction) -> Self {
-        Self::new(pending.id, Some(pending.tool_call_id), pending.request)
+        let mut state = Self::new(pending.id, Some(pending.tool_call_id), pending.request);
+        state.form = pending.form.map(FormRuntime::new);
+        if state.form.is_some() {
+            state.apply_active();
+        }
+        state
     }
 
     pub fn host(request: InteractionRequest) -> Self {
@@ -398,11 +723,134 @@ impl InteractionState {
             id,
             tool_call_id,
             request,
+            header: None,
+            custom_label: "Other",
+            progress: None,
             selected_index: 0,
             selected: Vec::new(),
             draft,
             other_editing: false,
+            form: None,
         }
+    }
+
+    fn apply_active(&mut self) {
+        let Some(form) = self.form.as_ref() else {
+            return;
+        };
+        let question = form.questions[form.active].clone();
+        let saved = form.cursors[form.active].clone();
+        self.request = question.request;
+        self.header = question.header;
+        self.custom_label = if self.request.allow_other {
+            "Type your own answer"
+        } else {
+            "Other"
+        };
+        self.progress = Some((form.active, form.questions.len()));
+        self.selected_index = saved.selected_index;
+        self.selected = saved.selected;
+        self.other_editing = saved.other_editing;
+        if let InteractionDraft::Text { value, cursor } = &mut self.draft {
+            *cursor = saved.draft.len();
+            *value = saved.draft;
+        }
+    }
+
+    fn save_active(&mut self) {
+        let draft = match &self.draft {
+            InteractionDraft::Text { value, .. } => value.clone(),
+            InteractionDraft::Secret(_) => String::new(),
+        };
+        let selected_index = self.selected_index;
+        let selected = self.selected.clone();
+        let other_editing = self.other_editing;
+        let Some(form) = self.form.as_mut() else {
+            return;
+        };
+        let cursor = &mut form.cursors[form.active];
+        cursor.selected_index = selected_index;
+        cursor.selected = selected;
+        cursor.draft = draft;
+        cursor.other_editing = other_editing;
+    }
+
+    fn shift_form(&mut self, delta: isize) {
+        let len = self
+            .form
+            .as_ref()
+            .map(|form| form.questions.len())
+            .unwrap_or(0);
+        if len < 2 {
+            return;
+        }
+        self.save_active();
+        let active = self.form.as_ref().expect("form length was checked").active as isize;
+        let next = (active + delta).rem_euclid(len as isize) as usize;
+        self.form.as_mut().expect("form length was checked").active = next;
+        self.apply_active();
+    }
+
+    fn form_switch(&mut self, code: KeyCode, modifiers: KeyModifiers) -> bool {
+        let Some(form) = self.form.as_ref() else {
+            return false;
+        };
+        if form.questions.len() < 2 {
+            return false;
+        }
+        if !(modifiers.is_empty() || modifiers == KeyModifiers::ALT) {
+            return false;
+        }
+        let editing = self.other_editing
+            || matches!(
+                self.request.mode,
+                InteractionMode::FreeText | InteractionMode::Masked
+            );
+        let switching = matches!(code, KeyCode::Left | KeyCode::Right)
+            && (modifiers.contains(KeyModifiers::ALT) || !editing);
+        if !switching {
+            return false;
+        }
+        self.shift_form(if code == KeyCode::Right { 1 } else { -1 });
+        true
+    }
+
+    fn fold_form(&mut self, resolution: InteractionResolution) -> Option<InteractionResolution> {
+        if self.form.is_none() {
+            return Some(resolution);
+        }
+        let InteractionOutcome::Answer(answer) = resolution.outcome else {
+            return Some(resolution);
+        };
+        let lock = FormLock::from_answer(&answer);
+        if lock.choices.is_empty() && lock.custom.is_none() {
+            return None;
+        }
+        self.save_active();
+        let report = {
+            let form = self.form.as_mut().expect("form is present");
+            form.locked[form.active] = Some(lock);
+            if form.locked.iter().all(Option::is_some) {
+                Some(form.report())
+            } else {
+                form.active = form
+                    .locked
+                    .iter()
+                    .position(Option::is_none)
+                    .expect("an unlocked question remains");
+                None
+            }
+        };
+        if let Some(report) = report {
+            return Some(
+                self.resolution(InteractionOutcome::Answer(InteractionAnswer {
+                    selected: Vec::new(),
+                    text: Some(format!("\u{0}{report}")),
+                })),
+            );
+        }
+        self.apply_active();
+        None
     }
 
     pub fn visible_count(&self) -> usize {
@@ -466,6 +914,18 @@ impl InteractionState {
     }
 
     pub fn handle_key(
+        &mut self,
+        code: KeyCode,
+        modifiers: KeyModifiers,
+    ) -> Option<InteractionResolution> {
+        if self.form_switch(code, modifiers) {
+            return None;
+        }
+        let resolution = self.handle_key_once(code, modifiers)?;
+        self.fold_form(resolution)
+    }
+
+    fn handle_key_once(
         &mut self,
         code: KeyCode,
         modifiers: KeyModifiers,
@@ -774,6 +1234,7 @@ mod tests {
             kind,
             choices: vec![choice("One"), choice("Two")],
             allow_other: true,
+            questions: Vec::new(),
         })
         .unwrap()
     }
@@ -786,6 +1247,7 @@ mod tests {
             kind: ModelInteractionKind::FreeText,
             choices: Vec::new(),
             allow_other: false,
+            questions: Vec::new(),
         })
         .is_ok());
         assert!(InteractionRequest::from_model(RequestUserInputArgs {
@@ -794,6 +1256,7 @@ mod tests {
             kind: ModelInteractionKind::SingleChoice,
             choices: (0..9).map(|index| choice(&index.to_string())).collect(),
             allow_other: true,
+            questions: Vec::new(),
         })
         .is_err());
         assert!(InteractionRequest::from_model(RequestUserInputArgs {
@@ -802,6 +1265,7 @@ mod tests {
             kind: ModelInteractionKind::SingleChoice,
             choices: vec![choice("same"), choice("same")],
             allow_other: false,
+            questions: Vec::new(),
         })
         .is_err());
     }
@@ -867,6 +1331,7 @@ mod tests {
             kind: ModelInteractionKind::Confirmation,
             choices: Vec::new(),
             allow_other: false,
+            questions: Vec::new(),
         })
         .unwrap();
         let mut by_number = InteractionState::host(confirmation.clone());
@@ -990,5 +1455,165 @@ mod tests {
             panic!("expected secret handle")
         };
         assert_eq!(secret.expose_bytes().len(), MAX_MASKED_SECRET_BYTES);
+    }
+
+    fn option(label: &str, description: &str) -> QuestionOptionArgs {
+        QuestionOptionArgs {
+            label: label.into(),
+            description: Some(description.into()),
+        }
+    }
+
+    fn form_args(questions: Vec<QuestionItemArgs>) -> RequestUserInputArgs {
+        RequestUserInputArgs {
+            question: String::new(),
+            description: None,
+            kind: ModelInteractionKind::FreeText,
+            choices: Vec::new(),
+            allow_other: false,
+            questions,
+        }
+    }
+
+    #[test]
+    fn a_question_form_keeps_the_recommendation_and_the_custom_answer() {
+        let forced = InteractionRequest::from_model(RequestUserInputArgs {
+            question: "One".into(),
+            description: None,
+            kind: ModelInteractionKind::SingleChoice,
+            choices: vec![choice("Stay")],
+            allow_other: false,
+            questions: Vec::new(),
+        })
+        .unwrap();
+        assert!(forced.allow_other);
+        let confirmation = InteractionRequest::from_model(RequestUserInputArgs {
+            question: "Continue?".into(),
+            description: None,
+            kind: ModelInteractionKind::Confirmation,
+            choices: Vec::new(),
+            allow_other: true,
+            questions: Vec::new(),
+        })
+        .unwrap();
+        assert!(!confirmation.allow_other);
+
+        let rejected = form_args(vec![QuestionItemArgs {
+            question: "Too many".into(),
+            header: None,
+            options: (0..5)
+                .map(|index| option(&index.to_string(), "detail"))
+                .collect(),
+            multiple: false,
+        }]);
+        assert!(rejected.prepare().is_err());
+        let rejected = form_args(
+            (0..6)
+                .map(|index| QuestionItemArgs {
+                    question: format!("Question {index}"),
+                    header: None,
+                    options: Vec::new(),
+                    multiple: false,
+                })
+                .collect(),
+        );
+        assert!(rejected.prepare().is_err());
+
+        let PreparedUserInput::Form(form) = form_args(vec![
+            QuestionItemArgs {
+                question: "Push this commit?".into(),
+                header: Some("Publish".into()),
+                options: vec![
+                    option("Push main", "fast-forward"),
+                    option("Leave it", "local"),
+                ],
+                multiple: false,
+            },
+            QuestionItemArgs {
+                question: "Anything else?".into(),
+                header: Some("Notes".into()),
+                options: vec![option("No", "stop"), option("Yes", "add a note")],
+                multiple: false,
+            },
+        ])
+        .prepare()
+        .unwrap() else {
+            panic!("expected a question form");
+        };
+        assert_eq!(
+            form.questions[0].request.choices[0].label,
+            "Push main (Recommended)"
+        );
+        assert_eq!(
+            form.questions[0].request.choices[0].resolved_value(),
+            "Push main"
+        );
+        assert!(form.questions[0].request.allow_other);
+        assert_eq!(
+            form.questions[1].request.choices[1].description.as_deref(),
+            Some("add a note")
+        );
+
+        let mut state =
+            InteractionState::from_pending(PendingInteraction::form("call-1".into(), form));
+        assert_eq!(state.header.as_deref(), Some("Publish"));
+        assert_eq!(state.custom_label, "Type your own answer");
+        assert_eq!(state.progress, Some((0, 2)));
+        assert!(state
+            .handle_key(KeyCode::Right, KeyModifiers::NONE)
+            .is_none());
+        assert_eq!(state.progress, Some((1, 2)));
+        assert!(state
+            .handle_key(KeyCode::Left, KeyModifiers::NONE)
+            .is_none());
+        let locked = state.handle_key(KeyCode::Char('2'), KeyModifiers::NONE);
+        assert!(locked.is_none());
+        assert_eq!(state.header.as_deref(), Some("Notes"));
+        state.handle_key(KeyCode::Char('3'), KeyModifiers::NONE);
+        assert!(state.other_editing());
+        state.handle_key(KeyCode::Char('h'), KeyModifiers::NONE);
+        state.handle_key(KeyCode::Char('i'), KeyModifiers::NONE);
+        let resolution = state
+            .handle_key(KeyCode::Enter, KeyModifiers::NONE)
+            .unwrap();
+        let report = resolution.outcome.model_result().unwrap();
+        assert!(report.contains("outcome=submitted"));
+        assert!(report.contains("1.header=Publish"));
+        assert!(report.contains("1.question=Push this commit?"));
+        assert!(report.contains("1.choice=Leave it"));
+        assert!(report.contains("1.custom=\n"));
+        assert!(report.contains("2.header=Notes"));
+        assert!(report.contains("2.choice=\n"));
+        assert!(report.contains("2.custom=hi"));
+        assert!(!report.contains("(Recommended)"));
+        assert_eq!(resolution.tool_call_id.as_deref(), Some("call-1"));
+
+        let PreparedUserInput::Form(form) = form_args(vec![
+            QuestionItemArgs {
+                question: "First?".into(),
+                header: None,
+                options: vec![option("A", "one"), option("B", "two")],
+                multiple: false,
+            },
+            QuestionItemArgs {
+                question: "Second?".into(),
+                header: None,
+                options: Vec::new(),
+                multiple: false,
+            },
+        ])
+        .prepare()
+        .unwrap() else {
+            panic!("expected a question form");
+        };
+        let mut state =
+            InteractionState::from_pending(PendingInteraction::form("call-2".into(), form));
+        state.handle_key(KeyCode::Char('1'), KeyModifiers::NONE);
+        let cancelled = state.handle_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();
+        assert!(matches!(cancelled.outcome, InteractionOutcome::Cancelled));
+        assert_eq!(
+            cancelled.outcome.model_result().unwrap(),
+            "Cancelled by user"
+        );
     }
 }

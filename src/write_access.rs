@@ -38,6 +38,7 @@ impl WriteAccessRequest {
             kind: crate::interaction::ModelInteractionKind::Confirmation,
             choices: Vec::new(),
             allow_other: false,
+            questions: Vec::new(),
         }).expect("host folder confirmation is valid")
     }
 }
