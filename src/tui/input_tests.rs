@@ -148,6 +148,7 @@ fn plan_workflow_graph_inspection_and_return_to_existing_agent_are_distinct_acti
                     participant: "original-author".into(),
                     route: None,
                     instructions: String::new(),
+                    evidence: None,
                 }],
                 review_loop: None,
                 implementation: None,

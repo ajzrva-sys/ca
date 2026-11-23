@@ -273,6 +273,39 @@ fn expand_tabs(line: &str) -> String {
     output
 }
 
+/// Expand tabs to 8-column stops and drop characters that move the cursor.
+/// A string with neither is unchanged.
+pub(crate) fn settle_transcript_text(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut column = 0usize;
+    for grapheme in input.graphemes(true) {
+        if grapheme == "\t" {
+            let spaces = TAB_STOP - (column % TAB_STOP);
+            output.push_str(&" ".repeat(spaces));
+            column += spaces;
+            continue;
+        }
+        let moves_cursor = grapheme.chars().any(|character| {
+            matches!(
+                character,
+                '\n' | '\r'
+                    | '\u{0008}'
+                    | '\u{000b}'
+                    | '\u{000c}'
+                    | '\u{007f}'
+                    | '\u{2028}'
+                    | '\u{2029}'
+            ) || character.is_control()
+        });
+        if moves_cursor {
+            continue;
+        }
+        output.push_str(grapheme);
+        column = column.saturating_add(grapheme.width());
+    }
+    output
+}
+
 pub(crate) fn wrap_cells(input: &str, width: usize) -> Vec<String> {
     if input.is_empty() {
         return vec![String::new()];

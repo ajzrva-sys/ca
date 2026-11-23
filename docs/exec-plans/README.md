@@ -4,9 +4,11 @@ Use an ExecPlan when the work is risky, unclear, multi-file, or likely to span s
 
 ## Next plan
 
-[AGT-271](active/AGT-271-task-first-economic-delegation.md) is the plan that just finished M5. A live cheaper-quality claim stays separately authorized. [NEXT_STEPS.md](../../NEXT_STEPS.md) points here.
+[verify-drive](active/verify-drive.md) is the named continuation. M1 through M3 are in ca 0.1.187. M4 and M5 are unstarted. [NEXT_STEPS.md](../../NEXT_STEPS.md) points here.
 
-Do not start another file in `active/` unless the task names that plan. Each of those files starts with that sentence. The status line under it is `HELD`. The rest of the plan text was not rewritten.
+[AGT-271](active/AGT-271-task-first-economic-delegation.md) finished M5. A live cheaper-quality claim stays separately authorized.
+
+Do not start another file in `active/` unless the task names that plan. Each held file starts with that sentence and points at verify-drive. The status line under it is `HELD`. Two status sentences were corrected: ORC-258's milestones paragraph no longer says ACTIVE, and ORC-291's status line no longer says implementation is in progress. The rest of those plans was not rewritten.
 
 | Plan | Why it is not the continuation |
 |---|---|

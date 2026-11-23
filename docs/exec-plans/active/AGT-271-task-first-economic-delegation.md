@@ -1,3 +1,5 @@
+Do not start this plan. M0 through M5 are finished. The continuation is [verify-drive](verify-drive.md). A live cheaper-quality claim stays separately authorized.
+
 # AGT-271 — Task-first economic delegation
 
 Status: M0 through M5 checked. A live cheaper-quality claim stays separately authorized.

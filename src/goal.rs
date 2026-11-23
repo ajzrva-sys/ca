@@ -205,6 +205,14 @@ pub struct GoalState {
     pub updated_at: DateTime<Utc>,
     #[serde(default)]
     pub last_evaluation: Option<GoalEvaluation>,
+    #[serde(default)]
+    pub verification_queued: bool,
+    #[serde(default)]
+    pub no_file_continuations: u32,
+    #[serde(default)]
+    pub invalid_evaluations: u32,
+    #[serde(default)]
+    pub pause_note: Option<String>,
 }
 
 impl std::fmt::Debug for GoalState {
@@ -226,6 +234,42 @@ impl std::fmt::Debug for GoalState {
             )
             .finish_non_exhaustive()
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct GoalActivity {
+    pub files_changed: bool,
+    pub successful_check: bool,
+}
+
+impl Default for GoalActivity {
+    fn default() -> Self {
+        Self {
+            files_changed: true,
+            successful_check: false,
+        }
+    }
+}
+
+impl GoalActivity {
+    pub fn from_snapshot(snapshot: &GoalEvidenceSnapshot, files_changed: bool) -> Self {
+        Self {
+            files_changed,
+            successful_check: snapshot
+                .work_events
+                .iter()
+                .any(|event| event.contains("Test passed")),
+        }
+    }
+}
+
+pub fn turn_changed_files<'a>(tools: impl IntoIterator<Item = &'a str>) -> bool {
+    tools.into_iter().any(|name| {
+        matches!(
+            name,
+            "write_file" | "edit_file" | "search_replace" | "apply_patch"
+        )
+    })
 }
 
 impl GoalState {
@@ -250,6 +294,10 @@ impl GoalState {
             started_at: now,
             updated_at: now,
             last_evaluation: None,
+            verification_queued: false,
+            no_file_continuations: 0,
+            invalid_evaluations: 0,
+            pause_note: None,
         })
     }
 
@@ -325,12 +373,41 @@ impl GoalState {
         evaluation: GoalEvaluation,
         now: DateTime<Utc>,
     ) -> Result<GoalApplyOutcome, GoalError> {
+        self.decide(evaluation, now, &GoalActivity::default())
+    }
+
+    /// Record one failed evaluator report. The fourth failure pauses the goal.
+    pub fn note_invalid_evaluation(&mut self, now: DateTime<Utc>) -> GoalApplyOutcome {
+        self.invalid_evaluations = self.invalid_evaluations.saturating_add(1);
+        self.updated_at = now;
+        if self.invalid_evaluations >= 4 {
+            self.pause_note = Some("evaluation failed".into());
+            self.pause(GoalPauseReason::EvaluationFailed, now);
+            return GoalApplyOutcome::Stopped(GoalStatus::Paused);
+        }
+        GoalApplyOutcome::Continue(String::new())
+    }
+
+    pub fn decide(
+        &mut self,
+        evaluation: GoalEvaluation,
+        now: DateTime<Utc>,
+        activity: &GoalActivity,
+    ) -> Result<GoalApplyOutcome, GoalError> {
         if self.status != GoalStatus::Active {
             return Err(GoalError::NotActive);
         }
         let evaluation = evaluation.validate()?;
         self.last_evaluation = Some(evaluation.clone());
         self.updated_at = now;
+        if !activity.files_changed {
+            self.no_file_continuations = self.no_file_continuations.saturating_add(1);
+            if self.no_file_continuations >= 5 {
+                self.pause_note = Some("no file changed".into());
+                self.pause(GoalPauseReason::User, now);
+                return Ok(GoalApplyOutcome::Stopped(GoalStatus::Paused));
+            }
+        }
         let status = match evaluation.decision {
             GoalDecision::Continue => {
                 if self.continuations >= self.limits.max_continuations {
@@ -344,7 +421,20 @@ impl GoalState {
                     return Ok(GoalApplyOutcome::Continue(evaluation.feedback));
                 }
             }
-            GoalDecision::Complete => GoalStatus::Complete,
+            GoalDecision::Complete => {
+                let first = !self.verification_queued;
+                self.verification_queued = true;
+                if first || !activity.successful_check {
+                    self.continuations = self.continuations.saturating_add(1);
+                    let feedback = if first {
+                        "Run the checks the objective names and record their results.".into()
+                    } else {
+                        "Missing successful check from the verification continuation.".into()
+                    };
+                    return Ok(GoalApplyOutcome::Continue(feedback));
+                }
+                GoalStatus::Complete
+            }
             GoalDecision::Unreachable => GoalStatus::Unreachable,
             GoalDecision::Blocked => GoalStatus::Blocked,
         };
@@ -1176,5 +1266,82 @@ mod tests {
                 .map(|usage| usage.total_tokens),
             Some(15)
         );
+    }
+
+    #[test]
+    fn first_complete_without_a_check_stays_active_and_later_quiet_turns_pause() {
+        let limits = GoalLimits::from_config(GoalConfig::default()).unwrap();
+        let evaluation = GoalEvaluation {
+            decision: GoalDecision::Complete,
+            rationale: "the objective looks done".into(),
+            feedback: String::new(),
+            evidence: Vec::new(),
+            created_at: now(200),
+        };
+        let mut goal = GoalState::start("finish the objective".into(), limits, now(100)).unwrap();
+        let queued = goal
+            .decide(
+                evaluation.clone(),
+                now(200),
+                &GoalActivity {
+                    files_changed: true,
+                    successful_check: false,
+                },
+            )
+            .unwrap();
+        assert!(matches!(queued, GoalApplyOutcome::Continue(text) if text.contains("checks")));
+        assert_eq!(goal.status, GoalStatus::Active);
+        let mut work = crate::work::WorkState::default();
+        work.record_event(crate::work::WorkEventKind::Test, "cargo test", true);
+        let snapshot =
+            GoalEvidenceSnapshot::from_state(&goal, &work, "", "workspace", now(201), &[]);
+        let verified = GoalActivity::from_snapshot(&snapshot, true);
+        assert!(verified.successful_check);
+        assert_eq!(
+            goal.decide(evaluation.clone(), now(202), &verified)
+                .unwrap(),
+            GoalApplyOutcome::Stopped(GoalStatus::Complete)
+        );
+
+        let mut quiet = GoalState::start("finish the objective".into(), limits, now(100)).unwrap();
+        let quiet_snapshot = GoalEvidenceSnapshot::from_state(
+            &quiet,
+            &crate::work::WorkState::default(),
+            "",
+            "workspace",
+            now(209),
+            &[],
+        );
+        let no_file =
+            GoalActivity::from_snapshot(&quiet_snapshot, turn_changed_files(std::iter::empty()));
+        assert!(!no_file.files_changed);
+        for _ in 0..4 {
+            quiet
+                .decide(evaluation.clone(), now(210), &no_file)
+                .unwrap();
+            assert_eq!(quiet.status, GoalStatus::Active);
+        }
+        assert_eq!(
+            quiet.decide(evaluation, now(211), &no_file).unwrap(),
+            GoalApplyOutcome::Stopped(GoalStatus::Paused)
+        );
+        assert_eq!(quiet.pause_note.as_deref(), Some("no file changed"));
+
+        let mut invalid =
+            GoalState::start("finish the objective".into(), limits, now(100)).unwrap();
+        for _ in 0..3 {
+            assert!(matches!(
+                invalid.note_invalid_evaluation(now(220)),
+                GoalApplyOutcome::Continue(_)
+            ));
+            assert_eq!(invalid.status, GoalStatus::Active);
+        }
+        assert_eq!(
+            invalid.note_invalid_evaluation(now(221)),
+            GoalApplyOutcome::Stopped(GoalStatus::Paused)
+        );
+        assert_eq!(invalid.pause_note.as_deref(), Some("evaluation failed"));
+        let workspace = tempfile::tempdir().unwrap();
+        assert!(workspace.path().read_dir().unwrap().next().is_none());
     }
 }

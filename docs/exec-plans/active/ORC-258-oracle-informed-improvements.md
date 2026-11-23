@@ -1,4 +1,4 @@
-Do not start this plan unless the task names it. The continuation is [AGT-271](AGT-271-task-first-economic-delegation.md).
+Do not start this plan unless the task names it. The continuation is [verify-drive](verify-drive.md).
 
 # ORC-258 — Oracle-informed improvements
 
@@ -20,8 +20,8 @@ only. Recovery storage errors continue edits with visibly incomplete coverage.
 ## Milestones
 
 Checked M1–M7 mark implemented source and focused/integrated fixture coverage.
-Actual duration and real-model acceptance remain M8 release gates; overall status
-is ACTIVE and installation has not occurred.
+Actual duration and real-model acceptance remain M8 release gates. The plan is
+HELD. M8 remains open. This is not the continuation.
 
 - [x] M1: current baseline, fresh-path BUG-257 evidence, checkpoint validation and repair.
 - [x] M2: stable advisory session ownership, optimistic storage validation, owner-scoped hook outcomes.

@@ -1,8 +1,8 @@
-Do not start this plan unless the task names it. The continuation is [AGT-271](AGT-271-task-first-economic-delegation.md).
+Do not start this plan unless the task names it. The continuation is [verify-drive](verify-drive.md).
 
 # ORC-291 — Silo'd lane orchestration: declared handoffs, clarification channel, facts/merge lanes
 
-Status: HELD — design reviewed; implementation in progress
+Status: HELD — milestones checked, including install as 0.1.26. Not the continuation.
 Date: 2026-10-15 (started)
 
 ## User intent

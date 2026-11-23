@@ -1251,6 +1251,15 @@ pub struct ApprovalQueue {
     total: usize,
     resolved: usize,
     command_editor: Option<crate::approval_amend::CommandEditor>,
+    card_id: Option<uuid::Uuid>,
+    always_prefix: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CardAnswer {
+    Allow,
+    Always,
+    Deny,
 }
 
 impl ApprovalQueue {
@@ -1262,7 +1271,50 @@ impl ApprovalQueue {
             total: 0,
             resolved: 0,
             command_editor: None,
+            card_id: None,
+            always_prefix: None,
         }
+    }
+
+    pub fn current_card_id(&self) -> Option<uuid::Uuid> {
+        self.card_id
+    }
+
+    pub fn granted_prefix(&self) -> Option<&str> {
+        self.always_prefix.as_deref()
+    }
+
+    /// The approval key calls this with the id it read from the card on screen.
+    pub fn bind_answer(&mut self, card_id: uuid::Uuid, answer: CardAnswer) -> bool {
+        if self.card_id != Some(card_id) || self.current.is_none() {
+            return false;
+        }
+        if answer == CardAnswer::Always {
+            self.always_prefix = self.current.as_ref().and_then(command_prefix);
+        }
+        true
+    }
+
+    pub fn remember_always_grant(&self, store: &mut crate::permission::SessionGrantStore) -> bool {
+        let Some(prefix) = self.always_prefix.as_deref() else {
+            return false;
+        };
+        store
+            .add(crate::permission::PermissionMatcher::CommandPrefix {
+                prefix: vec![prefix.to_string()],
+            })
+            .is_ok()
+    }
+
+    /// Apply allow, always, or deny only when `card_id` is the card on screen.
+    pub fn decide(&mut self, card_id: uuid::Uuid, answer: CardAnswer) -> ResolutionAction {
+        if self.card_id != Some(card_id) || self.current.is_none() {
+            return ResolutionAction::Idle;
+        }
+        if answer == CardAnswer::Always {
+            self.always_prefix = self.current.as_ref().and_then(command_prefix);
+        }
+        self.resolve()
     }
 
     /// Atomically populate the queue with a new batch.
@@ -1368,6 +1420,7 @@ impl ApprovalQueue {
     pub fn advance(&mut self) -> bool {
         self.command_editor = None;
         self.current = self.remaining.pop_front();
+        self.card_id = self.current.as_ref().map(|_| uuid::Uuid::new_v4());
         self.current.is_some()
     }
 
@@ -1469,7 +1522,17 @@ impl ApprovalQueue {
         self.in_flight = false;
         self.total = 0;
         self.resolved = 0;
+        self.card_id = None;
     }
+}
+
+fn command_prefix(approval: &PendingApproval) -> Option<String> {
+    let arguments: serde_json::Value = serde_json::from_str(&approval.tool_args).ok()?;
+    arguments
+        .get("command")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|command| command.split_whitespace().next())
+        .map(str::to_string)
 }
 
 impl Default for ApprovalQueue {
@@ -3587,6 +3650,68 @@ impl Default for AppState {
 #[cfg(test)]
 mod tui127_tests {
     use super::*;
+
+    fn approval(id: &str, command: &str) -> PendingApproval {
+        PendingApproval {
+            tool_name: "run_command".into(),
+            tool_args: serde_json::json!({"command": command}).to_string(),
+            tool_id: id.into(),
+            network_requested: false,
+            email_preview: None,
+            email_draft_ref: None,
+        }
+    }
+
+    #[test]
+    fn a_late_approval_for_card_a_does_not_run_card_b() {
+        let mut queue = ApprovalQueue::new();
+        queue.begin_batch(vec![
+            approval("A", "rm -f a.txt"),
+            approval("B", "git push"),
+        ]);
+        let card_a = queue.current_card_id().expect("card A");
+        assert_eq!(queue.current().unwrap().tool_id, "A");
+        assert!(matches!(
+            queue.decide(card_a, CardAnswer::Allow),
+            ResolutionAction::Advance { .. }
+        ));
+        assert_eq!(queue.current().unwrap().tool_id, "B");
+        let card_b = queue.current_card_id().expect("card B");
+        assert_ne!(card_a, card_b);
+        assert!(matches!(
+            queue.decide(card_a, CardAnswer::Allow),
+            ResolutionAction::Idle
+        ));
+        assert_eq!(queue.current().unwrap().tool_id, "B");
+        assert!(matches!(
+            queue.decide(card_b, CardAnswer::Allow),
+            ResolutionAction::Continue
+        ));
+        assert!(queue.current().is_none());
+
+        let mut always = ApprovalQueue::new();
+        always.begin_batch(vec![
+            approval("A", "rm -f a.txt"),
+            approval("B", "git push"),
+        ]);
+        let card_a = always.current_card_id().unwrap();
+        assert!(always.bind_answer(card_a, CardAnswer::Always));
+        let mut grants = crate::permission::SessionGrantStore::default();
+        assert!(always.remember_always_grant(&mut grants));
+        assert!(grants.grants().iter().any(|grant| matches!(
+            grant,
+            crate::permission::PermissionMatcher::CommandPrefix { prefix } if prefix == &["rm".to_string()]
+        )));
+        assert!(grants.grants().iter().all(|grant| !matches!(
+            grant,
+            crate::permission::PermissionMatcher::CommandPrefix { prefix } if prefix.first().map(String::as_str) == Some("git")
+        )));
+        always.decide(card_a, CardAnswer::Always);
+        assert_eq!(always.granted_prefix(), Some("rm"));
+        assert_eq!(always.current().unwrap().tool_id, "B");
+        assert!(!always.bind_answer(card_a, CardAnswer::Allow));
+        assert_eq!(always.current().unwrap().tool_id, "B");
+    }
 
     fn streaming() -> StreamingState {
         StreamingState {

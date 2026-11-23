@@ -754,6 +754,7 @@ pub fn record_explicit_execution(
                 route: Some(route.clone()),
                 instructions: "Execute the explicitly selected plan and record task evidence."
                     .into(),
+                evidence: None,
             },
         },
         route,
@@ -853,6 +854,7 @@ mod tests {
                     participant: "focused-author".into(),
                     route: Some(route.clone()),
                     instructions: "Author a focused task map".into(),
+                    evidence: None,
                 }],
                 review_loop: None,
                 implementation: None,
@@ -893,6 +895,7 @@ mod tests {
                     participant: "focused-author".into(),
                     route: Some(other.clone()),
                     instructions: "Author a focused task map".into(),
+                    evidence: None,
                 }],
                 review_loop: None,
                 implementation: None,
@@ -1013,6 +1016,7 @@ mod tests {
                     model: "model".into(),
                 }),
                 instructions: String::new(),
+                evidence: None,
             },
         };
         assert!(validate_routes(&args, &[]).is_err());
@@ -1110,6 +1114,7 @@ mod tests {
                     participant: "focused-author".into(),
                     route: Some(route.clone()),
                     instructions: "Author a focused task map".into(),
+                    evidence: None,
                 }],
                 review_loop: None,
                 implementation: None,

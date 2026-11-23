@@ -146,6 +146,7 @@ mod narrow_worker;
 mod network_broker;
 mod owned_tools;
 mod panes;
+mod parallel_parts;
 #[allow(dead_code)]
 mod parity_backend;
 mod path_lock;
@@ -255,6 +256,7 @@ mod tool_schema;
 mod tool_selection;
 mod tui;
 mod turn_choice;
+mod turn_ledger;
 mod turn_recovery;
 mod ui_settings;
 mod undo;
@@ -7260,8 +7262,15 @@ async fn run_tui(cli: CliArgs) -> Result<Option<String>> {
                                     match code {
                                         KeyCode::Char('y') => {
                                             // Approve: take current, mark in_flight, spawn async execution
+                                            let card_id = state.approval_queue.current_card_id();
+                                            let accepted = card_id.is_some_and(|id| {
+                                                state
+                                                    .approval_queue
+                                                    .bind_answer(id, crate::app::CardAnswer::Allow)
+                                            });
                                             if let Some(pa) = state.approval_queue.current().cloned() {
-                                                if state.approval_queue.mark_in_flight() {
+                                                if accepted && state.approval_queue.mark_in_flight()
+                                                {
                                                     if let Some(privilege) = state
                                                         .manual_resolutions
                                                         .current_privilege()
@@ -7357,6 +7366,21 @@ async fn run_tui(cli: CliArgs) -> Result<Option<String>> {
                                                         };
                                                         let _ = tx.send(StreamMsg::ToolApproved(pa.tool_id, output, gen));
                                                     }));
+                                                }
+                                            }
+                                        }
+                                        KeyCode::Char('A') => {
+                                            let card_id = state.approval_queue.current_card_id();
+                                            if let Some(id) = card_id {
+                                                if state.approval_queue.bind_answer(
+                                                    id,
+                                                    crate::app::CardAnswer::Always,
+                                                ) {
+                                                    let mut grants = state
+                                                        .session_grants
+                                                        .lock()
+                                                        .unwrap_or_else(|poison| poison.into_inner());
+                                                    state.approval_queue.remember_always_grant(&mut grants);
                                                 }
                                             }
                                         }
@@ -12386,9 +12410,51 @@ async fn run_tui(cli: CliArgs) -> Result<Option<String>> {
                                     match result {
                                         Ok(result) => {
                                             let now = chrono::Utc::now();
+                                            let activity = state.goal_state.as_ref().map(|goal| {
+                                                let work = state
+                                                    .work_state
+                                                    .lock()
+                                                    .unwrap_or_else(|poison| poison.into_inner());
+                                                let workspace_label = state
+                                                    .workspace
+                                                    .primary()
+                                                    .and_then(|root| root.path.file_name())
+                                                    .map(|name| name.to_string_lossy().into_owned())
+                                                    .unwrap_or_else(|| "workspace".into());
+                                                let snapshot = crate::goal::GoalEvidenceSnapshot::from_state(
+                                                    goal,
+                                                    &work,
+                                                    "",
+                                                    &workspace_label,
+                                                    now,
+                                                    &[],
+                                                );
+                                                let changed = state
+                                                    .messages
+                                                    .iter()
+                                                    .rev()
+                                                    .find(|message| message.role == Role::Assistant)
+                                                    .and_then(|message| message.tool_calls.as_ref())
+                                                    .map(|calls| {
+                                                        calls
+                                                            .iter()
+                                                            .map(|call| call.name.as_str())
+                                                            .collect::<Vec<_>>()
+                                                    })
+                                                    .unwrap_or_default();
+                                                crate::goal::GoalActivity::from_snapshot(
+                                                    &snapshot,
+                                                    crate::goal::turn_changed_files(changed),
+                                                )
+                                            });
                                             let outcome = state.goal_state.as_mut().and_then(|goal| {
                                                 goal.observe_usage(result.usage.as_ref());
-                                                goal.apply_evaluation(result.evaluation, now).ok()
+                                                goal.decide(
+                                                    result.evaluation,
+                                                    now,
+                                                    activity.as_ref().unwrap_or(&crate::goal::GoalActivity::default()),
+                                                )
+                                                .ok()
                                             });
                                             match outcome {
                                                 Some(crate::goal::GoalApplyOutcome::Continue(feedback)) => {
@@ -12456,6 +12522,24 @@ async fn run_tui(cli: CliArgs) -> Result<Option<String>> {
                                         Err(error) => {
                                             if let Some(goal) = state.goal_state.as_mut() {
                                                 goal.observe_usage(error.usage.as_ref());
+                                                let outcome = goal.note_invalid_evaluation(chrono::Utc::now());
+                                                if !matches!(
+                                                    outcome,
+                                                    crate::goal::GoalApplyOutcome::Stopped(_)
+                                                ) {
+                                                    state.status_message = Some(
+                                                        "Goal evaluation failed; the goal stays active"
+                                                            .into(),
+                                                    );
+                                                    state.turn_lifecycle.complete();
+                                                    state.outcome_tracker.record_assistant_turn();
+                                                    let _ = save_current_session(
+                                                        &mut state,
+                                                        &session_store,
+                                                    );
+                                                    tui.draw(&state)?;
+                                                    continue;
+                                                }
                                             }
                                             pause_active_goal(
                                                 &mut state,
@@ -21546,6 +21630,7 @@ fn prepare_filter_breakdown(
                 participant: "focused-author".into(),
                 route: Some(route.clone()),
                 instructions: expanded.clone(),
+                evidence: None,
             },
         }
     } else {
@@ -21556,6 +21641,7 @@ fn prepare_filter_breakdown(
             role: plan_workflow::WorkflowRole::Author,
             participant: "focused-author".into(), route: Some(route.clone()),
             instructions: "Prepare a focused task plan for the user to review. Preserve the request's overall purpose, supplied evidence and shared constraints.".into(),
+            evidence: None,
         }],
         review_loop: None, implementation: None,
     }
@@ -22961,7 +23047,9 @@ fn execute_command_action(
             }
         }
         CommandId::Undo => {
-            if state.undo_busy {
+            if let Some(message) = state.automatic_review.undo_merge() {
+                state.status_message = Some(message);
+            } else if state.undo_busy {
                 state.status_message = Some("A file history operation is already running".into());
             } else if state.run_capabilities.session_persistence && state.current_session.is_some()
             {
@@ -22982,7 +23070,9 @@ fn execute_command_action(
             }
         }
         CommandId::Redo => {
-            if state.undo_busy {
+            if let Some(message) = state.automatic_review.redo_merge() {
+                state.status_message = Some(message);
+            } else if state.undo_busy {
                 state.status_message = Some("A file history operation is already running".into());
             } else if state.run_capabilities.session_persistence && state.current_session.is_some()
             {
@@ -39002,6 +39092,37 @@ fn finalize_completed_plain_response_or_pause(
     }
 }
 
+fn install_host_publish_card(state: &mut AppState) {
+    let turn = state.active_agent_turn_id.unwrap_or_else(uuid::Uuid::nil);
+    let model_question = state
+        .interaction
+        .as_ref()
+        .map(|item| item.request.question.clone());
+    let Some(card) = crate::publish_receipt::host_publish_card(
+        state.automatic_review.publish_receipts(),
+        turn,
+        model_question.as_deref(),
+    ) else {
+        return;
+    };
+    let request = crate::interaction::InteractionRequest {
+        question: card.text,
+        description: None,
+        mode: crate::interaction::InteractionMode::SingleChoice,
+        choices: card
+            .choices
+            .into_iter()
+            .map(|label| crate::interaction::InteractionChoice {
+                label: label.into(),
+                value: Some(label.into()),
+                description: None,
+            })
+            .collect(),
+        allow_other: false,
+    };
+    state.interaction = Some(crate::interaction::InteractionState::host(request));
+}
+
 fn finalize_completed_plain_response(
     state: &mut AppState,
     config: &CaConfig,
@@ -39011,6 +39132,17 @@ fn finalize_completed_plain_response(
     checkpoint_task_handle: &mut Option<tokio::task::JoinHandle<()>>,
     goal_task_handle: &mut Option<tokio::task::JoinHandle<()>>,
 ) {
+    let effort = state.reasoning_effort;
+    crate::turn_ledger::review_completed_turn(
+        &mut state.messages,
+        effort,
+        &mut state.automatic_review,
+        crate::turn_ledger::host_diff_reviewer,
+    );
+    if let Some(message) = state.messages.last_mut() {
+        crate::turn_ledger::apply_ledger(message);
+    }
+    install_host_publish_card(state);
     let choice_waiting = std::mem::take(&mut state.automatic_review.awaiting_choice);
     if !choice_waiting {
         if retry_empty_reply(state, config, stream_tx, cancel_handle) {
@@ -41227,7 +41359,7 @@ fn activate_next_manual_resolution(
                     .as_ref()
                     .is_none_or(|deck| deck.focused() == state.pane_id);
                 if focused {
-                    if let Some(execution) = reclassify_pending_approval(state, config, &approval) {
+                    if let Some(execution) = snapshot_then_reclassify(state, config, &approval) {
                         state.manual_resolutions.replace_current(
                             crate::interaction::PendingManualResolution::Execution(execution),
                         );
@@ -41355,6 +41487,104 @@ fn pane_execution_requires_focus(execution: &crate::interaction::PendingExecutio
             })
 }
 
+fn explicit_ask_blocks_yolo(config: &CaConfig, arguments: &serde_json::Value) -> bool {
+    let command = arguments
+        .get("command")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    config.permission_rules.iter().any(|rule| {
+        rule.decision == crate::permission::PermissionDecision::Ask
+            && match &rule.matcher {
+                crate::permission::PermissionMatcher::Tool { tool } => tool == "run_command",
+                crate::permission::PermissionMatcher::CommandPrefix { prefix } => command
+                    .split_whitespace()
+                    .take(prefix.len())
+                    .eq(prefix.iter().map(String::as_str)),
+                _ => false,
+            }
+    })
+}
+
+fn yolo_workspace_rm(
+    name: &str,
+    arguments: &serde_json::Value,
+    workspace: &std::path::Path,
+) -> bool {
+    if name != "run_command" {
+        return false;
+    }
+    let Some(command) = arguments.get("command").and_then(serde_json::Value::as_str) else {
+        return false;
+    };
+    let root = workspace
+        .canonicalize()
+        .unwrap_or_else(|_| workspace.to_path_buf());
+    let segments = crate::parity_backend::split_command_segments(command);
+    if segments.is_empty() {
+        return false;
+    }
+    for segment in segments {
+        let words = crate::parity_backend::shell_words(&segment);
+        if words.first().map(String::as_str) != Some("rm") {
+            return false;
+        }
+        let paths: Vec<_> = words
+            .iter()
+            .skip(1)
+            .filter(|word| !word.starts_with('-'))
+            .collect();
+        if paths.is_empty() {
+            return false;
+        }
+        for path in paths {
+            let candidate = {
+                let raw = std::path::Path::new(path);
+                if raw.is_absolute() {
+                    raw.to_path_buf()
+                } else {
+                    root.join(raw)
+                }
+            };
+            let inside = candidate.canonicalize().unwrap_or_else(|_| {
+                candidate
+                    .parent()
+                    .and_then(|parent| parent.canonicalize().ok())
+                    .and_then(|parent| candidate.file_name().map(|name| parent.join(name)))
+                    .unwrap_or(candidate.clone())
+            });
+            if !inside.starts_with(&root) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn take_workspace_snapshot(state: &AppState) -> bool {
+    let Some(root) = state.workspace.primary() else {
+        return false;
+    };
+    std::process::Command::new("git")
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .current_dir(&root.path)
+        .output()
+        .ok()
+        .is_some_and(|output| output.status.success() && output.stdout.starts_with(b"true"))
+}
+
+fn snapshot_then_reclassify(
+    state: &mut AppState,
+    config: &CaConfig,
+    approval: &PendingApproval,
+) -> Option<crate::interaction::PendingExecution> {
+    if state.approval == crate::app::ApprovalMode::AutoReview
+        && state.automatic_review.snapshot_ok.is_none()
+    {
+        state.automatic_review.snapshot_ok = Some(take_workspace_snapshot(state));
+    }
+    reclassify_pending_approval(state, config, approval)
+}
+
 fn reclassify_pending_approval(
     state: &AppState,
     config: &CaConfig,
@@ -41395,15 +41625,78 @@ fn reclassify_pending_approval(
         agent::registry::ToolOrigin::BuiltIn,
         false,
     );
+    let workspace_root = state
+        .workspace
+        .primary()
+        .map(|root| root.path.as_path())
+        .unwrap_or(std::path::Path::new("."));
+    let prefix_granted = state.approval_queue.granted_prefix().is_some_and(|prefix| {
+        approval.tool_name == "run_command"
+            && arguments
+                .get("command")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|command| command.split_whitespace().next() == Some(prefix))
+    });
+    let yolo = state.approval == crate::app::ApprovalMode::RunEverything;
+    let hold_auto_review_command = state.approval == crate::app::ApprovalMode::AutoReview
+        && approval.tool_name == "run_command"
+        && arguments
+            .get("command")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|command| command.contains("git push") || command.contains("bash"));
+    let snapshot_edit = state.approval == crate::app::ApprovalMode::AutoReview
+        && state.automatic_review.snapshot_ok == Some(true)
+        && matches!(
+            approval.tool_name.as_str(),
+            "write_file" | "edit_file" | "search_replace" | "apply_patch"
+        )
+        && !matches!(decision, crate::approval::BrokerDecision::DeniedByRule);
+    let inside_rm = yolo
+        && !explicit_ask_blocks_yolo(config, &arguments)
+        && yolo_workspace_rm(&approval.tool_name, &arguments, workspace_root);
+    let outside_rm = yolo
+        && approval.tool_name == "run_command"
+        && arguments
+            .get("command")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|command| command.split_whitespace().any(|word| word == "rm"))
+        && !yolo_workspace_rm(&approval.tool_name, &arguments, workspace_root);
+    if prefix_granted && !hold_auto_review_command {
+        return Some(crate::interaction::PendingExecution {
+            tool_name: approval.tool_name.clone(),
+            tool_args: approval.tool_args.clone(),
+            tool_id: approval.tool_id.clone(),
+            network_allowed: approval.network_requested,
+            pre_resolved: None,
+        });
+    }
     let pre_resolved = match decision {
         crate::approval::BrokerDecision::DeniedByRule => {
             Some(crate::agent::registry::ToolExecutionResult::Denied(
                 "Denied by current permission rule".into(),
             ))
         }
-        crate::approval::BrokerDecision::AllowedByRule => None,
+        crate::approval::BrokerDecision::AllowedByRule if hold_auto_review_command => {
+            return None;
+        }
         crate::approval::BrokerDecision::Prompt
-            if !tool_needs_approval(&approval.tool_name, &arguments, &state.approval) =>
+        | crate::approval::BrokerDecision::ExplicitPrompt
+            if hold_auto_review_command =>
+        {
+            return None;
+        }
+        crate::approval::BrokerDecision::AllowedByRule => None,
+        _ if snapshot_edit => None,
+        crate::approval::BrokerDecision::Prompt
+        | crate::approval::BrokerDecision::ExplicitPrompt
+            if outside_rm || explicit_ask_blocks_yolo(config, &arguments) =>
+        {
+            return None;
+        }
+        crate::approval::BrokerDecision::ExplicitPrompt if inside_rm => None,
+        crate::approval::BrokerDecision::Prompt
+            if !tool_needs_approval(&approval.tool_name, &arguments, &state.approval)
+                && !outside_rm =>
         {
             None
         }
@@ -42305,6 +42598,26 @@ fn apply_interaction_resolution(
         }
         _ => None,
     };
+    if let crate::interaction::InteractionOutcome::Answer(answer) = &resolution.outcome {
+        if state
+            .interaction
+            .as_ref()
+            .is_some_and(|item| item.request.question.starts_with("PUBLISH_RECEIPT"))
+        {
+            let turn = state.active_agent_turn_id.unwrap_or_else(uuid::Uuid::nil);
+            if let Some(choice) = answer.selected.first() {
+                if let Err(error) = crate::publish_receipt::resolve_host_publish_choice(
+                    state.automatic_review.publish_receipts(),
+                    turn,
+                    turn,
+                    choice,
+                ) {
+                    state.status_message = Some(error);
+                    return false;
+                }
+            }
+        }
+    }
     if !state.manual_resolutions.resolve_interaction(resolution.id) {
         return false;
     }
@@ -42362,7 +42675,12 @@ fn handle_resolution(
         .approval_queue
         .current()
         .map(|approval| approval.tool_id.clone());
-    let action = state.approval_queue.resolve();
+    let action = match state.approval_queue.current_card_id() {
+        Some(card_id) => state
+            .approval_queue
+            .decide(card_id, crate::app::CardAnswer::Deny),
+        None => crate::app::ResolutionAction::Idle,
+    };
     apply_resolution_action(
         state,
         &action,
@@ -54097,6 +54415,7 @@ command = "printf secret-command-marker"
                     participant: "focused-author".into(),
                     route: Some(route.clone()),
                     instructions: String::new(),
+                    evidence: None,
                 }],
                 review_loop: None,
                 implementation: None,
@@ -63988,6 +64307,118 @@ tools = ["read_file", "search_files", "list_dir"]
     }
 
     #[test]
+    fn yolo_runs_workspace_rm_and_still_cards_an_outside_path_and_an_ask_rule() {
+        let root = tempfile::tempdir().unwrap();
+        let inside = root.path().join("note.txt");
+        let other = root.path().join("other.txt");
+        std::fs::write(&inside, "a\n").unwrap();
+        std::fs::write(&other, "b\n").unwrap();
+        let mut state = AppState::new(crate::context::ShellHistory::in_memory());
+        state.workspace = workspace::WorkspaceContext::discover(root.path()).unwrap();
+        state.approval = ApprovalMode::RunEverything;
+        let config = CaConfig::default();
+        let approval = |command: &str, id: &str| PendingApproval {
+            tool_name: "run_command".into(),
+            tool_args: serde_json::json!({
+                "command": command,
+                "cwd": root.path(),
+                "background": false,
+                "network": false
+            })
+            .to_string(),
+            tool_id: id.into(),
+            network_requested: false,
+            email_preview: None,
+            email_draft_ref: None,
+        };
+        let one = approval(&format!("rm -f {}", inside.display()), "rm-1");
+        let two = approval(
+            &format!("rm -f {} && rm -f {}", inside.display(), other.display()),
+            "rm-2",
+        );
+        assert!(reclassify_pending_approval(&state, &config, &one).is_some());
+        assert!(reclassify_pending_approval(&state, &config, &two).is_some());
+        state.approval = ApprovalMode::Allowlist;
+        assert!(reclassify_pending_approval(&state, &config, &one).is_none());
+        state.approval = ApprovalMode::RunEverything;
+        let mut asking = config.clone();
+        asking.permission_rules.push(permission::PermissionRule {
+            decision: permission::PermissionDecision::Ask,
+            matcher: permission::PermissionMatcher::Tool {
+                tool: "run_command".into(),
+            },
+        });
+        assert!(reclassify_pending_approval(&state, &asking, &one).is_none());
+        let outside = approval("rm -f /etc/passwd", "rm-out");
+        assert!(reclassify_pending_approval(&state, &config, &outside).is_none());
+    }
+
+    #[test]
+    fn auto_review_snapshot_runs_an_edit_and_still_cards_push_and_bash() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("note.txt");
+        std::fs::write(&file, "old\n").unwrap();
+        let mut state = AppState::new(crate::context::ShellHistory::in_memory());
+        state.workspace = workspace::WorkspaceContext::discover(root.path()).unwrap();
+        state.approval = ApprovalMode::AutoReview;
+        let config = CaConfig::default();
+        let edit = PendingApproval {
+            tool_name: "search_replace".into(),
+            tool_args: serde_json::json!({"path": file, "old_string": "old", "new_string": "new"})
+                .to_string(),
+            tool_id: "edit".into(),
+            network_requested: false,
+            email_preview: None,
+            email_draft_ref: None,
+        };
+        let command = |command: &str, id: &str| PendingApproval {
+            tool_name: "run_command".into(),
+            tool_args: serde_json::json!({"command": command, "cwd": root.path()}).to_string(),
+            tool_id: id.into(),
+            network_requested: false,
+            email_preview: None,
+            email_draft_ref: None,
+        };
+        assert!(state.automatic_review.snapshot_ok.is_none());
+        assert!(snapshot_then_reclassify(&mut state, &config, &edit).is_some());
+        assert_eq!(state.automatic_review.snapshot_ok, Some(false));
+        assert!(snapshot_then_reclassify(
+            &mut state,
+            &config,
+            &command("git push origin main", "push")
+        )
+        .is_none());
+        assert!(std::process::Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(root.path())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success());
+        state.automatic_review.snapshot_ok = None;
+        assert!(snapshot_then_reclassify(&mut state, &config, &edit).is_some());
+        assert_eq!(state.automatic_review.snapshot_ok, Some(true));
+        assert!(reclassify_pending_approval(
+            &state,
+            &config,
+            &command("bash -c 'echo hi'", "bash")
+        )
+        .is_none());
+        assert!(reclassify_pending_approval(
+            &state,
+            &config,
+            &command("git push origin main", "push2")
+        )
+        .is_none());
+        state.approval = ApprovalMode::RunEverything;
+        state.automatic_review.snapshot_ok = None;
+        assert!(
+            reclassify_pending_approval(&state, &config, &command("cargo fmt", "fmt")).is_some()
+        );
+    }
+
+    #[test]
     fn interaction_answer_resolves_exact_call_once_without_user_message_or_draft_mutation() {
         let request =
             crate::interaction::InteractionRequest::from_legacy_question("Explain".into()).unwrap();
@@ -70490,6 +70921,7 @@ mod oracle_integration_tests {
                     participant: "a".into(),
                     route: None,
                     instructions: String::new(),
+                    evidence: None,
                 }],
                 review_loop: None,
                 implementation: None,

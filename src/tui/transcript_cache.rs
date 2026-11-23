@@ -158,6 +158,27 @@ fn line_bytes(line: &Line<'_>) -> usize {
             .sum::<usize>()
 }
 
+fn settle_transcript_line(line: Line<'static>) -> Line<'static> {
+    let style = line.style;
+    let alignment = line.alignment;
+    let spans = line
+        .spans
+        .into_iter()
+        .map(|span| {
+            let settled = crate::tui::output_layout::settle_transcript_text(span.content.as_ref());
+            if settled.as_str() == span.content.as_ref() {
+                span
+            } else {
+                Span::styled(settled, span.style)
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut settled = Line::from(spans);
+    settled.style = style;
+    settled.alignment = alignment;
+    settled
+}
+
 impl Layout {
     fn build(
         content: ConversationContent,
@@ -167,6 +188,12 @@ impl Layout {
         trailing_rows: u16,
         previous: BTreeMap<usize, Arc<Block>>,
     ) -> Self {
+        let mut content = content;
+        content.lines = content
+            .lines
+            .into_iter()
+            .map(settle_transcript_line)
+            .collect();
         let mut starts = Vec::with_capacity(content.lines.len() + 1);
         starts.push(0u32);
         let mut blocks = BTreeMap::new();
@@ -890,7 +917,10 @@ mod tests {
                     Span::styled("bold ", Style::default().add_modifier(Modifier::BOLD)),
                     Span::raw("ordinary"),
                 ]),
-            ];
+            ]
+            .into_iter()
+            .map(settle_transcript_line)
+            .collect::<Vec<_>>();
             let rows = Paragraph::new(Text::from(lines.clone()))
                 .wrap(Wrap { trim: false })
                 .line_count(width);
@@ -925,6 +955,54 @@ mod tests {
                 assert_eq!(actual, expected, "width={width}, top={top}");
             }
         }
+    }
+
+    #[test]
+    fn tabbed_diff_line_does_not_share_a_row_with_the_following_header() {
+        let plain = Line::from("no tabs here");
+        assert_eq!(settle_transcript_line(plain.clone()), plain);
+        let width = 24u16;
+        let tail = "d ? &hi : &fg, font,";
+        let diff = format!("+\t\t\t\t{tail}");
+        let header = "search_replace";
+        let layout = Layout::build(
+            ConversationContent {
+                lines: vec![Line::from(diff), Line::from(header)],
+                activity_headers: Vec::new(),
+                user_prompt_cards: Vec::new(),
+                links: Vec::new(),
+                omitted_earlier: 0,
+                selectable: Vec::new(),
+            },
+            width,
+            0,
+            12,
+            0,
+            BTreeMap::new(),
+        );
+        let painted = layout.blocks[&0].lines.clone();
+        let area = Rect::new(0, 0, width, 12);
+        let mut buffer = ratatui::buffer::Buffer::empty(area);
+        render_indexed(&painted, &layout.starts, 0, &mut buffer, area);
+        let header_row = layout.starts[1] as u16;
+        assert!(
+            header_row > 0,
+            "the diff line occupies the row above the header"
+        );
+        assert_eq!(buffer[(0, header_row)].symbol(), "s");
+        let row_text: String = (0..width)
+            .map(|column| buffer[(column, header_row)].symbol())
+            .collect();
+        assert!(row_text.contains(header));
+        assert!(!row_text.contains("font"));
+        assert!(!row_text.contains("hi"));
+        let mut above = String::new();
+        for row in 0..header_row {
+            for column in 0..width {
+                above.push_str(buffer[(column, row)].symbol());
+            }
+        }
+        assert!(above.contains("font"));
     }
 
     #[test]

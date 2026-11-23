@@ -66,6 +66,16 @@ pub struct WorkflowStep {
     pub route: Option<AgentRoute>,
     #[serde(default)]
     pub instructions: String,
+    /// Host evidence for a review stage. Absent keeps today's review behavior.
+    #[serde(default)]
+    pub evidence: Option<PlanStageEvidence>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanStageEvidence {
+    AssistantOutput,
+    ToolSuccess { tool: String },
 }
 
 fn default_review_passes() -> u8 {
@@ -101,6 +111,13 @@ pub enum PlanWorkflowArgs {
     Pause,
     Resume,
     Cancel,
+    SendBack {
+        stage: usize,
+        reason: String,
+    },
+    Note {
+        text: String,
+    },
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -112,6 +129,8 @@ enum WorkflowToolAction {
     Pause,
     Resume,
     Cancel,
+    SendBack,
+    Note,
 }
 
 /// Provider tools require an object root. Internal tagged-enum deserialization
@@ -127,6 +146,8 @@ struct WorkflowToolSchema {
     review_loop: Option<WorkflowReviewLoop>,
     implementation: Option<WorkflowStep>,
     step: Option<WorkflowStep>,
+    stage: Option<usize>,
+    reason: Option<String>,
 }
 
 impl JsonSchema for PlanWorkflowArgs {
@@ -235,6 +256,8 @@ pub struct WorkflowStage {
     pub participant: String,
     pub route: AgentRoute,
     pub instructions: String,
+    #[serde(default)]
+    pub evidence: Option<PlanStageEvidence>,
     pub status: WorkflowStageStatus,
     pub agent_id: Option<Uuid>,
     pub source_plan: Option<PlanBinding>,
@@ -243,6 +266,12 @@ pub struct WorkflowStage {
     pub feedback: Option<String>,
     pub accepted: Option<bool>,
     pub loop_stage: bool,
+    /// How many times this stage has been the send-back target. One is the limit.
+    #[serde(default)]
+    pub send_backs: u8,
+    /// The human reason from the last send-back that targeted this stage.
+    #[serde(default)]
+    pub send_back_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -262,6 +291,8 @@ pub struct PlanWorkflowState {
     pub implementation_authority: Option<ExecutionAuthority>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    #[serde(default)]
+    pub workspace_notes: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -357,6 +388,10 @@ impl PlanWorkflowState {
                     .result_summary
                     .as_ref()
                     .is_some_and(|summary| summary.len() > MAX_PLAN_BYTES)
+                || step
+                    .send_back_reason
+                    .as_ref()
+                    .is_some_and(|reason| reason.is_empty() || reason.len() > MAX_PLAN_BYTES)
             {
                 return Err("Invalid plan workflow stage".into());
             }
@@ -518,6 +553,7 @@ impl PlanWorkflowState {
             participant: step.participant,
             route,
             instructions: step.instructions,
+            evidence: step.evidence.clone(),
             status: WorkflowStageStatus::Pending,
             agent_id: None,
             source_plan: None,
@@ -526,6 +562,8 @@ impl PlanWorkflowState {
             feedback: None,
             accepted: None,
             loop_stage,
+            send_backs: 0,
+            send_back_reason: None,
         });
         Ok(())
     }
@@ -618,6 +656,7 @@ pub fn apply_action(
                 implementation_authority: implementation.as_ref().and(authority),
                 created_at: now,
                 updated_at: now,
+                workspace_notes: Vec::new(),
             };
             let mut ids = HashSet::new();
             for participant in participants {
@@ -632,6 +671,17 @@ pub fn apply_action(
             }
             if let Some(plan) = &work.plan {
                 workflow.add_snapshot(plan)?;
+            }
+            if implementation.as_ref().is_some_and(|step| {
+                step.role == WorkflowRole::Implement
+                    && steps.iter().any(|stage| {
+                        stage.role == WorkflowRole::Review
+                            && matches!(stage.evidence, Some(PlanStageEvidence::AssistantOutput))
+                    })
+            }) {
+                return Err(
+                    "A review stage needs a host check the implementer prose cannot satisfy".into(),
+                );
             }
             for step in steps {
                 if step.role == WorkflowRole::Implement {
@@ -648,6 +698,7 @@ pub fn apply_action(
                         participant: definition.reviewer,
                         route: None,
                         instructions: String::new(),
+                        evidence: None,
                     },
                     default_route,
                     true,
@@ -656,6 +707,14 @@ pub fn apply_action(
             if let Some(implementation) = implementation {
                 if implementation.role != WorkflowRole::Implement {
                     return Err("The final implementation stage must have role implement".into());
+                }
+                if workflow.steps.iter().any(|step| {
+                    step.role == WorkflowRole::Review
+                        && step.participant == implementation.participant
+                }) {
+                    return Err(
+                        "The review participant must differ from the implement participant".into(),
+                    );
                 }
                 if workflow.implementation_authority.is_none() {
                     return Err(
@@ -711,6 +770,7 @@ pub fn apply_action(
                     implementation_authority: None,
                     created_at: now,
                     updated_at: now,
+                    workspace_notes: Vec::new(),
                 });
                 candidate.as_mut().expect("created workflow")
             };
@@ -780,6 +840,64 @@ pub fn apply_action(
                     stage.status = WorkflowStageStatus::Cancelled;
                 }
             }
+        }
+        PlanWorkflowArgs::SendBack { stage, reason } => {
+            let workflow = candidate.as_mut().ok_or("No plan workflow")?;
+            if workflow.status == WorkflowStatus::Cancelled {
+                return Err("A cancelled plan workflow cannot be sent back".into());
+            }
+            let reason = reason.trim();
+            if reason.is_empty() || reason.len() > MAX_PLAN_BYTES {
+                return Err("Send-back needs a reason".into());
+            }
+            if stage >= workflow.steps.len() {
+                return Err("Send back names an earlier stage".into());
+            }
+            if workflow.steps[stage].send_backs >= 1 {
+                return Err("Send-back already used for this stage".into());
+            }
+            if stage >= workflow.cursor {
+                return Err("Send back names an earlier stage".into());
+            }
+            let reason = reason.to_string();
+            for (index, step) in workflow.steps.iter_mut().enumerate().skip(stage) {
+                step.status = WorkflowStageStatus::Pending;
+                step.agent_id = None;
+                step.result_summary = None;
+                step.feedback = None;
+                step.accepted = None;
+                step.result_snapshot = None;
+                if index == stage {
+                    step.send_backs = 1;
+                    step.send_back_reason = Some(reason.clone());
+                } else {
+                    step.send_back_reason = None;
+                }
+            }
+            workflow.cursor = stage;
+            workflow.status = WorkflowStatus::Running;
+            workflow.notice = None;
+        }
+        PlanWorkflowArgs::Note { text } => {
+            let workflow = candidate.as_mut().ok_or("No plan workflow")?;
+            if matches!(
+                workflow.status,
+                WorkflowStatus::Failed | WorkflowStatus::Cancelled | WorkflowStatus::Completed
+            ) {
+                return Err("A failed plan stays failed until it is sent back".into());
+            }
+            let sent_back = workflow
+                .steps
+                .iter()
+                .any(|stage| stage.send_back_reason.is_some());
+            if workflow.status != WorkflowStatus::Paused && !sent_back {
+                return Err("Record a workspace note while the plan is paused or sent back".into());
+            }
+            let text = text.trim();
+            if text.is_empty() {
+                return Err("A workspace note needs text".into());
+            }
+            workflow.workspace_notes.push(text.to_string());
         }
         PlanWorkflowArgs::Status => unreachable!(),
     }
@@ -889,6 +1007,17 @@ pub fn next_dispatch(work: &WorkState) -> Result<Option<PlanWorkflowDispatch>, S
     prompt.data(&format!(
         "\n\nCurrent plan:\n{current}\n\nCommitted exchange context:\n{contributions}"
     ));
+    if let Some(reason) = &stage.send_back_reason {
+        prompt.data("\n\nSend-back reason:\n");
+        prompt.data(reason);
+    }
+    if !workflow.workspace_notes.is_empty() {
+        prompt.data("\n\nWorkspace notes:\n");
+        for note in &workflow.workspace_notes {
+            prompt.data(note);
+            prompt.data("\n");
+        }
+    }
     Ok(Some(PlanWorkflowDispatch {
         workflow_id: workflow.id,
         stage_id: stage.id,
@@ -1150,6 +1279,7 @@ fn complete_stage_inner(
                         participant,
                         route: None,
                         instructions: String::new(),
+                        evidence: None,
                     },
                     &default_route,
                     true,
@@ -1327,6 +1457,7 @@ mod tests {
             participant: participant.into(),
             route: None,
             instructions: String::new(),
+            evidence: None,
         }
     }
 
@@ -1409,7 +1540,16 @@ mod tests {
         assert_eq!(schema["required"], serde_json::json!(["action"]));
         assert_eq!(
             schema["definitions"]["WorkflowToolAction"]["enum"],
-            serde_json::json!(["start", "handoff", "status", "pause", "resume", "cancel"])
+            serde_json::json!([
+                "start",
+                "handoff",
+                "status",
+                "pause",
+                "resume",
+                "cancel",
+                "send_back",
+                "note"
+            ])
         );
         for field in [
             "action",
@@ -1549,6 +1689,246 @@ mod tests {
         assert_eq!(
             work.plan.as_ref().unwrap().status,
             crate::work::PlanStatus::Proposed
+        );
+    }
+
+    #[test]
+    fn send_back_reopens_an_earlier_stage_once_and_fail_stage_still_ends_the_run() {
+        let mut work = WorkState::default();
+        apply_action(
+            &mut work,
+            PlanWorkflowArgs::Start {
+                goal: "Build the requested feature".into(),
+                participants: vec![
+                    WorkflowParticipantInput {
+                        id: "a".into(),
+                        route: Some(route("provider-a")),
+                    },
+                    WorkflowParticipantInput {
+                        id: "b".into(),
+                        route: Some(route("provider-b")),
+                    },
+                ],
+                steps: vec![
+                    step(WorkflowRole::Author, "a"),
+                    step(WorkflowRole::Review, "b"),
+                ],
+                review_loop: None,
+                implementation: None,
+            },
+            &route("default"),
+            None,
+        )
+        .unwrap();
+        let first = next_dispatch(&work).unwrap().unwrap();
+        finish(&mut work, proposal("Plan"));
+        let reason = "Rewrite the approach";
+        apply_action(
+            &mut work,
+            PlanWorkflowArgs::SendBack {
+                stage: 0,
+                reason: reason.into(),
+            },
+            &route("default"),
+            None,
+        )
+        .unwrap();
+        let workflow = work.plan_workflow.as_ref().unwrap();
+        assert_eq!(workflow.status, WorkflowStatus::Running);
+        assert_eq!(workflow.cursor, 0);
+        assert_eq!(workflow.steps[0].status, WorkflowStageStatus::Pending);
+        assert_eq!(workflow.steps[0].send_back_reason.as_deref(), Some(reason));
+        assert_eq!(workflow.steps[1].status, WorkflowStageStatus::Pending);
+        let second = next_dispatch(&work).unwrap().unwrap();
+        assert_eq!(
+            second.prompt,
+            format!("{}\n\nSend-back reason:\n{reason}", first.prompt)
+        );
+        let before = work.clone();
+        assert!(apply_action(
+            &mut work,
+            PlanWorkflowArgs::SendBack {
+                stage: 0,
+                reason: "Again".into(),
+            },
+            &route("default"),
+            None,
+        )
+        .unwrap_err()
+        .contains("already used"));
+        assert_eq!(work, before);
+        fail_stage(&mut work, None, "stop");
+        assert_eq!(
+            work.plan_workflow.as_ref().unwrap().status,
+            WorkflowStatus::Failed
+        );
+    }
+
+    #[test]
+    fn review_participant_must_differ_from_the_implement_participant() {
+        let authority = Some(ExecutionAuthority {
+            source_user_message: 0,
+            source_request_sha256: "a".repeat(64),
+        });
+        let participants = vec![
+            WorkflowParticipantInput {
+                id: "a".into(),
+                route: Some(route("provider-a")),
+            },
+            WorkflowParticipantInput {
+                id: "b".into(),
+                route: Some(route("provider-b")),
+            },
+        ];
+        let mut work = WorkState::default();
+        let err = apply_action(
+            &mut work,
+            PlanWorkflowArgs::Start {
+                goal: "Build the requested feature".into(),
+                participants: participants.clone(),
+                steps: vec![
+                    step(WorkflowRole::Author, "a"),
+                    step(WorkflowRole::Review, "a"),
+                ],
+                review_loop: None,
+                implementation: Some(step(WorkflowRole::Implement, "a")),
+            },
+            &route("default"),
+            authority.clone(),
+        )
+        .unwrap_err();
+        assert!(err.contains("differ"));
+        assert!(work.plan_workflow.is_none());
+        let err = apply_action(
+            &mut work,
+            PlanWorkflowArgs::Start {
+                goal: "Build the requested feature".into(),
+                participants: participants.clone(),
+                steps: vec![step(WorkflowRole::Author, "a")],
+                review_loop: Some(WorkflowReviewLoop {
+                    reviewer: "a".into(),
+                    reviser: "b".into(),
+                    max_review_passes: 2,
+                }),
+                implementation: Some(step(WorkflowRole::Implement, "a")),
+            },
+            &route("default"),
+            authority.clone(),
+        )
+        .unwrap_err();
+        assert!(err.contains("differ"));
+        apply_action(
+            &mut work,
+            PlanWorkflowArgs::Start {
+                goal: "Build the requested feature".into(),
+                participants,
+                steps: vec![
+                    step(WorkflowRole::Author, "a"),
+                    step(WorkflowRole::Review, "b"),
+                ],
+                review_loop: None,
+                implementation: Some(step(WorkflowRole::Implement, "a")),
+            },
+            &route("default"),
+            authority,
+        )
+        .unwrap();
+        assert_eq!(
+            work.plan_workflow.as_ref().unwrap().status,
+            WorkflowStatus::Running
+        );
+    }
+
+    #[test]
+    fn assistant_output_review_fails_at_start_and_a_paused_note_reaches_the_next_stage() {
+        let authority = Some(ExecutionAuthority {
+            source_user_message: 0,
+            source_request_sha256: "a".repeat(64),
+        });
+        let participants = vec![
+            WorkflowParticipantInput {
+                id: "a".into(),
+                route: Some(route("provider-a")),
+            },
+            WorkflowParticipantInput {
+                id: "b".into(),
+                route: Some(route("provider-b")),
+            },
+        ];
+        let mut blocked = step(WorkflowRole::Review, "b");
+        blocked.evidence = Some(PlanStageEvidence::AssistantOutput);
+        let mut work = WorkState::default();
+        let err = apply_action(
+            &mut work,
+            PlanWorkflowArgs::Start {
+                goal: "Build the requested feature".into(),
+                participants: participants.clone(),
+                steps: vec![step(WorkflowRole::Author, "a"), blocked],
+                review_loop: None,
+                implementation: Some(step(WorkflowRole::Implement, "a")),
+            },
+            &route("default"),
+            authority.clone(),
+        )
+        .unwrap_err();
+        assert!(err.contains("host check"));
+        assert!(work.plan_workflow.is_none());
+        let mut allowed = step(WorkflowRole::Review, "b");
+        allowed.evidence = Some(PlanStageEvidence::ToolSuccess {
+            tool: "cargo test".into(),
+        });
+        apply_action(
+            &mut work,
+            PlanWorkflowArgs::Start {
+                goal: "Build the requested feature".into(),
+                participants,
+                steps: vec![step(WorkflowRole::Author, "a"), allowed],
+                review_loop: None,
+                implementation: Some(step(WorkflowRole::Implement, "a")),
+            },
+            &route("default"),
+            authority,
+        )
+        .unwrap();
+        finish(&mut work, proposal("Plan"));
+        assert_eq!(
+            work.plan_workflow.as_ref().unwrap().steps[0].status,
+            WorkflowStageStatus::Completed
+        );
+        apply_action(&mut work, PlanWorkflowArgs::Pause, &route("default"), None).unwrap();
+        apply_action(
+            &mut work,
+            PlanWorkflowArgs::Note {
+                text: "parent workspace note".into(),
+            },
+            &route("default"),
+            None,
+        )
+        .unwrap();
+        apply_action(&mut work, PlanWorkflowArgs::Resume, &route("default"), None).unwrap();
+        let dispatch = next_dispatch(&work).unwrap().unwrap();
+        assert!(dispatch.prompt.contains("parent workspace note"));
+        assert_eq!(
+            work.plan_workflow.as_ref().unwrap().steps[0].status,
+            WorkflowStageStatus::Completed
+        );
+        fail_stage(&mut work, None, "stop");
+        assert_eq!(
+            work.plan_workflow.as_ref().unwrap().status,
+            WorkflowStatus::Failed
+        );
+        assert!(apply_action(
+            &mut work,
+            PlanWorkflowArgs::Note {
+                text: "too late".into(),
+            },
+            &route("default"),
+            None,
+        )
+        .is_err());
+        assert_eq!(
+            work.plan_workflow.as_ref().unwrap().status,
+            WorkflowStatus::Failed
         );
     }
 

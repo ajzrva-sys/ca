@@ -37,6 +37,49 @@ pub(crate) struct ReviewTracker {
     carried_publish: Vec<crate::publish_receipt::PublishReceipt>,
     carried_covers: bool,
     carried_approved: bool,
+    pub snapshot_ok: Option<bool>,
+    pub diff_review: bool,
+    pub reviewed: bool,
+    pub(crate) merge_batch: Option<crate::parallel_parts::MergeBatch>,
+    pub(crate) parallel_child_running: bool,
+    pub(crate) merge_undone: bool,
+}
+
+impl ReviewTracker {
+    pub(crate) fn undo_merge(&mut self) -> Option<String> {
+        if self.parallel_child_running || crate::parallel_parts::any_running() {
+            return Some("Discard of a running child is refused".into());
+        }
+        if self.merge_batch.is_none() {
+            self.merge_batch = crate::parallel_parts::stored_merge();
+            self.merge_undone = false;
+        }
+        let batch = self.merge_batch.as_ref()?;
+        if self.merge_undone {
+            return None;
+        }
+        match crate::parallel_parts::restore_before(batch) {
+            Ok(()) => {
+                self.merge_undone = true;
+                Some("Restored the parent bytes from before the merge".into())
+            }
+            Err(error) => Some(error),
+        }
+    }
+
+    pub(crate) fn redo_merge(&mut self) -> Option<String> {
+        if !self.merge_undone {
+            return None;
+        }
+        let batch = self.merge_batch.as_ref()?;
+        match crate::parallel_parts::restore_after(batch) {
+            Ok(()) => {
+                self.merge_undone = false;
+                Some("Restored the merged bytes".into())
+            }
+            Err(error) => Some(error),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -257,6 +300,10 @@ impl ReviewTracker {
 
     pub(crate) fn has_publish_receipt(&self) -> bool {
         !self.publish_receipts.is_empty()
+    }
+
+    pub(crate) fn publish_receipts(&self) -> &[crate::publish_receipt::PublishReceipt] {
+        &self.publish_receipts
     }
 
     pub(crate) fn publish_status(&self) -> String {

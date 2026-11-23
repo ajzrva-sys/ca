@@ -8,6 +8,8 @@ Install receipts that used to fill this file are in [docs/archive/NEXT_STEPS-ins
 
 `python3 scripts/check-pyramid.py` is the comment ceiling, the `src/tui/` blocking-call ban, and the oracle include ban. It is not a new ExecPlan. Do not start another file in `docs/exec-plans/active/` unless the task names it. [verify-drive](docs/exec-plans/active/verify-drive.md) is the named plan for an opt-in proof file, an isolated in-process driver, and `ca verify`. M1 through M3 are in ca 0.1.187. M4 and M5 stay unstarted.
 
+ca 0.1.205 writes a high-effort diff concern and one follow-up edit onto the plain message after an earlier edit. An empty answer records `ran: false` on that message and still finishes. A parallel child keeps the user task. `finish` clears that worktree path, and the merge runs only after every part of the job is idle. LoopForge slice 2 and verify-drive M4 and M5 stay unstarted. Focused check `scratch/check-change/runs/20261123T045605Z-88452/report.json` passed. It is not a full gate. A new process is required. The 0.1.204 check `scratch/check-change/runs/20261123T043951Z-87241/report.json` passed for the earlier wiring.
+
 The provider filter and project-privacy rewriter are removed in ca 0.1.181. The plan is [docs/exec-plans/completed/remove-filter.md](docs/exec-plans/completed/remove-filter.md). `[provider_filter]` still parses and does nothing. The previous sources are in [docs/archive/filter-removed-2026-11-18/](docs/archive/filter-removed-2026-11-18/). Focused check `scratch/check-change/runs/20261118T122653Z-6694/report.json` passed. It is not a full gate. A new process is required.
 
 The latest local fix is ca 0.1.167. Shift+Tab cycles Normal, Plan, Auto-review, and Always-approve. The installed file matches candidate `41c41bf9d7ec5218887df025b5df548114b26de8c78725f626aabc16408825eb`. Focused check `scratch/check-change/runs/20261117T032757Z-88374/report.json` passed. A batch that completes the goal and then waits for approval keeps that goal completed. Tool dispatch publishes the active `/goal` goal before `update_goal` and copies it back after. `scheduler_create` enables a `ScheduleStoreV2` record that `claim_due` can run and honors `fire_immediately`. The built-in spec count is 126. ca 0.1.162 added `search_replace`, `todo_write`, `update_goal`, `enter_plan_mode`, `exit_plan_mode`, `lsp`, `scheduler_create`, `scheduler_list`, `scheduler_delete`, and `monitor`. ca 0.1.163 added `image_gen`, `image_edit`, `image_to_video`, and `reference_to_video`. Focused check `scratch/check-change/runs/20261117T030121Z-87653/report.json` passed. Those receipts are not a full gate. A new process is required. `workflow` stays unspecified and is not added. verify-drive is the named plan; do not start a different file in `docs/exec-plans/active/`.
@@ -17,52 +19,29 @@ The latest local fix is ca 0.1.167. Shift+Tab cycles Normal, Plan, Auto-review, 
 Status: Done
 Priority: High
 
-M0 through M5 are finished. A live cheaper-quality claim stays separately authorized and is not started. Do not start another file in `docs/exec-plans/active/` unless the task names that plan. The hold list is in [docs/exec-plans/README.md](docs/exec-plans/README.md).
-
-Allowed files:
-- The allowed set in [docs/exec-plans/active/AGT-271-task-first-economic-delegation.md](docs/exec-plans/active/AGT-271-task-first-economic-delegation.md)
-
-Forbidden files:
-- Anything that plan does not name
-- `oracles/`, `reference/`, `ca-hrs-252/`
+Closed record. M0 through M5 are finished. A live cheaper-quality claim stays separately authorized and is not started. The open named plan is [verify-drive](docs/exec-plans/active/verify-drive.md) M4 and M5. Do not start another file in `docs/exec-plans/active/` unless the task names it. The hold list is in [docs/exec-plans/README.md](docs/exec-plans/README.md).
 
 Context:
-- The plan status is DESIGN READY. Source audit is recorded there. Implementation and runtime acceptance are the remaining work.
+- Closed. M0 through M5 are checked in the plan. The live cheaper-quality claim is not started.
+- The open named plan is verify-drive M4 and M5.
 - ORC-291's progress boxes are all checked, including install as 0.1.26, so it is not the continuation.
 
-Reference parity:
-- Reference: N/A
-- Match: the plan's own acceptance fixture
-- Do not match/copy: N/A
-- Verification method: the checks named in the plan
-
 Instructions:
-1. Read the plan and the files it names. Follow `.agent/PLANS.md`.
-2. M5 is done. `economic_delegation_acceptance_fixture` is the credentialless acceptance fixture. A live cheaper-quality claim stays separately authorized. Do not add a second mechanical executor.
-3. Update the plan's progress as the steps finish.
+1. Do not implement this plan. It is finished.
+2. The open work is verify-drive M4 and M5.
+3. A live cheaper-quality claim stays separately authorized. Do not add a second mechanical executor.
 
 Acceptance criteria:
 - M0 is recorded: the test exists, production code is unchanged, and the focused compile failed on the missing function.
 - M5 is recorded: `economic_delegation_acceptance_fixture` passes without a provider credential. A live cheaper-quality claim stays separately authorized.
-- `NEXT_STEPS.md` still names this plan.
-
-Tests:
-- The focused checks written in the plan. No command is added here.
-
-Discovery budget:
-- The plan, `ARCHITECTURE.md`, and the source files the plan names. Stop if the plan's files are gone.
-
-Stop conditions:
-- Stop if the plan's design and the source disagree.
-- Stop if a different plan would have to change.
-- Stop if validation needs a live provider the plan does not already authorize.
+- This file still names the finished plan.
 
 ## MAIN-SPLIT: Move seams out of main.rs
 
 Status: Stopped
 Priority: Low
 
-The tool-dispatch and turn functions call the private functions that fill `src/main.rs`. Moving one of them does not compile unless those functions move with it or gain a new interface. That is not a straight move. Do not start it ahead of AGT-271 M5.
+The tool-dispatch and turn functions call the private functions that fill `src/main.rs`. Moving one of them does not compile unless those functions move with it or gain a new interface. That is not a straight move. AGT-271 M5 is finished. This stays stopped. The open named plan is verify-drive.
 
 ## GRD-010: Check new ExecPlans for required sections
 

@@ -5393,6 +5393,7 @@ fn key_line(state: &AppState) -> String {
         };
     }
     if state.approval_queue.current().is_some()
+        && state.approval != crate::app::ApprovalMode::RunEverything
         && !crate::tui::input::composer_keeps_keys_during_approval(state)
     {
         return "[y] run · [n] deny · [a] yolo · [e] edit".into();
@@ -7419,7 +7420,7 @@ fn approval_card_lines(state: &AppState, width: u16) -> Vec<Line<'static>> {
         let theme = palette(state);
         lines.push(Line::from(vec![
             Span::styled("    Reason: ", Style::default().fg(theme.muted)),
-            Span::styled(reason, Style::default().fg(theme.approval_pending)),
+            Span::styled(reason.clone(), Style::default().fg(theme.approval_pending)),
             Span::styled(" · [g] ", Style::default().fg(theme.muted)),
             Span::styled(
                 current_run_scope,
@@ -7432,11 +7433,14 @@ fn approval_card_lines(state: &AppState, width: u16) -> Vec<Line<'static>> {
         if crate::tui::input::composer_keeps_keys_during_approval(state) {
             lines.push(approval_typing_line(state));
         } else {
-            lines.push(Line::from(vec![
+            let mut keys = vec![
                 Span::styled("  [y] run  ", Style::default().fg(theme.approval_accept)),
                 Span::styled("[n] deny  ", Style::default().fg(theme.approval_deny)),
-                Span::styled("[a] yolo", Style::default().fg(theme.accent)),
-            ]));
+            ];
+            if state.approval != crate::app::ApprovalMode::RunEverything {
+                keys.push(Span::styled("[a] yolo", Style::default().fg(theme.accent)));
+            }
+            lines.push(Line::from(keys));
             lines.push(Line::from(vec![
                 Span::styled("  [e] edit  ", Style::default().fg(theme.approval_pending)),
                 Span::styled("[s] tool always  ", Style::default().fg(theme.accent)),
@@ -7836,35 +7840,64 @@ fn inline_command_editor_lines(
     lines
 }
 
-fn approval_reason_and_scope(pa: &crate::app::PendingApproval) -> (&'static str, &'static str) {
+fn outside_rm_path(command: &str) -> Option<String> {
+    for segment in crate::parity_backend::split_command_segments(command) {
+        let words = crate::parity_backend::shell_words(&segment);
+        if words.first().map(String::as_str) != Some("rm") {
+            continue;
+        }
+        if let Some(path) = words
+            .iter()
+            .skip(1)
+            .find(|word| !word.starts_with('-') && word.starts_with('/'))
+        {
+            return Some(path.clone());
+        }
+    }
+    None
+}
+
+fn approval_reason_and_scope(pa: &crate::app::PendingApproval) -> (String, &'static str) {
     if pa.tool_name == "run_command" {
-        let compound = serde_json::from_str::<serde_json::Value>(&pa.tool_args)
+        let command = serde_json::from_str::<serde_json::Value>(&pa.tool_args)
             .ok()
-            .and_then(|arguments| arguments["command"].as_str().map(str::to_string))
-            .is_some_and(|command| {
-                command
-                    .chars()
-                    .any(|character| matches!(character, ';' | '|' | '&' | '$' | '`'))
-            });
+            .and_then(|arguments| arguments["command"].as_str().map(str::to_string));
+        if let Some(path) = command.as_deref().and_then(outside_rm_path) {
+            return (
+                format!("rm outside the workspace: {path}"),
+                "this exact command for this run",
+            );
+        }
+        let compound = command.as_ref().is_some_and(|command| {
+            command
+                .chars()
+                .any(|character| matches!(character, ';' | '|' | '&' | '$' | '`'))
+        });
         return if compound && pa.network_requested {
             (
-                "compound shell syntax · network requested",
+                "compound shell syntax · network requested".into(),
                 "this exact command for this run",
             )
         } else if compound {
-            ("compound shell syntax", "this exact command for this run")
+            (
+                "compound shell syntax".into(),
+                "this exact command for this run",
+            )
         } else if pa.network_requested {
             (
-                "local process · network requested",
+                "local process · network requested".into(),
                 "this exact command for this run",
             )
         } else {
-            ("local process execution", "this exact command for this run")
+            (
+                "local process execution".into(),
+                "this exact command for this run",
+            )
         };
     }
     if pa.network_requested {
         return (
-            "network-capable tool execution",
+            "network-capable tool execution".into(),
             "this tool call for this run",
         );
     }
@@ -7877,13 +7910,16 @@ fn approval_reason_and_scope(pa: &crate::app::PendingApproval) -> (&'static str,
             | "delete_file"
             | "create_directory"
     ) {
-        return ("workspace write", "this file for this run");
+        return ("workspace write".into(), "this file for this run");
     }
     if pa.tool_name == "activate_skill" {
-        return ("instructions change", "this exact activation for this run");
+        return (
+            "instructions change".into(),
+            "this exact activation for this run",
+        );
     }
     (
-        "tool requires consent",
+        "tool requires consent".into(),
         "this exact invocation for this run",
     )
 }
@@ -7923,10 +7959,14 @@ fn approval_argument_lines(
             .and_then(|arguments| arguments["command"].as_str());
         if let Some(command) = command {
             let safe = crate::approval_display::command_preview(command).replace('\n', " ");
-            let mut rendered = vec![Line::from(Span::styled(
-                fit_approval_row("    Command: ", &safe, width),
-                Style::default().fg(theme.muted),
-            ))];
+            let wrapped = crate::tui::output_layout::wrap_cells(
+                &format!("    Command: {safe}"),
+                usize::from(width).saturating_sub(2).max(1),
+            );
+            let mut rendered: Vec<Line<'static>> = wrapped
+                .into_iter()
+                .map(|row| Line::from(Span::styled(row, Style::default().fg(theme.muted))))
+                .collect();
             if let Some(cwd) = arguments
                 .as_ref()
                 .and_then(|arguments| arguments["cwd"].as_str())

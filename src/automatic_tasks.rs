@@ -278,6 +278,7 @@ pub(crate) fn reviewed_execution_fixture() -> WorkState {
                 participant: "author".into(),
                 route: None,
                 instructions: String::new(),
+                evidence: None,
             }],
             review_loop: None,
             implementation: None,

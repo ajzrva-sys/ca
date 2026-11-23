@@ -479,6 +479,7 @@ fn plan_workflow_render_state() -> AppState {
                     participant: "author".into(),
                     route: Some(route.clone()),
                     instructions: String::new(),
+                    evidence: None,
                 },
                 WorkflowStep {
                     role: WorkflowRole::Review,
@@ -488,12 +489,14 @@ fn plan_workflow_render_state() -> AppState {
                         model: "review-model".into(),
                     }),
                     instructions: String::new(),
+                    evidence: None,
                 },
                 WorkflowStep {
                     role: WorkflowRole::Revise,
                     participant: "author".into(),
                     route: None,
                     instructions: String::new(),
+                    evidence: None,
                 },
             ],
             review_loop: None,
@@ -2917,6 +2920,7 @@ fn running_grok_plan_author_is_visible_without_prompt_tail() {
                     participant: "focused-author".into(),
                     route: Some(route),
                     instructions: "Author a focused task map".into(),
+                    evidence: None,
                 }],
                 review_loop: None,
                 implementation: None,
@@ -3022,6 +3026,7 @@ fn waiting_plan_author_shows_the_phase_and_stream_preview() {
                     participant: "focused-author".into(),
                     route: Some(route),
                     instructions: "Author a focused task map".into(),
+                    evidence: None,
                 }],
                 review_loop: None,
                 implementation: None,
@@ -5145,6 +5150,7 @@ fn fresh_context_review_snapshots() {
             line_end: 1848,
             confidence: 96,
             suggested_validation: "Add a fake-provider premature EOF test.".into(),
+            fix: None,
         }],
     };
     state.pager_open = true;
@@ -5702,6 +5708,32 @@ fn bounded_tool_output_snapshots() {
             render_to_text(&state, 60, 24)
         )
     );
+}
+
+#[test]
+fn outside_rm_card_names_the_path_wraps_the_command_and_hides_yolo_when_already_yolo() {
+    let mut state = test_state();
+    state.approval = crate::app::ApprovalMode::RunEverything;
+    let command = format!("rm -f /etc/passwd && echo {}", "outside-rm-tail-marker");
+    state.approval_queue.begin_batch(vec![PendingApproval {
+        tool_name: "run_command".into(),
+        tool_args: serde_json::json!({"command": command, "cwd": "/tmp"}).to_string(),
+        tool_id: "rm-out".into(),
+        network_requested: false,
+        email_preview: None,
+        email_draft_ref: None,
+    }]);
+    let yolo = render_to_text(&state, 100, 30);
+    assert!(
+        yolo.contains("rm outside the workspace: /etc/passwd"),
+        "{yolo}"
+    );
+    assert!(yolo.contains("outside-rm-tail-marker"));
+    assert!(!yolo.contains("[a] yolo"));
+    assert!(!yolo.contains("[y] run · [n] deny"));
+    state.approval = crate::app::ApprovalMode::Allowlist;
+    let allowlist = render_to_text(&state, 80, 24);
+    assert!(allowlist.contains("[a] yolo"));
 }
 
 #[test]

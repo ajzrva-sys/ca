@@ -97,6 +97,7 @@ fn queue_handoff(
             participant,
             route,
             instructions,
+            evidence: None,
         },
     });
     close_reader(state);
@@ -328,6 +329,21 @@ pub fn manage_command(state: &mut AppState, arguments: &str) -> Result<bool, Str
                 "resume" => crate::plan_workflow::PlanWorkflowArgs::Resume,
                 "cancel" => crate::plan_workflow::PlanWorkflowArgs::Cancel,
                 _ => crate::plan_workflow::PlanWorkflowArgs::Status,
+            });
+        }
+        "send-back" => {
+            let (index, reason) = value.split_once(char::is_whitespace).ok_or(
+                "Use /plan send-back <stage number> <reason>.",
+            )?;
+            let shown = index
+                .parse::<usize>()
+                .map_err(|_| "Stage number must be the number shown in plan status.".to_string())?;
+            if shown == 0 || reason.trim().is_empty() {
+                return Err("Use /plan send-back <stage number> <reason>.".into());
+            }
+            state.plan_workflow_request = Some(crate::plan_workflow::PlanWorkflowArgs::SendBack {
+                stage: shown - 1,
+                reason: reason.trim().to_string(),
             });
         }
         "comments" => {
@@ -984,6 +1000,7 @@ mod tests {
                     participant: "reviewer".into(),
                     route: None,
                     instructions: String::new(),
+                    evidence: None,
                 }],
                 review_loop: None,
                 implementation: None,

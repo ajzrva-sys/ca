@@ -1,3 +1,5 @@
+This is the named continuation. M4 and M5 are unstarted. Do not start another file in `active/` unless the task names it.
+
 # verify-drive — Proof an agent can rerun
 
 Status: ACTIVE
@@ -121,6 +123,7 @@ Blocked checks: `./scripts/verify.sh` is not required. No spawned-PTY proof. No 
 
 - The default status line does not include the mode field. Shift+Tab sets `status_message`, which render shows as a toast. The script asserts that toast text. The driver also puts `StatusField::Mode` on the fixture status line so `mode plan` is in the same frame.
 - `scripts/verify.py` `source_inventory` did not copy `.ca`. `every_feature_script_drives` walks `CARGO_MANIFEST_DIR/.ca/skills/verify-ca/references/features`, and check-change sets that root to the copied slot. The names list now includes `".ca/skills/verify-ca"` after `.codex/hooks.json`. That file was not on the allowed list above. Do not add more inventory names for this plan.
+- The 0.1.187 drive transcript recorded `Always-approve`. Current `status_message` is `Yolo` in `src/tui/input.rs`. The completion record below keeps the original receipt sentence.
 
 ## Recovery and Rollback
 

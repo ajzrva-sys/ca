@@ -41,6 +41,27 @@ pub struct ReviewFinding {
     #[schemars(range(min = 0, max = 100))]
     pub confidence: u8,
     pub suggested_validation: String,
+    #[serde(default)]
+    pub fix: Option<String>,
+}
+
+pub fn apply_finding_prompt(findings: &[ReviewFinding]) -> Result<String, String> {
+    let Some(first) = findings.first() else {
+        return Err("no finding".into());
+    };
+    let Some(fix) = first.fix.as_deref() else {
+        return Err("finding has no fix".into());
+    };
+    let prompt = format!(
+        "Apply this finding only in {}.\n{fix}\nValidate: {}\n",
+        first.file, first.suggested_validation
+    );
+    if let Some(second) = findings.get(1) {
+        if prompt.contains(&second.title) {
+            return Err("prompt included another finding".into());
+        }
+    }
+    Ok(prompt)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -271,9 +292,56 @@ impl ReviewResult {
                 finding.rationale,
                 finding.suggested_validation
             ));
+            if finding.fix.is_some() {
+                output.push_str("\nApply");
+            }
         }
         output
     }
+}
+
+pub fn apply_spawn_request(
+    mut request: crate::agent::subagent::AgentSpawnRequest,
+    findings: &[ReviewFinding],
+) -> Result<crate::agent::subagent::AgentSpawnRequest, String> {
+    request.task = apply_finding_prompt(findings)?;
+    request.isolation = crate::agent::subagent::AgentIsolation::Shared;
+    request.reads_only = false;
+    Ok(request)
+}
+
+pub fn judge_apply(
+    task: &str,
+    edited: &[String],
+    successful_tools: &[String],
+) -> Result<(), String> {
+    let named = task
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("Apply this finding only in "))
+        .and_then(|line| line.strip_suffix('.'))
+        .ok_or_else(|| "apply prompt has no file".to_string())?;
+    let validation = task
+        .lines()
+        .find_map(|line| line.strip_prefix("Validate: "))
+        .ok_or_else(|| "apply prompt has no validation".to_string())?;
+    let named_path = std::path::Path::new(named);
+    let mut named_edited = false;
+    for path in edited {
+        let edited_path = std::path::Path::new(path);
+        if edited_path == named_path || edited_path.ends_with(named_path) {
+            named_edited = true;
+        } else {
+            return Err(format!("edit outside the named file: {path}"));
+        }
+    }
+    if !named_edited {
+        return Err("named file was not edited".into());
+    }
+    if !successful_tools.iter().any(|tool| tool == validation) {
+        return Err("named file was not validated".into());
+    }
+    Ok(())
 }
 
 pub async fn run_review<B: ChatBackend + ?Sized>(
@@ -560,6 +628,52 @@ mod tests {
     use std::sync::Mutex;
     use tempfile::TempDir;
     use tokio::sync::mpsc;
+
+    fn finding(title: &str, file: &str, fix: Option<&str>) -> ReviewFinding {
+        ReviewFinding {
+            severity: ReviewSeverity::High,
+            title: title.into(),
+            rationale: "because".into(),
+            file: file.into(),
+            line_start: 1,
+            line_end: 2,
+            confidence: 80,
+            suggested_validation: "cargo test".into(),
+            fix: fix.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn apply_uses_only_the_first_finding_fix() {
+        let prompt = apply_finding_prompt(&[
+            finding("first", "src/a.rs", Some("replace the check")),
+            finding("second title", "src/b.rs", Some("other")),
+        ])
+        .unwrap();
+        assert!(prompt.contains("src/a.rs"));
+        assert!(prompt.contains("replace the check"));
+        assert!(!prompt.contains("second title"));
+        assert!(apply_finding_prompt(&[finding("stored", "src/a.rs", None)]).is_err());
+    }
+
+    #[test]
+    fn a_finding_without_a_fix_renders_without_apply() {
+        let stored = ReviewResult {
+            summary: "one stored finding".into(),
+            findings: vec![finding("stored title", "src/a.rs", None)],
+        };
+        let text = stored.render("working tree");
+        assert!(text.contains("stored title"));
+        assert!(text.contains("src/a.rs"));
+        assert!(!text.contains("Apply"));
+        let ready = ReviewResult {
+            summary: "one fix".into(),
+            findings: vec![finding("ready", "src/a.rs", Some("replace the check"))],
+        };
+        let text = ready.render("working tree");
+        assert!(text.contains("\nApply"));
+        assert!(text.contains("ready"));
+    }
 
     type FakeTurn = Result<Vec<ChatStreamItem>, ProviderError>;
 

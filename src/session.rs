@@ -4637,6 +4637,7 @@ mod tests {
                 line_end: 1,
                 confidence: 90,
                 suggested_validation: "test".into(),
+                fix: None,
             }],
             truncated: false,
             created_at: DateTime::from_timestamp(4, 0).unwrap(),

@@ -165,6 +165,111 @@ fn retain_plan_reads(
     });
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChildMode {
+    Ask,
+    Review,
+    Handoff,
+    Parallel,
+}
+
+pub fn apply_child_mode(
+    request: &mut AgentSpawnRequest,
+    mode: ChildMode,
+    brief: &str,
+    transcript_only: &str,
+) -> Result<bool, String> {
+    match mode {
+        ChildMode::Ask => {
+            request.reads_only = true;
+            Ok(false)
+        }
+        ChildMode::Review => {
+            request.reads_only = true;
+            request.task.push_str("\nEnd with ReportReviewFindings.");
+            if let Ok(prompt) = crate::review::apply_finding_prompt(&[]) {
+                request.task.push_str(&prompt);
+            }
+            Ok(false)
+        }
+        ChildMode::Handoff => {
+            if brief.contains(transcript_only) {
+                return Err("handoff copied a parent transcript sentence".into());
+            }
+            request.reads_only = false;
+            request.task = brief.to_string();
+            Ok(false)
+        }
+        ChildMode::Parallel => {
+            request.reads_only = false;
+            request.isolation = AgentIsolation::Worktree;
+            Ok(true)
+        }
+    }
+}
+
+pub struct ParallelLaunch {
+    pub ids: Vec<AgentId>,
+    pub children: Vec<crate::parallel_parts::PartChild>,
+}
+
+pub async fn spawn_parallel_child(
+    manager: &std::sync::Arc<AgentManager>,
+    repo: &std::path::Path,
+    files: &[String],
+    request: AgentSpawnRequest,
+) -> Result<ParallelLaunch, String> {
+    let children = if files.len() >= 2 {
+        let lists: Vec<Vec<String>> = files.iter().map(|file| vec![file.clone()]).collect();
+        let started = crate::parallel_parts::start_parts(repo, &lists)?;
+        let labeled = started
+            .children
+            .iter()
+            .enumerate()
+            .map(|(index, child)| (format!("part-{index}"), child.worktree.clone()))
+            .collect::<Vec<_>>();
+        crate::parallel_parts::remember_pending(repo, &started.base, labeled);
+        for child in &started.children {
+            crate::parallel_parts::register_running(child.clone());
+        }
+        started.children
+    } else {
+        vec![crate::parallel_parts::start_one(repo, files)?]
+    };
+    let mut ids = Vec::with_capacity(children.len());
+    for (index, part) in children.iter().enumerate() {
+        let mut child_request = request.clone();
+        child_request.reads_only = false;
+        child_request.isolation = AgentIsolation::Shared;
+        child_request.workspace = crate::workspace::WorkspaceContext::from_primary(
+            part.worktree.clone(),
+            part.worktree.clone(),
+        );
+        if files.len() >= 2 {
+            child_request
+                .task
+                .push_str(&format!("\nAssigned file: {}", files[index]));
+        }
+        match manager.spawn(child_request).await {
+            Ok(id) => {
+                attach_agent_id(&part.worktree, &id);
+                ids.push(id);
+            }
+            Err(error) => {
+                for started in &children {
+                    crate::parallel_parts::mark_finished(&started.worktree);
+                }
+                return Err(error.to_string());
+            }
+        }
+    }
+    Ok(ParallelLaunch { ids, children })
+}
+
+fn attach_agent_id(worktree: &std::path::Path, id: &AgentId) {
+    crate::parallel_parts::attach_agent(worktree, &id.to_string());
+}
+
 pub(crate) fn plan_child_write_refusal(reads_only: bool, name: &str) -> Option<&'static str> {
     if !reads_only {
         return None;
@@ -3216,6 +3321,48 @@ pub async fn execute_manager_tool_with_provenance(
                 admitted: None,
                 reads_only: false,
             };
+            if arguments
+                .get("child_mode")
+                .and_then(serde_json::Value::as_str)
+                == Some("parallel")
+            {
+                let files = arguments
+                    .get("assigned_files")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_string)
+                    .collect::<Vec<_>>();
+                if !files.is_empty() {
+                    if let Some(root) = workspace.primary() {
+                        match spawn_parallel_child(manager, &root.path, &files, request).await {
+                            Ok(launch) => {
+                                let listed = launch
+                                    .ids
+                                    .iter()
+                                    .zip(&launch.children)
+                                    .map(|(id, part)| format!("{id} {}", part.worktree.display()))
+                                    .collect::<Vec<_>>()
+                                    .join("\n");
+                                let first = launch.ids[0];
+                                return Some(
+                                    manager_spawn_success(
+                                        manager,
+                                        first,
+                                        format!(
+                                            "Spawned {} parts while they are running\n{listed}",
+                                            launch.ids.len()
+                                        ),
+                                    )
+                                    .await,
+                                );
+                            }
+                            Err(error) => return Some(ToolExecutionResult::Failure(error)),
+                        }
+                    }
+                }
+            }
             match manager.spawn(request).await {
                 Ok(id) => {
                     manager_spawn_success(
@@ -3751,6 +3898,44 @@ fn build_spawn_request(
         },
         selection,
     ))
+    .and_then(|(mut request, selection)| {
+        if let Some(mode_name) = arguments.get("child_mode").and_then(|value| value.as_str()) {
+            let mode = match mode_name {
+                "ask" => ChildMode::Ask,
+                "review" => ChildMode::Review,
+                "handoff" => ChildMode::Handoff,
+                "parallel" => ChildMode::Parallel,
+                "apply" => {
+                    let findings = arguments
+                        .get("findings")
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::json!([]));
+                    let findings: Vec<crate::review::ReviewFinding> =
+                        serde_json::from_value(findings)
+                            .map_err(|error| format!("apply findings are invalid: {error}"))?;
+                    request = crate::review::apply_spawn_request(request, &findings)?;
+                    return Ok((request, selection));
+                }
+                _ => {
+                    return Err(
+                        "child_mode must be ask, review, handoff, parallel, or apply".into(),
+                    )
+                }
+            };
+            let brief = arguments
+                .get("brief")
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| request.task.clone());
+            let transcript = arguments
+                .get("transcript_sentence")
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
+                .to_string();
+            apply_child_mode(&mut request, mode, &brief, &transcript)?;
+        }
+        Ok((request, selection))
+    })
 }
 
 fn requested_complexity(
@@ -3945,6 +4130,7 @@ struct AgentRecord {
     lifecycle_stop_claimed: bool,
     job_owner: crate::jobs::JobOwner,
     graph_budget: Option<crate::agent_graph::AgentAutonomyBudget>,
+    workspace_cwd: std::path::PathBuf,
 }
 
 struct AgentManagerInner {
@@ -6016,6 +6202,16 @@ impl AgentManager {
     }
 
     async fn finish(&self, id: AgentId, status: AgentStatus, summary: Option<String>) {
+        let workspace_cwd = self
+            .inner
+            .lock()
+            .await
+            .records
+            .get(&id)
+            .map(|record| record.workspace_cwd.clone());
+        if let Some(path) = workspace_cwd {
+            crate::parallel_parts::mark_finished(&path);
+        }
         // A terminal activity row is also a writer barrier: owned process
         // groups must be reaped and their final bytes captured first.
         let owner = self
@@ -6045,6 +6241,18 @@ impl AgentManager {
             }
         }
         let mut inner = self.inner.lock().await;
+        let edited: Vec<String> = inner
+            .mutations
+            .iter()
+            .filter(|receipt| receipt.agent_id == id)
+            .flat_map(|receipt| {
+                receipt
+                    .mutation
+                    .receipts()
+                    .iter()
+                    .map(|item| item.path.display().to_string())
+            })
+            .collect();
         let Some(record) = inner.records.get_mut(&id) else {
             return;
         };
@@ -6075,6 +6283,21 @@ impl AgentManager {
                         );
                     }
                 }
+            }
+        }
+        if status == AgentStatus::Completed
+            && record
+                .snapshot
+                .task
+                .starts_with("Apply this finding only in ")
+        {
+            if let Err(error) = crate::review::judge_apply(
+                &record.snapshot.task,
+                &edited,
+                &record.snapshot.successful_tools,
+            ) {
+                status = AgentStatus::Failed;
+                full_summary = error;
             }
         }
         if let Some(outcome) = &mut record.outcome {
@@ -6662,6 +6885,7 @@ fn insert_agent_record(
             lifecycle_stop_claimed: false,
             job_owner,
             graph_budget,
+            workspace_cwd: request.workspace.cwd().to_path_buf(),
         },
     );
 }
@@ -9738,6 +9962,7 @@ mod manager_tests {
                         participant: "author".into(),
                         route: None,
                         instructions: dynamic.clone(),
+                        evidence: None,
                     }],
                     review_loop: None,
                     implementation: None,
@@ -13799,5 +14024,348 @@ mod manager_tests {
         {
             assert!(!agent.tools.iter().any(|tool| tool == "read_lints"));
         }
+    }
+
+    #[test]
+    fn child_modes_keep_ask_from_writing_and_handoff_off_the_transcript() {
+        let workspace = tempfile::tempdir().unwrap();
+        let mut request = AgentSpawnRequest {
+            parent: None,
+            parent_turn: Uuid::new_v4(),
+            task_id: None,
+            task: "look".into(),
+            task_retrieved_spans: Vec::new(),
+            host_task: None,
+            context_mode: AgentContextMode::Summary,
+            context_summary: String::new(),
+            grants: AgentGrant {
+                tools: Vec::new(),
+                workspace_root_ids: Vec::new(),
+                path_scopes: Vec::new(),
+                command_scopes: Vec::new(),
+                network: false,
+            },
+            workspace: crate::workspace::WorkspaceContext::discover(workspace.path()).unwrap(),
+            depth: 1,
+            route: None,
+            purpose: AgentRunPurpose::Subagent,
+            output_contract: None,
+            repair_contract: None,
+            isolation: AgentIsolation::Shared,
+            admitted: None,
+            reads_only: false,
+        };
+        apply_child_mode(&mut request, ChildMode::Ask, "", "only in the transcript").unwrap();
+        assert!(plan_child_write_refusal(request.reads_only, "write_file").is_some());
+        let brief = "Goal: land the fix\nDone when: tests pass";
+        apply_child_mode(
+            &mut request,
+            ChildMode::Handoff,
+            brief,
+            "only in the transcript",
+        )
+        .unwrap();
+        assert_eq!(request.task, brief);
+        assert!(!request.task.contains("only in the transcript"));
+        apply_child_mode(
+            &mut request,
+            ChildMode::Parallel,
+            brief,
+            "only in the transcript",
+        )
+        .unwrap();
+        assert_eq!(request.isolation, AgentIsolation::Worktree);
+    }
+
+    struct HoldRunner;
+
+    #[async_trait::async_trait]
+    impl AgentRunner for HoldRunner {
+        async fn run(&self, context: AgentRunContext) -> Result<String, String> {
+            wait_cancelled(context.cancelled).await;
+            Err("cancelled".into())
+        }
+    }
+
+    #[tokio::test]
+    async fn parallel_spawn_returns_while_the_child_is_running() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        let git = |args: &[&str]| {
+            assert!(std::process::Command::new("git")
+                .args(args)
+                .current_dir(repo)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap()
+                .success());
+        };
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "t@example.com"]);
+        git(&["config", "user.name", "t"]);
+        std::fs::write(repo.join("a.txt"), "base\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "init"]);
+        let parent_head = std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        let manager = AgentManager::new(Arc::new(HoldRunner), AgentLimits::default());
+        let turn = manager.begin_parent_turn();
+        let workspace = crate::workspace::WorkspaceContext::discover(repo).unwrap();
+        let request = AgentSpawnRequest {
+            parent: None,
+            parent_turn: turn,
+            task_id: None,
+            task: "edit a.txt".into(),
+            task_retrieved_spans: Vec::new(),
+            host_task: None,
+            context_mode: AgentContextMode::Summary,
+            context_summary: String::new(),
+            grants: AgentGrant {
+                tools: vec!["read_file".into()],
+                workspace_root_ids: Vec::new(),
+                path_scopes: Vec::new(),
+                command_scopes: Vec::new(),
+                network: false,
+            },
+            workspace,
+            depth: 1,
+            route: None,
+            purpose: AgentRunPurpose::Subagent,
+            output_contract: None,
+            repair_contract: None,
+            isolation: AgentIsolation::Shared,
+            admitted: None,
+            reads_only: false,
+        };
+        let launch = spawn_parallel_child(&manager, repo, &["a.txt".into()], request.clone())
+            .await
+            .unwrap();
+        assert_eq!(launch.ids.len(), 1);
+        let id = launch.ids[0];
+        let part = &launch.children[0];
+        let snapshot = manager
+            .list()
+            .await
+            .into_iter()
+            .find(|agent| agent.id == id)
+            .unwrap();
+        assert!(!snapshot.status.terminal());
+        assert!(part.running);
+        assert!(part.worktree.join("a.txt").is_file());
+        let child_head = std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&part.worktree)
+            .output()
+            .unwrap();
+        assert_eq!(child_head.stdout, parent_head.stdout);
+        assert!(part.agent.is_none());
+        manager.finish(id, AgentStatus::Completed, None).await;
+        let _ = manager.cancel(id).await;
+
+        std::fs::write(repo.join("b.txt"), "base-b\n").unwrap();
+        git(&["add", "b.txt"]);
+        git(&["commit", "-m", "b"]);
+        let before_a = std::fs::read_to_string(repo.join("a.txt")).unwrap();
+        let before_b = std::fs::read_to_string(repo.join("b.txt")).unwrap();
+        let both = spawn_parallel_child(&manager, repo, &["a.txt".into(), "b.txt".into()], request)
+            .await
+            .unwrap();
+        assert_eq!(both.ids.len(), 2);
+        assert!(both.children.iter().all(|child| child.running));
+        let running = manager.list().await;
+        assert!(both.ids.iter().all(|id| {
+            running
+                .iter()
+                .any(|agent| agent.id == *id && !agent.status.terminal())
+        }));
+        assert_eq!(
+            std::fs::read_to_string(repo.join("a.txt")).unwrap(),
+            before_a
+        );
+        assert_eq!(
+            std::fs::read_to_string(repo.join("b.txt")).unwrap(),
+            before_b
+        );
+        let listed = manager.list().await;
+        for id in &both.ids {
+            let child = listed.iter().find(|agent| agent.id == *id).unwrap();
+            assert!(child.task.contains("edit a.txt"));
+            assert!(child.task.contains("Assigned file:"));
+        }
+        assert!(both.children.iter().all(|child| child.agent.is_none()));
+        assert!(crate::parallel_parts::any_running());
+        let stored_before = crate::parallel_parts::stored_merge();
+        manager
+            .finish(both.ids[0], AgentStatus::Completed, None)
+            .await;
+        assert_eq!(crate::parallel_parts::stored_merge(), stored_before);
+        assert!(crate::parallel_parts::any_running());
+        assert_eq!(
+            std::fs::read_to_string(repo.join("a.txt")).unwrap(),
+            before_a
+        );
+        manager
+            .finish(both.ids[1], AgentStatus::Completed, None)
+            .await;
+        let merged = crate::parallel_parts::stored_merge().expect("merge stored");
+        assert_eq!(merged.parent, repo);
+        assert!(!merged.committed);
+        assert_ne!(
+            stored_before.as_ref().map(|batch| batch.parent.as_path()),
+            Some(repo)
+        );
+        assert!(!crate::parallel_parts::any_running());
+        let mut tracker = crate::automatic_review::ReviewTracker::default();
+        let undone = tracker.undo_merge().unwrap_or_default();
+        assert_eq!(undone, "Restored the parent bytes from before the merge");
+        for id in &both.ids {
+            let _ = manager.cancel(*id).await;
+        }
+    }
+
+    struct ApplyRunner;
+
+    #[async_trait::async_trait]
+    impl AgentRunner for ApplyRunner {
+        async fn run(&self, context: AgentRunContext) -> Result<String, String> {
+            if context.request.isolation != AgentIsolation::Shared {
+                return Err("apply child left the parent workspace".into());
+            }
+            let task = context.request.task.clone();
+            let named = task
+                .lines()
+                .next()
+                .and_then(|line| line.strip_prefix("Apply this finding only in "))
+                .and_then(|line| line.strip_suffix('.'))
+                .unwrap_or("src/a.rs");
+            let validation = task
+                .lines()
+                .find_map(|line| line.strip_prefix("Validate: "))
+                .unwrap_or("cargo test")
+                .to_string();
+            let path = if task.contains("edit outside") {
+                "src/other.rs"
+            } else {
+                named
+            };
+            let _ = context.events.send(RunnerEvent::Mutation(
+                crate::undo::FileMutationBatchReceipt::single(
+                    crate::undo::FileMutationReceipt::new(
+                        std::path::PathBuf::from(path),
+                        "write_file",
+                        crate::undo::FileState::Utf8("old\n".into()),
+                        crate::undo::FileState::Utf8("new\n".into()),
+                    ),
+                ),
+            ));
+            if !task.contains("skip validation") {
+                let _ = context.events.send(RunnerEvent::ToolCompleted {
+                    name: validation,
+                    succeeded: true,
+                });
+            }
+            Ok("applied".into())
+        }
+    }
+
+    fn apply_request(
+        findings: &[crate::review::ReviewFinding],
+        workspace: crate::workspace::WorkspaceContext,
+        turn: Uuid,
+    ) -> AgentSpawnRequest {
+        let base = AgentSpawnRequest {
+            parent: None,
+            parent_turn: turn,
+            task_id: None,
+            task: "look".into(),
+            task_retrieved_spans: Vec::new(),
+            host_task: None,
+            context_mode: AgentContextMode::Summary,
+            context_summary: String::new(),
+            grants: AgentGrant {
+                tools: vec!["write_file".into(), "run_command".into()],
+                workspace_root_ids: Vec::new(),
+                path_scopes: Vec::new(),
+                command_scopes: Vec::new(),
+                network: false,
+            },
+            workspace,
+            depth: 1,
+            route: None,
+            purpose: AgentRunPurpose::Subagent,
+            output_contract: None,
+            repair_contract: None,
+            isolation: AgentIsolation::Worktree,
+            admitted: None,
+            reads_only: true,
+        };
+        crate::review::apply_spawn_request(base, findings).unwrap()
+    }
+
+    #[tokio::test]
+    async fn apply_child_uses_the_first_finding_and_fails_an_outside_edit() {
+        let workspace = tempfile::tempdir().unwrap();
+        let manager = AgentManager::new(Arc::new(ApplyRunner), AgentLimits::default());
+        let turn = manager.begin_parent_turn();
+        let discovered = crate::workspace::WorkspaceContext::discover(workspace.path()).unwrap();
+        let first = crate::review::ReviewFinding {
+            severity: crate::review::ReviewSeverity::High,
+            title: "first".into(),
+            rationale: "because".into(),
+            file: "src/a.rs".into(),
+            line_start: 1,
+            line_end: 2,
+            confidence: 80,
+            suggested_validation: "cargo test named_file".into(),
+            fix: Some("replace the check".into()),
+        };
+        let second = crate::review::ReviewFinding {
+            title: "second title".into(),
+            fix: Some("other fix".into()),
+            file: "src/b.rs".into(),
+            ..first.clone()
+        };
+        let outside = crate::review::ReviewFinding {
+            fix: Some("edit outside the named file".into()),
+            ..first.clone()
+        };
+        let unchecked = crate::review::ReviewFinding {
+            fix: Some("skip validation".into()),
+            ..first.clone()
+        };
+        let started = apply_request(&[first.clone(), second], discovered.clone(), turn);
+        assert!(started.task.contains("src/a.rs"));
+        assert!(started.task.contains("replace the check"));
+        assert!(!started.task.contains("second title"));
+        assert_eq!(started.isolation, AgentIsolation::Shared);
+        let child = manager.spawn(started).await.unwrap();
+        let done = manager.await_agent(child).await.unwrap();
+        assert_eq!(done.status, AgentStatus::Completed);
+        assert!(done.task.contains("src/a.rs"));
+        assert!(!done.task.contains("second title"));
+        let outside_id = manager
+            .spawn(apply_request(&[outside], discovered.clone(), turn))
+            .await
+            .unwrap();
+        let outside_done = manager.await_agent(outside_id).await.unwrap();
+        assert_eq!(outside_done.status, AgentStatus::Failed);
+        assert!(outside_done
+            .result_summary
+            .unwrap_or_default()
+            .contains("edit outside the named file"));
+        let quiet_id = manager
+            .spawn(apply_request(&[unchecked], discovered, turn))
+            .await
+            .unwrap();
+        let quiet = manager.await_agent(quiet_id).await.unwrap();
+        assert_eq!(quiet.status, AgentStatus::Failed);
+        assert!(quiet
+            .result_summary
+            .unwrap_or_default()
+            .contains("named file was not validated"));
     }
 }

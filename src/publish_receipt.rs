@@ -135,6 +135,54 @@ pub(crate) fn format_blocks(receipts: &[PublishReceipt], covers: bool, approved:
         .join("\n")
 }
 
+pub(crate) const PUSH_THIS_COMMIT: &str = "Push this commit";
+pub(crate) const LEAVE_IT_LOCAL: &str = "Leave it local";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct HostPublishCard {
+    pub turn: uuid::Uuid,
+    pub text: String,
+    pub choices: [&'static str; 2],
+}
+
+/// The host card replaces any model question while a receipt belongs to this turn.
+pub(crate) fn host_publish_card(
+    receipts: &[PublishReceipt],
+    turn: uuid::Uuid,
+    model_question: Option<&str>,
+) -> Option<HostPublishCard> {
+    if receipts.is_empty() {
+        return None;
+    }
+    let _ = model_question;
+    Some(HostPublishCard {
+        turn,
+        text: format_blocks(receipts, true, false),
+        choices: [PUSH_THIS_COMMIT, LEAVE_IT_LOCAL],
+    })
+}
+
+pub(crate) fn resolve_host_publish_choice(
+    receipts: &[PublishReceipt],
+    card_turn: uuid::Uuid,
+    answer_turn: uuid::Uuid,
+    choice: &str,
+) -> Result<(), String> {
+    if receipts.is_empty() {
+        return Err("no publish receipt".into());
+    }
+    if answer_turn != card_turn {
+        return Err("only the turn that produced the receipt can answer".into());
+    }
+    if choice != PUSH_THIS_COMMIT && choice != LEAVE_IT_LOCAL {
+        return Err("the model cannot add a choice".into());
+    }
+    if choice == PUSH_THIS_COMMIT && receipts.iter().any(|receipt| !receipt.matches_remote) {
+        return Err("publish remote does not match HEAD".into());
+    }
+    Ok(())
+}
+
 pub(crate) fn bind_approval(
     report: &mut crate::automatic_review::ReviewReport,
     receipts: &[PublishReceipt],
@@ -740,5 +788,59 @@ diff --git a/Cargo.lock b/Cargo.lock
             panic!("dependency push");
         };
         assert!(deps[0].lockfile_dependency_change);
+    }
+
+    fn sample_receipt(matches_remote: bool) -> PublishReceipt {
+        PublishReceipt {
+            toplevel: PathBuf::from("/work"),
+            head: "abc".into(),
+            parent: "def".into(),
+            remote_sha: if matches_remote { "abc" } else { "zzz" }.into(),
+            matches_remote,
+            paths_added: 0,
+            paths_modified: 1,
+            paths_deleted: 0,
+            lines_inserted: 1,
+            lines_deleted: 0,
+            lockfile_dependency_change: false,
+            pushed_command: "git push origin main".into(),
+            paths: vec!["note.txt".into()],
+            remote_name: "origin".into(),
+            remote_ref: "refs/heads/main".into(),
+            expected_sha: "abc".into(),
+        }
+    }
+
+    #[test]
+    fn host_publish_card_keeps_the_receipt_text_and_refuses_a_remote_mismatch() {
+        let turn = uuid::Uuid::new_v4();
+        let later = uuid::Uuid::new_v4();
+        let matched = vec![sample_receipt(true)];
+        let card = host_publish_card(
+            &matched,
+            turn,
+            Some("Push this commit? with a third choice"),
+        )
+        .unwrap();
+        assert_eq!(card.choices, [PUSH_THIS_COMMIT, LEAVE_IT_LOCAL]);
+        assert_eq!(card.text, format_blocks(&matched, true, false));
+        assert!(!card.text.contains("third choice"));
+        assert!(card.text.contains("head=abc"));
+        assert!(card.text.contains("pushed_command=git push origin main"));
+        resolve_host_publish_choice(&matched, turn, turn, PUSH_THIS_COMMIT).unwrap();
+        let mismatched = vec![sample_receipt(false)];
+        let card = host_publish_card(&mismatched, turn, None).unwrap();
+        assert!(card.text.contains("remote=zzz"));
+        assert!(
+            resolve_host_publish_choice(&mismatched, turn, turn, PUSH_THIS_COMMIT)
+                .unwrap_err()
+                .contains("remote")
+        );
+        assert!(
+            resolve_host_publish_choice(&mismatched, turn, later, LEAVE_IT_LOCAL)
+                .unwrap_err()
+                .contains("turn")
+        );
+        resolve_host_publish_choice(&mismatched, turn, turn, LEAVE_IT_LOCAL).unwrap();
     }
 }

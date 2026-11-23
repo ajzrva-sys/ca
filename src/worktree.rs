@@ -451,6 +451,9 @@ impl WorktreeStore {
         attached: Option<Uuid>,
     ) -> Result<WorktreeCleanupResult, WorktreeError> {
         require_writable(self.writable)?;
+        if let Err(message) = crate::parallel_parts::discard_recorded(raw_id) {
+            return Err(WorktreeError::Git(message));
+        }
         let _guard = self.mutation.lock().await;
         let mut manifest = self.load_manifest()?;
         let record = resolve_record(&manifest.records, raw_id)?;
