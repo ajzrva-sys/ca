@@ -23,6 +23,7 @@ const HEADER_BYTES: usize = 24;
 const LOG_BYTES_PER_STREAM: usize = 64 * 1024;
 const HEALTH_RESPONSE_BYTES: usize = 64 * 1024;
 const MIN_CONTEXT_TOKENS: u32 = 512;
+const DEFAULT_CONTEXT_TOKENS: u32 = 4096;
 const MAX_CONTEXT_TOKENS: u32 = 1_048_576;
 const MIN_STARTUP_SECONDS: u64 = 1;
 const MAX_STARTUP_SECONDS: u64 = 600;
@@ -84,7 +85,7 @@ enum LocalCommand {
         model: String,
         #[arg(long, value_name = "RUNTIME_ID")]
         runtime: String,
-        #[arg(long, default_value_t = 4096, value_parser = clap::value_parser!(u32).range(MIN_CONTEXT_TOKENS as i64..=MAX_CONTEXT_TOKENS as i64))]
+        #[arg(long, default_value_t = DEFAULT_CONTEXT_TOKENS, value_parser = clap::value_parser!(u32).range(MIN_CONTEXT_TOKENS as i64..=MAX_CONTEXT_TOKENS as i64))]
         context_size: u32,
         #[arg(long, default_value_t = 300, value_parser = clap::value_parser!(u64).range(MIN_STARTUP_SECONDS..=MAX_STARTUP_SECONDS))]
         startup_timeout: u64,
@@ -467,6 +468,7 @@ async fn run_cli_inner(cli: LocalCliArgs) -> Result<(), LocalModelError> {
                 &model,
                 context_size,
                 Duration::from_secs(startup_timeout),
+                None,
             )
             .await?;
             let info = server.info();
@@ -494,9 +496,16 @@ fn print_list(state: &ModelState) -> Result<(), LocalModelError> {
     Ok(())
 }
 
+fn visible_fit(bytes: u64, physical: u64) -> &'static str {
+    memory_fit(bytes, DEFAULT_CONTEXT_TOKENS, physical).label()
+}
+
 fn print_info(info: &LocalModelInfo, detailed: bool) {
+    let fit = physical_memory()
+        .map(|memory| visible_fit(info.bytes, memory))
+        .unwrap_or("unknown");
     println!(
-        "{}\t{} bytes\tGGUF v{}\t{}\t{}",
+        "{}\t{} bytes\tGGUF v{}\t{}\t{}\t{fit}",
         info.id, info.bytes, info.gguf_version, info.source, info.license
     );
     if detailed {
@@ -771,6 +780,7 @@ pub struct LocalRunOptions {
     pub runtime_id: String,
     pub context_size: u32,
     pub startup_timeout: Duration,
+    pub cache_type: Option<String>,
 }
 
 impl LocalRunOptions {
@@ -783,6 +793,14 @@ impl LocalRunOptions {
                 .contains(&self.startup_timeout)
         {
             return Err(LocalModelError::InvalidMetadata);
+        }
+        if let Some(cache) = &self.cache_type {
+            if !matches!(
+                cache.as_str(),
+                "q8_0" | "q4_0" | "q4_1" | "q5_0" | "q5_1" | "f16" | "bf16"
+            ) {
+                return Err(LocalModelError::InvalidMetadata);
+            }
         }
         Ok(())
     }
@@ -929,6 +947,7 @@ pub async fn start_managed_server(
     model_id: &str,
     context_size: u32,
     startup_timeout: Duration,
+    cache_type: Option<String>,
 ) -> Result<ManagedLocalServer, LocalModelError> {
     start_managed_server_mode(
         paths,
@@ -937,6 +956,7 @@ pub async fn start_managed_server(
         model_id,
         context_size,
         startup_timeout,
+        cache_type,
         LocalServerMode::Chat,
     )
     .await
@@ -956,6 +976,7 @@ async fn start_managed_server_mode(
     model_id: &str,
     context_size: u32,
     startup_timeout: Duration,
+    cache_type: Option<String>,
     mode: LocalServerMode,
 ) -> Result<ManagedLocalServer, LocalModelError> {
     let options = LocalRunOptions {
@@ -963,6 +984,7 @@ async fn start_managed_server_mode(
         runtime_id: runtime_id.to_string(),
         context_size,
         startup_timeout,
+        cache_type,
     };
     options.validate()?;
     let (_, model) =
@@ -1001,24 +1023,31 @@ async fn start_server_with_resolved_mode(
     options.validate()?;
     let runtime = canonical_executable(&runtime)?;
     let model = canonical_regular(&model, MAX_MODEL_BYTES)?;
-    parse_gguf_header(&read_header(&model)?)?;
+    let header = read_header(&model)?;
+    let weight_bytes = std::fs::metadata(&model)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    let fit = label_gguf(
+        &header,
+        weight_bytes,
+        options.context_size,
+        physical_memory().unwrap_or(u64::MAX),
+    )?;
+    if !start_still_allowed(fit) {
+        return Err(LocalModelError::InvalidMetadata);
+    }
     let port = reserve_loopback_port().await?;
     let temporary = tempfile::Builder::new()
         .prefix("ca-local-server-")
         .tempdir()
         .map_err(|_| LocalModelError::ServerStart)?;
-    let mut arguments = vec![
-        "--host".into(),
-        "127.0.0.1".into(),
-        "--port".into(),
-        port.to_string(),
-        "--model".into(),
-        model.to_string_lossy().into_owned(),
-        "--alias".into(),
-        options.model_id.clone(),
-        "--ctx-size".into(),
-        options.context_size.to_string(),
-    ];
+    let mut arguments = managed_server_arguments(
+        &model.to_string_lossy(),
+        &options.model_id,
+        options.context_size,
+        port,
+        options.cache_type.as_deref(),
+    );
     match mode {
         LocalServerMode::Chat => arguments.push("--jinja".into()),
         LocalServerMode::Embeddings => arguments.extend([
@@ -1147,6 +1176,7 @@ pub async fn start_managed_embedding_server(
         runtime_id: runtime_id.into(),
         context_size,
         startup_timeout,
+        cache_type: None,
     };
     options.validate()?;
     // Only embedding preparation is admitted here. The permit belongs to the
@@ -1254,6 +1284,7 @@ impl ManagedEmbeddingServer {
                 runtime_id: "fixture".into(),
                 context_size: 2048,
                 startup_timeout: Duration::from_secs(5),
+                cache_type: None,
             },
             crate::sandbox::SandboxMode::PolicyOnly,
             LocalServerMode::Embeddings,
@@ -1762,6 +1793,94 @@ fn hash_and_header_with_cancellation(
         return Err(LocalModelError::Drift);
     }
     Ok((parse_gguf_header(&prefix)?, digest_string(hasher), total))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryFit {
+    Fits,
+    Tight,
+    TooBig,
+}
+
+impl MemoryFit {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Fits => "fits",
+            Self::Tight => "tight",
+            Self::TooBig => "too big",
+        }
+    }
+}
+
+pub fn start_still_allowed(_fit: MemoryFit) -> bool {
+    true
+}
+
+pub fn memory_fit(weight_bytes: u64, context_tokens: u32, physical_bytes: u64) -> MemoryFit {
+    let gib = 1024_u64 * 1024 * 1024;
+    let budget_numer = if physical_bytes <= 36 * gib { 2 } else { 3 };
+    let budget_denom = if physical_bytes <= 36 * gib { 3 } else { 4 };
+    let budget = physical_bytes.saturating_mul(budget_numer) / budget_denom;
+    let kv = u64::from(context_tokens).saturating_mul(512);
+    let need = weight_bytes.saturating_add(kv);
+    if need > budget {
+        MemoryFit::TooBig
+    } else if need > budget.saturating_mul(4) / 5 {
+        MemoryFit::Tight
+    } else {
+        MemoryFit::Fits
+    }
+}
+
+pub fn label_gguf(
+    header: &[u8],
+    file_len: u64,
+    context_tokens: u32,
+    physical_bytes: u64,
+) -> Result<MemoryFit, LocalModelError> {
+    parse_gguf_header(header)?;
+    Ok(memory_fit(file_len, context_tokens, physical_bytes))
+}
+
+pub fn managed_server_arguments(
+    model: &str,
+    model_id: &str,
+    context_size: u32,
+    port: u16,
+    cache_type: Option<&str>,
+) -> Vec<String> {
+    let mut arguments = vec![
+        "--host".into(),
+        "127.0.0.1".into(),
+        "--port".into(),
+        port.to_string(),
+        "--model".into(),
+        model.to_string(),
+        "--alias".into(),
+        model_id.to_string(),
+        "--ctx-size".into(),
+        context_size.to_string(),
+    ];
+    if let Some(cache) = cache_type.filter(|value| !value.is_empty()) {
+        arguments.extend([
+            "--cache-type-k".into(),
+            cache.to_string(),
+            "--cache-type-v".into(),
+            cache.to_string(),
+        ]);
+    }
+    arguments
+}
+
+fn physical_memory() -> Option<u64> {
+    let output = std::process::Command::new("sysctl")
+        .args(["-n", "hw.memsize"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout).ok()?.trim().parse().ok()
 }
 
 fn parse_gguf_header(bytes: &[u8]) -> Result<GgufHeader, LocalModelError> {
@@ -2387,6 +2506,7 @@ PY
                 runtime_id: "fixture".into(),
                 context_size: 2048,
                 startup_timeout: Duration::from_secs(5),
+                cache_type: None,
             },
             crate::sandbox::SandboxMode::PolicyOnly,
             LocalServerMode::Embeddings,
@@ -2661,6 +2781,7 @@ PY
                 runtime_id: "fake-runtime".into(),
                 context_size: 2048,
                 startup_timeout: Duration::from_secs(5),
+                cache_type: None,
             },
             crate::sandbox::SandboxMode::PolicyOnly,
         )
@@ -2714,6 +2835,7 @@ PY
                 runtime_id: "fake-runtime".into(),
                 context_size: 2048,
                 startup_timeout: Duration::from_secs(5),
+                cache_type: None,
             },
             crate::sandbox::SandboxMode::PolicyOnly,
         )
@@ -2732,5 +2854,51 @@ PY
         assert!(rendered.starts_with('h'));
         assert!(rendered.ends_with('t'));
         assert!(rendered.contains("[stdout: 1234 bytes omitted]"));
+    }
+
+    #[test]
+    fn local_memory_fit_labels_header_and_cache_flags() {
+        let gib = 1024_u64 * 1024 * 1024;
+        let header = gguf(3, 1, 2, b"payload");
+        let small = label_gguf(&header, 1024 * 1024, 2048, 36 * gib).unwrap();
+        assert_eq!(small, MemoryFit::Fits);
+        assert_eq!(small.label(), "fits");
+        let large = label_gguf(&header, 40 * gib, 2048, 36 * gib).unwrap();
+        assert_eq!(large, MemoryFit::TooBig);
+        assert_eq!(large.label(), "too big");
+        let tight = label_gguf(&header, 20 * gib, 2048, 36 * gib).unwrap();
+        assert_eq!(tight, MemoryFit::Tight);
+        assert_eq!(tight.label(), "tight");
+        let above = label_gguf(&header, 25 * gib, 2048, 40 * gib).unwrap();
+        assert_eq!(above, MemoryFit::Tight);
+        let above_fits = label_gguf(&header, 1024 * 1024, 2048, 40 * gib).unwrap();
+        assert_eq!(above_fits, MemoryFit::Fits);
+        assert!(start_still_allowed(large));
+        let budget = 36 * gib * 2 / 3;
+        let boundary = budget - 3 * 1024 * 1024;
+        assert_eq!(DEFAULT_CONTEXT_TOKENS, 4096);
+        assert_eq!(memory_fit(boundary, 8192, 36 * gib), MemoryFit::TooBig);
+        assert_eq!(visible_fit(boundary, 36 * gib), "tight");
+        let plain = managed_server_arguments("/model.gguf", "demo", 2048, 9, None);
+        let cached = managed_server_arguments("/model.gguf", "demo", 2048, 9, Some("q8_0"));
+        println!(
+            "small={} tight={} large={} above={} picker={} context={} plain={plain:?} cached={cached:?} start={}",
+            small.label(),
+            tight.label(),
+            large.label(),
+            above.label(),
+            visible_fit(boundary, 36 * gib),
+            DEFAULT_CONTEXT_TOKENS,
+            start_still_allowed(large)
+        );
+        assert!(!plain
+            .iter()
+            .any(|arg| arg == "--cache-type-k" || arg == "--cache-type-v"));
+        assert!(cached
+            .windows(2)
+            .any(|pair| pair == ["--cache-type-k", "q8_0"]));
+        assert!(cached
+            .windows(2)
+            .any(|pair| pair == ["--cache-type-v", "q8_0"]));
     }
 }

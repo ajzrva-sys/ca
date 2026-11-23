@@ -706,7 +706,7 @@ dependencies = [
 
 [[package]]
 name = "ca"
-version = "0.1.205"
+version = "0.1.212"
 dependencies = [
  "agent-client-protocol",
  "aho-corasick",

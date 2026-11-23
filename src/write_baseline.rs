@@ -95,6 +95,13 @@ impl Baselines {
         );
     }
 
+    pub fn read_in_full(&self, path: &Path, current: &[u8]) -> bool {
+        let sha256 = hash(current);
+        self.files
+            .get(path)
+            .is_some_and(|entry| entry.turn == self.turn && entry.full && entry.sha256 == sha256)
+    }
+
     pub fn overwrite_refusal(&self, path: &Path, current: &[u8]) -> Option<String> {
         let sha256 = hash(current);
         let fresh = self
@@ -136,6 +143,10 @@ pub fn note_digest(path: &Path, start: usize, end: usize, total_lines: usize, sh
 
 pub fn remember_written(path: &Path, bytes: &[u8]) {
     lock().remember_written(path, bytes);
+}
+
+pub fn read_in_full(path: &Path, current: &[u8]) -> bool {
+    lock().read_in_full(path, current)
 }
 
 pub fn overwrite_refusal(path: &Path, current: &[u8]) -> Option<String> {

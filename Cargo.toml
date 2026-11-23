@@ -22,7 +22,7 @@ license = "MIT OR Apache-2.0"
 
 [package]
 name = "ca"
-version = "0.1.205"
+version = "0.1.212"
 edition = "2021"
 license.workspace = true
 default-run = "ca"

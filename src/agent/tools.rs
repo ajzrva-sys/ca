@@ -1238,6 +1238,9 @@ async fn execute_file_mutation(
     args: &Value,
     context: &ToolContext,
 ) -> ToolExecutionResult {
+    if let Err(error) = crate::local_finish::admit_edit() {
+        return ToolExecutionResult::Failure(error);
+    }
     if let Some(binding) = crate::privacy::tasks::remote_binding() {
         let name = match handler {
             ToolHandler::WriteFile => "write_file",
@@ -1285,7 +1288,7 @@ async fn execute_file_mutation(
         }
     }
     let mut written_baseline: Option<(std::path::PathBuf, String)> = None;
-    let (prepared, marker) = if crate::formatting::has_ticket(args) {
+    let (prepared, mut marker) = if crate::formatting::has_ticket(args) {
         match crate::formatting::consume(
             match handler {
                 ToolHandler::WriteFile => "write_file",
@@ -1404,25 +1407,47 @@ async fn execute_file_mutation(
                 let old_string = args["old_string"].as_str().unwrap_or("");
                 let new_string = args["new_string"].as_str().unwrap_or("");
                 let replace_all = args["replace_all"].as_bool().unwrap_or(false);
-                let applied = match crate::precise_edit::apply(
+                let copied = crate::local_copy_span::decide(
+                    crate::local_copy_span::route_enabled(),
+                    crate::write_baseline::read_in_full(&resolved, content.as_bytes()),
                     content,
                     old_string,
                     new_string,
-                    replace_all,
-                ) {
-                    Ok(applied) => applied,
-                    Err(error) => {
-                        let hint = if error.contains("not found") {
-                            crate::edit_followup::confusable_edit_hint(content, old_string)
-                                .map(|hint| format!(" {hint}"))
-                                .unwrap_or_default()
-                        } else {
-                            String::new()
-                        };
-                        return ToolExecutionResult::Failure(format!(
-                            "Error: {error} in {}.{hint}",
-                            resolved.display()
-                        ));
+                );
+                let (applied, copied_bytes) = match copied {
+                    crate::local_copy_span::CopyDecision::Copied {
+                        content: copied_content,
+                        copied_bytes,
+                    } => (
+                        crate::precise_edit::AppliedEdit {
+                            content: copied_content,
+                            strategy: "local_copy",
+                            already_applied: false,
+                        },
+                        Some(copied_bytes),
+                    ),
+                    crate::local_copy_span::CopyDecision::Generate => {
+                        match crate::precise_edit::apply(
+                            content,
+                            old_string,
+                            new_string,
+                            replace_all,
+                        ) {
+                            Ok(applied) => (applied, None),
+                            Err(error) => {
+                                let hint = if error.contains("not found") {
+                                    crate::edit_followup::confusable_edit_hint(content, old_string)
+                                        .map(|hint| format!(" {hint}"))
+                                        .unwrap_or_default()
+                                } else {
+                                    String::new()
+                                };
+                                return ToolExecutionResult::Failure(format!(
+                                    "Error: {error} in {}.{hint}",
+                                    resolved.display()
+                                ));
+                            }
+                        }
                     }
                 };
                 if applied.already_applied {
@@ -1440,11 +1465,14 @@ async fn execute_file_mutation(
                 };
                 let old_display: String = old_string.chars().take(120).collect();
                 let new_display: String = new_string.chars().take(120).collect();
+                let copied_note = copied_bytes
+                    .map(|bytes| format!("\ncopied {bytes} bytes"))
+                    .unwrap_or_default();
                 (
                     "edit_file",
                     after,
                     format!(
-                        "@@ {} @@\n-{old_display}\n+{new_display}\nstrategy: {strategy}",
+                        "@@ {} @@\n-{old_display}\n+{new_display}\nstrategy: {strategy}{copied_note}",
                         resolved.display()
                     ),
                 )
@@ -1666,6 +1694,10 @@ async fn execute_file_mutation(
             Ok(mutation) => {
                 if let Some((path, content)) = written_baseline {
                     crate::write_baseline::remember_written(&path, content.as_bytes());
+                }
+                if let Some(tail) = crate::local_finish::check_tail(&context.cwd) {
+                    marker.push('\n');
+                    marker.push_str(&tail);
                 }
                 ToolExecutionResult::SuccessMutation {
                     marker: outcome.warning.map_or(marker.clone(), |warning| {
@@ -2425,7 +2457,13 @@ async fn execute_builtin(
             };
             let mut guard = crate::session_tools::lock_work(&work);
             match crate::session_tools::todo_write(&mut guard.session_todos, args) {
-                Ok(text) => text,
+                Ok(text) => {
+                    let open = guard.session_todos.iter().any(|todo| {
+                        matches!(todo.status.as_str(), "pending" | "in_progress")
+                    });
+                    crate::local_finish::note_todos(open);
+                    text
+                }
                 Err(error) => format!("Error: {error}"),
             }
         }
@@ -2594,6 +2632,10 @@ async fn execute_job_tool_with_policy(
     match handler {
         ToolHandler::RunCommand => {
             let raw_command = args["command"].as_str().unwrap_or("");
+            let background = args["background"].as_bool().unwrap_or(false);
+            if let Err(error) = crate::local_finish::admit_command(raw_command, background) {
+                return ToolExecutionResult::Failure(error);
+            }
             if context.profile == ToolProfile::Plan
                 && crate::parity_backend::command_writes(raw_command)
             {
@@ -2614,7 +2656,6 @@ async fn execute_job_tool_with_policy(
                 return ToolExecutionResult::Failure(error);
             }
             let command = crate::shell_snapshot::prepared_shell_command(raw_command);
-            let background = args["background"].as_bool().unwrap_or(false);
             let effective_network_allowed = context.network_allowed;
             let execution_policy = context
                 .job_execution_policy

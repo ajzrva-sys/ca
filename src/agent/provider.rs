@@ -1134,7 +1134,14 @@ impl OpenAiResponsesDecoder {
                                 Some(arguments.to_string());
                         }
                     }
-                    "message" | "reasoning" | "code_interpreter_call" => {}
+                    "message"
+                    | "reasoning"
+                    | "code_interpreter_call"
+                    | "web_search_call"
+                    | "x_search_call"
+                    | "custom_tool_call"
+                    | "file_search_call"
+                    | "mcp_call" => {}
                     _ => {
                         return Err(ProviderError::Protocol(
                             "unsupported response output item".into(),
@@ -1231,6 +1238,7 @@ impl OpenAiResponsesDecoder {
             | "response.code_interpreter_call.completed"
             | "response.code_interpreter_call_code.delta"
             | "response.code_interpreter_call_code.done" => {}
+            event_type if hosted_progress_event(event_type) => {}
             // Codex emits advisory metadata between output and completion. It is
             // neither assistant output nor the terminal response metadata.
             "response.metadata" => {}
@@ -1479,6 +1487,14 @@ enum ResponsesOutputKind {
     Hosted,
 }
 
+fn hosted_progress_event(event_type: &str) -> bool {
+    event_type.starts_with("response.web_search_call.")
+        || event_type.starts_with("response.x_search_call.")
+        || event_type.starts_with("response.file_search_call.")
+        || event_type.starts_with("response.mcp_call")
+        || event_type.starts_with("response.custom_tool_call_input.")
+}
+
 fn responses_incomplete_error(response: &serde_json::Value) -> ProviderError {
     match response
         .pointer("/incomplete_details/reason")
@@ -1581,9 +1597,12 @@ fn validate_response_output_item(
             required_string(item, "arguments")?;
             ResponsesOutputKind::FunctionCall
         }
-        "web_search_call" | "custom_tool_call" | "code_interpreter_call" => {
-            ResponsesOutputKind::Hosted
-        }
+        "web_search_call"
+        | "x_search_call"
+        | "custom_tool_call"
+        | "code_interpreter_call"
+        | "file_search_call"
+        | "mcp_call" => ResponsesOutputKind::Hosted,
         _ => {
             return Err(ProviderError::Protocol(
                 "unsupported response output item".into(),
@@ -5166,6 +5185,52 @@ mod tests {
             error,
             ProviderError::StreamAnomaly(crate::agent::stream::StreamAnomalyKind::RepetitionLoop)
         );
+    }
+
+    #[test]
+    fn xai_search_items_do_not_interrupt_a_started_response() {
+        let input = concat!(
+            "data: {\"type\":\"response.reasoning_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"look up\"}\n\n",
+            "data: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"id\":\"ws-1\",\"type\":\"web_search_call\",\"status\":\"in_progress\"}}\n\n",
+            "data: {\"type\":\"response.web_search_call.searching\",\"output_index\":1,\"item_id\":\"ws-1\"}\n\n",
+            "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"id\":\"ws-1\",\"type\":\"web_search_call\",\"status\":\"completed\"}}\n\n",
+            "data: {\"type\":\"response.output_item.added\",\"output_index\":2,\"item\":{\"id\":\"xs-1\",\"type\":\"x_search_call\",\"status\":\"in_progress\"}}\n\n",
+            "data: {\"type\":\"response.x_search_call.in_progress\",\"output_index\":2,\"item_id\":\"xs-1\"}\n\n",
+            "data: {\"type\":\"response.output_item.done\",\"output_index\":2,\"item\":{\"id\":\"xs-1\",\"type\":\"x_search_call\",\"status\":\"completed\"}}\n\n",
+            "data: {\"type\":\"response.output_item.added\",\"output_index\":3,\"item\":{\"id\":\"ct-1\",\"type\":\"custom_tool_call\",\"status\":\"in_progress\"}}\n\n",
+            "data: {\"type\":\"response.custom_tool_call_input.delta\",\"output_index\":3,\"delta\":\"{}\"}\n\n",
+            "data: {\"type\":\"response.output_item.done\",\"output_index\":3,\"item\":{\"id\":\"ct-1\",\"type\":\"custom_tool_call\",\"status\":\"completed\"}}\n\n",
+            "data: {\"type\":\"response.output_text.delta\",\"output_index\":4,\"content_index\":0,\"delta\":\"answer\"}\n\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-search\",\"model\":\"grok-4.7\",\"status\":\"completed\",\"output\":[",
+            "{\"id\":\"rs-1\",\"type\":\"reasoning\"},",
+            "{\"id\":\"ws-1\",\"type\":\"web_search_call\",\"status\":\"completed\"},",
+            "{\"id\":\"xs-1\",\"type\":\"x_search_call\",\"status\":\"completed\"},",
+            "{\"id\":\"ct-1\",\"type\":\"custom_tool_call\",\"status\":\"completed\"},",
+            "{\"id\":\"msg-1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"answer\"}]}],",
+            "\"usage\":{\"input_tokens\":1,\"output_tokens\":2,\"total_tokens\":3}}}\n\n"
+        );
+        let mut decoder = OpenAiResponsesDecoder::with_request_id_for_test("req-search");
+        let mut events = Vec::new();
+        for byte in input.as_bytes() {
+            events.extend(decoder.push(&[*byte]).unwrap());
+        }
+        events.extend(decoder.finish().unwrap());
+        assert!(events
+            .iter()
+            .any(|event| event == &ProviderEvent::Reasoning("look up".into())));
+        assert!(events
+            .iter()
+            .any(|event| event == &ProviderEvent::Text("answer".into())));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            ProviderEvent::Finish {
+                reason: FinishReason::Stop,
+                ..
+            }
+        )));
+        assert!(events
+            .iter()
+            .all(|event| !matches!(event, ProviderEvent::ToolCallStart { .. })));
     }
 
     #[test]

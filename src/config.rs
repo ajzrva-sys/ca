@@ -1123,6 +1123,10 @@ fn default_true() -> bool {
     true
 }
 
+fn skip_false(value: &bool) -> bool {
+    !*value
+}
+
 fn default_mcp_timeout() -> u64 {
     30
 }
@@ -1879,6 +1883,15 @@ pub struct AgentConfig {
     /// Continue a rate-limited child, at most twice. Off unless the user turns it on.
     #[serde(default)]
     pub resume_rate_limited_children: bool,
+    /// Two-pass residual, shared prefix, and reused search index. Off unless set.
+    #[serde(default, skip_serializing_if = "skip_false")]
+    pub loop_refine: bool,
+    /// Optional check run after a local edit. Unset runs nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_check_command: Option<String>,
+    /// Optional llama-server KV cache type, for example q8_0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_cache_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -2012,6 +2025,9 @@ impl Default for AgentConfig {
             child_execution: None,
             compaction_model: None,
             resume_rate_limited_children: false,
+            loop_refine: false,
+            local_check_command: None,
+            local_cache_type: None,
         }
     }
 }

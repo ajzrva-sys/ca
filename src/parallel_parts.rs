@@ -7,6 +7,7 @@ pub struct PartChild {
     pub worktree: PathBuf,
     pub running: bool,
     pub agent: Option<String>,
+    pub port: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,6 +21,7 @@ pub struct MergeBatch {
     pub parent: PathBuf,
     pub files: Vec<MergedFile>,
     pub committed: bool,
+    pub loose_ends: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,6 +43,7 @@ pub fn start_parts(repo: &Path, file_lists: &[Vec<String>]) -> Result<ParallelSt
             }
         }
     }
+    let links = load_worktree_links(repo)?;
     let base = git(repo, &["rev-parse", "HEAD"])?;
     let mut children = Vec::new();
     for (index, _) in file_lists.iter().enumerate() {
@@ -54,10 +57,12 @@ pub fn start_parts(repo: &Path, file_lists: &[Vec<String>]) -> Result<ParallelSt
         if child_head != base {
             return Err("worktree is not at the parent HEAD".into());
         }
+        apply_worktree_links(repo, &path, &links)?;
         children.push(PartChild {
             worktree: path,
             running: true,
             agent: None,
+            port: part_port(index),
         });
     }
     if !children.iter().all(|child| child.running) {
@@ -76,6 +81,7 @@ pub fn merge_parts(
             parent: parent.to_path_buf(),
             files: Vec::new(),
             committed: false,
+            loose_ends: Vec::new(),
         });
     }
     let mut names = std::collections::BTreeSet::new();
@@ -124,10 +130,20 @@ pub fn merge_parts(
             after,
         });
     }
+    let mut loose_ends = Vec::new();
+    for (_, worktree) in parts {
+        for line in read_loose_ends(worktree) {
+            if loose_ends.len() == 16 {
+                break;
+            }
+            loose_ends.push(line);
+        }
+    }
     let batch = MergeBatch {
         parent: parent.to_path_buf(),
         files,
         committed: false,
+        loose_ends,
     };
     if let Ok(mut slot) = last_merge().lock() {
         *slot = Some(batch.clone());
@@ -159,6 +175,7 @@ pub fn start_one(repo: &Path, files: &[String]) -> Result<PartChild, String> {
     if files.is_empty() {
         return Err("a parallel part needs a file list".into());
     }
+    let links = load_worktree_links(repo)?;
     let base = git(repo, &["rev-parse", "HEAD"])?;
     let path = repo.join(".parallel-part-live");
     if path.exists() {
@@ -170,10 +187,12 @@ pub fn start_one(repo: &Path, files: &[String]) -> Result<PartChild, String> {
     if child_head != base {
         return Err("worktree is not at the parent HEAD".into());
     }
+    apply_worktree_links(repo, &path, &links)?;
     let child = PartChild {
         worktree: path,
         running: true,
         agent: None,
+        port: part_port(0),
     };
     register_running(child.clone());
     Ok(child)
@@ -347,6 +366,102 @@ fn git(cwd: &Path, args: &[&str]) -> Result<String, String> {
     Ok(git_stdout(cwd, args)?.trim().to_string())
 }
 
+pub fn part_port(index: usize) -> u16 {
+    20_000 + u16::try_from(index).unwrap_or(u16::MAX).saturating_mul(10)
+}
+
+pub fn port_line(port: u16) -> String {
+    format!("\nCA_PORT={port}")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LinkKind {
+    Link,
+    Copy,
+}
+
+fn load_worktree_links(repo: &Path) -> Result<Vec<(String, LinkKind)>, String> {
+    let path = repo.join(".ca/worktree-links.toml");
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let text = std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
+    let map: std::collections::BTreeMap<String, String> =
+        toml::from_str(&text).map_err(|error| error.to_string())?;
+    let mut links = Vec::new();
+    for (name, kind) in map {
+        reject_link_name(&name)?;
+        let kind = match kind.as_str() {
+            "link" => LinkKind::Link,
+            "copy" => LinkKind::Copy,
+            _ => return Err(format!("unsupported worktree link kind for {name}")),
+        };
+        links.push((name, kind));
+    }
+    Ok(links)
+}
+
+fn reject_link_name(name: &str) -> Result<(), String> {
+    let lower = name.to_ascii_lowercase();
+    if lower == ".env"
+        || lower.starts_with(".env.")
+        || lower == "secrets"
+        || lower.contains("credential")
+        || lower.contains("secret")
+    {
+        return Err(format!("worktree link rejected: {name}"));
+    }
+    if name.contains('/') || name.contains('\\') || name == "." || name == ".." {
+        return Err(format!("worktree link rejected: {name}"));
+    }
+    Ok(())
+}
+
+fn apply_worktree_links(
+    repo: &Path,
+    worktree: &Path,
+    links: &[(String, LinkKind)],
+) -> Result<(), String> {
+    for (name, kind) in links {
+        let source = repo.join(name);
+        let dest = worktree.join(name);
+        if dest.exists() || std::fs::symlink_metadata(&dest).is_ok() {
+            continue;
+        }
+        if !source.exists() {
+            continue;
+        }
+        match kind {
+            LinkKind::Link => {
+                std::os::unix::fs::symlink(&source, &dest).map_err(|error| error.to_string())?;
+            }
+            LinkKind::Copy => {
+                let status = std::process::Command::new("cp")
+                    .args(["-cR", &source.to_string_lossy(), &dest.to_string_lossy()])
+                    .status()
+                    .map_err(|error| error.to_string())?;
+                if !status.success() {
+                    return Err(format!("worktree copy failed for {name}"));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn read_loose_ends(worktree: &Path) -> Vec<String> {
+    let path = worktree.join(".ca/loose-ends.txt");
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .take(16)
+        .map(str::to_string)
+        .collect()
+}
+
 fn git_stdout(cwd: &Path, args: &[&str]) -> Result<String, String> {
     let output = Command::new("git")
         .args(args)
@@ -479,5 +594,92 @@ mod tests {
             .contains("Discard of a running child is refused"));
         mark_finished(&started.children[0].worktree);
         mark_finished(&started.children[1].worktree);
+    }
+
+    #[test]
+    fn worktree_link_port_and_loose_ends() {
+        let dir = repo();
+        std::fs::create_dir(dir.path().join("node_modules")).unwrap();
+        std::fs::write(dir.path().join("node_modules/marker"), "shared").unwrap();
+        let absent =
+            start_parts(dir.path(), &[vec!["a.txt".into()], vec!["b.txt".into()]]).unwrap();
+        assert!(!absent.children[0].worktree.join("node_modules").exists());
+        println!(
+            "ports={} {} lines={:?} {:?}",
+            absent.children[0].port,
+            absent.children[1].port,
+            port_line(absent.children[0].port),
+            port_line(absent.children[1].port)
+        );
+        assert_eq!(absent.children[0].port, 20_000);
+        assert_eq!(absent.children[1].port, 20_010);
+        assert_eq!(port_line(part_port(0)), "\nCA_PORT=20000");
+        assert_eq!(port_line(part_port(1)), "\nCA_PORT=20010");
+        for child in &absent.children {
+            mark_finished(&child.worktree);
+            git(
+                dir.path(),
+                &[
+                    "worktree",
+                    "remove",
+                    "--force",
+                    &child.worktree.to_string_lossy(),
+                ],
+            )
+            .unwrap();
+        }
+        std::fs::create_dir_all(dir.path().join(".ca")).unwrap();
+        std::fs::write(
+            dir.path().join(".ca/worktree-links.toml"),
+            ".env = \"link\"\n",
+        )
+        .unwrap();
+        let rejected =
+            start_parts(dir.path(), &[vec!["a.txt".into()], vec!["b.txt".into()]]).unwrap_err();
+        assert!(rejected.contains(".env"));
+        std::fs::write(
+            dir.path().join(".ca/worktree-links.toml"),
+            "node_modules = \"link\"\n",
+        )
+        .unwrap();
+        let linked =
+            start_parts(dir.path(), &[vec!["a.txt".into()], vec!["b.txt".into()]]).unwrap();
+        let link = linked.children[0].worktree.join("node_modules");
+        let kind = std::fs::symlink_metadata(&link).unwrap().file_type();
+        println!("node_modules-symlink={}", kind.is_symlink());
+        assert!(kind.is_symlink());
+        assert_eq!(
+            std::fs::read_to_string(link.join("marker")).unwrap(),
+            "shared"
+        );
+        std::fs::create_dir_all(linked.children[0].worktree.join(".ca")).unwrap();
+        std::fs::write(
+            linked.children[0].worktree.join(".ca/loose-ends.txt"),
+            "remove debug flag\n",
+        )
+        .unwrap();
+        std::fs::write(linked.children[0].worktree.join("a.txt"), "part-a\n").unwrap();
+        let parts = vec![
+            ("part-1".into(), linked.children[0].worktree.clone()),
+            ("part-2".into(), linked.children[1].worktree.clone()),
+        ];
+        let batch = merge_parts(dir.path(), &linked.base, &parts).unwrap();
+        println!(
+            "loose={:?} merged-a={}",
+            batch.loose_ends,
+            std::fs::read_to_string(dir.path().join("a.txt")).unwrap()
+        );
+        assert_eq!(batch.loose_ends, vec!["remove debug flag".to_string()]);
+        assert_eq!(
+            std::fs::read_to_string(linked.children[0].worktree.join(".ca/loose-ends.txt"))
+                .unwrap(),
+            "remove debug flag\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "part-a\n"
+        );
+        assert_eq!(linked.children[0].port, part_port(0));
+        assert_eq!(linked.children[1].port, part_port(1));
     }
 }

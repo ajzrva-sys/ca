@@ -250,6 +250,9 @@ pub async fn spawn_parallel_child(
                 .task
                 .push_str(&format!("\nAssigned file: {}", files[index]));
         }
+        child_request
+            .task
+            .push_str(&crate::parallel_parts::port_line(part.port));
         match manager.spawn(child_request).await {
             Ok(id) => {
                 attach_agent_id(&part.worktree, &id);

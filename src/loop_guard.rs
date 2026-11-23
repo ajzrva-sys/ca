@@ -301,6 +301,10 @@ impl LoopGuard {
         *self = Self::default();
     }
 
+    pub fn unlatch(&mut self) {
+        self.incident_latched = false;
+    }
+
     pub fn replan(&mut self) {
         self.clear_observations();
         self.suppressed = false;
